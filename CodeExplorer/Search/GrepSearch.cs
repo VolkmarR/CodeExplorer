@@ -1,0 +1,601 @@
+using System.Globalization;
+using System.Text;
+using DuckDB.NET.Data;
+
+namespace CodeExplorer;
+
+/// <summary>Everything a grep call asks for. Bounds are enforced by <see cref="GrepSearch" />, not by the caller.</summary>
+public sealed record GrepRequest(
+    string Query,
+    bool Regex = false,
+    bool CaseSensitive = false,
+    string? Path = null,
+    string? Exclude = null,
+    string? Extension = null,
+    bool Multiline = false,
+    bool WholeWord = false,
+    int Context = 0,
+    bool FilesOnly = false,
+    int MaxLinesPerFile = 20,
+    int Page = 1,
+    int PageSize = 20)
+{
+    public bool HasFileFilters =>
+        !string.IsNullOrWhiteSpace(Path) || !string.IsNullOrWhiteSpace(Exclude) || !string.IsNullOrWhiteSpace(Extension);
+}
+
+/// <summary>Either a <see cref="GrepResult" /> or a <see cref="GrepProblem" />: a semantic failure is an answer, never an exception.</summary>
+public abstract record GrepOutcome;
+
+/// <summary>What went wrong and what to try instead, in agent-facing prose.</summary>
+public sealed record GrepProblem(string Explanation) : GrepOutcome;
+
+/// <summary><see cref="IsMatch" /> is false for a line returned only as context around a match.</summary>
+public sealed record GrepLine(int LineNumber, string Text, bool IsMatch);
+
+/// <summary>
+///     One file's share of the answer. <see cref="MatchesShown" /> is how many of the
+///     <see cref="MatchCount" /> matches <see cref="Lines" /> covers; in multiline mode one match can
+///     span several lines, so it is not the number of marked lines. Both are zero-lines for a files-only search.
+/// </summary>
+public sealed record GrepFile(string QualifiedPath, int MatchCount, int MatchesShown, IReadOnlyList<GrepLine> Lines);
+
+/// <summary>
+///     A page of matches. <see cref="Engine" /> names what answered, because full-text and substring
+///     scan rank differently. <see cref="FilesMatchingWithoutFilters" /> is filled only when nothing
+///     matched under path, extension or exclude filters: it tells "no matches" from "matches existed
+///     and the filters hid them", which read identically and mean opposite things.
+/// </summary>
+public sealed record GrepResult(
+    string Engine,
+    int TotalFiles,
+    long TotalLines,
+    int Page,
+    int PageSize,
+    IReadOnlyList<GrepFile> Files,
+    int? FilesMatchingWithoutFilters) : GrepOutcome;
+
+/// <summary>
+///     Text and regular-expression search over a project's <c>lines</c>. All matching runs inside
+///     DuckDB (ADR-0004): BM25 narrows a text query when the index has a full-text index, every
+///     token is then verified with <c>contains</c> so the answer is exact; regex is RE2 through
+///     <c>regexp_matches</c>. The substring fallback for text queries is <c>contains</c> rather than
+///     the <c>regexp_matches</c> ADR-0004 names, because a text query is not a pattern and escaping it
+///     into one buys nothing. Nothing here opens <c>control.duckdb</c> (ADR-0005).
+/// </summary>
+public sealed class GrepSearch(ProjectIndexes indexes)
+{
+    public const string FullTextEngine = "full-text";
+    public const string SubstringEngine = "substring scan";
+    public const string RegexEngine = "regex scan";
+    public const string MultilineEngine = "multiline regex scan";
+
+    /// <summary>Ten lines each way is a whole method around a hit; beyond that read_file is the right tool.</summary>
+    public const int MaxContext = 10;
+
+    /// <summary>A file that matches more than this is telling the agent to narrow the query, not to read on.</summary>
+    public const int MaxLinesPerFile = 200;
+
+    /// <summary>
+    ///     A hundred files at the default twenty lines each is already past the reply cap; a larger
+    ///     page would only be truncated, so paging is the honest way to see more.
+    /// </summary>
+    public const int MaxPageSize = 100;
+
+    /// <summary>
+    ///     RE2 rejects these; each is a .NET or PCRE habit an agent brings along. Recognised up front so
+    ///     the explanation names the construct rather than quoting an engine error.
+    /// </summary>
+    private static readonly (string Needle, string Name)[] UnsupportedSyntax =
+    [
+        ("(?<=", "lookbehind (?<=...)"),
+        ("(?<!", "negative lookbehind (?<!...)"),
+        ("(?=", "lookahead (?=...)"),
+        ("(?!", "negative lookahead (?!...)")
+    ];
+
+    /// <summary>
+    ///     Wrapped around every multiline match by <c>regexp_replace</c> so the exact boundaries come
+    ///     back from RE2 itself. Control characters, because source text does not contain them; a
+    ///     stray one would only shift a line number by one within that file.
+    /// </summary>
+    private const char MatchStart = '';
+
+    private const char MatchEnd = '';
+
+    public async Task<GrepOutcome> SearchAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
+    {
+        string query = request.Query.Trim();
+        if (query.Length == 0) return new GrepProblem("The query is empty. Pass the text or RE2 pattern to search for.");
+
+        bool regex = request.Regex || request.Multiline;
+        if (regex && UnsupportedRegex(query) is { } unsupported) return new GrepProblem(unsupported);
+        if (regex && request.WholeWord) query = $@"\b(?:{query})\b";
+
+        using var connection = await indexes.OpenAsync(slug, cancellationToken);
+        if (connection is null)
+            return new GrepProblem(
+                $"Project '{slug}' has no index to search right now: it was never built, or a rebuild is in progress. "
+                + $"Ask the operator to build it with POST /api/projects/{slug}/index, or retry shortly.");
+
+        var bounds = Bounds.From(request);
+        try
+        {
+            return request.Multiline
+                ? await SearchMultilineAsync(connection, request, query, bounds, cancellationToken)
+                : await SearchLinesAsync(connection, request, query, regex, bounds, cancellationToken);
+        }
+        catch (DuckDBException ex) when (regex && ex.Message.StartsWith("Invalid Input Error", StringComparison.Ordinal))
+        {
+            // Only regex mode hands user text to a parser, and RE2 rejections surface as DuckDB's
+            // "Invalid Input Error: missing ): ..." with no other marker. A missing table or a detached
+            // catalog is a Catalog or Binder error and propagates as infrastructure.
+            return new GrepProblem(
+                $"The pattern is not a valid RE2 regular expression: {FirstLine(ex.Message)}. "
+                + "RE2 has no lookaround and no backreferences; escape literal metacharacters with a backslash.");
+        }
+    }
+
+    private async Task<GrepOutcome> SearchLinesAsync(
+        DuckDBConnection connection, GrepRequest request, string query, bool regex, Bounds bounds,
+        CancellationToken cancellationToken)
+    {
+        // Match parameters and file-filter parameters are kept apart: the "without filters" recount
+        // below reuses the match alone, and DuckDB rejects a parameter the statement does not reference.
+        var matchParameters = new List<DuckDBParameter>();
+        var match = new StringBuilder();
+        string engine;
+
+        if (regex)
+        {
+            engine = RegexEngine;
+            match.Append("regexp_matches(l.content, $q, $flags)");
+            matchParameters.Add(new DuckDBParameter("q", query));
+            matchParameters.Add(new DuckDBParameter("flags", request.CaseSensitive ? "" : "i"));
+        }
+        else
+        {
+            var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            // The decision is per index, not per process: an index built under Substring has no BM25 tables
+            // even when the extension is loaded now, and match_bm25 would fail on it.
+            bool useFts = indexes.FtsAvailable && tokens.Any(HasIndexableChars)
+                                               && await HasFullTextIndexAsync(connection, cancellationToken);
+            engine = useFts ? FullTextEngine : SubstringEngine;
+
+            if (useFts)
+            {
+                // Conjunctive: every token must be in the line. The index is lower-cased, so this is a
+                // case-insensitive prefilter; the contains() below restores exactness either way.
+                match.Append("fts_main_lines.match_bm25(l.line_id, $q, conjunctive := 1) IS NOT NULL");
+                matchParameters.Add(new DuckDBParameter("q", query));
+            }
+
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                if (match.Length > 0) match.Append(" AND ");
+                match.Append(request.CaseSensitive ? $"contains(l.content, $t{i})" : $"contains(lower(l.content), $t{i})");
+                matchParameters.Add(new DuckDBParameter($"t{i}", request.CaseSensitive ? tokens[i] : tokens[i].ToLowerInvariant()));
+            }
+        }
+
+        var fileParameters = new List<DuckDBParameter>();
+        string fileFilter = FileFilter(request, fileParameters);
+        string common = $"""
+                         WITH hits AS (
+                             SELECT l.file_id, l.line_number, f.qualified_path
+                             FROM lines l JOIN files f USING (file_id)
+                             WHERE {match}{fileFilter}),
+                         per_file AS (
+                             SELECT file_id, qualified_path, count(*) AS n FROM hits GROUP BY ALL),
+                         totals AS (
+                             SELECT count(*) AS total_files, coalesce(sum(n), 0) AS total_lines FROM per_file),
+                         page_files AS (
+                             SELECT file_id, qualified_path, n FROM per_file
+                             ORDER BY n DESC, qualified_path
+                             LIMIT {bounds.PageSize} OFFSET {(bounds.Page - 1) * bounds.PageSize})
+                         """;
+
+        // totals drives the join so that a page past the end still returns one row carrying the totals;
+        // otherwise an out-of-range page would read as "no matches". Files-only never touches line
+        // content: the cheap way to size a broad query.
+        string sql = request.FilesOnly
+            ? $"""
+               {common}
+               SELECT t.total_files, t.total_lines, p.qualified_path, p.n, NULL::INTEGER, NULL::VARCHAR, NULL::BOOLEAN
+               FROM totals t LEFT JOIN page_files p ON true
+               ORDER BY p.n DESC, p.qualified_path
+               """
+            // kept = the matching lines shown per file; shown = those plus their context window, grouped
+            // so overlapping windows collapse into one run of lines.
+            : $"""
+               {common},
+               kept AS (
+                   SELECT file_id, line_number FROM (
+                       SELECT h.file_id, h.line_number,
+                              row_number() OVER (PARTITION BY h.file_id ORDER BY h.line_number) AS rn
+                       FROM hits h JOIN page_files p USING (file_id))
+                   WHERE rn <= {bounds.MaxLinesPerFile}),
+               shown AS (
+                   SELECT l.file_id, l.line_number, l.content, bool_or(k.line_number = l.line_number) AS is_match
+                   FROM kept k
+                   JOIN lines l ON l.file_id = k.file_id
+                               AND l.line_number BETWEEN k.line_number - {bounds.Context} AND k.line_number + {bounds.Context}
+                   GROUP BY ALL),
+               page_lines AS (
+                   SELECT p.qualified_path, p.n, s.line_number, s.content, s.is_match
+                   FROM page_files p JOIN shown s USING (file_id))
+               SELECT t.total_files, t.total_lines, p.qualified_path, p.n, p.line_number, p.content, p.is_match
+               FROM totals t LEFT JOIN page_lines p ON true
+               ORDER BY p.n DESC, p.qualified_path, p.line_number
+               """;
+
+        var files = new List<GrepFile>();
+        int totalFiles = 0;
+        long totalLines = 0;
+        using (var command = Command(connection, sql, [.. matchParameters, .. fileParameters]))
+        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            string? currentPath = null;
+            int currentCount = 0;
+            List<GrepLine> current = [];
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                totalFiles = (int)reader.GetInt64(0);
+                totalLines = reader.GetInt64(1);
+                if (reader.IsDBNull(2)) continue;
+
+                string path = reader.GetString(2);
+                if (path != currentPath)
+                {
+                    if (currentPath is not null) files.Add(File(currentPath, currentCount, current));
+                    currentPath = path;
+                    currentCount = (int)reader.GetInt64(3);
+                    current = [];
+                }
+
+                if (!reader.IsDBNull(4)) current.Add(new GrepLine(reader.GetInt32(4), reader.GetString(5), reader.GetBoolean(6)));
+            }
+
+            if (currentPath is not null) files.Add(File(currentPath, currentCount, current));
+        }
+
+        int? withoutFilters = null;
+        if (totalFiles == 0 && request.HasFileFilters)
+            // Same match, no file filters: a second pass only on the empty answer, so the common case pays nothing.
+            withoutFilters = await CountAsync(connection,
+                $"SELECT count(DISTINCT l.file_id) FROM lines l WHERE {match}", matchParameters, cancellationToken);
+
+        return new GrepResult(engine, totalFiles, totalLines, bounds.Page, bounds.PageSize, files, withoutFilters);
+
+        // In single-line mode every marked line is exactly one match.
+        static GrepFile File(string path, int count, List<GrepLine> lines) =>
+            new(path, count, lines.Count(l => l.IsMatch), lines);
+    }
+
+    /// <summary>
+    ///     Whole-file regex, reassembled in the engine because the index stores text only as lines (#4).
+    ///     Candidates are narrowed by the file filters and by a literal the pattern requires, then each
+    ///     candidate is <c>string_agg</c>-ed in line order and matched with the <c>s</c> flag so <c>.</c>
+    ///     crosses newlines. Two passes: counts without content, then content only for the page shown.
+    /// </summary>
+    private static async Task<GrepOutcome> SearchMultilineAsync(
+        DuckDBConnection connection, GrepRequest request, string query, Bounds bounds, CancellationToken cancellationToken)
+    {
+        string flags = request.CaseSensitive ? "s" : "si";
+        var matchParameters = new List<DuckDBParameter> { new("q", query), new("flags", flags) };
+        string literalFilter = "";
+        if (RequiredLiteral(query) is { } literal)
+        {
+            // The literal holds no newline, so a whole-file match must contain it within one line. Compared
+            // lower-cased regardless of case mode: a (?i) inside the pattern would otherwise defeat it.
+            literalFilter = " AND EXISTS (SELECT 1 FROM lines l WHERE l.file_id = f.file_id AND contains(lower(l.content), $lit))";
+            matchParameters.Add(new DuckDBParameter("lit", literal.ToLowerInvariant()));
+        }
+
+        var fileParameters = new List<DuckDBParameter>();
+        string fileFilter = FileFilter(request, fileParameters);
+
+        var counts = new List<(long FileId, string Path, int Count)>();
+        using (var command = Command(connection, $"""
+                                                  {Documents(fileFilter + literalFilter)}
+                                                  SELECT file_id, qualified_path, len(regexp_extract_all(content, $q, 0, $flags)) AS n
+                                                  FROM docs WHERE regexp_matches(content, $q, $flags)
+                                                  ORDER BY n DESC, qualified_path
+                                                  """, [.. matchParameters, .. fileParameters]))
+        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+                counts.Add((reader.GetInt64(0), reader.GetString(1), (int)reader.GetInt64(2)));
+        }
+
+        int? withoutFilters = null;
+        if (counts.Count == 0 && request.HasFileFilters)
+            withoutFilters = await CountAsync(connection,
+                $"{Documents(literalFilter)} SELECT count(*) FROM docs WHERE regexp_matches(content, $q, $flags)",
+                matchParameters, cancellationToken);
+
+        long totalMatches = counts.Sum(c => (long)c.Count);
+        var pageFiles = counts.Skip((bounds.Page - 1) * bounds.PageSize).Take(bounds.PageSize).ToList();
+        if (request.FilesOnly || pageFiles.Count == 0)
+            return new GrepResult(MultilineEngine, counts.Count, totalMatches, bounds.Page, bounds.PageSize,
+                [.. pageFiles.Select(f => new GrepFile(f.Path, f.Count, 0, []))], withoutFilters);
+
+        // RE2 marks its own match boundaries: the pattern becomes group 1 and every match is rewritten as
+        // START match END, so the offsets read back are exact even for \b, ^ or $, which a text search
+        // for the matched string could not honour. The ids come from the query above, never from the
+        // request, so inlining them is safe.
+        string ids = string.Join(",", pageFiles.Select(f => f.FileId.ToString(CultureInfo.InvariantCulture)));
+        var marked = new Dictionary<long, string>();
+        using (var command = Command(connection, $"""
+                                                  {Documents($" AND f.file_id IN ({ids})")}
+                                                  SELECT file_id, regexp_replace(content, '(' || $q || ')', chr(1) || '\1' || chr(2), $gflags)
+                                                  FROM docs
+                                                  """, [new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
+        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken)) marked[reader.GetInt64(0)] = reader.GetString(1);
+        }
+
+        var files = new List<GrepFile>();
+        foreach (var (fileId, path, count) in pageFiles)
+        {
+            if (!marked.TryGetValue(fileId, out string? content)) continue;
+            var (lines, shown) = SpannedLines(content, bounds);
+            files.Add(new GrepFile(path, count, shown, lines));
+        }
+
+        return new GrepResult(MultilineEngine, counts.Count, totalMatches, bounds.Page, bounds.PageSize, files, withoutFilters);
+
+        // Skipped files (binary, oversized) have no lines and would aggregate to nothing; filtered out
+        // here so they never even reach the join.
+        static string Documents(string candidateFilter) => $"""
+                                                            WITH candidates AS (
+                                                                SELECT f.file_id, f.qualified_path FROM files f
+                                                                WHERE f.skip_reason IS NULL{candidateFilter}),
+                                                            docs AS (
+                                                                SELECT c.file_id, c.qualified_path,
+                                                                       string_agg(l.content, chr(10) ORDER BY l.line_number) AS content
+                                                                FROM candidates c JOIN lines l USING (file_id)
+                                                                GROUP BY ALL)
+                                                            """;
+    }
+
+    /// <summary>
+    ///     Walks content in which every match is wrapped in <see cref="MatchStart" /> and
+    ///     <see cref="MatchEnd" />, marks every line a match spans, adds the context window, and returns
+    ///     the lines with how many matches they cover. Empty matches are skipped: they span nothing.
+    /// </summary>
+    private static (List<GrepLine> Lines, int MatchesShown) SpannedLines(string marked, Bounds bounds)
+    {
+        var lines = new List<string>();
+        var matched = new HashSet<int>();
+        var shown = new SortedSet<int>();
+        var current = new StringBuilder();
+        int line = 1, matchesSeen = 0, matchStartLine = 0, matchStartColumn = 0;
+        foreach (char c in marked)
+            switch (c)
+            {
+                case MatchStart:
+                    matchStartLine = line;
+                    matchStartColumn = current.Length;
+                    break;
+                case MatchEnd:
+                    if (matchStartLine == line && current.Length == matchStartColumn) break;
+                    if (matchesSeen < bounds.MaxLinesPerFile)
+                    {
+                        for (int i = matchStartLine; i <= line; i++) matched.Add(i);
+                        for (int i = Math.Max(1, matchStartLine - bounds.Context); i <= line + bounds.Context; i++) shown.Add(i);
+                    }
+
+                    matchesSeen++;
+                    break;
+                case '\n':
+                    lines.Add(current.ToString());
+                    current.Clear();
+                    line++;
+                    break;
+                default:
+                    current.Append(c);
+                    break;
+            }
+
+        lines.Add(current.ToString());
+        return (
+            [.. shown.Where(i => i <= lines.Count).Select(i => new GrepLine(i, lines[i - 1], matched.Contains(i)))],
+            Math.Min(matchesSeen, bounds.MaxLinesPerFile));
+    }
+
+    /// <summary>
+    ///     A literal every match of the pattern must contain, or null. Ripgrep's "inner literal" idea,
+    ///     reduced to what is provably sound: only characters at the top level (outside any group or
+    ///     class), not under a quantifier that allows zero, and never when the top level has an
+    ///     alternation. A shorter literal than ripgrep would find costs a weaker prefilter, never a
+    ///     wrong answer. Exposed for tests.
+    /// </summary>
+    internal static string? RequiredLiteral(string pattern)
+    {
+        var best = new StringBuilder();
+        var current = new StringBuilder();
+        int depth = 0;
+
+        void Break()
+        {
+            if (current.Length > best.Length) best.Clear().Append(current);
+            current.Clear();
+        }
+
+        // Keeps c only when the next character cannot let it match zero times; '+' keeps it but ends
+        // the run, because "ab+c" matches "abbc", which does not contain "abc".
+        void Literal(char c, char next)
+        {
+            if (depth != 0) return;
+            if (next is '?' or '*' or '{')
+            {
+                Break();
+                return;
+            }
+
+            current.Append(c);
+            if (next == '+') Break();
+        }
+
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            char c = pattern[i];
+            char next = i + 1 < pattern.Length ? pattern[i + 1] : '\0';
+            switch (c)
+            {
+                case '|' when depth == 0:
+                    return null;
+                case '\\':
+                    if (++i >= pattern.Length) break;
+                    // \d, \s, \b, \1 and the like are classes or anchors; \. and \( are the character itself.
+                    if (char.IsLetterOrDigit(pattern[i])) Break();
+                    else Literal(pattern[i], i + 1 < pattern.Length ? pattern[i + 1] : '\0');
+                    break;
+                case '(':
+                    depth++;
+                    Break();
+                    break;
+                case ')':
+                    depth--;
+                    Break();
+                    break;
+                case '[':
+                    // Skip the class: a leading ']' or '^]' is literal, and '\' escapes inside it.
+                    i++;
+                    if (i < pattern.Length && pattern[i] == '^') i++;
+                    if (i < pattern.Length && pattern[i] == ']') i++;
+                    while (i < pattern.Length && pattern[i] != ']')
+                        i += pattern[i] == '\\' ? 2 : 1;
+                    Break();
+                    break;
+                case '{':
+                    // A counted repetition; its digits are not literals.
+                    while (i < pattern.Length && pattern[i] != '}') i++;
+                    Break();
+                    break;
+                case '.' or '^' or '$' or '?' or '*' or '+' or '}':
+                    Break();
+                    break;
+                default:
+                    Literal(c, next);
+                    break;
+            }
+        }
+
+        Break();
+        string literal = best.ToString();
+        return literal.Trim().Length == 0 ? null : literal;
+    }
+
+    private static string? UnsupportedRegex(string pattern)
+    {
+        foreach (var (needle, name) in UnsupportedSyntax)
+            if (pattern.Contains(needle, StringComparison.Ordinal))
+                return $"The pattern uses {name}, which RE2 does not support. "
+                       + "Match the wider text instead and read the hit, or grep for the inner part with context.";
+
+        // \1..\9 is a backreference; \0 is not one and \\1 is an escaped backslash followed by a digit.
+        for (int i = 0; i + 1 < pattern.Length; i++)
+        {
+            if (pattern[i] != '\\') continue;
+            if (pattern[i + 1] is >= '1' and <= '9')
+                return $"The pattern uses a backreference (\\{pattern[i + 1]}), which RE2 does not support. "
+                       + "Repeat the text instead of referring back to a group.";
+            i++;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     Path terms are OR-ed (one call over several folders), exclude terms AND-ed, both against the
+    ///     lower-cased qualified path. A term with <c>*</c> or <c>?</c> is a SQL GLOB over the whole path,
+    ///     where <c>*</c> crosses <c>/</c>; anything else is a plain substring.
+    /// </summary>
+    private static string FileFilter(GrepRequest request, List<DuckDBParameter> parameters)
+    {
+        var where = new StringBuilder();
+        var includes = SplitTerms(request.Path);
+        if (includes.Count > 0)
+        {
+            where.Append(" AND (");
+            for (int i = 0; i < includes.Count; i++)
+            {
+                if (i > 0) where.Append(" OR ");
+                where.Append(Match(includes[i], $"$p{i}"));
+                parameters.Add(new DuckDBParameter($"p{i}", includes[i]));
+            }
+
+            where.Append(')');
+        }
+
+        var excludes = SplitTerms(request.Exclude);
+        for (int i = 0; i < excludes.Count; i++)
+        {
+            where.Append(" AND NOT (").Append(Match(excludes[i], $"$x{i}")).Append(')');
+            parameters.Add(new DuckDBParameter($"x{i}", excludes[i]));
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Extension))
+        {
+            where.Append(" AND f.extension = $ext");
+            parameters.Add(new DuckDBParameter("ext", request.Extension.Trim().TrimStart('.').ToLowerInvariant()));
+        }
+
+        return where.ToString();
+
+        static string Match(string term, string parameter) =>
+            term.Contains('*') || term.Contains('?')
+                ? $"lower(f.qualified_path) GLOB {parameter}"
+                : $"contains(lower(f.qualified_path), {parameter})";
+    }
+
+    private static List<string> SplitTerms(string? terms) =>
+    [
+        .. (terms ?? "")
+        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(t => t.Replace('\\', '/').ToLowerInvariant())
+    ];
+
+    private static async Task<bool> HasFullTextIndexAsync(DuckDBConnection connection, CancellationToken cancellationToken)
+    {
+        using var command = Command(connection, "SELECT fts_indexed FROM index_info", []);
+        return await command.ExecuteScalarAsync(cancellationToken) is true;
+    }
+
+    private static async Task<int> CountAsync(
+        DuckDBConnection connection, string sql, IEnumerable<DuckDBParameter> parameters, CancellationToken cancellationToken)
+    {
+        using var command = Command(connection, sql, parameters);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+    }
+
+    private static DuckDBCommand Command(DuckDBConnection connection, string sql, IEnumerable<DuckDBParameter> parameters)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = sql;
+        foreach (var parameter in parameters) command.Parameters.Add(parameter);
+        return command;
+    }
+
+    /// <summary>The FTS tokenizer keeps letters, digits and underscore; a token with none of them has no index entry.</summary>
+    private static bool HasIndexableChars(string token) => token.Any(c => char.IsLetterOrDigit(c) || c == '_');
+
+    private static string FirstLine(string text)
+    {
+        int newline = text.IndexOf('\n');
+        return (newline < 0 ? text : text[..newline]).Trim();
+    }
+
+    /// <summary>Request numbers clamped to the ranges the tool description promises.</summary>
+    private readonly record struct Bounds(int Page, int PageSize, int Context, int MaxLinesPerFile)
+    {
+        public static Bounds From(GrepRequest request) => new(
+            Math.Max(1, request.Page),
+            Math.Clamp(request.PageSize, 1, MaxPageSize),
+            Math.Clamp(request.Context, 0, MaxContext),
+            Math.Clamp(request.MaxLinesPerFile, 1, GrepSearch.MaxLinesPerFile));
+    }
+}
