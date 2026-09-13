@@ -46,8 +46,17 @@ workaround for `match_bm25` failing to resolve its internal tables in an attache
   scheduled off-peak refreshes this is affordable; if a project ever grows to several such
   repositories, the escape hatch is per-repository shadow tables rather than per-repository files.
 - No transaction can write to two projects at once — DuckDB forbids it, and nothing here needs it.
-- Two assumptions need a spike before real code, because a failure on either changes the layout:
-  whether one connection's `ATTACH` is visible to another in DuckDB.NET (the instance cache decides
-  whether N files mean one instance or N), and whether `match_bm25` works against an attached
-  database under `USE` on DuckDB 1.5.x. If the second fails, the fallback is a connection per file,
-  which reopens the N-memory-limits problem.
+- **Both load-bearing assumptions were verified** against DuckDB.NET.Data.Full 1.5.5. Connections
+  sharing a connection string share one instance: an `ATTACH` on one is visible to all, and a
+  `memory_limit` set on one reads back on the others. `match_bm25` fails qualified
+  (`Catalog Error: Table with name "fts_main_lines.terms" does not exist` — duckdb/duckdb#13523 is
+  still open on 1.5.5) and succeeds after `USE`. `ATTACH` is instance-wide while `USE` is
+  per-connection, which is what lets one instance serve every project without connections treading
+  on each other. `PRAGMA create_fts_index` also works inside an attached database, so a shadow
+  build needs no special handling.
+- **`DETACH` offers no protection during a swap, so the drain is entirely ours.** It succeeds while
+  another connection has `USE`d that database, and returns in 0 ms while a query is actively
+  scanning it. The in-flight query completes correctly against its snapshot, but the orphaned
+  connection fails on its next statement with `Binder Error: Catalog "<project>" does not exist!` —
+  even for `SELECT current_database()`. A connection must therefore issue `USE` per checkout and
+  never hold one across a swap.
