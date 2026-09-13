@@ -94,6 +94,27 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
             : null;
     }
 
+    /// <summary>
+    ///     How this index named its files, read from the index itself rather than from the control
+    ///     database: <c>Search/</c> answers from the index alone (ADR-0005), and an index names things
+    ///     the way the build that wrote it was told to, which is the only shape its rows can be read in.
+    ///     One statement, because a path cannot be parsed until both halves are known.
+    /// </summary>
+    /// <param name="projectSlug">Only used to anchor the shape when the index holds no repositories yet.</param>
+    /// <param name="cancellationToken">Threaded through to the DuckDB command.</param>
+    public async Task<ProjectPaths> PathsAsync(string projectSlug, CancellationToken cancellationToken)
+    {
+        using var command = Command("""
+                                    SELECT (SELECT single_repository FROM index_info),
+                                           (SELECT slug FROM repositories ORDER BY repo_id LIMIT 1)
+                                    """, []);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return new ProjectPaths(false, projectSlug);
+
+        return new ProjectPaths(!reader.IsDBNull(0) && reader.GetBoolean(0),
+            reader.IsDBNull(1) ? projectSlug : reader.GetString(1));
+    }
+
     public async Task<IReadOnlyList<IndexedRepository>> RepositoriesAsync(CancellationToken cancellationToken)
     {
         using var command = Command(
@@ -161,7 +182,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
     ///     window count rides along with the rows so one statement yields both the total and the page.
     /// </summary>
     public async Task<GlobResult> GlobAsync(string glob, string? repositorySlug, int limit,
-        CancellationToken cancellationToken, int offset = 0)
+        CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter> { new("g", glob.ToLowerInvariant()) };
         string scope = "";
@@ -178,7 +199,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
                                       {FileSource}
                                       WHERE lower(f.qualified_path) GLOB $g{scope}
                                       ORDER BY f.qualified_path
-                                      LIMIT {limit} OFFSET {offset}
+                                      LIMIT {limit}
                                       """, parameters))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
@@ -203,29 +224,28 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
 
     /// <summary>
     ///     One level of the project as a tree: the repositories at the root, or the immediate
-    ///     subdirectories and files of <paramref name="directory" /> inside one of them. Directories are
+    ///     subdirectories and files of <paramref name="location" /> inside one of them. Directories are
     ///     not rows in the index — <c>files.directory</c> holds each file's whole repository-relative
     ///     directory — so a level is the distinct first segment below the prefix, aggregated over
     ///     everything beneath it. Directories come first, each alphabetical, as a tree reads.
     /// </summary>
-    /// <param name="repositorySlug">
-    ///     Null asks for the repositories themselves, which is the root of a multi-repository project. A
-    ///     single-repository project has no such level: its root is its one repository's own top level,
-    ///     so the caller passes that repository's slug and an empty <paramref name="directory" />.
+    /// <param name="paths">
+    ///     The project's shape, which names the entries: children are formatted through the same thing
+    ///     that parsed the level, so a listing cannot be spelled differently from what it links to.
     /// </param>
-    /// <param name="directory">
-    ///     The repository-relative directory to list, empty for the repository's own top level.
-    /// </param>
-    /// <param name="qualify">
-    ///     Whether the qualified path of each entry is headed by the repository slug. It follows the
-    ///     project's shape (ADR-0006), not this level, so children are named the way the index named
-    ///     them.
+    /// <param name="location">
+    ///     Null asks for the repositories themselves, which is the root of a multi-repository project.
+    ///     A single-repository project has no such level, and <see cref="ProjectPaths.Parse" /> never
+    ///     hands back null for one.
     /// </param>
     /// <param name="cancellationToken">Threaded through to both DuckDB commands.</param>
-    public async Task<IReadOnlyList<TreeItem>> TreeAsync(string? repositorySlug, string directory, bool qualify,
+    public async Task<IReadOnlyList<TreeItem>> TreeAsync(ProjectPaths paths, QualifiedPath? location,
         CancellationToken cancellationToken)
     {
-        if (repositorySlug is null) return await RepositoryLevelAsync(cancellationToken);
+        if (location is null) return await RepositoryLevelAsync(cancellationToken);
+
+        string repositorySlug = location.RepositorySlug;
+        string directory = location.PathInRepository;
 
         // "" at a repository root, "src/" below one. Every directory under this level starts with it,
         // and the next segment begins where it ends. The length is taken in SQL rather than in C#
@@ -253,8 +273,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
             while (await reader.ReadAsync(cancellationToken))
             {
                 string segment = reader.GetString(0);
-                entries.Add(new TreeItem(segment,
-                    qualify ? $"{repositorySlug}/{prefix}{segment}" : prefix + segment,
+                entries.Add(new TreeItem(segment, paths.Format(repositorySlug, prefix + segment),
                     (int)reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), null));
             }
         }
@@ -277,19 +296,22 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
     }
 
     /// <summary>
-    ///     The root of a project: its repositories, which are what qualified paths begin with. A
-    ///     repository indexed from an empty tree still belongs here, hence the left join and the
-    ///     coalesce — it is a repository with no files, not an absent one.
+    ///     The root of a project: its repositories, which are what qualified paths begin with. The file
+    ///     and line counts are the ones the build recorded on <c>repositories</c>, not a second count
+    ///     over <c>files</c>: two definitions of "how many files are in this repository" would disagree
+    ///     the moment a build skips something, and the tree would then contradict the project page. Only
+    ///     the byte total has to be summed. A repository indexed from an empty tree still belongs here,
+    ///     hence the left join and the coalesce — it is a repository with no files, not an absent one.
     /// </summary>
     private async Task<IReadOnlyList<TreeItem>> RepositoryLevelAsync(CancellationToken cancellationToken)
     {
         using var command = Command("""
                                     SELECT r.slug,
-                                           CAST(count(f.file_id) AS BIGINT) AS files,
-                                           CAST(coalesce(sum(f.line_count), 0) AS BIGINT) AS lines,
+                                           CAST(r.file_count AS BIGINT) AS files,
+                                           CAST(r.line_count AS BIGINT) AS lines,
                                            CAST(coalesce(sum(f.size_bytes), 0) AS BIGINT) AS bytes
                                     FROM repositories r LEFT JOIN files f USING (repo_id)
-                                    GROUP BY r.slug
+                                    GROUP BY r.slug, r.file_count, r.line_count
                                     ORDER BY r.slug
                                     """, []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);

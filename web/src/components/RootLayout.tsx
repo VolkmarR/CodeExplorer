@@ -1,5 +1,6 @@
 import { Link, useLocation, useParams } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
+import { treeSearch } from '@/features/files/browseParams'
 import { cn } from '@/lib/utils'
 
 /** Same treatment for every nav link; the lit one adds the second class. */
@@ -41,7 +42,7 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
                 <Link
                   to="/projects/$project/files"
                   params={{ project }}
-                  search={{ glob: '', path: '' }}
+                  search={treeSearch()}
                   className={cn(NAV_LINK, view === 'files' && NAV_LINK_ACTIVE)}
                 >
                   Files

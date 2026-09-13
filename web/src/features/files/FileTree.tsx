@@ -1,6 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ChevronRight, FileText, Folder, GitBranch } from 'lucide-react'
+import { treeSearch } from '@/features/files/browseParams'
 import { treeQuery } from '@/features/files/queries'
 import { formatBytes, formatCount } from '@/lib/format'
 import {
@@ -27,7 +28,7 @@ export function FileTree({ project, path }: { project: string; path: string }) {
         <Link
           to="/projects/$project/files"
           params={{ project }}
-          search={{ glob: '', path: '' }}
+          search={treeSearch()}
           className="text-muted-foreground hover:text-foreground hover:underline"
         >
           {project}
@@ -41,7 +42,7 @@ export function FileTree({ project, path }: { project: string; path: string }) {
               <Link
                 to="/projects/$project/files"
                 params={{ project }}
-                search={{ glob: '', path: segments.slice(0, index + 1).join('/') }}
+                search={treeSearch(segments.slice(0, index + 1).join('/'))}
                 className="font-mono text-muted-foreground hover:text-foreground hover:underline"
               >
                 {segment}
@@ -68,55 +69,48 @@ export function FileTree({ project, path }: { project: string; path: string }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {level.entries.map((entry) => (
-                <TableRow key={entry.qualifiedPath}>
-                  <TableCell className="font-mono text-xs">
-                    <Link
-                      // A directory is a level to walk into; a file is a thing to read. The server has
-                      // already told us which by whether it counted the files beneath.
-                      to={
-                        entry.files === null
-                          ? '/projects/$project/file'
-                          : '/projects/$project/files'
-                      }
-                      params={{ project }}
-                      search={
-                        entry.files === null
-                          ? { path: entry.qualifiedPath }
-                          : { glob: '', path: entry.qualifiedPath }
-                      }
-                      className="flex items-center gap-2 hover:underline"
-                    >
-                      {entry.files === null ? (
-                        <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                      ) : level.repositoryLevel ? (
-                        <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-                      ) : (
-                        <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-                      )}
-                      {entry.name}
-                      {entry.files === null ? null : (
-                        <span className="font-sans text-muted-foreground">
-                          ({formatCount(entry.files)})
+              {level.entries.map((entry) => {
+                // A directory is a level to walk into; a file is a thing to read. The server has
+                // already told us which by whether it counted the files beneath.
+                const files = entry.files
+                const isFile = files === null
+                const Icon = isFile ? FileText : level.repositoryLevel ? GitBranch : Folder
+                return (
+                  <TableRow key={entry.qualifiedPath}>
+                    <TableCell className="font-mono text-xs">
+                      <Link
+                        to={isFile ? '/projects/$project/file' : '/projects/$project/files'}
+                        params={{ project }}
+                        search={
+                          isFile ? { path: entry.qualifiedPath } : treeSearch(entry.qualifiedPath)
+                        }
+                        className="flex items-center gap-2 hover:underline"
+                      >
+                        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                        {entry.name}
+                        {files === null ? null : (
+                          <span className="font-sans text-muted-foreground">
+                            ({formatCount(files)})
+                          </span>
+                        )}
+                      </Link>
+                      {/* A file committed but not indexed still exists, and the reason is what the
+                          operator needs in order to decide whether it matters. */}
+                      {entry.skipReason ? (
+                        <span className="ml-5 font-sans text-muted-foreground">
+                          ({entry.skipReason})
                         </span>
-                      )}
-                    </Link>
-                    {/* A file committed but not indexed still exists, and the reason is what the
-                        operator needs in order to decide whether it matters. */}
-                    {entry.skipReason ? (
-                      <span className="ml-5 font-sans text-muted-foreground">
-                        ({entry.skipReason})
-                      </span>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="text-right text-sm text-muted-foreground">
-                    {formatCount(entry.lines)}
-                  </TableCell>
-                  <TableCell className="text-right text-sm text-muted-foreground">
-                    {formatBytes(entry.sizeBytes)}
-                  </TableCell>
-                </TableRow>
-              ))}
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="text-right text-sm text-muted-foreground">
+                      {formatCount(entry.lines)}
+                    </TableCell>
+                    <TableCell className="text-right text-sm text-muted-foreground">
+                      {formatBytes(entry.sizeBytes)}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         </div>

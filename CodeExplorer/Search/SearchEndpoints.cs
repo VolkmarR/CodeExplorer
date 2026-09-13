@@ -130,21 +130,13 @@ internal static class SearchEndpoints
         if (index is null) return Results.NotFound(new { error = ToolReply.NoIndex(project) });
 
         // The shape has to be known before the path can be read at all: `src/x.ts` is a file in one
-        // project and a repository in another (ADR-0006). It is read from the index, which recorded how
-        // its own build named things, rather than from the control database, which this module does not
-        // open (ADR-0005).
-        var repositories = await index.RepositoriesAsync(cancellationToken);
-        bool single = (await index.InfoAsync(cancellationToken))?.SingleRepository ?? false;
-        string slug = repositories.Count > 0 ? repositories[0].Slug : project;
+        // project and a repository in another (ADR-0006). Null back from Parse is the repository level,
+        // which a single-repository project does not have.
+        var paths = await index.PathsAsync(project, cancellationToken);
+        var location = paths.Parse(path);
 
-        // A single-repository project has no level above its one repository, so the empty path is that
-        // repository's top level rather than a list of one.
-        var location = new ProjectPaths(single, slug).Parse(path)
-                       ?? (single ? new QualifiedPath(slug, "", false) : null);
-
-        var entries = await index.TreeAsync(location?.RepositorySlug, location?.PathInRepository ?? "", !single,
-            cancellationToken);
-        return Results.Ok(new TreeResponse(location?.ToString() ?? "", location is null,
+        var entries = await index.TreeAsync(paths, location, cancellationToken);
+        return Results.Ok(new TreeResponse(location is null ? "" : paths.Format(location), location is null,
             entries
                 .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
                     e.SkipReason))
