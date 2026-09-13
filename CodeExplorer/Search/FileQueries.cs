@@ -58,7 +58,7 @@ public sealed record GlobResult(int Total, IReadOnlyList<IndexedFile> Files, int
 ///     it. Glob matching is the SQL <c>GLOB</c> operator (ADR-0004), so <c>*</c> crosses <c>/</c> and
 ///     there is no brace expansion.
 /// </summary>
-public sealed class FileQueries(DuckDBConnection connection) : IDisposable
+public sealed class FileQueries(IndexLease lease) : IDisposable
 {
     // The join is for the slug only; qualified_path already carries it as a prefix, but splitting a
     // string to recover what a column holds would be the worse choice.
@@ -66,14 +66,15 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         "SELECT f.file_id, f.qualified_path, r.slug, f.line_count, f.size_bytes, f.skip_reason";
 
     private const string FileSource = "FROM files f JOIN repositories r USING (repo_id)";
-    public void Dispose() => connection.Dispose();
+    /// <summary>Releases the lease as well as the connection, which is what lets a swap proceed.</summary>
+    public void Dispose() => lease.Dispose();
 
     /// <summary>Null when the project has no index, which is an answer for the tool to phrase, not a failure.</summary>
     public static async Task<FileQueries?> OpenAsync(ProjectIndexes indexes, string slug,
         CancellationToken cancellationToken)
     {
-        var connection = await indexes.OpenAsync(slug, cancellationToken);
-        return connection is null ? null : new FileQueries(connection);
+        var lease = await indexes.OpenAsync(slug, cancellationToken);
+        return lease is null ? null : new FileQueries(lease);
     }
 
     /// <summary>
@@ -368,7 +369,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
 
     private DuckDBCommand Command(string sql, IEnumerable<DuckDBParameter> parameters)
     {
-        var command = connection.CreateCommand();
+        var command = lease.Connection.CreateCommand();
         command.CommandText = sql;
         foreach (var parameter in parameters) command.Parameters.Add(parameter);
         return command;

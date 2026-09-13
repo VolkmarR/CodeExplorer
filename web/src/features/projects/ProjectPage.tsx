@@ -1,31 +1,45 @@
+import { useEffect } from 'react'
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
 import { api } from '@/lib/api'
-import { BuildSummary } from '@/features/projects/BuildSummary'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { IndexStatus } from '@/features/projects/IndexStatus'
 import { NewRepositoryForm } from '@/features/projects/NewRepositoryForm'
+import { RefreshProgress } from '@/features/refresh/RefreshProgress'
 import { RepositoryTable } from '@/features/projects/RepositoryTable'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { invalidateProject, projectQuery, projectsQuery } from '@/features/projects/queries'
+import { refreshStatusQuery } from '@/features/refresh/queries'
 
 /**
  * One project: what its index holds, the repositories it is built from, and the operator actions on
- * both. A build runs inside the request until #8 makes it a shadow build and a swap, so the button
- * blocks and says so rather than pretending to be a background job.
+ * both. A refresh fetches every repository and rebuilds beside the live index, so the button hands
+ * the work off and the page follows it by polling; searches keep answering the whole time.
  */
 export function ProjectPage() {
   const { project: slug } = useParams({ from: '/projects/$project/' })
   const { data: project } = useSuspenseQuery(projectQuery(slug))
+  const { data: status } = useSuspenseQuery(refreshStatusQuery(slug))
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
-  const build = useMutation({
-    mutationFn: () => api.index(slug),
-    onSuccess: () => invalidateProject(queryClient, slug),
+  const running = status.state === 'Queued' || status.state === 'Running'
+
+  const refresh = useMutation({
+    mutationFn: () => api.refresh(slug),
+    // The status the POST answers with is the first poll, so the progress line appears without
+    // waiting a second for the interval to come round.
+    onSuccess: (started) => queryClient.setQueryData(refreshStatusQuery(slug).queryKey, started),
   })
+
+  // The index only changes when a refresh finishes, and the status is the only thing that says so.
+  // Keyed on the state alone: a second refresh passes through Queued and Running on its way back to
+  // Succeeded, so this fires once per refresh rather than on every poll reporting the same one.
+  useEffect(() => {
+    if (status.state === 'Succeeded') void invalidateProject(queryClient, slug)
+  }, [status.state, queryClient, slug])
 
   const remove = useMutation({
     mutationFn: () => api.removeProject(slug),
@@ -51,11 +65,13 @@ export function ProjectPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          {/* "Build" or "Rebuild", never "Refresh": this reads the local copies as they already are
-              and never fetches, so the word CONTEXT.md reserves for fetch-and-rebuild would promise
-              commits the operator will not get. #8 makes it fetch, and takes the word with it. */}
-          <Button onClick={() => build.mutate()} disabled={build.isPending}>
-            {build.isPending ? 'Building…' : project.index.builtAt ? 'Rebuild' : 'Build'}
+          {/* "Refresh" as CONTEXT.md defines it, and for a project that has never been built too: the
+              first one clones rather than fetches, but it is the same action and a second name for it
+              would only suggest there are two. The label says what is happening rather than what was
+              asked for, because the work outlives the click and a page reopened mid-refresh must read
+              the same. */}
+          <Button onClick={() => refresh.mutate()} disabled={running || refresh.isPending}>
+            {running ? 'Refreshing…' : 'Refresh'}
           </Button>
           <Button
             variant="destructive"
@@ -70,9 +86,11 @@ export function ProjectPage() {
         </div>
       </div>
 
-      {build.error ? <ErrorPanel error={build.error} /> : null}
+      {/* A refusal — another refresh running, or too little disk — is the server's prose and belongs
+          in the panel that shows it verbatim. What a refresh then does is the status's to report. */}
+      {refresh.error ? <ErrorPanel error={refresh.error} /> : null}
       {remove.error ? <ErrorPanel error={remove.error} /> : null}
-      {build.data ? <BuildSummary summary={build.data} /> : null}
+      <RefreshProgress status={status} />
 
       <Card>
         <CardHeader>

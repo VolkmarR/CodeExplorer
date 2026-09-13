@@ -242,7 +242,7 @@ public sealed class FileToolsTests : IDisposable
         {
             string text = await CallAsync(client, tool, arguments);
             Assert.Contains("no index", text);
-            Assert.Contains("POST /api/projects/alpha/index", text);
+            Assert.Contains("POST /api/projects/alpha/refresh", text);
         }
     }
 

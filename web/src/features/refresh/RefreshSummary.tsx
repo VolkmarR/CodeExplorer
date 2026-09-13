@@ -2,10 +2,10 @@ import type { IndexSummary } from '@/lib/api'
 import { formatCount } from '@/lib/format'
 
 /**
- * What a build just produced. One bad repository does not fail the project, so what was left out is
+ * What a refresh produced. One bad repository does not fail the project, so what was left out is
  * listed with the reason rather than being silently missing from the count.
  */
-export function BuildSummary({ summary }: { summary: IndexSummary }) {
+export function RefreshSummary({ summary }: { summary: IndexSummary }) {
   return (
     <div className="rounded-lg border bg-card px-4 py-3 text-sm">
       <p>

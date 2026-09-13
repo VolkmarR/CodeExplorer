@@ -117,9 +117,11 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         if (regex && UnsupportedRegex(query) is { } unsupported) return new GrepProblem(unsupported);
         if (regex && request.WholeWord) query = $@"\b(?:{query})\b";
 
-        using var connection = await indexes.OpenAsync(slug, cancellationToken);
-        if (connection is null)
+        using var lease = await indexes.OpenAsync(slug, cancellationToken);
+        if (lease is null)
             return new GrepProblem(ToolReply.NoIndex(slug));
+
+        var connection = lease.Connection;
 
         var bounds = Bounds.From(request);
         try

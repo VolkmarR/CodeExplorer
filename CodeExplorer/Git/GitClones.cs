@@ -62,6 +62,33 @@ public sealed class GitClones(
     }
 
     /// <summary>
+    ///     Opens the repository with its local copy brought up to date: a shallow fetch when it is
+    ///     already cloned, and the clone itself when it is not, which is already current. This is the
+    ///     first half of a refresh (CONTEXT.md); without it a rebuild re-reads whatever was fetched
+    ///     when the repository was first added, however long ago that was.
+    /// </summary>
+    public async Task<Repository> OpenRefreshedAsync(ProjectRepository repository,
+        CancellationToken cancellationToken)
+    {
+        string path = Path.Combine(_cloneRoot, repository.ProjectSlug, repository.Slug + ".git");
+        var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!Repository.IsValid(path))
+                await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken);
+            else
+                await Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        return new Repository(path);
+    }
+
+    /// <summary>
     ///     Deletes the local copy of one repository, or of a whole project when
     ///     <paramref name="repositorySlug" /> is null. Called after the control database has forgotten
     ///     them, so a failure here leaves disused bytes behind rather than a repository the operator
@@ -189,29 +216,7 @@ public sealed class GitClones(
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         var options = new CloneOptions { IsBare = true };
-        // ADR-0003: the local transport rejects shallow clones ("shallow fetch is not supported by the
-        // local transport"), so a path or file URL clones in full. Only tests and mirrors use those.
-        if (RepositoryUrl.Classify(repository.Url) == RepositoryUrlKind.Remote) options.FetchOptions.Depth = 1;
-        options.FetchOptions.OnTransferProgress = _ => !cancellationToken.IsCancellationRequested;
-        if (repository.ProtectedCredential is { } ciphertext)
-        {
-            string token;
-            try
-            {
-                token = _protector.Unprotect(ciphertext);
-            }
-            catch (CryptographicException)
-            {
-                // The key ring that protected it is gone (a restart without #13, or a rotated key).
-                throw new McpException(
-                    $"The stored credential for repository '{repository.Slug}' cannot be decrypted because the "
-                    + "Data Protection key ring has changed. Ask the operator to set the credential again.");
-            }
-
-            // GitHub and Azure DevOps both accept a token as the password with any user name.
-            options.FetchOptions.CredentialsProvider = (_, _, _) =>
-                new UsernamePasswordCredentials { Username = "token", Password = token };
-        }
+        Configure(options.FetchOptions, repository, cancellationToken);
 
         // The credential is deliberately absent from this line and every other log line.
         if (logger.IsEnabled(LogLevel.Information))
@@ -232,6 +237,78 @@ public sealed class GitClones(
                 $"Cloning repository '{repository.Slug}' from '{repository.Url}' failed: {ex.Message.TrimEnd('.')}. "
                 + "Ask the operator to check the URL and the stored credential for this repository, then try again.");
         }
+    }
+
+    /// <summary>
+    ///     Brings an existing clone up to date. The refspec writes the local branch refs directly
+    ///     rather than remote-tracking ones, because the clone is bare: HEAD points at a local branch
+    ///     and that is what the tree walk reads, so a fetch that only moved <c>refs/remotes</c> would
+    ///     download the commits and index none of them. It is forced because there is no working copy
+    ///     and nothing to merge — the remote's history replaces ours outright, including after a force
+    ///     push.
+    /// </summary>
+    private void Fetch(ProjectRepository repository, string path, CancellationToken cancellationToken)
+    {
+        // Pruned, because the clone is a mirror of the remote and nothing here merges: a branch deleted
+        // upstream must go, or the index keeps serving a branch that no longer exists. If the pruned
+        // branch is the one HEAD points at — a renamed default branch — HEAD resolves to nothing and
+        // the refresh reports the repository as having no commits rather than indexing the stale tree.
+        var options = new FetchOptions { Prune = true };
+        Configure(options, repository, cancellationToken);
+
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.LogInformation("Fetching repository {Repository} of project {Project}",
+                repository.Slug, repository.ProjectSlug);
+        using var clone = new Repository(path);
+        try
+        {
+            Commands.Fetch(clone, "origin", ["+refs/heads/*:refs/heads/*"], options, null);
+        }
+        catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // The clone is left in place: it still holds the commits of the last successful fetch, so
+            // a refresh that cannot reach the remote reports the repository and indexes nothing newer,
+            // rather than losing what is already there. Neither the URL nor libgit2's message can
+            // carry the credential, for the reason Clone gives.
+            throw new McpException(
+                $"Fetching repository '{repository.Slug}' from '{repository.Url}' failed: {ex.Message.TrimEnd('.')}. "
+                + "Ask the operator to check the URL and the stored credential for this repository, then try again.");
+        }
+
+        // HEAD has moved, so what a previous scan concluded about LFS is about the old tree.
+        _lfsByPath.TryRemove(clone.Info.Path, out _);
+    }
+
+    /// <summary>
+    ///     The transfer settings a clone and a fetch share: shallow where the transport allows it,
+    ///     cancellable, and carrying the stored credential to libgit2 and nowhere else.
+    /// </summary>
+    private void Configure(FetchOptions options, ProjectRepository repository, CancellationToken cancellationToken)
+    {
+        // ADR-0003: the local transport rejects shallow clones and fetches ("shallow fetch is not
+        // supported by the local transport"), so a path or file URL transfers in full. Only tests and
+        // mirrors use those.
+        if (RepositoryUrl.Classify(repository.Url) == RepositoryUrlKind.Remote) options.Depth = 1;
+        options.OnTransferProgress = _ => !cancellationToken.IsCancellationRequested;
+        if (repository.ProtectedCredential is not { } ciphertext) return;
+
+        string token;
+        try
+        {
+            token = _protector.Unprotect(ciphertext);
+        }
+        catch (CryptographicException)
+        {
+            // The key ring that protected it is gone (a restart without #13, or a rotated key).
+            throw new McpException(
+                $"The stored credential for repository '{repository.Slug}' cannot be decrypted because the "
+                + "Data Protection key ring has changed. Ask the operator to set the credential again.");
+        }
+
+        // GitHub and Azure DevOps both accept a token as the password with any user name.
+        options.CredentialsProvider = (_, _, _) =>
+            new UsernamePasswordCredentials { Username = "token", Password = token };
     }
 
     /// <summary>libgit2 writes pack files read-only, which a recursive delete refuses until cleared.</summary>
