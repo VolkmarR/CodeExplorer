@@ -1,4 +1,5 @@
 import type { RefreshStatus } from '@/lib/api'
+import { ErrorPanel } from '@/components/ErrorPanel'
 import { RefreshSummary } from '@/features/refresh/RefreshSummary'
 
 /**
@@ -30,14 +31,10 @@ export function RefreshProgress({ status }: { status: RefreshStatus }) {
     )
   }
 
-  if (status.state === 'Failed') {
-    return (
-      <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3">
-        <p className="text-sm font-medium text-destructive">The refresh did not finish</p>
-        <p className="mt-1 text-sm whitespace-pre-wrap text-foreground/90">{status.error}</p>
-      </div>
-    )
-  }
+  // The same panel a failed request gets, so the two errors a project page can show look alike. The
+  // server's prose is the message; the title says which of the two this is.
+  if (status.state === 'Failed')
+    return <ErrorPanel error={status.error} title="The refresh did not finish" />
 
   return status.summary ? <RefreshSummary summary={status.summary} /> : null
 }

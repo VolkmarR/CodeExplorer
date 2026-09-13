@@ -34,7 +34,7 @@ public sealed class RefreshTests : IDisposable
         var summary = await _host.RefreshAsync("alpha");
 
         Assert.Equal(2, summary.Files);
-        Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await PathsAsync());
+        Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await _host.ScalarsAsync("alpha", PathQuery));
     }
 
     [Fact]
@@ -50,18 +50,18 @@ public sealed class RefreshTests : IDisposable
             using (var response = await _host.RequestRefreshAsync("alpha"))
                 Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
 
-            await WaitForSwapAsync("alpha");
+            await WaitForSwapAsync(_host, "alpha");
 
             // The shadow index is complete and the swap is blocked on this connection, which is the
             // one moment a half-applied refresh could be visible. It is not: the old index is intact.
-            Assert.Equal(["one/src/A.cs"], await PathsAsync(inFlight));
+            Assert.Equal(["one/src/A.cs"], await TestHost.ScalarsAsync(inFlight, PathQuery));
             // And it really is blocked, rather than having quietly finished before this ran.
             Assert.False(_host.Refreshes.Pending.IsCompleted);
         }
 
         await _host.WaitForRefreshesAsync();
         Assert.Equal(RefreshState.Succeeded, (await _host.RefreshStatusAsync("alpha")).State);
-        Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await PathsAsync());
+        Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await _host.ScalarsAsync("alpha", PathQuery));
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public sealed class RefreshTests : IDisposable
         {
             using (var first = await _host.RequestRefreshAsync("alpha"))
                 Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
-            await WaitForSwapAsync("alpha");
+            await WaitForSwapAsync(_host, "alpha");
 
             using var second = await _host.RequestRefreshAsync("alpha");
 
@@ -149,7 +149,7 @@ public sealed class RefreshTests : IDisposable
         {
             using (var first = await _host.RequestRefreshAsync("alpha"))
                 Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
-            await WaitForSwapAsync("alpha");
+            await WaitForSwapAsync(_host, "alpha");
 
             // Accepted rather than refused: one rebuild at a time is a queue, so a second project
             // waits its turn instead of being turned away for something it has nothing to do with.
@@ -238,7 +238,7 @@ public sealed class RefreshTests : IDisposable
         Assert.NotNull(status.Error);
         Assert.Contains("one", status.Error, StringComparison.Ordinal);
         // The point of failing rather than swapping: what was searchable before still is.
-        Assert.Equal(["one/src/A.cs"], await PathsAsync());
+        Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
     }
 
     private static Dictionary<string, Dictionary<string, string>> Fixture(string repository = "one") =>
@@ -246,21 +246,13 @@ public sealed class RefreshTests : IDisposable
 
     private const string PathQuery = "SELECT qualified_path FROM files ORDER BY qualified_path";
 
-    /// <summary>What the project holds now, through a lease of this call's own.</summary>
-    private Task<List<string>> PathsAsync() => _host.ScalarsAsync("alpha", PathQuery);
-
-    /// <summary>What a lease taken before a refresh still sees, which is the whole point of the drain.</summary>
-    private static Task<List<string>> PathsAsync(IndexLease lease) => TestHost.ScalarsAsync(lease, PathQuery);
-
     /// <summary>
     ///     Waits until the shadow index is built and only the swap is left, which is where the drain
     ///     holds it. The phase is compared against the constant the builder reports, not a literal, so
     ///     rewording the operator-facing sentence cannot silently turn this into a wait that never ends.
     /// </summary>
-    private Task<RefreshStatus> WaitForSwapAsync(string project) => WaitForSwapAsync(_host, project);
-
     private static Task<RefreshStatus> WaitForSwapAsync(TestHost host, string project) =>
-        PollAsync(host, project, s => s.Phase == IndexBuilder.SwapPhase);
+        PollAsync(host, project, s => s.Phase == ProjectRefresh.SwapPhase);
 
     /// <summary>
     ///     Polls the status endpoint the way the web UI does, until it says what the test is waiting

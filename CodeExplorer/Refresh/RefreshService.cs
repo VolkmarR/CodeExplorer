@@ -39,21 +39,25 @@ public sealed record RefreshStatus(
     string? Error);
 
 /// <summary>
-///     Whether a refresh was taken on. A refusal carries the prose saying why and what to do instead,
-///     and <paramref name="OutOfDisk" /> tells the two refusals apart: waiting for the rebuild slot is
-///     something a caller retries, and a full disk is something an operator has to act on.
+///     Why a refresh was not taken on: the prose saying what to do instead, and the status code that
+///     says which kind of answer it is. The code travels with the reason rather than being decoded
+///     from a flag at the endpoint, so a third reason needs no third flag.
 /// </summary>
-public sealed record RefreshRequest(bool Accepted, RefreshStatus Status, string? Refusal, bool OutOfDisk = false);
+/// <param name="Message">Operator-facing prose, returned as the API's <c>{ error }</c>.</param>
+/// <param name="StatusCode">409 when the caller should simply try later, 507 when the disk is the problem.</param>
+public sealed record RefreshRefusal(string Message, int StatusCode);
+
+/// <summary>Where a refresh request got to. <paramref name="Refused" /> null means it was taken on.</summary>
+public sealed record RefreshRequest(RefreshStatus Status, RefreshRefusal? Refused = null);
 
 /// <summary>
 ///     Drives refreshes: one at a time across the whole server, refused when the disk would not hold
 ///     the shadow index, and reported through a status a caller polls. The work itself is
-///     <see cref="IndexBuilder.RefreshAsync" />; this owns when it may start and what an operator can
-///     see of it.
+///     <see cref="ProjectRefresh" />; this owns when it may start and what an operator can see of it.
 /// </summary>
 public sealed class RefreshService(
     ControlDatabase control,
-    IndexBuilder builder,
+    ProjectRefresh refresh,
     ProjectIndexes indexes,
     IConfiguration configuration,
     IHostApplicationLifetime lifetime,
@@ -83,9 +87,15 @@ public sealed class RefreshService(
     /// </summary>
     public Task Pending { get; private set; } = Task.CompletedTask;
 
+    /// <summary>
+    ///     The status of a refresh this replica knows about, or null when it has run none for the
+    ///     project. Null does not mean the project is unknown — only the control database can say that.
+    /// </summary>
+    public RefreshStatus? Find(string slug) => _statuses.GetValueOrDefault(slug);
+
     /// <summary>What a caller polling the status endpoint gets, for a project that has never refreshed too.</summary>
     public RefreshStatus Status(string slug) =>
-        _statuses.GetValueOrDefault(slug)
+        Find(slug)
         ?? new RefreshStatus(slug, RefreshState.NeverRun, "No refresh has run on this replica", null, null, null, null);
 
     /// <summary>
@@ -99,12 +109,12 @@ public sealed class RefreshService(
         {
             var current = Status(project.Slug);
             if (current.State is RefreshState.Queued or RefreshState.Running)
-                return new RefreshRequest(false, current,
+                return new RefreshRequest(current, new RefreshRefusal(
                     $"A refresh of project '{project.Slug}' is already {(current.State == RefreshState.Queued ? "queued" : "running")}. "
-                    + $"Poll GET /api/projects/{project.Slug}/refresh for its progress instead of starting a second one.");
+                    + $"Poll GET /api/projects/{project.Slug}/refresh for its progress instead of starting a second one.",
+                    StatusCodes.Status409Conflict));
 
-            if (InsufficientDisk(project.Slug) is { } refusal)
-                return new RefreshRequest(false, current, refusal, true);
+            if (InsufficientDisk(project.Slug) is { } refusal) return new RefreshRequest(current, refusal);
 
             var queued = new RefreshStatus(project.Slug, RefreshState.Queued, "Waiting for the rebuild slot",
                 DateTimeOffset.UtcNow, null, null, null);
@@ -113,7 +123,7 @@ public sealed class RefreshService(
             // than letting one escape, and the continuation is what serialises the rebuilds.
             Pending = Pending.ContinueWith(_ => RunAsync(project), CancellationToken.None,
                 TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
-            return new RefreshRequest(true, queued, null);
+            return new RefreshRequest(queued);
         }
     }
 
@@ -122,7 +132,8 @@ public sealed class RefreshService(
         // The refresh outlives the request that asked for it, so it takes the application's token and
         // not the caller's: a browser closing a tab must not abandon a rebuild half-way.
         var cancellationToken = lifetime.ApplicationStopping;
-        var started = _statuses[project.Slug].StartedAt ?? DateTimeOffset.UtcNow;
+        // Set when the refresh was queued, which is what an operator watching a queue wants to see.
+        var started = _statuses[project.Slug].StartedAt;
 
         void Report(string phase) =>
             _statuses[project.Slug] = Status(project.Slug) with { State = RefreshState.Running, Phase = phase };
@@ -145,12 +156,12 @@ public sealed class RefreshService(
             // filled the disk in between, and that is exactly the condition ADR-0003 says to avoid.
             if (InsufficientDisk(project.Slug) is { } refusal)
             {
-                Fail(refusal);
+                Fail(refusal.Message);
                 return;
             }
 
             Report("Starting");
-            var summary = await builder.RefreshAsync(project, Report, cancellationToken);
+            var summary = await refresh.RunAsync(project, Report, cancellationToken);
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Succeeded, "Done", started,
                 DateTimeOffset.UtcNow, summary, null);
             if (logger.IsEnabled(LogLevel.Information))
@@ -167,20 +178,28 @@ public sealed class RefreshService(
     }
 
     /// <summary>
-    ///     The prose refusing a refresh that would not fit, or null when it fits. One method, because
-    ///     the check runs twice — once to answer the caller, once when the queued work actually starts.
+    ///     The refusal for a refresh that would not fit, or null when it fits. One method, because the
+    ///     check runs twice — once to answer the caller, once when the queued work actually starts.
     /// </summary>
-    private string? InsufficientDisk(string slug)
+    private RefreshRefusal? InsufficientDisk(string slug)
     {
         long free = indexes.FreeBytes();
         long required = Math.Max(_minimumFreeBytes, indexes.LiveSizeBytes(slug) * 2);
         return free >= required
             ? null
-            : $"A refresh of project '{slug}' needs about {Mib(required)} free where the indexes live, and only {Mib(free)} is left. "
-              + "That disk holds every project's index, the shadow index a refresh builds beside it, and the local copies, and it cannot be enlarged (ADR-0003). "
-              + "Delete a project that is no longer needed, then refresh again.";
+            : new RefreshRefusal(
+                $"A refresh of project '{slug}' needs about {Mib(required)} free where the indexes live, and only {Mib(free)} is left. "
+                + "That disk holds every project's index, the shadow index a refresh builds beside it, and the local copies, and it cannot be enlarged (ADR-0003). "
+                + "Delete a project that is no longer needed, then refresh again.",
+                // 507 rather than another 409: a cron reading only the status line still learns that
+                // this is about storage and not about another rebuild holding the slot.
+                StatusCodes.Status507InsufficientStorage);
     }
 
+    /// <summary>
+    ///     MiB, not <c>ToolReply.Bytes</c>'s scaled MB: this figure sits next to the 8 GiB ceiling
+    ///     ADR-0003 documents, and the two are only comparable in the same units.
+    /// </summary>
     private static string Mib(long bytes) =>
         string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.#} MiB");
 }
