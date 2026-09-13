@@ -209,7 +209,8 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         string sql = request.FilesOnly
             ? $"""
                {common}
-               SELECT t.total_files, t.total_lines, p.qualified_path, p.n, NULL::INTEGER, NULL::VARCHAR, NULL::BOOLEAN
+               SELECT t.total_files, t.total_lines, p.qualified_path, p.n AS match_count,
+                      NULL::INTEGER AS line_number, NULL::VARCHAR AS content, NULL::BOOLEAN AS is_match
                FROM totals t LEFT JOIN page_files p ON true
                ORDER BY p.n DESC, p.qualified_path
                """
@@ -232,7 +233,8 @@ public sealed class GrepSearch(ProjectIndexes indexes)
                page_lines AS (
                    SELECT p.qualified_path, p.n, s.line_number, s.content, s.is_match
                    FROM page_files p JOIN shown s USING (file_id))
-               SELECT t.total_files, t.total_lines, p.qualified_path, p.n, p.line_number, p.content, p.is_match
+               SELECT t.total_files, t.total_lines, p.qualified_path, p.n AS match_count,
+                      p.line_number, p.content, p.is_match
                FROM totals t LEFT JOIN page_lines p ON true
                ORDER BY p.n DESC, p.qualified_path, p.line_number
                """;
@@ -248,21 +250,22 @@ public sealed class GrepSearch(ProjectIndexes indexes)
             List<GrepLine> current = [];
             while (await reader.ReadAsync(cancellationToken))
             {
-                totalFiles = (int)reader.GetInt64(0);
-                totalLines = reader.GetInt64(1);
-                if (reader.IsDBNull(2)) continue;
+                totalFiles = (int)reader.Int64("total_files");
+                totalLines = reader.Int64("total_lines");
+                if (reader.IsNull("qualified_path")) continue;
 
-                string path = reader.GetString(2);
+                string path = reader.Text("qualified_path");
                 if (path != currentPath)
                 {
                     if (currentPath is not null) files.Add(File(currentPath, currentCount, current));
                     currentPath = path;
-                    currentCount = (int)reader.GetInt64(3);
+                    currentCount = (int)reader.Int64("match_count");
                     current = [];
                 }
 
-                if (!reader.IsDBNull(4))
-                    current.Add(new GrepLine(reader.GetInt32(4), reader.GetString(5), reader.GetBoolean(6)));
+                if (!reader.IsNull("line_number"))
+                    current.Add(new GrepLine(reader.Int32("line_number"), reader.Text("content"),
+                        reader.Flag("is_match")));
             }
 
             if (currentPath is not null) files.Add(File(currentPath, currentCount, current));
@@ -311,14 +314,15 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         var counts = new List<(long FileId, string Path, int Count)>();
         using (var command = Command(connection, $"""
                                                   {Documents(fileFilter + literalFilter)}
-                                                  SELECT file_id, qualified_path, len(regexp_extract_all(content, $q, 0, $flags)) AS n
+                                                  SELECT file_id, qualified_path, len(regexp_extract_all(content, $q, 0, $flags)) AS match_count
                                                   FROM docs WHERE regexp_matches(content, $q, $flags)
-                                                  ORDER BY n DESC, qualified_path
+                                                  ORDER BY match_count DESC, qualified_path
                                                   """, [.. matchParameters, .. fileParameters]))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
-                counts.Add((reader.GetInt64(0), reader.GetString(1), (int)reader.GetInt64(2)));
+                counts.Add((reader.Int64("file_id"), reader.Text("qualified_path"),
+                    (int)reader.Int64("match_count")));
         }
 
         int? withoutFilters = null;
@@ -341,13 +345,14 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         var marked = new Dictionary<long, string>();
         using (var command = Command(connection, $"""
                                                   {Documents($" AND f.file_id IN ({ids})")}
-                                                  SELECT file_id, regexp_replace(content, '(' || $q || ')', chr(1) || '\1' || chr(2), $gflags)
+                                                  SELECT file_id,
+                                                         regexp_replace(content, '(' || $q || ')', chr(1) || '\1' || chr(2), $gflags) AS marked
                                                   FROM docs
                                                   """,
                    [new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
-            while (await reader.ReadAsync(cancellationToken)) marked[reader.GetInt64(0)] = reader.GetString(1);
+            while (await reader.ReadAsync(cancellationToken)) marked[reader.Int64("file_id")] = reader.Text("marked");
         }
 
         var files = new List<GrepFile>();
