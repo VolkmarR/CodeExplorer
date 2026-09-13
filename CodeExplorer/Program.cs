@@ -2,6 +2,10 @@ using CodeExplorer;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Traces and metrics when an OTLP endpoint is configured, and nothing at all when it is not
+// (ADR-0004): an empty appsettings must still yield a working, offline server.
+builder.AddTelemetry();
+
 // The default key ring (a folder under the user profile) protects stored credentials until #13
 // moves it to Blob Storage and Key Vault; absent configuration must still yield a working server.
 builder.Services.AddDataProtection();

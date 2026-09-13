@@ -12,7 +12,9 @@ dotnet run --project CodeExplorer     # API, MCP and the built UI on http://loca
 ```
 
 No configuration is needed: absent settings select local defaults, so a plain `dotnet run` is a
-complete, offline, unauthenticated server (ADR-0004).
+complete, offline, unauthenticated server (ADR-0004). Traces and metrics are one of those defaults:
+set `Telemetry:OtlpEndpoint` (or the standard `OTEL_EXPORTER_OTLP_ENDPOINT`) to export them, and
+leave it unset to run with no exporter at all.
 
 The web UI is served from `CodeExplorer/wwwroot`, which `web/` builds into. To work on it with hot
 reload, run `vp dev` in `web/` alongside the server and use <http://localhost:5173>; see
