@@ -1,0 +1,6 @@
+minimumReleaseAgeExclude:
+  - '@tanstack/history@1.162.4'
+  - '@tanstack/react-router@1.170.36'
+  - '@tanstack/router-core@1.171.30'
+  - '@tanstack/router-generator@1.167.36'
+  - '@tanstack/router-plugin@1.168.38'

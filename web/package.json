@@ -1,0 +1,32 @@
+{
+  "name": "codeexplorer-web",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@base-ui/react": "^1.8.0",
+    "@tanstack/highlight": "^0.1.0",
+    "@tanstack/react-query": "^5.102.8",
+    "@tanstack/react-router": "^1.170.36",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "ky": "^2.1.0",
+    "lucide-react": "^0.552.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tailwind-merge": "^3.4.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/router-plugin": "^1.168.38",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxc-transform-react": "^0.149.0",
+    "oxlint-plugin-react-doctor": "^0.9.14",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite-plus": "^0.3.1"
+  },
+  "packageManager": "pnpm@11.24.0"
+}

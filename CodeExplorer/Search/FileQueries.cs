@@ -57,14 +57,21 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         return connection is null ? null : new FileQueries(connection);
     }
 
-    public async Task<IndexInfo> InfoAsync(CancellationToken cancellationToken)
+    /// <summary>
+    ///     Null when the file exists but the build that was filling it never finished — the row is
+    ///     written last, so its absence is what an interrupted build leaves behind. That is a state a
+    ///     caller can catch the server in, and the project list has to show every other project even
+    ///     when one is in it.
+    /// </summary>
+    public async Task<IndexInfo?> InfoAsync(CancellationToken cancellationToken)
     {
         // epoch() hands back seconds as a double, which is the one representation of a TIMESTAMPTZ that
         // does not depend on whether the ICU extension is loaded to decide the session time zone.
         using var command = Command("SELECT epoch(built_at), fts_indexed FROM index_info", []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        await reader.ReadAsync(cancellationToken);
-        return new IndexInfo(DateTimeOffset.FromUnixTimeSeconds((long)reader.GetDouble(0)), reader.GetBoolean(1));
+        return await reader.ReadAsync(cancellationToken)
+            ? new IndexInfo(DateTimeOffset.FromUnixTimeSeconds((long)reader.GetDouble(0)), reader.GetBoolean(1))
+            : null;
     }
 
     public async Task<IReadOnlyList<IndexedRepository>> RepositoriesAsync(CancellationToken cancellationToken)

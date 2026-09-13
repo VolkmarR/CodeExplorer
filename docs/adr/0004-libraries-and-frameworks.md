@@ -74,17 +74,55 @@ and a ticket that breaks that has a defect.
 
 ## Web UI
 
-- **React 19.3, Vite 8.3, TypeScript 7.0, pnpm**, built into `CodeExplorer/wwwroot`.
+Revised on 2026-09-13 while #7 was being built. The first pass named plain Vite 8.3 with oxlint as a
+separate dependency, TanStack Router loaders as the only data layer, and `fetch`. The five decisions
+below replaced that, and the reasoning for each is recorded here rather than in the ticket.
+
+- **React 19.3, TypeScript 7.0, pnpm**, built into `CodeExplorer/wwwroot`. The app lives in `web/`
+  at the repository root and stays out of the `.slnx`.
+- **Vite+ 0.3.1 (`vite-plus`, the `vp` CLI)** in place of Vite and oxlint as separate dependencies.
+  It bundles Vite 8.2.2 on Rolldown, Vitest, oxlint and oxfmt behind one dependency and one
+  configuration file, `vite.config.ts`, which now also carries the `lint` and `fmt` sections. The
+  cost is that the bundled Vite trails the standalone release by a patch or two; the gain is that
+  formatting arrives at all, which a separate oxfmt would have been a sixth dependency to get.
+  There are deliberately **no `package.json` scripts**: `vp dev`, `vp build` and `vp check` are
+  built-ins, and a script of the same name would only make `vp run <name>` ambiguous.
 - **TanStack Router 1.170** (`@tanstack/react-router` + `@tanstack/router-plugin`): file-based
-  routes, typed search params via `validateSearch`. Shareable state lives in the URL through the
-  router's search params; there is no state library.
-- **Tailwind CSS 4.3** (`@tailwindcss/vite`) with **shadcn 4.21** components. shadcn copies
-  component source into the repo; those files are ours to edit and are not reinstalled over local
-  changes.
-- **@tanstack/highlight 0.1.0** for the file view, with a **custom C# language definition** written
-  in this repo. Chosen knowing that 0.1.0 ships no C# and has no grammar engine; the definition is
-  hand-written patterns and a candidate for upstream contribution.
-- **oxlint** as the linter, carried over from the proof of concept.
+  routes under `web/src/routes`, typed search params via `validateSearch`. Shareable state lives in
+  the URL through the router's search params; there is no state library.
+- **TanStack Query 5.102 and ky 2.1** for reads and writes. A route loader primes a query with
+  `ensureQueryData` and the component reads it with `useSuspenseQuery`, so preloading on hover and
+  invalidation after a mutation are one mechanism rather than two. ky replaces hand-rolled `fetch`;
+  its `beforeError` hook is where the API's `{ error }` prose replaces the status line, which is the
+  whole reason a semantic failure is worth returning as prose. Query is a cache, not the state
+  library the paragraph above rules out: nothing shareable is kept in it.
+- **Tailwind CSS 4.3** (`@tailwindcss/vite`) with **shadcn 4.21** components, in its **Base UI**
+  flavour: `components.json` carries `"style": "base-vega"`, so `shadcn add` copies the components
+  built on **@base-ui/react 1.8** rather than the Radix ones. Base UI composes through a `render`
+  prop where Radix took `asChild` and a single child, which is the only difference the calling code
+  sees. shadcn copies component source into the repo; those files are ours to edit and are not
+  reinstalled over local changes — re-running `shadcn add --overwrite` discards local edits and
+  reintroduces its `import { cn } from "cn"` mistake, which is ours to fix each time.
+  What it copies is not self-contained, so its runtime dependencies are named here too and are not a
+  ticket's choice: **@base-ui/react 1.8** (the primitives), **class-variance-authority 0.7** (the
+  variant tables), **clsx 2.1** and **tailwind-merge 3.4** (the `cn` helper), and **lucide-react
+  0.552** (the icon set `components.json` selects).
+- **React Compiler through `oxc-transform-react`** (`@vitejs/plugin-react`'s `compiler: true`),
+  the Rust port, not the Babel plugin — Babel is the only thing this toolchain would otherwise have
+  had to install. `@vitejs/plugin-react` calls its native compiler support experimental; a fatal
+  diagnostic fails the transform rather than miscompiling, so the failure mode is a build error.
+  Manual memoization is not removed where it documents a real cost, such as tokenizing a whole file.
+- **@tanstack/highlight 0.1.0** for the file view, with **custom C# and X# language definitions**
+  written in this repo. Chosen knowing that 0.1.0 ships neither and has no grammar engine; both are
+  hand-written patterns and candidates for upstream contribution. Its `patternTokenizer` helper is
+  not in the package's exports map, so `highlight/patterns.ts` carries a thirty-line copy of that
+  rule and both definitions share it.
+- **oxlint-plugin-react-doctor 0.9** on top of oxlint's own plugins, run through Vite+'s `jsPlugins`.
+  Its 906 rules ship with no preset, so `web/lint.rules.ts` derives the enabled set from the
+  plugin's own registry rather than listing them, at the severity each rule declares, minus rules
+  for frameworks this app does not use and rules that need the `react-doctor` CLI's whole-project
+  view. It earned its place on the first run by finding a real defect: a search form that copied the
+  URL's parameters into state once and went stale when the pager navigated.
 
 ## Consequences
 
