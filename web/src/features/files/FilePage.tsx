@@ -23,8 +23,19 @@ export function FilePage() {
             {formatCount(file.lineCount)} lines, {formatBytes(file.sizeBytes)}
           </p>
         </div>
-        <Button render={<Link to="/projects/$project" params={{ project }} />} variant="ghost">
-          Back to project
+        {/* Back to the folder this file is in, which is where the reader came from and where the
+            sibling they want next is. The qualified path already names it. */}
+        <Button
+          render={
+            <Link
+              to="/projects/$project/files"
+              params={{ project }}
+              search={{ glob: '', path: path.slice(0, path.lastIndexOf('/')) }}
+            />
+          }
+          variant="ghost"
+        >
+          Back to folder
         </Button>
       </div>
 

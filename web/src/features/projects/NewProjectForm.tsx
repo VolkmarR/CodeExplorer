@@ -3,13 +3,16 @@ import { useState } from 'react'
 import { api } from '@/lib/api'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { projectsQuery } from '@/features/projects/queries'
 
+/** Both callbacks leave the form; they are separate so a caller can tell a create from a dismissal. */
+type NewProjectFormProps = { onCancel: () => void; onCreated: () => void }
+
 /** Creating a project: the slug agents will address it by, and a display name that can change. */
-export function NewProjectForm() {
+export function NewProjectForm({ onCancel, onCreated }: NewProjectFormProps) {
   const queryClient = useQueryClient()
   const [slug, setSlug] = useState('')
   const [name, setName] = useState('')
@@ -20,14 +23,13 @@ export function NewProjectForm() {
       setSlug('')
       setName('')
       await queryClient.invalidateQueries(projectsQuery())
+      onCreated()
     },
   })
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">New project</CardTitle>
-      </CardHeader>
+      {/* No card title: the page this sits on is already headed "New project". */}
       <CardContent>
         <form
           onSubmit={(event) => {
@@ -65,9 +67,14 @@ export function NewProjectForm() {
             </div>
           </div>
           {create.error ? <ErrorPanel error={create.error} /> : null}
-          <Button type="submit" disabled={create.isPending}>
-            {create.isPending ? 'Creating…' : 'Create project'}
-          </Button>
+          <div className="flex gap-2">
+            <Button type="submit" disabled={create.isPending}>
+              {create.isPending ? 'Creating…' : 'Create project'}
+            </Button>
+            <Button type="button" variant="ghost" onClick={onCancel} disabled={create.isPending}>
+              Cancel
+            </Button>
+          </div>
         </form>
       </CardContent>
     </Card>

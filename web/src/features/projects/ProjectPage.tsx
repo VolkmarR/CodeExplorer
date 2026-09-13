@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
-import { Link, useNavigate, useParams } from '@tanstack/react-router'
+import { useNavigate, useParams } from '@tanstack/react-router'
 import { api } from '@/lib/api'
 import { BuildSummary } from '@/features/projects/BuildSummary'
 import { ErrorPanel } from '@/components/ErrorPanel'
@@ -45,32 +45,11 @@ export function ProjectPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button
-            render={
-              <Link
-                to="/projects/$project/files"
-                params={{ project: slug }}
-                search={{ glob: '*' }}
-              />
-            }
-            variant="secondary"
-          >
-            Browse
-          </Button>
-          <Button
-            render={
-              <Link
-                to="/projects/$project/search"
-                params={{ project: slug }}
-                search={{ caseSensitive: false, page: 1, q: '', regex: false }}
-              />
-            }
-            variant="secondary"
-          >
-            Search
-          </Button>
+          {/* "Build" or "Rebuild", never "Refresh": this reads the local copies as they already are
+              and never fetches, so the word CONTEXT.md reserves for fetch-and-rebuild would promise
+              commits the operator will not get. #8 makes it fetch, and takes the word with it. */}
           <Button onClick={() => build.mutate()} disabled={build.isPending}>
-            {build.isPending ? 'Building…' : 'Build index'}
+            {build.isPending ? 'Building…' : project.index.builtAt ? 'Rebuild' : 'Build'}
           </Button>
           <Button
             variant="destructive"

@@ -5,7 +5,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-/** Narrows the listing, into the URL, so a filtered view of a project's files can be linked. */
+/**
+ * Narrows the listing, into the URL, so a filtered view of a project's files can be linked. An empty
+ * glob is not a narrower filter but the other view: the tree, one level at a time.
+ */
 export function BrowseFilter({ project, search }: { project: string; search: BrowseParameters }) {
   const navigate = useNavigate()
   const [draft, setDraft] = useState(search)
@@ -32,7 +35,7 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
           name="glob"
           value={draft.glob}
           onChange={(event) => setDraft({ ...draft, glob: event.target.value })}
-          placeholder="*.cs"
+          placeholder="empty to browse the tree"
           className="font-mono"
         />
       </div>
