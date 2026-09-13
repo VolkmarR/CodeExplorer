@@ -1,11 +1,17 @@
 using System.ComponentModel;
+using System.Globalization;
+using System.Text;
 using CodeExplorer;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// The default key ring (a folder under the user profile) protects stored credentials until #13
+// moves it to Blob Storage and Key Vault; absent configuration must still yield a working server.
+builder.Services.AddDataProtection();
 builder.Services.AddSingleton<ControlDatabase>();
+builder.Services.AddSingleton<GitClones>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMcpServer().WithHttpTransport().WithTools<ProjectTools>();
 
@@ -23,6 +29,25 @@ api.MapPost("/projects", async (CreateProjectRequest request, ControlDatabase co
         CreateProjectOutcome.MissingName => Results.BadRequest(new { error = "Name is required." }),
         _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." })
     });
+
+// The credential is accepted here and nowhere else surfaces it: responses carry only whether one is set.
+api.MapPost("/projects/{project}/repositories",
+    async (string project, AddRepositoryRequest request, ControlDatabase control, CancellationToken ct) =>
+        await control.AddRepositoryAsync(project, request.Slug, request.Url, request.Credential, ct) switch
+        {
+            AddRepositoryOutcome.Created => Results.Created($"/api/projects/{project}/repositories",
+                new RepositoryResponse(request.Slug, request.Url.Trim(), !string.IsNullOrEmpty(request.Credential))),
+            AddRepositoryOutcome.NoProject => Results.NotFound(new { error = $"No project with slug '{project}'." }),
+            AddRepositoryOutcome.InvalidSlug => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
+            AddRepositoryOutcome.InvalidUrl => Results.BadRequest(new { error = RepositoryUrl.Rule }),
+            _ => Results.Conflict(new
+                { error = $"Project '{project}' already has a repository with slug '{request.Slug}'." })
+        });
+api.MapGet("/projects/{project}/repositories", async (string project, ControlDatabase control, CancellationToken ct) =>
+    await control.FindAsync(project, ct) is null
+        ? Results.NotFound(new { error = $"No project with slug '{project}'." })
+        : Results.Ok((await control.ListRepositoriesAsync(project, ct))
+            .Select(r => new RepositoryResponse(r.Slug, r.Url, r.HasCredential))));
 
 // One MCP endpoint per project (ADR-0002). The filter binds the project from the route before the
 // SDK sees the request, so every tool in the session answers for that project and nothing else.
@@ -47,13 +72,24 @@ app.Run();
 
 internal sealed record CreateProjectRequest(string Slug, string? Name);
 
+internal sealed record AddRepositoryRequest(string Slug, string Url, string? Credential);
+
+/// <summary>What the API says about a repository. The credential itself is deliberately absent.</summary>
+internal sealed record RepositoryResponse(string Slug, string Url, bool HasCredential);
+
 /// <summary>Marker so the tests can host the app through <c>WebApplicationFactory</c>.</summary>
 public partial class Program;
 
 [McpServerToolType]
-internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor)
+internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor, ControlDatabase control, GitClones clones)
 {
     public const string ProjectItemKey = "CodeExplorer.Project";
+
+    /// <summary>
+    ///     Enough to show a whole mid-sized tree in one call while keeping a runaway `depth` on a large
+    ///     monorepo from returning megabytes; the agent is told how to narrow down.
+    /// </summary>
+    private const int MaxEntries = 2000;
 
     [McpServerTool(Name = "which_project")]
     [Description(
@@ -62,6 +98,92 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor)
     {
         var project = BoundProject();
         return $"This endpoint serves the project '{project.Name}' (slug: {project.Slug}).";
+    }
+
+    [McpServerTool(Name = "list_tree")]
+    [Description(
+        "Lists directories and files of this project, like `tree -L depth`. Paths are qualified: the first segment is the repository slug, the rest is the path inside that repository (`main/src/Lib`). An empty path lists the repositories, and with depth 2 or more their top-level entries as well. Directories end with `/`. Entries come from the committed HEAD tree, so there is no working copy and no .gitignore filtering. The first call for a repository clones it, which can take a few seconds.")]
+    public async Task<string> ListTree(
+        [Description("Qualified path of the directory to list: `repo` or `repo/dir/sub`. Empty for the project root.")]
+        string path = "",
+        [Description("How many levels to descend, at least 1. Default 1 lists only direct children.")]
+        int depth = 1,
+        CancellationToken cancellationToken = default)
+    {
+        var project = BoundProject();
+        if (depth < 1) return "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on.";
+
+        var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
+        if (repositories.Count == 0)
+            return $"Project '{project.Slug}' has no repositories yet. Ask the operator to add one with POST /api/projects/{project.Slug}/repositories.";
+
+        string normalized = path.Trim().Replace('\\', '/').Trim('/');
+        if (normalized.Length == 0) return await ListRootAsync(project, repositories, depth, cancellationToken);
+
+        string repoSlug = normalized.Split('/', 2)[0];
+        string inner = normalized.Length > repoSlug.Length ? normalized[(repoSlug.Length + 1)..] : "";
+        var repository = repositories.FirstOrDefault(r => r.Slug == repoSlug);
+        if (repository is null)
+            return $"No repository '{repoSlug}' in project '{project.Slug}'. Repositories: {string.Join(", ", repositories.Select(r => r.Slug))}. "
+                + "The first path segment must be one of these.";
+
+        using var repo = await clones.OpenAsync(repository, cancellationToken);
+        if (!GitClones.HasCommits(repo)) return $"Repository '{repoSlug}' has no commits yet, so there is nothing to list.";
+        if (GitClones.DeclaresLfs(repo)) return $"Repository '{repoSlug}': {GitClones.LfsRefusal}";
+
+        var entries = GitClones.ListTree(repo, inner, depth);
+        if (entries is null)
+            return $"'{inner}' is not a directory in repository '{repoSlug}'. Call list_tree with a parent path to see what exists there.";
+
+        var text = new StringBuilder($"{normalized}/ (depth {depth}, {entries.Count} entries)\n");
+        AppendEntries(text, "", entries);
+        return text.ToString();
+    }
+
+    /// <summary>
+    ///     The root lists every repository and, for depth 2 or more, their trees one level shallower. A
+    ///     repository that cannot be listed (LFS, clone failure) gets its reason inline so one bad
+    ///     repository does not hide the others.
+    /// </summary>
+    private async Task<string> ListRootAsync(
+        Project project, IReadOnlyList<ProjectRepository> repositories, int depth, CancellationToken cancellationToken)
+    {
+        var text = new StringBuilder($"{project.Slug} (depth {depth}, {repositories.Count} repositories)\n");
+        foreach (var repository in repositories)
+        {
+            text.Append(repository.Slug).Append("/\n");
+            if (depth == 1) continue;
+
+            try
+            {
+                using var repo = await clones.OpenAsync(repository, cancellationToken);
+                if (!GitClones.HasCommits(repo)) continue;
+                if (GitClones.DeclaresLfs(repo))
+                {
+                    text.Append("  ").Append(GitClones.LfsRefusal).Append('\n');
+                    continue;
+                }
+
+                AppendEntries(text, repository.Slug + "/", GitClones.ListTree(repo, "", depth - 1)!);
+            }
+            catch (McpException ex)
+            {
+                // Safe to swallow: the failure is reported in place of this repository's entries, and
+                // the other repositories still list. A direct call on the repository rethrows it.
+                text.Append("  ").Append(ex.Message).Append('\n');
+            }
+        }
+
+        return text.ToString();
+    }
+
+    private static void AppendEntries(StringBuilder text, string prefix, IReadOnlyList<TreeEntryInfo> entries)
+    {
+        foreach (var entry in entries.Take(MaxEntries))
+            text.Append(prefix).Append(entry.RelativePath).Append(entry.IsDirectory ? "/\n" : "\n");
+        if (entries.Count > MaxEntries)
+            text.Append(CultureInfo.InvariantCulture,
+                $"... {entries.Count - MaxEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
     }
 
     /// <summary>
