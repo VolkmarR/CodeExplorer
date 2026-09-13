@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="CodeExplorer.Api/CodeExplorer.Api.csproj" />
+  <Project Path="CodeExplorer.Tests/CodeExplorer.Tests.csproj" />
+</Solution>
