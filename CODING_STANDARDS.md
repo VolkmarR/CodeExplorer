@@ -22,8 +22,17 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
 
 - Two C# projects: `CodeExplorer` (host, endpoints, storage, MCP tools) and `CodeExplorer.Tests`.
   The web app is a Vite build into `CodeExplorer/wwwroot` and stays out of the solution file.
+- **Modular monolith (ADR-0005).** Inside the host, one folder per module, named after the concept
+  in `CONTEXT.md` it owns: `Control/` (projects, repositories, credentials), `Git/` (local copies),
+  `Index/`, `Search/`, `Refresh/`, `Operator/`. Folders follow the module boundary, never the
+  ticket or the endpoint; a refresh touches `Refresh/`, not a folder per endpoint. Everything stays
+  in the single `CodeExplorer` namespace, so a folder is navigation and a boundary, not a `using`.
+  A module reaches another only through its public types; `Search/` never opens `control.duckdb`.
+  The test project mirrors the folders.
 - Endpoints are inline lambdas in `Program.cs`, grouped with `MapGroup`. Logic lives in a service;
-  a handler that needs more than one statement of its own is a handler doing too much.
+  a handler that needs more than one statement of its own is a handler doing too much. Once
+  `Program.cs` passes about 150 lines, an endpoint group moves to a `static void MapX(this
+  RouteGroupBuilder)` extension in its module's folder, and the handlers stay one statement each.
 - Group related DTOs at the top of the file that uses them. One type per file is not a rule here.
 - No interfaces for the sake of mocking. Tests use a real DuckDB.
 
