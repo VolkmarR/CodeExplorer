@@ -41,9 +41,9 @@ public enum AddRepositoryOutcome
 }
 
 /// <summary>
-/// Owns <c>control.duckdb</c>: projects, repositories and credentials (ADR-0004). It is a
-/// plain file next to the project indexes and is never shadow-rebuilt. It is opened standalone, not
-/// attached, so the "USE slug before every query" rule for project indexes does not apply here.
+///     Owns <c>control.duckdb</c>: projects, repositories and credentials (ADR-0004). It is a
+///     plain file next to the project indexes and is never shadow-rebuilt. It is opened standalone, not
+///     attached, so the "USE slug before every query" rule for project indexes does not apply here.
 /// </summary>
 public sealed partial class ControlDatabase
 {
@@ -74,16 +74,16 @@ public sealed partial class ControlDatabase
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            CREATE TABLE IF NOT EXISTS projects (slug VARCHAR PRIMARY KEY, name VARCHAR NOT NULL);
-            -- No foreign key: DuckDB forbids deleting a referenced row even inside one transaction,
-            -- which would make project deletion awkward later. Project existence is checked in code.
-            CREATE TABLE IF NOT EXISTS repositories (
-                project_slug VARCHAR NOT NULL,
-                slug VARCHAR NOT NULL,
-                url VARCHAR NOT NULL,
-                credential VARCHAR,
-                PRIMARY KEY (project_slug, slug));
-            """;
+                              CREATE TABLE IF NOT EXISTS projects (slug VARCHAR PRIMARY KEY, name VARCHAR NOT NULL);
+                              -- No foreign key: DuckDB forbids deleting a referenced row even inside one transaction,
+                              -- which would make project deletion awkward later. Project existence is checked in code.
+                              CREATE TABLE IF NOT EXISTS repositories (
+                                  project_slug VARCHAR NOT NULL,
+                                  slug VARCHAR NOT NULL,
+                                  url VARCHAR NOT NULL,
+                                  credential VARCHAR,
+                                  PRIMARY KEY (project_slug, slug));
+                              """;
         command.ExecuteNonQuery();
     }
 
@@ -144,13 +144,14 @@ public sealed partial class ControlDatabase
         using var connection = await OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO repositories (project_slug, slug, url, credential)
-            VALUES ($project, $slug, $url, $credential) ON CONFLICT DO NOTHING
-            """;
+                              INSERT INTO repositories (project_slug, slug, url, credential)
+                              VALUES ($project, $slug, $url, $credential) ON CONFLICT DO NOTHING
+                              """;
         command.Parameters.Add(new DuckDBParameter("project", repository.ProjectSlug));
         command.Parameters.Add(new DuckDBParameter("slug", repository.Slug));
         command.Parameters.Add(new DuckDBParameter("url", repository.Url));
-        command.Parameters.Add(new DuckDBParameter("credential", (object?)repository.ProtectedCredential ?? DBNull.Value));
+        command.Parameters.Add(new DuckDBParameter("credential",
+            (object?)repository.ProtectedCredential ?? DBNull.Value));
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1
             ? (AddRepositoryOutcome.Created, repository)
             : (AddRepositoryOutcome.SlugTaken, null);

@@ -20,6 +20,8 @@ public sealed class ProjectIndexTests : IDisposable
 
     private WebApplicationFactory<Program>? _factory;
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     public void Dispose()
     {
         _factory?.Dispose();
@@ -65,9 +67,9 @@ public sealed class ProjectIndexTests : IDisposable
 
         // Paths stay repository-relative and repo_id scopes them, so the same path exists twice.
         var relative = await ScalarsAsync(connection, """
-            SELECT f.path FROM files f JOIN repositories r USING (repo_id)
-            WHERE r.slug = 'two' AND f.skip_reason IS NULL
-            """);
+                                                      SELECT f.path FROM files f JOIN repositories r USING (repo_id)
+                                                      WHERE r.slug = 'two' AND f.skip_reason IS NULL
+                                                      """);
         Assert.Equal(["src/index.ts"], relative);
 
         var second = await ScalarsAsync(connection,
@@ -90,9 +92,9 @@ public sealed class ProjectIndexTests : IDisposable
 
         using var connection = await OpenAsync(indexes, "alpha");
         var matches = await ScalarsAsync(connection, """
-            SELECT content FROM lines
-            WHERE fts_main_lines.match_bm25(line_id, 'needle') IS NOT NULL
-            """);
+                                                     SELECT content FROM lines
+                                                     WHERE fts_main_lines.match_bm25(line_id, 'needle') IS NOT NULL
+                                                     """);
         Assert.Equal(["void Needle() {}"], matches);
     }
 
@@ -122,7 +124,7 @@ public sealed class ProjectIndexTests : IDisposable
             return (slug, paths);
         })));
 
-        foreach (var (slug, paths) in results)
+        foreach ((string slug, var paths) in results)
             Assert.Equal(Enumerable.Repeat($"main/only-in-{slug}.txt", 5), paths);
     }
 
@@ -191,8 +193,6 @@ public sealed class ProjectIndexTests : IDisposable
         Assert.Contains("LFS", skipped);
     }
 
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
     private ProjectIndexes Start(SearchEngine engine)
     {
         _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
@@ -209,7 +209,7 @@ public sealed class ProjectIndexTests : IDisposable
         string path = Path.Combine(_root, "fixtures", name);
         Repository.Init(path);
         using var repo = new Repository(path);
-        foreach (var (relative, content) in files)
+        foreach ((string relative, string content) in files)
         {
             string full = Path.Combine(path, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(full)!);

@@ -100,27 +100,32 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor, Con
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject();
-        if (depth < 1) return "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on.";
+        if (depth < 1)
+            return "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on.";
 
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         if (repositories.Count == 0)
-            return $"Project '{project.Slug}' has no repositories yet. Ask the operator to add one with POST /api/projects/{project.Slug}/repositories.";
+            return
+                $"Project '{project.Slug}' has no repositories yet. Ask the operator to add one with POST /api/projects/{project.Slug}/repositories.";
 
         var qualified = QualifiedPath.Parse(path);
         if (qualified is null) return await ListRootAsync(project, repositories, depth, cancellationToken);
 
         var repository = repositories.FirstOrDefault(r => r.Slug == qualified.RepositorySlug);
         if (repository is null)
-            return $"No repository '{qualified.RepositorySlug}' in project '{project.Slug}'. Repositories: {string.Join(", ", repositories.Select(r => r.Slug))}. "
+            return
+                $"No repository '{qualified.RepositorySlug}' in project '{project.Slug}'. Repositories: {string.Join(", ", repositories.Select(r => r.Slug))}. "
                 + "The first path segment must be one of these.";
 
         using var repo = await clones.OpenAsync(repository, cancellationToken);
-        if (!GitClones.HasCommits(repo)) return $"Repository '{repository.Slug}' has no commits yet, so there is nothing to list.";
+        if (!GitClones.HasCommits(repo))
+            return $"Repository '{repository.Slug}' has no commits yet, so there is nothing to list.";
         if (clones.DeclaresLfs(repo)) return $"Repository '{repository.Slug}': {GitClones.LfsRefusal}";
 
         var entries = GitClones.ListTree(repo, qualified.PathInRepository, depth);
         if (entries is null)
-            return $"'{qualified.PathInRepository}' is not a directory in repository '{repository.Slug}'. Call list_tree with a parent path to see what exists there.";
+            return
+                $"'{qualified.PathInRepository}' is not a directory in repository '{repository.Slug}'. Call list_tree with a parent path to see what exists there.";
 
         var text = new StringBuilder($"{qualified}/ (depth {depth}, {entries.Count} entries)\n");
         AppendEntries(text, "", entries);
