@@ -34,7 +34,10 @@ public enum AddRepositoryOutcome
     NoProject,
     InvalidSlug,
     InvalidUrl,
-    SlugTaken
+    SlugTaken,
+
+    /// <summary>The project was declared single-repository and already has its one (ADR-0006).</summary>
+    ProjectIsFull
 }
 
 /// <summary>
@@ -72,6 +75,14 @@ public sealed partial class ControlDatabase
         using var command = connection.CreateCommand();
         command.CommandText = """
                               CREATE TABLE IF NOT EXISTS projects (slug VARCHAR PRIMARY KEY, name VARCHAR NOT NULL);
+                              -- Added after the table existed, so it arrives as an ALTER rather than in the
+                              -- CREATE above. DuckDB refuses a constraint on an added column ("Adding columns
+                              -- with constraints not yet supported"), so it is nullable here and filled in
+                              -- the next statement instead. False is the shape every project had before
+                              -- ADR-0006, which is what an existing row must keep: the flag decides how its
+                              -- files are named.
+                              ALTER TABLE projects ADD COLUMN IF NOT EXISTS single_repository BOOLEAN;
+                              UPDATE projects SET single_repository = false WHERE single_repository IS NULL;
                               -- No foreign key: DuckDB forbids deleting a referenced row even inside one transaction,
                               -- which would make project deletion awkward later. Project existence is checked in code.
                               CREATE TABLE IF NOT EXISTS repositories (
@@ -95,7 +106,13 @@ public sealed partial class ControlDatabase
 
     public static bool IsValidSlug(string slug) => SlugPattern.IsMatch(slug);
 
-    public async Task<CreateProjectOutcome> CreateAsync(string slug, string? name, CancellationToken cancellationToken)
+    /// <summary>
+    ///     <paramref name="singleRepository" /> is written once, here. There is deliberately no update
+    ///     path for it (ADR-0006): it decides how every file in the project is named, and a name that
+    ///     can change is one agents cannot hold.
+    /// </summary>
+    public async Task<CreateProjectOutcome> CreateAsync(string slug, string? name, bool singleRepository,
+        CancellationToken cancellationToken)
     {
         if (!IsValidSlug(slug)) return CreateProjectOutcome.InvalidSlug;
 
@@ -105,9 +122,13 @@ public sealed partial class ControlDatabase
         using var command = connection.CreateCommand();
         // ON CONFLICT DO NOTHING keeps the existence check and the insert one statement, so two
         // concurrent creates cannot both succeed.
-        command.CommandText = "INSERT INTO projects (slug, name) VALUES ($slug, $name) ON CONFLICT DO NOTHING";
+        command.CommandText = """
+                              INSERT INTO projects (slug, name, single_repository)
+                              VALUES ($slug, $name, $single) ON CONFLICT DO NOTHING
+                              """;
         command.Parameters.Add(new DuckDBParameter("slug", slug));
         command.Parameters.Add(new DuckDBParameter("name", name.Trim()));
+        command.Parameters.Add(new DuckDBParameter("single", singleRepository));
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1
             ? CreateProjectOutcome.Created
             : CreateProjectOutcome.SlugTaken;
@@ -121,11 +142,12 @@ public sealed partial class ControlDatabase
     {
         using var connection = await OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT slug, name FROM projects ORDER BY slug";
+        command.CommandText = "SELECT slug, name, single_repository FROM projects ORDER BY slug";
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var projects = new List<Project>();
         while (await reader.ReadAsync(cancellationToken))
-            projects.Add(new Project(reader.GetString(0), reader.GetString(1)));
+            projects.Add(new Project(reader.GetString(0), reader.GetString(1),
+                !reader.IsDBNull(2) && reader.GetBoolean(2)));
         return projects;
     }
 
@@ -133,20 +155,40 @@ public sealed partial class ControlDatabase
     {
         using var connection = await OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT name FROM projects WHERE slug = $slug";
+        command.CommandText = "SELECT name, single_repository FROM projects WHERE slug = $slug";
         command.Parameters.Add(new DuckDBParameter("slug", slug));
-        object? name = await command.ExecuteScalarAsync(cancellationToken);
-        return name is string n ? new Project(slug, n) : null;
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? new Project(slug, reader.GetString(0), !reader.IsDBNull(1) && reader.GetBoolean(1))
+            : null;
     }
 
     /// <summary>
     ///     Adds a repository. The credential arrives in plaintext once, here, and is stored protected;
     ///     nothing on this class reads it back in the clear.
     /// </summary>
+    /// <param name="projectSlug">The project the repository is added to.</param>
+    /// <param name="slug">
+    ///     Ignored for a single-repository project, which heads no path with it and so is not asked for
+    ///     one: the project's own slug is used, and it is unique in that project by construction.
+    /// </param>
+    /// <param name="url">The git remote, validated by <see cref="RepositoryUrl" />.</param>
+    /// <param name="credential">Plaintext, accepted once and stored protected; never read back in the clear.</param>
+    /// <param name="cancellationToken">Threaded through to the DuckDB command.</param>
     public async Task<(AddRepositoryOutcome Outcome, ProjectRepository? Repository)> AddRepositoryAsync(
         string projectSlug, string slug, string url, string? credential, CancellationToken cancellationToken)
     {
-        if (await FindAsync(projectSlug, cancellationToken) is null) return (AddRepositoryOutcome.NoProject, null);
+        if (await FindAsync(projectSlug, cancellationToken) is not { } project)
+            return (AddRepositoryOutcome.NoProject, null);
+
+        if (project.SingleRepository)
+        {
+            // The one repository is what the whole project is named after, so a second one would have
+            // nothing to be called and nowhere to be named (ADR-0006).
+            if ((await ListRepositoriesAsync(projectSlug, cancellationToken)).Count > 0)
+                return (AddRepositoryOutcome.ProjectIsFull, null);
+            slug = projectSlug;
+        }
 
         if (!IsValidSlug(slug)) return (AddRepositoryOutcome.InvalidSlug, null);
 

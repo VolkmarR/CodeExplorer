@@ -42,8 +42,14 @@ internal sealed record TreeEntryResponse(
 /// <summary>
 ///     One level of the tree. <paramref name="Path" /> echoes the level that was asked for — empty at
 ///     the project root — so the view can draw a breadcrumb from the response alone.
+///     <paramref name="RepositoryLevel" /> says whether the entries are repositories rather than
+///     directories, which an empty path no longer implies: a single-repository project's root is
+///     already inside its one repository (ADR-0006).
 /// </summary>
-internal sealed record TreeResponse(string Path, IReadOnlyList<TreeEntryResponse> Entries);
+internal sealed record TreeResponse(
+    string Path,
+    bool RepositoryLevel,
+    IReadOnlyList<TreeEntryResponse> Entries);
 
 /// <summary>
 ///     Browsing, searching and file reads for the operator UI. The same services answer the MCP tools;
@@ -123,9 +129,22 @@ internal static class SearchEndpoints
         using var index = await FileQueries.OpenAsync(indexes, project, cancellationToken);
         if (index is null) return Results.NotFound(new { error = ToolReply.NoIndex(project) });
 
-        var location = QualifiedPath.Parse(path);
-        var entries = await index.TreeAsync(path, cancellationToken);
-        return Results.Ok(new TreeResponse(location?.ToString() ?? "",
+        // The shape has to be known before the path can be read at all: `src/x.ts` is a file in one
+        // project and a repository in another (ADR-0006). It is read from the index, which recorded how
+        // its own build named things, rather than from the control database, which this module does not
+        // open (ADR-0005).
+        var repositories = await index.RepositoriesAsync(cancellationToken);
+        bool single = (await index.InfoAsync(cancellationToken))?.SingleRepository ?? false;
+        string slug = repositories.Count > 0 ? repositories[0].Slug : project;
+
+        // A single-repository project has no level above its one repository, so the empty path is that
+        // repository's top level rather than a list of one.
+        var location = new ProjectPaths(single, slug).Parse(path)
+                       ?? (single ? new QualifiedPath(slug, "", false) : null);
+
+        var entries = await index.TreeAsync(location?.RepositorySlug, location?.PathInRepository ?? "", !single,
+            cancellationToken);
+        return Results.Ok(new TreeResponse(location?.ToString() ?? "", location is null,
             entries
                 .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
                     e.SkipReason))

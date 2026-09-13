@@ -19,8 +19,13 @@ public sealed record IndexedFile(
 /// <summary>A row of <c>repositories</c>: what the last build read and where it stood.</summary>
 public sealed record IndexedRepository(string Slug, string Url, string HeadCommit, int FileCount, long LineCount);
 
-/// <summary>The <c>index_info</c> row: when the build completed and whether BM25 exists.</summary>
-public sealed record IndexInfo(DateTimeOffset BuiltAt, bool FtsIndexed);
+/// <summary>
+///     The <c>index_info</c> row: when the build completed, whether BM25 exists, and how the build
+///     named its files. <see cref="SingleRepository" /> comes from here rather than from the control
+///     database so that a read path can parse a qualified path without leaving the index (ADR-0005,
+///     ADR-0006).
+/// </summary>
+public sealed record IndexInfo(DateTimeOffset BuiltAt, bool FtsIndexed, bool SingleRepository);
 
 /// <summary><see cref="Skipped" /> of the <see cref="Files" /> have no lines; <see cref="Lines" /> covers the rest.</summary>
 public sealed record ExtensionCount(string Extension, int Files, long Lines, int Skipped);
@@ -81,10 +86,11 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
     {
         // epoch() hands back seconds as a double, which is the one representation of a TIMESTAMPTZ that
         // does not depend on whether the ICU extension is loaded to decide the session time zone.
-        using var command = Command("SELECT epoch(built_at), fts_indexed FROM index_info", []);
+        using var command = Command("SELECT epoch(built_at), fts_indexed, single_repository FROM index_info", []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new IndexInfo(DateTimeOffset.FromUnixTimeSeconds((long)reader.GetDouble(0)), reader.GetBoolean(1))
+            ? new IndexInfo(DateTimeOffset.FromUnixTimeSeconds((long)reader.GetDouble(0)), reader.GetBoolean(1),
+                reader.GetBoolean(2))
             : null;
     }
 
@@ -197,22 +203,34 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
 
     /// <summary>
     ///     One level of the project as a tree: the repositories at the root, or the immediate
-    ///     subdirectories and files of <paramref name="path" /> inside one of them. Directories are
+    ///     subdirectories and files of <paramref name="directory" /> inside one of them. Directories are
     ///     not rows in the index — <c>files.directory</c> holds each file's whole repository-relative
     ///     directory — so a level is the distinct first segment below the prefix, aggregated over
     ///     everything beneath it. Directories come first, each alphabetical, as a tree reads.
     /// </summary>
-    public async Task<IReadOnlyList<TreeItem>> TreeAsync(string path, CancellationToken cancellationToken)
+    /// <param name="repositorySlug">
+    ///     Null asks for the repositories themselves, which is the root of a multi-repository project. A
+    ///     single-repository project has no such level: its root is its one repository's own top level,
+    ///     so the caller passes that repository's slug and an empty <paramref name="directory" />.
+    /// </param>
+    /// <param name="directory">
+    ///     The repository-relative directory to list, empty for the repository's own top level.
+    /// </param>
+    /// <param name="qualify">
+    ///     Whether the qualified path of each entry is headed by the repository slug. It follows the
+    ///     project's shape (ADR-0006), not this level, so children are named the way the index named
+    ///     them.
+    /// </param>
+    /// <param name="cancellationToken">Threaded through to both DuckDB commands.</param>
+    public async Task<IReadOnlyList<TreeItem>> TreeAsync(string? repositorySlug, string directory, bool qualify,
+        CancellationToken cancellationToken)
     {
-        // Parsed here rather than taken apart by the caller: `QualifiedPath` is internal to the host and
-        // this class is public, and a level is addressed by the same string a file is.
-        if (QualifiedPath.Parse(path) is not { } location) return await RepositoryLevelAsync(cancellationToken);
+        if (repositorySlug is null) return await RepositoryLevelAsync(cancellationToken);
 
         // "" at a repository root, "src/" below one. Every directory under this level starts with it,
         // and the next segment begins where it ends. The length is taken in SQL rather than in C#
         // because a .NET string counts UTF-16 units and `substr` counts characters, which part ways on
         // any path outside the BMP.
-        string directory = location.PathInRepository;
         string prefix = directory.Length == 0 ? "" : directory + "/";
         var entries = new List<TreeItem>();
 
@@ -227,7 +245,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
                                      ORDER BY segment
                                      """,
                    [
-                       new DuckDBParameter("r", location.RepositorySlug), new DuckDBParameter("p", prefix),
+                       new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", prefix),
                        new DuckDBParameter("d", directory)
                    ]))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
@@ -236,7 +254,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
             {
                 string segment = reader.GetString(0);
                 entries.Add(new TreeItem(segment,
-                    $"{location.RepositorySlug}/{prefix}{segment}",
+                    qualify ? $"{repositorySlug}/{prefix}{segment}" : prefix + segment,
                     (int)reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), null));
             }
         }
@@ -247,7 +265,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
                                      WHERE r.slug = $r AND f.directory = $d
                                      ORDER BY f.name
                                      """,
-                   [new DuckDBParameter("r", location.RepositorySlug), new DuckDBParameter("d", directory)]))
+                   [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("d", directory)]))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
