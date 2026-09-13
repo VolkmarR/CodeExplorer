@@ -1,11 +1,20 @@
+using System.Data.Common;
 using System.Globalization;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer;
 
-/// <summary>A row of <c>files</c>. <see cref="SkipReason" /> is set when the file is committed but has no lines in the index.</summary>
+/// <summary>
+///     A row of <c>files</c>. <see cref="SkipReason" /> is set when the file is committed but has no lines in the
+///     index.
+/// </summary>
 public sealed record IndexedFile(
-    long FileId, string QualifiedPath, string RepositorySlug, int LineCount, long SizeBytes, string? SkipReason);
+    long FileId,
+    string QualifiedPath,
+    string RepositorySlug,
+    int LineCount,
+    long SizeBytes,
+    string? SkipReason);
 
 /// <summary>A row of <c>repositories</c>: what the last build read and where it stood.</summary>
 public sealed record IndexedRepository(string Slug, string Url, string HeadCommit, int FileCount, long LineCount);
@@ -32,6 +41,12 @@ public sealed record GlobResult(int Total, IReadOnlyList<IndexedFile> Files, int
 /// </summary>
 public sealed class FileQueries(DuckDBConnection connection) : IDisposable
 {
+    // The join is for the slug only; qualified_path already carries it as a prefix, but splitting a
+    // string to recover what a column holds would be the worse choice.
+    private const string FileColumns =
+        "SELECT f.file_id, f.qualified_path, r.slug, f.line_count, f.size_bytes, f.skip_reason";
+
+    private const string FileSource = "FROM files f JOIN repositories r USING (repo_id)";
     public void Dispose() => connection.Dispose();
 
     /// <summary>Null when the project has no index, which is an answer for the tool to phrase, not a failure.</summary>
@@ -83,7 +98,8 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
     }
 
     /// <summary>Files anywhere in the project with this leaf name, for a "did you mean" after a miss.</summary>
-    public async Task<IReadOnlyList<string>> FilesNamedAsync(string name, int limit, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<string>> FilesNamedAsync(string name, int limit,
+        CancellationToken cancellationToken)
     {
         using var command = Command(
             $"SELECT qualified_path FROM files WHERE lower(name) = lower($n) ORDER BY qualified_path LIMIT {limit}",
@@ -94,7 +110,10 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         return result;
     }
 
-    /// <summary>Lines <paramref name="first" /> to <paramref name="last" /> inclusive, in order; fewer when the file ends first.</summary>
+    /// <summary>
+    ///     Lines <paramref name="first" /> to <paramref name="last" /> inclusive, in order; fewer when the file ends
+    ///     first.
+    /// </summary>
     public async Task<IReadOnlyList<string>> LinesAsync(long fileId, int first, int last,
         CancellationToken cancellationToken)
     {
@@ -148,7 +167,8 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         {
             using var command = Command("SELECT count(*) FROM files f WHERE lower(f.qualified_path) GLOB $g",
                 [new DuckDBParameter("g", glob.ToLowerInvariant())]);
-            elsewhere = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+            elsewhere = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken),
+                CultureInfo.InvariantCulture);
         }
 
         return new GlobResult(total, files, elsewhere);
@@ -180,14 +200,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         return result;
     }
 
-    // The join is for the slug only; qualified_path already carries it as a prefix, but splitting a
-    // string to recover what a column holds would be the worse choice.
-    private const string FileColumns =
-        "SELECT f.file_id, f.qualified_path, r.slug, f.line_count, f.size_bytes, f.skip_reason";
-
-    private const string FileSource = "FROM files f JOIN repositories r USING (repo_id)";
-
-    private static IndexedFile ReadFile(System.Data.Common.DbDataReader reader) => new(
+    private static IndexedFile ReadFile(DbDataReader reader) => new(
         reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetInt64(4),
         reader.IsDBNull(5) ? null : reader.GetString(5));
 

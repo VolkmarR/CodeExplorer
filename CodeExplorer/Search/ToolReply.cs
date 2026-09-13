@@ -35,7 +35,8 @@ internal static class ToolReply
         int cut = text.LastIndexOf('\n', MaxOutputChars);
         if (cut < MaxOutputChars / 2) cut = MaxOutputChars;
         return text[..cut] + string.Create(CultureInfo.InvariantCulture,
-            $"\n\n... results truncated at {MaxOutputChars / 1024} KB ({text.Length - cut:N0} more characters). ") + advice + "\n";
+                   $"\n\n... results truncated at {MaxOutputChars / 1024} KB ({text.Length - cut:N0} more characters). ") +
+               advice + "\n";
     }
 
     public static string Clip(string text)

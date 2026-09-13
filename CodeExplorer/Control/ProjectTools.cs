@@ -14,7 +14,10 @@ namespace CodeExplorer;
 /// </summary>
 [McpServerToolType]
 internal sealed class ProjectTools(
-    IHttpContextAccessor httpContextAccessor, ControlDatabase control, GitClones clones, ProjectIndexes indexes)
+    IHttpContextAccessor httpContextAccessor,
+    ControlDatabase control,
+    GitClones clones,
+    ProjectIndexes indexes)
 {
     /// <summary>
     ///     Enough to show a whole mid-sized tree in one call while keeping a runaway `depth` on a large
