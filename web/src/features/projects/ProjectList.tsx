@@ -1,6 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Pencil, Plus } from 'lucide-react'
+import { treeSearch } from '@/features/files/browseParams'
 import { IndexStatus } from '@/features/projects/IndexStatus'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -54,7 +55,7 @@ export function ProjectList() {
                       <Link
                         to="/projects/$project/files"
                         params={{ project: project.slug }}
-                        search={{ glob: '', path: '' }}
+                        search={treeSearch()}
                         className={CARD_LINK}
                       >
                         {project.name}

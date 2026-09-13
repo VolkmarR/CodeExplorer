@@ -66,7 +66,8 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
 
         using var index = await FileQueries.OpenAsync(indexes, project.Slug, cancellationToken);
         if (index is null) return ToolReply.NoIndex(project.Slug);
-        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken));
+        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken),
+            await index.PathsAsync(project.Slug, cancellationToken));
 
         var text = new StringBuilder();
         for (int i = 0; i < targets.Count; i++)
@@ -88,12 +89,8 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         var qualified = paths.Parse(target.Path);
         if (qualified is null || qualified.PathInRepository.Length == 0)
         {
-            if (paths.SingleRepository)
-                text.Append(CultureInfo.InvariantCulture,
-                    $"'{target.Path}' names no file: this project holds one repository, so a path is the path inside it, like `{paths.Example(scope.ExampleSlug)}`.\n");
-            else
-                text.Append(CultureInfo.InvariantCulture,
-                    $"'{target.Path}' names no file: a qualified path must start with a repository slug, then the path inside it, like `{paths.Example(scope.ExampleSlug)}`. Repositories: {scope.Slugs}.\n");
+            text.Append(CultureInfo.InvariantCulture,
+                $"'{target.Path}' names no file: {scope.PathRule} Write it like `{paths.Example()}`.\n");
             return;
         }
 
@@ -109,11 +106,12 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         }
 
         qualified = qualified with { RepositorySlug = repository.Slug };
-        var file = await scope.Index.FindFileAsync(qualified.ToString(), cancellationToken);
+        string spelled = paths.Format(qualified);
+        var file = await scope.Index.FindFileAsync(spelled, cancellationToken);
         if (file is null)
         {
             text.Append(CultureInfo.InvariantCulture,
-                $"No indexed file '{qualified}' in repository '{repository.Slug}' of project '{scope.Project.Slug}'. ");
+                $"No indexed file '{spelled}' in repository '{repository.Slug}' of project '{scope.Project.Slug}'. ");
             string name = qualified.PathInRepository[(qualified.PathInRepository.LastIndexOf('/') + 1)..];
             var similar = await scope.Index.FilesNamedAsync(name, MaxSuggestions, cancellationToken);
             text.Append(similar.Count > 0
@@ -193,7 +191,8 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
 
         using var index = await FileQueries.OpenAsync(indexes, project.Slug, cancellationToken);
         if (index is null) return ToolReply.NoIndex(project.Slug);
-        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken));
+        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken),
+            await index.PathsAsync(project.Slug, cancellationToken));
         (var repository, string? unknown) = scope.Resolve(repo);
         if (unknown is not null) return $"{unknown} Drop `repo` to search all of them.";
 
@@ -242,7 +241,8 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
 
         using var index = await FileQueries.OpenAsync(indexes, project.Slug, cancellationToken);
         if (index is null) return ToolReply.NoIndex(project.Slug);
-        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken));
+        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken),
+            await index.PathsAsync(project.Slug, cancellationToken));
         (var repository, string? unknown) = scope.Resolve(repo);
         if (unknown is not null) return $"{unknown} Drop `repo` to cover all of them.";
 
@@ -343,19 +343,31 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
     ///     repositories in the index. Owns repository resolution so the three tools name an unknown
     ///     slug the same way.
     /// </summary>
-    private sealed record Scope(Project Project, FileQueries Index, IReadOnlyList<IndexedRepository> Repositories)
+    /// <param name="Project">The project the session is bound to, for the messages that name it.</param>
+    /// <param name="Index">The open index, bound to that project for this one call.</param>
+    /// <param name="Repositories">What the last build read, which is what a path may name.</param>
+    /// <param name="Paths">
+    ///     How this project names files (ADR-0006), read from the index by
+    ///     <see cref="FileQueries.PathsAsync" />. It comes from the index rather than the control
+    ///     database so that a tool parses and prints paths the way the index it is reading spells them,
+    ///     and so that nothing in <c>Search/</c> needs anything but the index (ADR-0005).
+    /// </param>
+    private sealed record Scope(
+        Project Project,
+        FileQueries Index,
+        IReadOnlyList<IndexedRepository> Repositories,
+        ProjectPaths Paths)
     {
         public string Slugs => string.Join(", ", Repositories.Select(r => r.Slug));
 
-        public string ExampleSlug => Repositories.Count > 0 ? Repositories[0].Slug : "repo";
-
         /// <summary>
-        ///     How this project names files (ADR-0006). Built from the index's own repositories rather
-        ///     than the control database, so a tool parses paths the way the index it is reading spells
-        ///     them, even if a repository has been added since the last build.
+        ///     What a path in this project is made of, for the message that says one was not. The two
+        ///     shapes are described in one place so a tool cannot explain one project's naming in the
+        ///     other's words (ADR-0006).
         /// </summary>
-        public ProjectPaths Paths =>
-            new(Project.SingleRepository, Repositories.Count > 0 ? Repositories[0].Slug : Project.Slug);
+        public string PathRule => Paths.SingleRepository
+            ? "this project holds one repository, so a path is the path inside it."
+            : $"a qualified path must start with a repository slug, then the path inside it. Repositories: {Slugs}.";
 
         public IndexedRepository? Find(string slug) =>
             Repositories.FirstOrDefault(r => string.Equals(r.Slug, slug, StringComparison.OrdinalIgnoreCase));

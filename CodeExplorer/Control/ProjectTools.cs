@@ -99,12 +99,11 @@ internal sealed class ProjectTools(
             return
                 $"Project '{project.Slug}' has no repositories yet. Ask the operator to add one with POST /api/projects/{project.Slug}/repositories.";
 
-        var qualified = ProjectPaths.For(project, repositories).Parse(path);
-        // A single-repository project has no level above its one repository, so an empty path lists that
-        // repository's top level rather than a list of one (ADR-0006).
-        if (qualified is null && !project.SingleRepository)
+        // Null is the repository level, which a single-repository project does not have: there an empty
+        // path already means that repository's own top level (ADR-0006).
+        var paths = ProjectPaths.For(project, repositories);
+        if (paths.Parse(path) is not { } qualified)
             return await ListRootAsync(project, repositories, depth, cancellationToken);
-        qualified ??= new QualifiedPath(repositories[0].Slug, "", false);
 
         var repository = repositories.FirstOrDefault(r => r.Slug == qualified.RepositorySlug);
         if (repository is null)
@@ -122,7 +121,7 @@ internal sealed class ProjectTools(
             return
                 $"'{qualified.PathInRepository}' is not a directory in repository '{repository.Slug}'. Call list_tree with a parent path to see what exists there.";
 
-        var text = new StringBuilder($"{qualified}/ (depth {depth}, {entries.Count} entries)\n");
+        var text = new StringBuilder($"{paths.Format(qualified)}/ (depth {depth}, {entries.Count} entries)\n");
         AppendEntries(text, "", entries);
         return text.ToString();
     }

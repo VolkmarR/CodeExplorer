@@ -1,5 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearch } from '@tanstack/react-router'
+import { treeSearch } from '@/features/files/browseParams'
 import { CodeView } from '@/features/files/CodeView'
 import { fileQuery } from '@/features/files/queries'
 import { Button } from '@/components/ui/button'
@@ -30,7 +31,7 @@ export function FilePage() {
             <Link
               to="/projects/$project/files"
               params={{ project }}
-              search={{ glob: '', path: path.slice(0, path.lastIndexOf('/')) }}
+              search={treeSearch(path.slice(0, path.lastIndexOf('/')))}
             />
           }
           variant="ghost"
