@@ -14,11 +14,11 @@ data/
 *.duckdb
 *.duckdb.wal
 
-# React / Vite (web UI is built into CodeExplorer.Api/wwwroot)
+# React / Vite (web UI is built into CodeExplorer/wwwroot)
 node_modules/
 dist/
 dist-ssr/
-CodeExplorer.Api/wwwroot/
+CodeExplorer/wwwroot/
 *.tsbuildinfo
 .pnpm-store/
 .env

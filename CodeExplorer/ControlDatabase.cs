@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer.Api;
+namespace CodeExplorer;
 
 /// <summary>A project as stored in the control database: the stable slug plus a free display name.</summary>
 public sealed record Project(string Slug, string Name);
