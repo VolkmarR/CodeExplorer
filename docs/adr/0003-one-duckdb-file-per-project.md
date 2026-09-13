@@ -35,8 +35,8 @@ workaround for `match_bm25` failing to resolve its internal tables in an attache
 - **8 GiB of ephemeral storage is a hard ceiling.** Azure Container Apps allocates it by vCPU, and
   "over 1 vCPU" is the top of the table — 4 vCPU gets the same 8 GiB, storage appears nowhere in the
   quota system, and a Consumption-only environment caps at 2 vCPU / 4 GiB regardless. It holds every
-  project's index, the shadow file during a rebuild, the working copies and DuckDB's spill files.
-  Working copies are therefore shallow clones (`--depth 1 --single-branch`). If the real project mix
+  project's index, the shadow file during a rebuild, the local clones and DuckDB's spill files.
+  Clones are therefore shallow and bare. If the real project mix
   approaches ten SrcRadix-sized codebases (649 MB of index each), this is the constraint that ends
   the Consumption plan.
 - **Microsoft documents nothing about exceeding that quota** — not eviction, not restart, not
@@ -54,6 +54,22 @@ workaround for `match_bm25` failing to resolve its internal tables in an attache
   per-connection, which is what lets one instance serve every project without connections treading
   on each other. `PRAGMA create_fts_index` also works inside an attached database, so a shadow
   build needs no special handling.
+- **There is no working copy.** Clones are bare, and files are read from the object database: the
+  HEAD tree gives the file list and blobs give the content. Measured on Xs2Cs (2,822 files, 1.3 GB
+  of history today): a shallow bare clone is 17.1 MB in 3.4 s against 68.5 MB in 7.1 s with a
+  working tree, a tree walk lists every file in 45 ms, and 500 blobs read as text in 82 ms. A
+  shallow fetch — the refresh path — takes 519 ms and leaves the clone shallow. Walking the tree
+  rather than a directory also removes `.gitignore` from the design entirely: the index holds what
+  is committed. `RetrieveStatus`, which exists only to answer what is ignored, costs 763–1084 ms
+  against the 45 ms tree walk and is never needed.
+- **Git is driven through LibGit2Sharp 0.32.0, not the git CLI.** No git binary in the image, typed
+  errors instead of parsed stderr, and credentials passed through `CredentialsProvider` so a token
+  never appears in process arguments or a URL on disk. Three limits come with it: libgit2 has no
+  Git LFS support and would silently index pointer files instead of source, so a repository
+  declaring `filter=lfs` must be refused rather than indexed; shallow clone is unsupported over the
+  local transport (`shallow fetch is not supported by the local transport`), so tests cannot seed a
+  shallow fixture from a path; and checkout can exceed `MAX_PATH` on Windows, which production on
+  Linux avoids and bare clones avoid entirely.
 - **`DETACH` offers no protection during a swap, so the drain is entirely ours.** It succeeds while
   another connection has `USE`d that database, and returns in 0 ms while a query is actively
   scanning it. The in-flight query completes correctly against its snapshot, but the orphaned

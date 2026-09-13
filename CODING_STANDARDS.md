@@ -65,6 +65,15 @@ Two kinds of failure, two mechanisms. Never mix them.
 - Annotate non-obvious SQL inline — why a join is skipped, why a value is safe to inline, what a
   CTE holds.
 
+## Git
+
+- LibGit2Sharp, never the git CLI. Credentials go through `CredentialsProvider` so a token never
+  reaches process arguments or a URL on disk.
+- Clones are shallow and bare. Read the file list from the HEAD tree and content from blobs; there
+  is no working copy to walk, and therefore no `.gitignore` handling.
+- Refuse a repository that declares `filter=lfs`. libgit2 has no LFS support and would index
+  pointer files as though they were source — a silent wrong answer, not an error.
+
 ## Telemetry
 
 - One static `Telemetry` class holds every instrument. One `ServiceName` constant names the
