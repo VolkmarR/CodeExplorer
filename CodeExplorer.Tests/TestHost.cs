@@ -60,6 +60,9 @@ public sealed class TestHost : IDisposable
         return path;
     }
 
+    /// <summary>Where <see cref="CreateGitRepository" /> put the fixture with this name.</summary>
+    public string FixturePath(string name) => Path.Combine(_root, "fixtures", name);
+
     public async Task CreateProjectAsync(string slug)
     {
         using var http = Factory.CreateClient();
