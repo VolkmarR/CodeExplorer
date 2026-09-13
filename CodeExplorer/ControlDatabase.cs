@@ -15,6 +15,10 @@ public sealed record Project(string Slug, string Name);
 public sealed record ProjectRepository(string ProjectSlug, string Slug, string Url, string? ProtectedCredential)
 {
     public bool HasCredential => ProtectedCredential is not null;
+
+    /// <summary>Keeps the ciphertext out of anything that stringifies the record, such as a log scope.</summary>
+    public override string ToString() =>
+        $"{ProjectSlug}/{Slug} ({Url}, credential {(HasCredential ? "set" : "not set")})";
 }
 
 /// <summary>Outcome of creating a project. The handler maps each case to a status code and nothing more.</summary>
@@ -126,29 +130,30 @@ public sealed partial class ControlDatabase
     ///     Adds a repository. The credential arrives in plaintext once, here, and is stored protected;
     ///     nothing on this class reads it back in the clear.
     /// </summary>
-    public async Task<AddRepositoryOutcome> AddRepositoryAsync(
+    public async Task<(AddRepositoryOutcome Outcome, ProjectRepository? Repository)> AddRepositoryAsync(
         string projectSlug, string slug, string url, string? credential, CancellationToken cancellationToken)
     {
-        if (await FindAsync(projectSlug, cancellationToken) is null) return AddRepositoryOutcome.NoProject;
+        if (await FindAsync(projectSlug, cancellationToken) is null) return (AddRepositoryOutcome.NoProject, null);
 
-        if (!IsValidSlug(slug)) return AddRepositoryOutcome.InvalidSlug;
+        if (!IsValidSlug(slug)) return (AddRepositoryOutcome.InvalidSlug, null);
 
-        if (RepositoryUrl.Classify(url) == RepositoryUrlKind.Invalid) return AddRepositoryOutcome.InvalidUrl;
+        if (RepositoryUrl.Classify(url) == RepositoryUrlKind.Invalid) return (AddRepositoryOutcome.InvalidUrl, null);
 
+        var repository = new ProjectRepository(projectSlug, slug, url.Trim(),
+            string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));
         using var connection = await OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO repositories (project_slug, slug, url, credential)
             VALUES ($project, $slug, $url, $credential) ON CONFLICT DO NOTHING
             """;
-        command.Parameters.Add(new DuckDBParameter("project", projectSlug));
-        command.Parameters.Add(new DuckDBParameter("slug", slug));
-        command.Parameters.Add(new DuckDBParameter("url", url.Trim()));
-        command.Parameters.Add(new DuckDBParameter("credential",
-            string.IsNullOrEmpty(credential) ? DBNull.Value : _protector.Protect(credential)));
+        command.Parameters.Add(new DuckDBParameter("project", repository.ProjectSlug));
+        command.Parameters.Add(new DuckDBParameter("slug", repository.Slug));
+        command.Parameters.Add(new DuckDBParameter("url", repository.Url));
+        command.Parameters.Add(new DuckDBParameter("credential", (object?)repository.ProtectedCredential ?? DBNull.Value));
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-            ? AddRepositoryOutcome.Created
-            : AddRepositoryOutcome.SlugTaken;
+            ? (AddRepositoryOutcome.Created, repository)
+            : (AddRepositoryOutcome.SlugTaken, null);
     }
 
     public async Task<IReadOnlyList<ProjectRepository>> ListRepositoriesAsync(

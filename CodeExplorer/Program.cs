@@ -35,11 +35,11 @@ api.MapPost("/projects/{project}/repositories",
     async (string project, AddRepositoryRequest request, ControlDatabase control, CancellationToken ct) =>
         await control.AddRepositoryAsync(project, request.Slug, request.Url, request.Credential, ct) switch
         {
-            AddRepositoryOutcome.Created => Results.Created($"/api/projects/{project}/repositories",
-                new RepositoryResponse(request.Slug, request.Url.Trim(), !string.IsNullOrEmpty(request.Credential))),
-            AddRepositoryOutcome.NoProject => Results.NotFound(new { error = $"No project with slug '{project}'." }),
-            AddRepositoryOutcome.InvalidSlug => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
-            AddRepositoryOutcome.InvalidUrl => Results.BadRequest(new { error = RepositoryUrl.Rule }),
+            (AddRepositoryOutcome.Created, { } added) => Results.Created($"/api/projects/{project}/repositories",
+                new RepositoryResponse(added.Slug, added.Url, added.HasCredential)),
+            (AddRepositoryOutcome.NoProject, _) => Results.NotFound(new { error = $"No project with slug '{project}'." }),
+            (AddRepositoryOutcome.InvalidSlug, _) => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
+            (AddRepositoryOutcome.InvalidUrl, _) => Results.BadRequest(new { error = RepositoryUrl.Rule }),
             _ => Results.Conflict(new
                 { error = $"Project '{project}' already has a repository with slug '{request.Slug}'." })
         });
@@ -76,6 +76,27 @@ internal sealed record AddRepositoryRequest(string Slug, string Url, string? Cre
 
 /// <summary>What the API says about a repository. The credential itself is deliberately absent.</summary>
 internal sealed record RepositoryResponse(string Slug, string Url, bool HasCredential);
+
+/// <summary>
+///     A qualified path (CONTEXT.md): the repository slug, then the path inside that repository.
+///     Separators are normalised so an agent may write either slash.
+/// </summary>
+internal sealed record QualifiedPath(string RepositorySlug, string PathInRepository)
+{
+    /// <summary>Null for the project root, which names no repository.</summary>
+    public static QualifiedPath? Parse(string path)
+    {
+        string normalized = path.Trim().Replace('\\', '/').Trim('/');
+        if (normalized.Length == 0) return null;
+        int slash = normalized.IndexOf('/');
+        return slash < 0
+            ? new QualifiedPath(normalized, "")
+            : new QualifiedPath(normalized[..slash], normalized[(slash + 1)..]);
+    }
+
+    public override string ToString() =>
+        PathInRepository.Length == 0 ? RepositorySlug : $"{RepositorySlug}/{PathInRepository}";
+}
 
 /// <summary>Marker so the tests can host the app through <c>WebApplicationFactory</c>.</summary>
 public partial class Program;
@@ -117,25 +138,23 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor, Con
         if (repositories.Count == 0)
             return $"Project '{project.Slug}' has no repositories yet. Ask the operator to add one with POST /api/projects/{project.Slug}/repositories.";
 
-        string normalized = path.Trim().Replace('\\', '/').Trim('/');
-        if (normalized.Length == 0) return await ListRootAsync(project, repositories, depth, cancellationToken);
+        var qualified = QualifiedPath.Parse(path);
+        if (qualified is null) return await ListRootAsync(project, repositories, depth, cancellationToken);
 
-        string repoSlug = normalized.Split('/', 2)[0];
-        string inner = normalized.Length > repoSlug.Length ? normalized[(repoSlug.Length + 1)..] : "";
-        var repository = repositories.FirstOrDefault(r => r.Slug == repoSlug);
+        var repository = repositories.FirstOrDefault(r => r.Slug == qualified.RepositorySlug);
         if (repository is null)
-            return $"No repository '{repoSlug}' in project '{project.Slug}'. Repositories: {string.Join(", ", repositories.Select(r => r.Slug))}. "
+            return $"No repository '{qualified.RepositorySlug}' in project '{project.Slug}'. Repositories: {string.Join(", ", repositories.Select(r => r.Slug))}. "
                 + "The first path segment must be one of these.";
 
         using var repo = await clones.OpenAsync(repository, cancellationToken);
-        if (!GitClones.HasCommits(repo)) return $"Repository '{repoSlug}' has no commits yet, so there is nothing to list.";
-        if (GitClones.DeclaresLfs(repo)) return $"Repository '{repoSlug}': {GitClones.LfsRefusal}";
+        if (!GitClones.HasCommits(repo)) return $"Repository '{repository.Slug}' has no commits yet, so there is nothing to list.";
+        if (clones.DeclaresLfs(repo)) return $"Repository '{repository.Slug}': {GitClones.LfsRefusal}";
 
-        var entries = GitClones.ListTree(repo, inner, depth);
+        var entries = GitClones.ListTree(repo, qualified.PathInRepository, depth);
         if (entries is null)
-            return $"'{inner}' is not a directory in repository '{repoSlug}'. Call list_tree with a parent path to see what exists there.";
+            return $"'{qualified.PathInRepository}' is not a directory in repository '{repository.Slug}'. Call list_tree with a parent path to see what exists there.";
 
-        var text = new StringBuilder($"{normalized}/ (depth {depth}, {entries.Count} entries)\n");
+        var text = new StringBuilder($"{qualified}/ (depth {depth}, {entries.Count} entries)\n");
         AppendEntries(text, "", entries);
         return text.ToString();
     }
@@ -158,7 +177,7 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor, Con
             {
                 using var repo = await clones.OpenAsync(repository, cancellationToken);
                 if (!GitClones.HasCommits(repo)) continue;
-                if (GitClones.DeclaresLfs(repo))
+                if (clones.DeclaresLfs(repo))
                 {
                     text.Append("  ").Append(GitClones.LfsRefusal).Append('\n');
                     continue;
