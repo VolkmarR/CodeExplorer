@@ -46,12 +46,18 @@ public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes in
     public async Task<IndexSummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
         bool singleRepository, CancellationToken cancellationToken)
     {
+        // Every build is recorded here and nowhere else: a second caller gets the same span and the
+        // same metrics by calling this, which is the only way to fill an index at all.
+        using var recording = Telemetry.IndexBuild(shadow.Slug);
+
         // The tree walk and the appender are synchronous libgit2 and DuckDB calls; a worker thread
         // keeps them off the request thread, and the token is checked between files.
         var (files, lines) = await Task.Run(
             () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, repositories, cancellationToken),
             cancellationToken);
         await indexes.CompleteBuildAsync(shadow.Connection, singleRepository, cancellationToken);
+
+        recording.Built(files, lines);
         return new IndexSummary(repositories.Count, files, lines, []);
     }
 

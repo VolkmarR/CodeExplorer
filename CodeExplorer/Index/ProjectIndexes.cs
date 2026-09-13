@@ -44,12 +44,18 @@ public sealed class IndexLease(DuckDBConnection connection, Action release) : ID
 ///     file, and the catalog name an appender targets. It is a second file next to the live one, so
 ///     the live index keeps answering queries until <see cref="ProjectIndexes.SwapShadowAsync" />.
 /// </summary>
-public sealed class ShadowIndex(DuckDBConnection connection, string catalog) : IDisposable
+public sealed class ShadowIndex(DuckDBConnection connection, string catalog, string slug) : IDisposable
 {
     public DuckDBConnection Connection { get; } = connection;
 
     /// <summary>What <c>CreateAppender</c> is given; it is not the project slug, so it is passed rather than derived.</summary>
     public string Catalog { get; } = catalog;
+
+    /// <summary>
+    ///     Which project is being rebuilt. Carried here rather than passed alongside, so that a build
+    ///     cannot be told to tag its telemetry with one project while writing another's file.
+    /// </summary>
+    public string Slug { get; } = slug;
 
     public void Dispose() => Connection.Dispose();
 }
@@ -253,7 +259,7 @@ public sealed class ProjectIndexes : IDisposable
 
             await ExecuteAsync(connection, $"USE {Quote(catalog)}", cancellationToken);
             await ExecuteAsync(connection, Schema, cancellationToken);
-            return new ShadowIndex(connection, catalog);
+            return new ShadowIndex(connection, catalog, slug);
         }
         catch
         {

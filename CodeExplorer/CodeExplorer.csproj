@@ -4,6 +4,11 @@
         <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.5"/>
         <PackageReference Include="LibGit2Sharp" Version="0.32.0"/>
         <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0"/>
+        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0"/>
+        <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0"/>
+        <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0"/>
+        <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0"/>
+        <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0"/>
     </ItemGroup>
 
     <ItemGroup>
