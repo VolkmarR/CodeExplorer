@@ -201,8 +201,9 @@ public sealed class ProjectIndexes : IDisposable
     }
 
     /// <summary>
-    ///     Removes a project's file after a failed build, so <see cref="HasIndex" /> does not report a
-    ///     half-written index as one that can be served.
+    ///     Detaches and removes a project's file: after a failed build, so <see cref="HasIndex" /> does
+    ///     not report a half-written index as one that can be served, and when an operator deletes the
+    ///     project. Deleting a project that has no index is not an error, so a missing file is not one.
     /// </summary>
     public async Task DiscardAsync(string slug, CancellationToken cancellationToken)
     {

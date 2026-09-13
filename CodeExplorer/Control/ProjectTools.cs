@@ -49,7 +49,11 @@ internal sealed class ProjectTools(
                 ? $" The project has no repositories yet either; add one with POST /api/projects/{project.Slug}/repositories."
                 : $" Repositories waiting to be indexed: {string.Join(", ", configured.Select(r => r.Slug))}.");
 
-        var info = await index.InfoAsync(cancellationToken);
+        // No index_info row means a build was interrupted while filling this file. Saying so is an
+        // answer the agent can act on; reading the half-built tables and reporting them as the project
+        // would be a wrong answer shaped like a right one.
+        if (await index.InfoAsync(cancellationToken) is not { } info) return ToolReply.NoIndex(project.Slug);
+
         var indexed = await index.RepositoriesAsync(cancellationToken);
 
         var text = new StringBuilder();
