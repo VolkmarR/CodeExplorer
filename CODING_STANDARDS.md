@@ -7,6 +7,17 @@ are bad.
 
 Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules follow from.
 
+## Dependencies
+
+- Every library and its major version is decided in ADR-0004. A ticket adds no dependency on its
+  own; if it needs one, the ADR changes first.
+- Regex and glob matching run inside DuckDB (RE2 syntax, SQL `GLOB`). .NET `Regex` is for
+  classifying a candidate line, never for filtering the candidate set.
+- **Every Azure dependency has a local default chosen by absent configuration**: a folder instead
+  of Blob Storage, the default Data Protection key ring, authentication off, no exporter. A plain
+  `dotnet run` with an empty `appsettings` must come up as a complete, offline, unauthenticated
+  server. Nothing may require Azure to start.
+
 ## Layout
 
 - Two C# projects: `CodeExplorer.Api` (host, endpoints, storage, MCP tools) and `CodeExplorer.Tests`.
@@ -20,6 +31,8 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
 
 - **Integration-first, against a real DuckDB.** Nearly all the correctness in this system is SQL:
   BM25 scoping, `repo_id` filtering, the shadow swap. A mocked database proves the mock works.
+- xunit.v3 with its built-in `Assert`; no assertion library. The host runs in-process through
+  `WebApplicationFactory`, and a test that talks MCP uses the SDK's own client.
 - Each test class gets its own temp directory and real database file, deleted on dispose. Never
   `:memory:` — attach, `USE`, shadow-and-swap and Parquet restore are all about files.
 - **Pin the search engine in every search test, and cover both paths.** `INSTALL fts` fails offline
@@ -62,6 +75,8 @@ Two kinds of failure, two mechanisms. Never mix them.
   so it works only against the current database (duckdb/duckdb#13523).
 - No transaction writes to two projects. DuckDB forbids it and nothing here needs it.
 - A refresh builds a shadow index and swaps. Never mutate a live index in place.
+- Projects, repositories and credentials live in `control.duckdb`, never in a project index. The
+  control database is not shadow-rebuilt and not exported to Parquet; it is backed up as a file.
 - Annotate non-obvious SQL inline — why a join is skipped, why a value is safe to inline, what a
   CTE holds.
 
@@ -69,6 +84,9 @@ Two kinds of failure, two mechanisms. Never mix them.
 
 - LibGit2Sharp, never the git CLI. Credentials go through `CredentialsProvider` so a token never
   reaches process arguments or a URL on disk.
+- A stored credential is `IDataProtector` ciphertext in the control database. It is write-only in
+  the UI and the API (readable only as set or not set), and it never appears in a log, a span or an
+  error message.
 - Clones are shallow and bare. Read the file list from the HEAD tree and content from blobs; there
   is no working copy to walk, and therefore no `.gitignore` handling.
 - Refuse a repository that declares `filter=lfs`. libgit2 has no LFS support and would index
@@ -100,5 +118,11 @@ Two kinds of failure, two mechanisms. Never mix them.
   anyway; there is no reason to inherit the gap.)
 - Named function declarations for components, not arrow consts. One component per file, PascalCase
   filename matching the export.
-- Shareable state lives in the URL via `useSearchParams`, so a view can be linked. No state library.
-- One global stylesheet, semantic kebab-case class names. Inline styles only for computed values.
+- Shareable state lives in the URL as TanStack Router search params, typed with `validateSearch`,
+  so a view can be linked. No state library.
+- Tailwind utility classes and shadcn components. A shadcn component, once copied into
+  `src/components/ui`, is project source: edit it there and never regenerate over it. No global
+  stylesheet beyond Tailwind's entry file and the theme tokens; inline styles only for computed
+  values.
+- Syntax highlighting is `@tanstack/highlight` with the C# definition kept in this repo. A language
+  the library lacks gets a definition here, not a second highlighter.
