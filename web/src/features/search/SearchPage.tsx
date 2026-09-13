@@ -1,7 +1,6 @@
-import { Link, useParams, useSearch } from '@tanstack/react-router'
+import { useParams, useSearch } from '@tanstack/react-router'
 import { SearchForm } from '@/features/search/SearchForm'
 import { SearchResults } from '@/features/search/SearchResults'
-import { Button } from '@/components/ui/button'
 
 /**
  * Search over one project's index. The query and its options come from the URL and nowhere else, so
@@ -13,16 +12,8 @@ export function SearchPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Search{' '}
-          <span className="font-mono text-lg font-normal text-muted-foreground">{project}</span>
-        </h1>
-        <Button render={<Link to="/projects/$project" params={{ project }} />} variant="ghost">
-          Back to project
-        </Button>
-      </div>
-
+      {/* The header bar already names the project and lights this view; a heading here would say it
+          a second time. */}
       <SearchForm project={project} search={search} />
 
       {search.q === '' ? (

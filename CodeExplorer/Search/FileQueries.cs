@@ -26,6 +26,20 @@ public sealed record IndexInfo(DateTimeOffset BuiltAt, bool FtsIndexed);
 public sealed record ExtensionCount(string Extension, int Files, long Lines, int Skipped);
 
 /// <summary>
+///     One row of a directory listing. A directory carries what lies beneath it — <see cref="Files" />
+///     counts every file at any depth, not just its immediate children — and a file carries its own
+///     size, with <see cref="Files" /> null to tell the two apart. <see cref="QualifiedPath" /> is what
+///     the next listing is asked for, or what the file view opens.
+/// </summary>
+public sealed record TreeItem(
+    string Name,
+    string QualifiedPath,
+    int? Files,
+    long Lines,
+    long SizeBytes,
+    string? SkipReason);
+
+/// <summary>
 ///     <see cref="Total" /> counts every match, <see cref="Files" /> the first <c>limit</c> of them.
 ///     <see cref="MatchesInOtherRepositories" /> is filled only when a repository-scoped glob matched
 ///     nothing, so a scoped miss is told apart from a pattern that matches nowhere.
@@ -141,7 +155,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
     ///     window count rides along with the rows so one statement yields both the total and the page.
     /// </summary>
     public async Task<GlobResult> GlobAsync(string glob, string? repositorySlug, int limit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int offset = 0)
     {
         var parameters = new List<DuckDBParameter> { new("g", glob.ToLowerInvariant()) };
         string scope = "";
@@ -158,7 +172,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
                                       {FileSource}
                                       WHERE lower(f.qualified_path) GLOB $g{scope}
                                       ORDER BY f.qualified_path
-                                      LIMIT {limit}
+                                      LIMIT {limit} OFFSET {offset}
                                       """, parameters))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
@@ -179,6 +193,97 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         }
 
         return new GlobResult(total, files, elsewhere);
+    }
+
+    /// <summary>
+    ///     One level of the project as a tree: the repositories at the root, or the immediate
+    ///     subdirectories and files of <paramref name="path" /> inside one of them. Directories are
+    ///     not rows in the index — <c>files.directory</c> holds each file's whole repository-relative
+    ///     directory — so a level is the distinct first segment below the prefix, aggregated over
+    ///     everything beneath it. Directories come first, each alphabetical, as a tree reads.
+    /// </summary>
+    public async Task<IReadOnlyList<TreeItem>> TreeAsync(string path, CancellationToken cancellationToken)
+    {
+        // Parsed here rather than taken apart by the caller: `QualifiedPath` is internal to the host and
+        // this class is public, and a level is addressed by the same string a file is.
+        if (QualifiedPath.Parse(path) is not { } location) return await RepositoryLevelAsync(cancellationToken);
+
+        // "" at a repository root, "src/" below one. Every directory under this level starts with it,
+        // and the next segment begins where it ends. The length is taken in SQL rather than in C#
+        // because a .NET string counts UTF-16 units and `substr` counts characters, which part ways on
+        // any path outside the BMP.
+        string directory = location.PathInRepository;
+        string prefix = directory.Length == 0 ? "" : directory + "/";
+        var entries = new List<TreeItem>();
+
+        using (var command = Command("""
+                                     SELECT split_part(substr(f.directory, length($p) + 1), '/', 1) AS segment,
+                                            CAST(count(*) AS BIGINT) AS files,
+                                            CAST(sum(f.line_count) AS BIGINT) AS lines,
+                                            CAST(sum(f.size_bytes) AS BIGINT) AS bytes
+                                     FROM files f JOIN repositories r USING (repo_id)
+                                     WHERE r.slug = $r AND f.directory LIKE $p || '%' AND f.directory <> $d
+                                     GROUP BY segment
+                                     ORDER BY segment
+                                     """,
+                   [
+                       new DuckDBParameter("r", location.RepositorySlug), new DuckDBParameter("p", prefix),
+                       new DuckDBParameter("d", directory)
+                   ]))
+        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                string segment = reader.GetString(0);
+                entries.Add(new TreeItem(segment,
+                    $"{location.RepositorySlug}/{prefix}{segment}",
+                    (int)reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), null));
+            }
+        }
+
+        using (var command = Command("""
+                                     SELECT f.name, f.qualified_path, f.line_count, f.size_bytes, f.skip_reason
+                                     FROM files f JOIN repositories r USING (repo_id)
+                                     WHERE r.slug = $r AND f.directory = $d
+                                     ORDER BY f.name
+                                     """,
+                   [new DuckDBParameter("r", location.RepositorySlug), new DuckDBParameter("d", directory)]))
+        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+                entries.Add(new TreeItem(reader.GetString(0), reader.GetString(1), null,
+                    reader.GetInt32(2), reader.GetInt64(3), reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    ///     The root of a project: its repositories, which are what qualified paths begin with. A
+    ///     repository indexed from an empty tree still belongs here, hence the left join and the
+    ///     coalesce — it is a repository with no files, not an absent one.
+    /// </summary>
+    private async Task<IReadOnlyList<TreeItem>> RepositoryLevelAsync(CancellationToken cancellationToken)
+    {
+        using var command = Command("""
+                                    SELECT r.slug,
+                                           CAST(count(f.file_id) AS BIGINT) AS files,
+                                           CAST(coalesce(sum(f.line_count), 0) AS BIGINT) AS lines,
+                                           CAST(coalesce(sum(f.size_bytes), 0) AS BIGINT) AS bytes
+                                    FROM repositories r LEFT JOIN files f USING (repo_id)
+                                    GROUP BY r.slug
+                                    ORDER BY r.slug
+                                    """, []);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var entries = new List<TreeItem>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            string slug = reader.GetString(0);
+            entries.Add(new TreeItem(slug, slug, (int)reader.GetInt64(1), reader.GetInt64(2),
+                reader.GetInt64(3), null));
+        }
+
+        return entries;
     }
 
     public async Task<IReadOnlyList<ExtensionCount>> ExtensionsAsync(string? repositorySlug,

@@ -28,6 +28,24 @@ internal sealed record FileListEntry(
 internal sealed record FileListResponse(int Total, IReadOnlyList<FileListEntry> Files);
 
 /// <summary>
+///     One row of a tree listing. <paramref name="Files" /> is null for a file and counts everything
+///     beneath for a directory, which is how the view tells them apart without a second field.
+/// </summary>
+internal sealed record TreeEntryResponse(
+    string Name,
+    string QualifiedPath,
+    int? Files,
+    long Lines,
+    long SizeBytes,
+    string? SkipReason);
+
+/// <summary>
+///     One level of the tree. <paramref name="Path" /> echoes the level that was asked for — empty at
+///     the project root — so the view can draw a breadcrumb from the response alone.
+/// </summary>
+internal sealed record TreeResponse(string Path, IReadOnlyList<TreeEntryResponse> Entries);
+
+/// <summary>
 ///     Browsing, searching and file reads for the operator UI. The same services answer the MCP tools;
 ///     what differs is the shape, because the browser renders the result itself where an agent is
 ///     handed prose.
@@ -70,6 +88,10 @@ internal static class SearchEndpoints
                     string? repository = null) =>
                 await ListAsync(indexes, project, glob, repository, ct));
 
+        api.MapGet("/projects/{project}/tree",
+            async (string project, ProjectIndexes indexes, CancellationToken ct, string path = "") =>
+                await TreeAsync(indexes, project, path, ct));
+
         api.MapGet("/projects/{project}/file",
             async (string project, string path, ProjectIndexes indexes, CancellationToken ct) =>
                 await ReadAsync(indexes, project, path, ct));
@@ -87,6 +109,26 @@ internal static class SearchEndpoints
             result.Files
                 .Select(f => new FileListEntry(f.QualifiedPath, f.RepositorySlug, f.LineCount, f.SizeBytes,
                     f.SkipReason))
+                .ToList()));
+    }
+
+    /// <summary>
+    ///     A level of the tree. An unknown repository or directory answers with an empty level rather
+    ///     than a 404: the view has a breadcrumb out of it, and the only 404 here means the project has
+    ///     no index at all, which is a different thing to say.
+    /// </summary>
+    private static async Task<IResult> TreeAsync(
+        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken)
+    {
+        using var index = await FileQueries.OpenAsync(indexes, project, cancellationToken);
+        if (index is null) return Results.NotFound(new { error = ToolReply.NoIndex(project) });
+
+        var location = QualifiedPath.Parse(path);
+        var entries = await index.TreeAsync(path, cancellationToken);
+        return Results.Ok(new TreeResponse(location?.ToString() ?? "",
+            entries
+                .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
+                    e.SkipReason))
                 .ToList()));
     }
 

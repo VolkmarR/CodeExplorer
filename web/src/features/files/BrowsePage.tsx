@@ -1,7 +1,7 @@
-import { Link, useParams, useSearch } from '@tanstack/react-router'
+import { useParams, useSearch } from '@tanstack/react-router'
 import { BrowseFilter } from '@/features/files/BrowseFilter'
 import { FileList } from '@/features/files/FileList'
-import { Button } from '@/components/ui/button'
+import { FileTree } from '@/features/files/FileTree'
 
 /**
  * Browsing a project's index: what is in there, rather than what matches a query. The pair with
@@ -13,32 +13,16 @@ export function BrowsePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Files{' '}
-          <span className="font-mono text-lg font-normal text-muted-foreground">{project}</span>
-        </h1>
-        <div className="flex gap-2">
-          <Button
-            render={
-              <Link
-                to="/projects/$project/search"
-                params={{ project }}
-                search={{ caseSensitive: false, page: 1, q: '', regex: false }}
-              />
-            }
-            variant="secondary"
-          >
-            Search
-          </Button>
-          <Button render={<Link to="/projects/$project" params={{ project }} />} variant="ghost">
-            Back to project
-          </Button>
-        </div>
-      </div>
-
+      {/* No heading and no links of its own: the header bar says which project this is and which of
+          its three views is open, and the breadcrumb below says where in the tree. */}
       <BrowseFilter project={project} search={search} />
-      <FileList project={project} search={search} />
+      {/* A glob answers "where is every X", a tree answers "what is in here". The URL says which was
+          asked, so either view can be linked. */}
+      {search.glob === '' ? (
+        <FileTree project={project} path={search.path} />
+      ) : (
+        <FileList project={project} search={search} />
+      )}
     </div>
   )
 }
