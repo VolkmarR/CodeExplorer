@@ -32,8 +32,10 @@ public sealed class GitClones(
     private readonly IDataProtector _protector = dataProtection.CreateProtector(ControlDatabase.CredentialPurpose);
 
     // One gate per clone directory, so two first uses of the same repository clone it once and the
-    // second waits for the first instead of racing it on the same folder.
+    // second waits for the first instead of racing it on the same folder. Both dictionaries hold one
+    // entry per repository for the life of the process, which is bounded by the control database.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
+    private readonly ConcurrentDictionary<string, bool> _lfsByPath = new();
 
     /// <summary>
     ///     Opens the repository, cloning it first if no clone exists. Throws <see cref="McpException" />
@@ -59,9 +61,13 @@ public sealed class GitClones(
 
     /// <summary>
     ///     True when any <c>.gitattributes</c> in the HEAD tree declares <c>filter=lfs</c>. Walks the whole
-    ///     tree because git honours attributes files at any depth, not only at the root.
+    ///     tree because git honours attributes files at any depth, not only at the root. Remembered per
+    ///     clone, since HEAD only moves on a refresh, which is where the entry will be dropped.
     /// </summary>
-    public static bool DeclaresLfs(Repository repository)
+    public bool DeclaresLfs(Repository repository) =>
+        _lfsByPath.GetOrAdd(repository.Info.Path, static (_, repo) => ScanForLfs(repo), repository);
+
+    private static bool ScanForLfs(Repository repository)
     {
         if (HeadTree(repository) is not { } tree) return false;
         foreach (var entry in Walk(tree))
