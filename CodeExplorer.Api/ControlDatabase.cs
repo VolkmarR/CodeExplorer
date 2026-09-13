@@ -6,18 +6,31 @@ namespace CodeExplorer.Api;
 /// <summary>A project as stored in the control database: the stable slug plus a free display name.</summary>
 public sealed record Project(string Slug, string Name);
 
+/// <summary>Outcome of creating a project. The handler maps each case to a status code and nothing more.</summary>
+public enum CreateProjectOutcome
+{
+    Created,
+    InvalidSlug,
+    MissingName,
+    SlugTaken,
+}
+
 /// <summary>
 /// Owns <c>control.duckdb</c>: projects, and later repositories and credentials (ADR-0004). It is a
-/// plain file next to the project indexes and is never shadow-rebuilt.
+/// plain file next to the project indexes and is never shadow-rebuilt. It is opened standalone, not
+/// attached, so the "USE slug before every query" rule for project indexes does not apply here.
 /// </summary>
 public sealed partial class ControlDatabase
 {
     /// <summary>
     /// A slug is a URL path segment agents keep in their configuration, so it is limited to what
-    /// survives every client's URL handling unescaped: lowercase ASCII letters, digits and hyphens.
+    /// survives every client's URL handling unescaped: lowercase ASCII letters, digits and hyphens,
+    /// at most 64 characters.
     /// </summary>
     [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")]
     private static partial Regex SlugPattern { get; }
+
+    public const string SlugRule = "Slug must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit.";
 
     private readonly string _connectionString;
 
@@ -28,30 +41,41 @@ public sealed partial class ControlDatabase
         Directory.CreateDirectory(directory);
         _connectionString = $"Data Source={Path.Combine(directory, "control.duckdb")}";
 
-        using var connection = Open();
+        // Synchronous on purpose: this runs once at startup, before any request could cancel it.
+        using var connection = new DuckDBConnection(_connectionString);
+        connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "CREATE TABLE IF NOT EXISTS projects (slug VARCHAR PRIMARY KEY, name VARCHAR NOT NULL)";
         command.ExecuteNonQuery();
     }
 
-    public static bool IsValidSlug(string slug) => SlugPattern.IsMatch(slug);
-
-    /// <summary>Inserts a project; returns <c>false</c> when the slug is already taken.</summary>
-    public async Task<bool> TryCreateAsync(Project project, CancellationToken cancellationToken)
+    public async Task<CreateProjectOutcome> CreateAsync(string slug, string? name, CancellationToken cancellationToken)
     {
-        using var connection = Open();
+        if (!SlugPattern.IsMatch(slug))
+        {
+            return CreateProjectOutcome.InvalidSlug;
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return CreateProjectOutcome.MissingName;
+        }
+
+        using var connection = await OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
         // ON CONFLICT DO NOTHING keeps the existence check and the insert one statement, so two
         // concurrent creates cannot both succeed.
         command.CommandText = "INSERT INTO projects (slug, name) VALUES ($slug, $name) ON CONFLICT DO NOTHING";
-        command.Parameters.Add(new DuckDBParameter("slug", project.Slug));
-        command.Parameters.Add(new DuckDBParameter("name", project.Name));
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        command.Parameters.Add(new DuckDBParameter("slug", slug));
+        command.Parameters.Add(new DuckDBParameter("name", name.Trim()));
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
+            ? CreateProjectOutcome.Created
+            : CreateProjectOutcome.SlugTaken;
     }
 
     public async Task<Project?> FindAsync(string slug, CancellationToken cancellationToken)
     {
-        using var connection = Open();
+        using var connection = await OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT name FROM projects WHERE slug = $slug";
         command.Parameters.Add(new DuckDBParameter("slug", slug));
@@ -59,10 +83,10 @@ public sealed partial class ControlDatabase
         return name is string n ? new Project(slug, n) : null;
     }
 
-    private DuckDBConnection Open()
+    private async Task<DuckDBConnection> OpenAsync(CancellationToken cancellationToken)
     {
         var connection = new DuckDBConnection(_connectionString);
-        connection.Open();
+        await connection.OpenAsync(cancellationToken);
         return connection;
     }
 }

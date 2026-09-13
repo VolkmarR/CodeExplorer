@@ -74,6 +74,16 @@ public sealed class ProjectEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Mcp_client_cannot_connect_to_an_unknown_slug()
+    {
+        var error = await Assert.ThrowsAnyAsync<Exception>(async () =>
+        {
+            await using var client = await ConnectAsync("nope");
+        });
+        Assert.Contains("404", error.ToString());
+    }
+
+    [Fact]
     public async Task Creating_a_project_rejects_bad_slugs_and_duplicates()
     {
         using var http = _factory.CreateClient();
