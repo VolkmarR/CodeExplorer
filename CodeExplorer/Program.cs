@@ -9,14 +9,19 @@ builder.AddTelemetry();
 // The default key ring (a folder under the user profile) protects stored credentials until #13
 // moves it to Blob Storage and Key Vault; absent configuration must still yield a working server.
 builder.Services.AddDataProtection();
+// Blob Storage when a container is configured and a folder on disk when none is (ADR-0004), so a
+// plain `dotnet run` with an empty appsettings needs no Azure and still keeps a durable copy.
+builder.Services.AddSingleton<DurableStore>();
 builder.Services.AddSingleton<ControlDatabase>();
 builder.Services.AddSingleton<GitClones>();
+builder.Services.AddSingleton<DurableIndex>();
 builder.Services.AddSingleton<ProjectIndexes>();
 builder.Services.AddSingleton<IndexBuilder>();
 builder.Services.AddSingleton<ProjectRefresh>();
 builder.Services.AddSingleton<RefreshService>();
 builder.Services.AddSingleton<GrepSearch>();
 builder.Services.AddSingleton<ProjectOverview>();
+builder.Services.AddSingleton<WarmUp>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMcpServer().WithHttpTransport()
     .WithTools<ProjectTools>()

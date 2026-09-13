@@ -55,3 +55,21 @@ dependency and no project, and put boundaries where the coupling really is.
   `Program.cs` calls them. The one-statement handler rule does not change.
 - The Parquet class is revisited after issue #9. If by then it has a second reason to change, that
   is the moment for an explicit port, and not before.
+
+## Revisited after #9, on 2026-09-14
+
+The revisit above came due when #9 was built. Two things held and one moved.
+
+- **Still one class, still no port.** `DurableStore` chooses between Blob Storage and a folder from
+  one nullable field set in its constructor, exactly as the Hexagonal paragraph predicted. It was
+  briefly written as an abstract base with two implementations; that is a port by another name, it
+  cost a virtual call per operation and a second type to read, and it bought nothing the branch does
+  not. No second reason to change appeared, so no port.
+- **It does not live in `Index/`.** The Shape entry above put it there, and that was written before
+  the ticket showed that the control database's backup needs the same store (ADR-0004). `Index/`
+  already depends on `Control/` — `IndexBuilder` reads a `ProjectRepository` — so putting the store
+  in `Index/` would have made the two modules depend on each other. It sits at the repository root
+  instead, beside `Telemetry.cs` and `Project.cs`, which is where this codebase already keeps what
+  every module is handed. The Parquet itself, `DurableIndex`, is in `Index/` as the Shape says.
+- **The warm-up is in `Refresh/`**, as the Shape says, and not in `Operator/`: it is work a cron
+  drives against an index, not something that serves the web UI.

@@ -32,18 +32,23 @@ public static class Telemetry
     public const string FilesTag = "codeexplorer.files";
     public const string LinesTag = "codeexplorer.lines";
 
+    /// <summary>Which way the durable copy moved: <see cref="StoreOperation" /> or <see cref="FetchOperation" />.</summary>
+    public const string DurableTag = "codeexplorer.index.durable.operation";
+
     public const string SearchDuration = "codeexplorer.search.duration";
     public const string SearchFiles = "codeexplorer.search.files";
     public const string SearchLines = "codeexplorer.search.lines";
     public const string IndexDuration = "codeexplorer.index.build.duration";
     public const string IndexFiles = "codeexplorer.index.files";
     public const string IndexLines = "codeexplorer.index.lines";
+    public const string DurableDuration = "codeexplorer.index.durable.duration";
 
     // Span names are prefixed like the metric names, though only metrics and tags are held to it by
     // CODING_STANDARDS: a trace view shows these beside ASP.NET Core's own spans, and "search" alone
     // does not say whose.
     public const string SearchSpan = "codeexplorer.search";
     public const string IndexSpan = "codeexplorer.index.build";
+    public const string DurableSpan = "codeexplorer.index.durable";
 
     /// <summary>A search that reached an engine and got an answer, empty or not.</summary>
     public const string MatchedOutcome = "matched";
@@ -56,6 +61,22 @@ public static class Telemetry
 
     /// <summary>An index build that finished. A build has no second answer: it either completed or threw.</summary>
     public const string BuiltOutcome = "built";
+
+    /// <summary>The durable copy moved: written to the store, or read back out of it.</summary>
+    public const string MovedOutcome = "moved";
+
+    /// <summary>
+    ///     The store held no durable copy of this project, or held one an older build wrote. Neither is
+    ///     a failure — both mean the index is rebuilt from git — and neither is a move, so a dashboard
+    ///     that divides restores by wakes needs them apart.
+    /// </summary>
+    public const string AbsentOutcome = "absent";
+
+    /// <summary>Writing the durable copy of a project index to the store.</summary>
+    public const string StoreOperation = "store";
+
+    /// <summary>Reading it back, which is what an off-hours wake pays for.</summary>
+    public const string FetchOperation = "fetch";
 
     /// <summary>
     ///     The engine tag for a search that never reached one. A real engine name here would put a
@@ -85,6 +106,10 @@ public static class Telemetry
 
     private static readonly Histogram<long> IndexLineCount =
         Meter.CreateHistogram<long>(IndexLines, "{line}", "Lines read into an index by one build.");
+
+    private static readonly Histogram<double> DurableSeconds =
+        Meter.CreateHistogram<double>(DurableDuration, "s",
+            "How long a project's durable copy took to store or to fetch.");
 
     /// <summary>
     ///     Where the OTLP exporter sends, and the switch that decides whether there is one at all: absent
@@ -142,6 +167,15 @@ public static class Telemetry
 
     /// <summary>The chokepoint for one index build, called from <c>IndexBuilder</c> and nowhere else.</summary>
     public static IndexBuildRecording IndexBuild(string slug) => new(slug);
+
+    /// <summary>
+    ///     The chokepoint for one move of a project's durable copy, called from <c>DurableIndex</c> and
+    ///     nowhere else. The control database's backup deliberately has no recording: it belongs to no
+    ///     project, and an untagged measurement is the one thing CODING_STANDARDS rules out.
+    /// </summary>
+    /// <param name="slug">The project whose durable copy is moving.</param>
+    /// <param name="operation"><see cref="StoreOperation" /> or <see cref="FetchOperation" />.</param>
+    public static DurableCopyRecording DurableCopy(string slug, string operation) => new(slug, operation);
 
     /// <summary>
     ///     One operation in flight: its span, how long it has been running, and the project tag both
@@ -248,5 +282,41 @@ public static class Telemetry
             _operation.Tag(FilesTag, files);
             _operation.Tag(LinesTag, lines);
         }
+    }
+
+    /// <summary>
+    ///     One move of a project's durable copy, in either direction. The duration is the whole of it:
+    ///     storing is the <c>COPY TO</c> and the upload, and fetching is the download and the load,
+    ///     which is why a fetch's recording is started before the transfer and carried on the copy
+    ///     until it is loaded. That whole is what an off-hours wake waits for, and splitting it would
+    ///     need a span per leg to be worth anything.
+    /// </summary>
+    public sealed class DurableCopyRecording : IDisposable
+    {
+        private readonly Operation _operation;
+        private readonly string _which;
+        private string _outcome = FailedOutcome;
+
+        internal DurableCopyRecording(string slug, string operation)
+        {
+            _which = operation;
+            _operation = new Operation(DurableSpan, slug);
+            _operation.Tag(DurableTag, operation);
+        }
+
+        public void Dispose()
+        {
+            var tags = _operation.Tags;
+            tags.Add(DurableTag, _which);
+            tags.Add(OutcomeTag, _outcome);
+            DurableSeconds.Record(_operation.Seconds, tags);
+            _operation.Finish(_outcome);
+        }
+
+        /// <summary>The copy was written, or read back and loaded.</summary>
+        public void Moved() => _outcome = MovedOutcome;
+
+        /// <summary>There was nothing to read back, or what there was an older schema wrote.</summary>
+        public void Absent() => _outcome = AbsentOutcome;
     }
 }

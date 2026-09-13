@@ -78,6 +78,18 @@ public sealed class FileQueries(IndexLease lease) : IDisposable
     }
 
     /// <summary>
+    ///     The same against an index already on disk, without restoring one that is not: what a read
+    ///     spanning every project uses, so that opening the operator's project list does not wake every
+    ///     durable copy at once (#9).
+    /// </summary>
+    public static async Task<FileQueries?> PeekAsync(ProjectIndexes indexes, string slug,
+        CancellationToken cancellationToken)
+    {
+        var lease = await indexes.PeekAsync(slug, cancellationToken);
+        return lease is null ? null : new FileQueries(lease);
+    }
+
+    /// <summary>
     ///     Null when the file exists but the build that was filling it never finished — the row is
     ///     written last, so its absence is what an interrupted build leaves behind. That is a state a
     ///     caller can catch the server in, and the project list has to show every other project even
