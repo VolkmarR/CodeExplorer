@@ -107,7 +107,21 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         ("(?!", "negative lookahead (?!...)")
     ];
 
+    /// <summary>
+    ///     Every search goes through here — the MCP tool, the operator endpoint and whatever comes
+    ///     next — which is what makes this the one place a search is recorded. A new entry point cannot
+    ///     report a different set of attributes, because it does not record at all.
+    /// </summary>
     public async Task<GrepOutcome> SearchAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await RunAsync(slug, request, cancellationToken);
+        if (outcome is GrepResult result) recording.Matched(result.Engine, result.TotalFiles, result.TotalLines);
+        else recording.Problem();
+        return outcome;
+    }
+
+    private async Task<GrepOutcome> RunAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
     {
         string query = request.Query.Trim();
         if (query.Length == 0)
