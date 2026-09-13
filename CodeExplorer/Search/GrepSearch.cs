@@ -21,10 +21,14 @@ public sealed record GrepRequest(
     int PageSize = 20)
 {
     public bool HasFileFilters =>
-        !string.IsNullOrWhiteSpace(Path) || !string.IsNullOrWhiteSpace(Exclude) || !string.IsNullOrWhiteSpace(Extension);
+        !string.IsNullOrWhiteSpace(Path) || !string.IsNullOrWhiteSpace(Exclude) ||
+        !string.IsNullOrWhiteSpace(Extension);
 }
 
-/// <summary>Either a <see cref="GrepResult" /> or a <see cref="GrepProblem" />: a semantic failure is an answer, never an exception.</summary>
+/// <summary>
+///     Either a <see cref="GrepResult" /> or a <see cref="GrepProblem" />: a semantic failure is an answer, never an
+///     exception.
+/// </summary>
 public abstract record GrepOutcome;
 
 /// <summary>What went wrong and what to try instead, in agent-facing prose.</summary>
@@ -83,6 +87,15 @@ public sealed class GrepSearch(ProjectIndexes indexes)
     public const int MaxPageSize = 100;
 
     /// <summary>
+    ///     Wrapped around every multiline match by <c>regexp_replace</c> so the exact boundaries come
+    ///     back from RE2 itself. Control characters, because source text does not contain them; a
+    ///     stray one would only shift a line number by one within that file.
+    /// </summary>
+    private const char MatchStart = '';
+
+    private const char MatchEnd = '';
+
+    /// <summary>
     ///     RE2 rejects these; each is a .NET or PCRE habit an agent brings along. Recognised up front so
     ///     the explanation names the construct rather than quoting an engine error.
     /// </summary>
@@ -94,19 +107,11 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         ("(?!", "negative lookahead (?!...)")
     ];
 
-    /// <summary>
-    ///     Wrapped around every multiline match by <c>regexp_replace</c> so the exact boundaries come
-    ///     back from RE2 itself. Control characters, because source text does not contain them; a
-    ///     stray one would only shift a line number by one within that file.
-    /// </summary>
-    private const char MatchStart = '';
-
-    private const char MatchEnd = '';
-
     public async Task<GrepOutcome> SearchAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
     {
         string query = request.Query.Trim();
-        if (query.Length == 0) return new GrepProblem("The query is empty. Pass the text or RE2 pattern to search for.");
+        if (query.Length == 0)
+            return new GrepProblem("The query is empty. Pass the text or RE2 pattern to search for.");
 
         bool regex = request.Regex || request.Multiline;
         if (regex && UnsupportedRegex(query) is { } unsupported) return new GrepProblem(unsupported);
@@ -125,7 +130,8 @@ public sealed class GrepSearch(ProjectIndexes indexes)
                 ? await SearchMultilineAsync(connection, request, query, bounds, cancellationToken)
                 : await SearchLinesAsync(connection, request, query, regex, bounds, cancellationToken);
         }
-        catch (DuckDBException ex) when (regex && ex.Message.StartsWith("Invalid Input Error", StringComparison.Ordinal))
+        catch (DuckDBException ex) when
+            (regex && ex.Message.StartsWith("Invalid Input Error", StringComparison.Ordinal))
         {
             // Only regex mode hands user text to a parser, and RE2 rejections surface as DuckDB's
             // "Invalid Input Error: missing ): ..." with no other marker. A missing table or a detached
@@ -155,7 +161,8 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         }
         else
         {
-            var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string[] tokens = query.Split((char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             // The decision is per index, not per process: an index built under Substring has no BM25 tables
             // even when the extension is loaded now, and match_bm25 would fail on it.
             bool useFts = indexes.FtsAvailable && tokens.Any(HasIndexableChars)
@@ -173,8 +180,11 @@ public sealed class GrepSearch(ProjectIndexes indexes)
             for (int i = 0; i < tokens.Length; i++)
             {
                 if (match.Length > 0) match.Append(" AND ");
-                match.Append(request.CaseSensitive ? $"contains(l.content, $t{i})" : $"contains(lower(l.content), $t{i})");
-                matchParameters.Add(new DuckDBParameter($"t{i}", request.CaseSensitive ? tokens[i] : tokens[i].ToLowerInvariant()));
+                match.Append(request.CaseSensitive
+                    ? $"contains(l.content, $t{i})"
+                    : $"contains(lower(l.content), $t{i})");
+                matchParameters.Add(new DuckDBParameter($"t{i}",
+                    request.CaseSensitive ? tokens[i] : tokens[i].ToLowerInvariant()));
             }
         }
 
@@ -253,7 +263,8 @@ public sealed class GrepSearch(ProjectIndexes indexes)
                     current = [];
                 }
 
-                if (!reader.IsDBNull(4)) current.Add(new GrepLine(reader.GetInt32(4), reader.GetString(5), reader.GetBoolean(6)));
+                if (!reader.IsDBNull(4))
+                    current.Add(new GrepLine(reader.GetInt32(4), reader.GetString(5), reader.GetBoolean(6)));
             }
 
             if (currentPath is not null) files.Add(File(currentPath, currentCount, current));
@@ -268,8 +279,10 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         return new GrepResult(engine, totalFiles, totalLines, bounds.Page, bounds.PageSize, files, withoutFilters);
 
         // In single-line mode every marked line is exactly one match.
-        static GrepFile File(string path, int count, List<GrepLine> lines) =>
-            new(path, count, lines.Count(l => l.IsMatch), lines);
+        static GrepFile File(string path, int count, List<GrepLine> lines)
+        {
+            return new GrepFile(path, count, lines.Count(l => l.IsMatch), lines);
+        }
     }
 
     /// <summary>
@@ -279,7 +292,8 @@ public sealed class GrepSearch(ProjectIndexes indexes)
     ///     crosses newlines. Two passes: counts without content, then content only for the page shown.
     /// </summary>
     private static async Task<GrepOutcome> SearchMultilineAsync(
-        DuckDBConnection connection, GrepRequest request, string query, Bounds bounds, CancellationToken cancellationToken)
+        DuckDBConnection connection, GrepRequest request, string query, Bounds bounds,
+        CancellationToken cancellationToken)
     {
         string flags = request.CaseSensitive ? "s" : "si";
         var matchParameters = new List<DuckDBParameter> { new("q", query), new("flags", flags) };
@@ -288,7 +302,8 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         {
             // The literal holds no newline, so a whole-file match must contain it within one line. Compared
             // lower-cased regardless of case mode: a (?i) inside the pattern would otherwise defeat it.
-            literalFilter = " AND EXISTS (SELECT 1 FROM lines l WHERE l.file_id = f.file_id AND contains(lower(l.content), $lit))";
+            literalFilter =
+                " AND EXISTS (SELECT 1 FROM lines l WHERE l.file_id = f.file_id AND contains(lower(l.content), $lit))";
             matchParameters.Add(new DuckDBParameter("lit", literal.ToLowerInvariant()));
         }
 
@@ -330,34 +345,39 @@ public sealed class GrepSearch(ProjectIndexes indexes)
                                                   {Documents($" AND f.file_id IN ({ids})")}
                                                   SELECT file_id, regexp_replace(content, '(' || $q || ')', chr(1) || '\1' || chr(2), $gflags)
                                                   FROM docs
-                                                  """, [new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
+                                                  """,
+                   [new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken)) marked[reader.GetInt64(0)] = reader.GetString(1);
         }
 
         var files = new List<GrepFile>();
-        foreach (var (fileId, path, count) in pageFiles)
+        foreach ((long fileId, string path, int count) in pageFiles)
         {
             if (!marked.TryGetValue(fileId, out string? content)) continue;
-            var (lines, shown) = SpannedLines(content, bounds);
+            (var lines, int shown) = SpannedLines(content, bounds);
             files.Add(new GrepFile(path, count, shown, lines));
         }
 
-        return new GrepResult(MultilineEngine, counts.Count, totalMatches, bounds.Page, bounds.PageSize, files, withoutFilters);
+        return new GrepResult(MultilineEngine, counts.Count, totalMatches, bounds.Page, bounds.PageSize, files,
+            withoutFilters);
 
         // Skipped files (binary, oversized) have no lines and would aggregate to nothing; filtered out
         // here so they never even reach the join.
-        static string Documents(string candidateFilter) => $"""
-                                                            WITH candidates AS (
-                                                                SELECT f.file_id, f.qualified_path FROM files f
-                                                                WHERE f.skip_reason IS NULL{candidateFilter}),
-                                                            docs AS (
-                                                                SELECT c.file_id, c.qualified_path,
-                                                                       string_agg(l.content, chr(10) ORDER BY l.line_number) AS content
-                                                                FROM candidates c JOIN lines l USING (file_id)
-                                                                GROUP BY ALL)
-                                                            """;
+        static string Documents(string candidateFilter)
+        {
+            return $"""
+                    WITH candidates AS (
+                        SELECT f.file_id, f.qualified_path FROM files f
+                        WHERE f.skip_reason IS NULL{candidateFilter}),
+                    docs AS (
+                        SELECT c.file_id, c.qualified_path,
+                               string_agg(l.content, chr(10) ORDER BY l.line_number) AS content
+                        FROM candidates c JOIN lines l USING (file_id)
+                        GROUP BY ALL)
+                    """;
+        }
     }
 
     /// <summary>
@@ -384,7 +404,8 @@ public sealed class GrepSearch(ProjectIndexes indexes)
                     if (matchesSeen < bounds.MaxLinesPerFile)
                     {
                         for (int i = matchStartLine; i <= line; i++) matched.Add(i);
-                        for (int i = Math.Max(1, matchStartLine - bounds.Context); i <= line + bounds.Context; i++) shown.Add(i);
+                        for (int i = Math.Max(1, matchStartLine - bounds.Context); i <= line + bounds.Context; i++)
+                            shown.Add(i);
                     }
 
                     matchesSeen++;
@@ -491,7 +512,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
 
     private static string? UnsupportedRegex(string pattern)
     {
-        foreach (var (needle, name) in UnsupportedSyntax)
+        foreach ((string needle, string name) in UnsupportedSyntax)
             if (pattern.Contains(needle, StringComparison.Ordinal))
                 return $"The pattern uses {name}, which RE2 does not support. "
                        + "Match the wider text instead and read the hit, or grep for the inner part with context.";
@@ -546,10 +567,12 @@ public sealed class GrepSearch(ProjectIndexes indexes)
 
         return where.ToString();
 
-        static string Match(string term, string parameter) =>
-            term.Contains('*') || term.Contains('?')
+        static string Match(string term, string parameter)
+        {
+            return term.Contains('*') || term.Contains('?')
                 ? $"lower(f.qualified_path) GLOB {parameter}"
                 : $"contains(lower(f.qualified_path), {parameter})";
+        }
     }
 
     private static List<string> SplitTerms(string? terms) =>
@@ -559,20 +582,23 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         .Select(t => t.Replace('\\', '/').ToLowerInvariant())
     ];
 
-    private static async Task<bool> HasFullTextIndexAsync(DuckDBConnection connection, CancellationToken cancellationToken)
+    private static async Task<bool> HasFullTextIndexAsync(DuckDBConnection connection,
+        CancellationToken cancellationToken)
     {
         using var command = Command(connection, "SELECT fts_indexed FROM index_info", []);
         return await command.ExecuteScalarAsync(cancellationToken) is true;
     }
 
     private static async Task<int> CountAsync(
-        DuckDBConnection connection, string sql, IEnumerable<DuckDBParameter> parameters, CancellationToken cancellationToken)
+        DuckDBConnection connection, string sql, IEnumerable<DuckDBParameter> parameters,
+        CancellationToken cancellationToken)
     {
         using var command = Command(connection, sql, parameters);
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
     }
 
-    private static DuckDBCommand Command(DuckDBConnection connection, string sql, IEnumerable<DuckDBParameter> parameters)
+    private static DuckDBCommand Command(DuckDBConnection connection, string sql,
+        IEnumerable<DuckDBParameter> parameters)
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;

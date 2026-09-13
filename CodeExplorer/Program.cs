@@ -37,7 +37,7 @@ projects.AddEndpointFilter(async (context, next) =>
         .FindAsync(slug, context.HttpContext.RequestAborted);
     if (project is null)
         return Results.NotFound(new
-        { error = $"No project with slug '{slug}'. Create it with POST /api/projects first." });
+            { error = $"No project with slug '{slug}'. Create it with POST /api/projects first." });
 
     context.HttpContext.Items[BoundProject.ItemKey] = project;
     return await next(context);

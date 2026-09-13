@@ -15,7 +15,8 @@ namespace CodeExplorer.Tests;
 /// </summary>
 public sealed class TestHost : IDisposable
 {
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
+    private readonly string _root =
+        Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
 
     public TestHost(SearchEngine engine)
     {
