@@ -58,7 +58,8 @@ public sealed class FileToolsTests : IDisposable
         Assert.DoesNotContain("Needle", open);
 
         string defaults = await CallAsync(client, "read_file",
-            new() { ["paths"] = Paths("one/src/Orders.cs", "two/lib/index.ts"), ["startLine"] = 2, ["maxLines"] = 1 });
+            new Dictionary<string, object?>
+                { ["paths"] = Paths("one/src/Orders.cs", "two/lib/index.ts"), ["startLine"] = 2, ["maxLines"] = 1 });
         Assert.Contains("2  {", defaults);
         Assert.DoesNotContain("class Orders", defaults);
         Assert.Contains("2  export const haystack = 1;", defaults);
@@ -112,7 +113,7 @@ public sealed class FileToolsTests : IDisposable
     {
         await using var client = await StartAsync();
 
-        string all = await CallAsync(client, "glob", new() { ["glob"] = "*.cs" });
+        string all = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "*.cs" });
         Assert.Contains("2 files matching \"*.cs\"", all);
         Assert.Contains("one/src/Orders.cs", all);
         Assert.Contains("one/src/Orders.g.cs", all);
@@ -120,18 +121,20 @@ public sealed class FileToolsTests : IDisposable
         // Line counts let the agent size a read before making it.
         Assert.Contains("6L  one/src/Orders.cs", all);
 
-        string scoped = await CallAsync(client, "glob", new() { ["glob"] = "*", ["repo"] = "two" });
+        string scoped = await CallAsync(client, "glob",
+            new Dictionary<string, object?> { ["glob"] = "*", ["repo"] = "two" });
         Assert.Contains("3 files matching \"*\" in repository 'two'", scoped);
         Assert.DoesNotContain("one/", scoped);
         Assert.Contains("two/Makefile", scoped);
 
-        string prefixed = await CallAsync(client, "glob", new() { ["glob"] = "one/src/*" });
+        string prefixed = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "one/src/*" });
         Assert.Contains("2 files", prefixed);
 
-        string skipped = await CallAsync(client, "glob", new() { ["glob"] = "*.bin" });
+        string skipped = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "*.bin" });
         Assert.Contains("one/assets/logo.bin  (not indexed: binary)", skipped);
 
-        string limited = await CallAsync(client, "glob", new() { ["glob"] = "*", ["limit"] = 2 });
+        string limited = await CallAsync(client, "glob",
+            new Dictionary<string, object?> { ["glob"] = "*", ["limit"] = 2 });
         Assert.Contains("7 files matching", limited);
         Assert.Contains("showing the first 2", limited);
     }
@@ -141,33 +144,37 @@ public sealed class FileToolsTests : IDisposable
     {
         await using var client = await StartAsync();
 
-        string nowhere = await CallAsync(client, "glob", new() { ["glob"] = "*.py" });
-        Assert.Contains("No indexed file matches \"*.py\" in project 'alpha' (7 files in repositories one, two)", nowhere);
+        string nowhere = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "*.py" });
+        Assert.Contains("No indexed file matches \"*.py\" in project 'alpha' (7 files in repositories one, two)",
+            nowhere);
 
-        string elsewhere = await CallAsync(client, "glob", new() { ["glob"] = "*.ts", ["repo"] = "one" });
+        string elsewhere = await CallAsync(client, "glob",
+            new Dictionary<string, object?> { ["glob"] = "*.ts", ["repo"] = "one" });
         Assert.Contains("No indexed file matches \"*.ts\" in repository 'one'", elsewhere);
         Assert.Contains("2 files match in the other repositories of project 'alpha'", elsewhere);
 
-        string unknownRepo = await CallAsync(client, "glob", new() { ["glob"] = "*.ts", ["repo"] = "three" });
+        string unknownRepo = await CallAsync(client, "glob",
+            new Dictionary<string, object?> { ["glob"] = "*.ts", ["repo"] = "three" });
         Assert.Contains("No repository 'three' in project 'alpha'", unknownRepo);
 
-        string braces = await CallAsync(client, "glob", new() { ["glob"] = "*.{cs,ts}" });
+        string braces = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "*.{cs,ts}" });
         Assert.Contains("Brace expansion is not supported", braces);
         Assert.DoesNotContain("No indexed file", braces);
 
-        string slash = await CallAsync(client, "glob", new() { ["glob"] = "one/src/" });
+        string slash = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "one/src/" });
         Assert.Contains("trailing slash", slash);
         Assert.Contains("one/src/**", slash);
 
-        string empty = await CallAsync(client, "glob", new() { ["glob"] = "  " });
+        string empty = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "  " });
         Assert.Contains("empty", empty);
 
-        string bracket = await CallAsync(client, "glob", new() { ["glob"] = "*[0-9.cs" });
+        string bracket = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "*[0-9.cs" });
         Assert.Contains("unbalanced [ ]", bracket);
         Assert.DoesNotContain("No indexed file", bracket);
 
         // A repository scope is matched case-insensitively, like every other slug an agent types.
-        string upper = await CallAsync(client, "glob", new() { ["glob"] = "*.ts", ["repo"] = "TWO" });
+        string upper = await CallAsync(client, "glob",
+            new Dictionary<string, object?> { ["glob"] = "*.ts", ["repo"] = "TWO" });
         Assert.Contains("2 files matching \"*.ts\" in repository 'two'", upper);
     }
 
@@ -176,7 +183,7 @@ public sealed class FileToolsTests : IDisposable
     {
         await using var client = await StartAsync();
 
-        string all = await CallAsync(client, "list_extensions", new());
+        string all = await CallAsync(client, "list_extensions", new Dictionary<string, object?>());
         Assert.Contains("cs", all);
         Assert.Matches(@"cs\s+2 files", all);
         Assert.Matches(@"ts\s+2 files", all);
@@ -184,7 +191,8 @@ public sealed class FileToolsTests : IDisposable
         Assert.Matches(@"\(none\)\s+1 file\b", all);
         Assert.Matches(@"bin\s+1 file .*not indexed", all);
 
-        string scoped = await CallAsync(client, "list_extensions", new() { ["repo"] = "two" });
+        string scoped =
+            await CallAsync(client, "list_extensions", new Dictionary<string, object?> { ["repo"] = "two" });
         Assert.Contains("repository 'two'", scoped);
         Assert.DoesNotMatch(@"\bcs\b", scoped);
         Assert.Matches(@"ts\s+2 files", scoped);
@@ -199,7 +207,7 @@ public sealed class FileToolsTests : IDisposable
         await _host.AddRepositoryAsync("alpha", "later", later);
         await using var client = await _host.ConnectAsync("alpha");
 
-        string text = await CallAsync(client, "repo_info", new());
+        string text = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
         Assert.Contains("Project 'alpha'", text);
         Assert.Contains("Indexed at", text);
         Assert.Contains("Full-text index: not built", text);
@@ -224,12 +232,12 @@ public sealed class FileToolsTests : IDisposable
         await _host.CreateProjectAsync("alpha");
         await using var client = await _host.ConnectAsync("alpha");
 
-        foreach ((string tool, Dictionary<string, object?> arguments) in new (string, Dictionary<string, object?>)[]
+        foreach ((string tool, var arguments) in new[]
                  {
-                     ("read_file", new() { ["paths"] = Paths("one/a.cs") }),
-                     ("glob", new() { ["glob"] = "*.cs" }),
-                     ("list_extensions", new()),
-                     ("repo_info", new())
+                     ("read_file", new Dictionary<string, object?> { ["paths"] = Paths("one/a.cs") }),
+                     ("glob", new Dictionary<string, object?> { ["glob"] = "*.cs" }),
+                     ("list_extensions", new Dictionary<string, object?>()),
+                     ("repo_info", new Dictionary<string, object?>())
                  })
         {
             string text = await CallAsync(client, tool, arguments);
