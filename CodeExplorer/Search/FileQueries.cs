@@ -86,11 +86,12 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
     {
         // epoch() hands back seconds as a double, which is the one representation of a TIMESTAMPTZ that
         // does not depend on whether the ICU extension is loaded to decide the session time zone.
-        using var command = Command("SELECT epoch(built_at), fts_indexed, single_repository FROM index_info", []);
+        using var command = Command(
+            "SELECT epoch(built_at) AS built_seconds, fts_indexed, single_repository FROM index_info", []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new IndexInfo(DateTimeOffset.FromUnixTimeSeconds((long)reader.GetDouble(0)), reader.GetBoolean(1),
-                reader.GetBoolean(2))
+            ? new IndexInfo(DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("built_seconds")),
+                reader.Flag("fts_indexed"), reader.Flag("single_repository"))
             : null;
     }
 
@@ -105,14 +106,15 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
     public async Task<ProjectPaths> PathsAsync(string projectSlug, CancellationToken cancellationToken)
     {
         using var command = Command("""
-                                    SELECT (SELECT single_repository FROM index_info),
-                                           (SELECT slug FROM repositories ORDER BY repo_id LIMIT 1)
+                                    SELECT (SELECT single_repository FROM index_info) AS single_repository,
+                                           (SELECT slug FROM repositories ORDER BY repo_id LIMIT 1) AS slug
                                     """, []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return new ProjectPaths(false, projectSlug);
 
-        return new ProjectPaths(!reader.IsDBNull(0) && reader.GetBoolean(0),
-            reader.IsDBNull(1) ? projectSlug : reader.GetString(1));
+        // Both subqueries answer null on an index still being filled: no index_info row until the build
+        // completes, and no repositories until the first one is ingested.
+        return new ProjectPaths(reader.FlagOrFalse("single_repository"), reader.TextOrNull("slug") ?? projectSlug);
     }
 
     public async Task<IReadOnlyList<IndexedRepository>> RepositoriesAsync(CancellationToken cancellationToken)
@@ -122,8 +124,8 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var result = new List<IndexedRepository>();
         while (await reader.ReadAsync(cancellationToken))
-            result.Add(new IndexedRepository(reader.GetString(0), reader.GetString(1), reader.GetString(2),
-                reader.GetInt32(3), reader.GetInt64(4)));
+            result.Add(new IndexedRepository(reader.Text("slug"), reader.Text("url"), reader.Text("head_commit"),
+                reader.Int32("file_count"), reader.Int64("line_count")));
         return result;
     }
 
@@ -154,7 +156,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
             [new DuckDBParameter("n", name)]);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var result = new List<string>();
-        while (await reader.ReadAsync(cancellationToken)) result.Add(reader.GetString(0));
+        while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("qualified_path"));
         return result;
     }
 
@@ -173,7 +175,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
             [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var result = new List<string>();
-        while (await reader.ReadAsync(cancellationToken)) result.Add(reader.GetString(0));
+        while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("content"));
         return result;
     }
 
@@ -206,7 +208,7 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
             while (await reader.ReadAsync(cancellationToken))
             {
                 files.Add(ReadFile(reader));
-                total = (int)reader.GetInt64(6);
+                total = (int)reader.Int64("total");
             }
         }
 
@@ -272,9 +274,9 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         {
             while (await reader.ReadAsync(cancellationToken))
             {
-                string segment = reader.GetString(0);
+                string segment = reader.Text("segment");
                 entries.Add(new TreeItem(segment, paths.Format(repositorySlug, prefix + segment),
-                    (int)reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), null));
+                    (int)reader.Int64("files"), reader.Int64("lines"), reader.Int64("bytes"), null));
             }
         }
 
@@ -288,8 +290,8 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
-                entries.Add(new TreeItem(reader.GetString(0), reader.GetString(1), null,
-                    reader.GetInt32(2), reader.GetInt64(3), reader.IsDBNull(4) ? null : reader.GetString(4)));
+                entries.Add(new TreeItem(reader.Text("name"), reader.Text("qualified_path"), null,
+                    reader.Int32("line_count"), reader.Int64("size_bytes"), reader.TextOrNull("skip_reason")));
         }
 
         return entries;
@@ -318,9 +320,9 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         var entries = new List<TreeItem>();
         while (await reader.ReadAsync(cancellationToken))
         {
-            string slug = reader.GetString(0);
-            entries.Add(new TreeItem(slug, slug, (int)reader.GetInt64(1), reader.GetInt64(2),
-                reader.GetInt64(3), null));
+            string slug = reader.Text("slug");
+            entries.Add(new TreeItem(slug, slug, (int)reader.Int64("files"), reader.Int64("lines"),
+                reader.Int64("bytes"), null));
         }
 
         return entries;
@@ -338,7 +340,10 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         }
 
         using var command = Command($"""
-                                     SELECT f.extension, count(*), sum(f.line_count)::BIGINT, count(f.skip_reason)
+                                     SELECT f.extension,
+                                            count(*) AS files,
+                                            sum(f.line_count)::BIGINT AS lines,
+                                            count(f.skip_reason) AS skipped
                                      FROM files f JOIN repositories r USING (repo_id){scope}
                                      GROUP BY f.extension
                                      ORDER BY count(*) DESC, f.extension
@@ -346,15 +351,20 @@ public sealed class FileQueries(DuckDBConnection connection) : IDisposable
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var result = new List<ExtensionCount>();
         while (await reader.ReadAsync(cancellationToken))
-            result.Add(new ExtensionCount(reader.GetString(0), (int)reader.GetInt64(1),
+            result.Add(new ExtensionCount(reader.Text("extension"), (int)reader.Int64("files"),
                 // sum() yields a HUGEINT, which the reader surfaces as BigInteger; the cast above keeps it a long.
-                reader.GetInt64(2), (int)reader.GetInt64(3)));
+                reader.Int64("lines"), (int)reader.Int64("skipped")));
         return result;
     }
 
+    /// <summary>
+    ///     Reads the columns <see cref="FileColumns" /> selects, by name: the glob query appends a
+    ///     window count to that list, so a positional read here would break the moment another caller
+    ///     prepends anything to its own projection.
+    /// </summary>
     private static IndexedFile ReadFile(DbDataReader reader) => new(
-        reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetInt64(4),
-        reader.IsDBNull(5) ? null : reader.GetString(5));
+        reader.Int64("file_id"), reader.Text("qualified_path"), reader.Text("slug"),
+        reader.Int32("line_count"), reader.Int64("size_bytes"), reader.TextOrNull("skip_reason"));
 
     private DuckDBCommand Command(string sql, IEnumerable<DuckDBParameter> parameters)
     {
