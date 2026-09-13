@@ -154,6 +154,67 @@ public sealed class SearchEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Fact]
+    public async Task The_tree_walks_repositories_then_directories_then_files()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        // The root of a project is its repositories: a qualified path begins with one, so there is no
+        // level above them to list.
+        var root = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree");
+        Assert.Equal("", root.Path);
+        Assert.Equal(["one", "two"], root.Entries.Select(e => e.Name));
+        Assert.Equal(2, root.Entries[0].Files);
+        Assert.Equal(1, root.Entries[1].Files);
+
+        // Inside a repository: directories only here, and each counts what lies beneath it rather than
+        // its immediate children.
+        var repository = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree?path=one");
+        Assert.Equal("one", repository.Path);
+        Assert.Equal(["docs", "src"], repository.Entries.Select(e => e.Name));
+        Assert.All(repository.Entries, e => Assert.NotNull(e.Files));
+        Assert.Equal("one/docs", repository.Entries[0].QualifiedPath);
+
+        var source = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree?path=one/src");
+        var file = Assert.Single(source.Entries);
+        Assert.Equal("Widget.cs", file.Name);
+        // Null `Files` is what tells a file from a directory, and the qualified path is what the file
+        // view is opened with.
+        Assert.Null(file.Files);
+        Assert.Equal("one/src/Widget.cs", file.QualifiedPath);
+        Assert.Equal(4, file.Lines);
+    }
+
+    [Fact]
+    public async Task A_repository_root_lists_its_own_files_beside_its_directories()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new() { ["README.md"] = "read me\n", ["src/A.cs"] = "class A { }\n" }
+        });
+
+        var level = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree?path=one");
+
+        // A file at the repository root has an empty `directory`, which is also the prefix this level
+        // matches on. The listing must show it as a file and must not turn it into a directory.
+        Assert.Equal(["src", "README.md"], level.Entries.Select(e => e.Name));
+        Assert.NotNull(level.Entries[0].Files);
+        Assert.Null(level.Entries[1].Files);
+    }
+
+    [Fact]
+    public async Task A_directory_that_is_not_in_the_index_is_an_empty_level_not_a_not_found()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        // Only a project with no index at all is a 404 here. An empty level is an answer: the view
+        // still draws the breadcrumb that leads back out of it.
+        var level = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree?path=one/nowhere");
+
+        Assert.Empty(level.Entries);
+    }
+
     private static async Task<T> GetAsync<T>(TestHost host, string url)
     {
         using var http = host.Factory.CreateClient();

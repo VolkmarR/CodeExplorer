@@ -91,6 +91,25 @@ export interface FileList {
   files: FileListEntry[]
 }
 
+/**
+ * One row of a tree listing. `files` is null for a file and counts everything beneath for a
+ * directory, so it is what tells the two apart.
+ */
+export interface TreeEntry {
+  name: string
+  qualifiedPath: string
+  files: number | null
+  lines: number
+  sizeBytes: number
+  skipReason: string | null
+}
+
+/** One level of the tree. `path` is empty at the project root, where the entries are repositories. */
+export interface TreeLevel {
+  path: string
+  entries: TreeEntry[]
+}
+
 export interface FileContent {
   qualifiedPath: string
   repositorySlug: string
@@ -110,17 +129,18 @@ export { HTTPError as ApiError } from 'ky'
 const http = ky.create({
   hooks: {
     beforeError: [
-      async ({ error }) => {
+      ({ error }) => {
         // A timeout or a dropped connection is not an HTTPError and has no body to read.
         if (!(error instanceof HTTPError)) return error
 
         // A semantic failure answers `{ error }` with prose naming what to try instead (an unknown
         // project, a pattern RE2 rejects, an index still to be built). ky's default message is the
         // status line, which would throw that away.
-        const body: unknown = await error.response
-          .clone()
-          .json()
-          .catch(() => null)
+        //
+        // Read `error.data`, never the response: ky parses the body into `data` before this hook
+        // runs, which consumes it, so `response.clone()` here throws "Response body is already
+        // used" and every server message becomes that TypeError instead.
+        const body: unknown = error.data
         if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') {
           error.message = body.error
         }
@@ -151,6 +171,9 @@ export const api = {
         searchParams: repository ? { glob, repository } : { glob },
       })
       .json<FileList>(),
+
+  tree: (project: string, path: string) =>
+    http.get(`projects/${project}/tree`, { searchParams: { path } }).json<TreeLevel>(),
 
   file: (project: string, path: string) =>
     http.get(`projects/${project}/file`, { searchParams: { path } }).json<FileContent>(),

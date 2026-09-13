@@ -15,6 +15,14 @@ export function fileQuery(project: string, path: string) {
   })
 }
 
+/** One level of the tree. Keyed by the level, so walking back up is already in the cache. */
+export function treeQuery(project: string, path: string) {
+  return queryOptions({
+    queryFn: () => api.tree(project, path),
+    queryKey: [...projectKey(project), 'tree', path],
+  })
+}
+
 /** The listing behind the browse view, keyed under the project like everything else read from it. */
 export function browseQuery(project: string, parameters: BrowseParameters) {
   return queryOptions({
