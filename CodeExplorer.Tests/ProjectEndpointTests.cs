@@ -8,9 +8,9 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-/// Drives the walking skeleton end to end: projects created through the operator endpoint become
-/// reachable as MCP endpoints in the same process, and the route alone decides which project a
-/// session is bound to.
+///     Drives the walking skeleton end to end: projects created through the operator endpoint become
+///     reachable as MCP endpoints in the same process, and the route alone decides which project a
+///     session is bound to.
 /// </summary>
 public sealed class ProjectEndpointTests : IDisposable
 {
@@ -28,7 +28,7 @@ public sealed class ProjectEndpointTests : IDisposable
     public void Dispose()
     {
         _factory.Dispose();
-        Directory.Delete(_dataDirectory, recursive: true);
+        Directory.Delete(_dataDirectory, true);
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public sealed class ProjectEndpointTests : IDisposable
         var tools = await client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(tools, t => t.Name == "which_project");
 
-        var text = await CallWhichProjectAsync(client);
+        string text = await CallWhichProjectAsync(client);
         Assert.Contains("alpha", text);
         Assert.Contains("Alpha Project", text);
     }

@@ -17,10 +17,11 @@ var api = app.MapGroup("/api");
 api.MapPost("/projects", async (CreateProjectRequest request, ControlDatabase control, CancellationToken ct) =>
     await control.CreateAsync(request.Slug, request.Name, ct) switch
     {
-        CreateProjectOutcome.Created => Results.Created($"/projects/{request.Slug}/mcp", new Project(request.Slug, request.Name!.Trim())),
+        CreateProjectOutcome.Created => Results.Created($"/projects/{request.Slug}/mcp",
+            new Project(request.Slug, request.Name!.Trim())),
         CreateProjectOutcome.InvalidSlug => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
         CreateProjectOutcome.MissingName => Results.BadRequest(new { error = "Name is required." }),
-        _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." }),
+        _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." })
     });
 
 // One MCP endpoint per project (ADR-0002). The filter binds the project from the route before the
@@ -30,13 +31,12 @@ api.MapPost("/projects", async (CreateProjectRequest request, ControlDatabase co
 var projects = app.MapGroup("/projects/{slug}");
 projects.AddEndpointFilter(async (context, next) =>
 {
-    var slug = (string)context.HttpContext.GetRouteValue("slug")!;
+    string slug = (string)context.HttpContext.GetRouteValue("slug")!;
     var project = await context.HttpContext.RequestServices.GetRequiredService<ControlDatabase>()
         .FindAsync(slug, context.HttpContext.RequestAborted);
     if (project is null)
-    {
-        return Results.NotFound(new { error = $"No project with slug '{slug}'. Create it with POST /api/projects first." });
-    }
+        return Results.NotFound(new
+            { error = $"No project with slug '{slug}'. Create it with POST /api/projects first." });
 
     context.HttpContext.Items[ProjectTools.ProjectItemKey] = project;
     return await next(context);
@@ -56,7 +56,8 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor)
     public const string ProjectItemKey = "CodeExplorer.Project";
 
     [McpServerTool(Name = "which_project")]
-    [Description("Reports which project this MCP endpoint is bound to. The project comes from the URL you connected to, not from an argument; use it to confirm the server before searching.")]
+    [Description(
+        "Reports which project this MCP endpoint is bound to. The project comes from the URL you connected to, not from an argument; use it to confirm the server before searching.")]
     public string WhichProject()
     {
         var project = BoundProject();
@@ -64,9 +65,9 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor)
     }
 
     /// <summary>
-    /// The Streamable HTTP transport runs each handler inside the HTTP request that carried it, so
-    /// the project the route filter resolved is on the current context. If the SDK ever dispatches
-    /// off-request this fails loudly rather than binding to nothing.
+    ///     The Streamable HTTP transport runs each handler inside the HTTP request that carried it, so
+    ///     the project the route filter resolved is on the current context. If the SDK ever dispatches
+    ///     off-request this fails loudly rather than binding to nothing.
     /// </summary>
     private Project BoundProject() =>
         httpContextAccessor.HttpContext?.Items[ProjectItemKey] as Project
