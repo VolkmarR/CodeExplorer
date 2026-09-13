@@ -12,7 +12,7 @@ public enum CreateProjectOutcome
     Created,
     InvalidSlug,
     MissingName,
-    SlugTaken,
+    SlugTaken
 }
 
 /// <summary>
@@ -22,22 +22,15 @@ public enum CreateProjectOutcome
 /// </summary>
 public sealed partial class ControlDatabase
 {
-    /// <summary>
-    /// A slug is a URL path segment agents keep in their configuration, so it is limited to what
-    /// survives every client's URL handling unescaped: lowercase ASCII letters, digits and hyphens,
-    /// at most 64 characters.
-    /// </summary>
-    [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")]
-    private static partial Regex SlugPattern { get; }
-
-    public const string SlugRule = "Slug must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit.";
+    public const string SlugRule =
+        "Slug must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit.";
 
     private readonly string _connectionString;
 
     public ControlDatabase(IConfiguration configuration)
     {
         // Absent configuration selects a local folder, so `dotnet run` needs no settings at all.
-        var directory = configuration["Storage:DataDirectory"] ?? "data";
+        string directory = configuration["Storage:DataDirectory"] ?? "data";
         Directory.CreateDirectory(directory);
         _connectionString = $"Data Source={Path.Combine(directory, "control.duckdb")}";
 
@@ -49,17 +42,19 @@ public sealed partial class ControlDatabase
         command.ExecuteNonQuery();
     }
 
+    /// <summary>
+    ///     A slug is a URL path segment agents keep in their configuration, so it is limited to what
+    ///     survives every client's URL handling unescaped: lowercase ASCII letters, digits and hyphens,
+    ///     at most 64 characters.
+    /// </summary>
+    [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")]
+    private static partial Regex SlugPattern { get; }
+
     public async Task<CreateProjectOutcome> CreateAsync(string slug, string? name, CancellationToken cancellationToken)
     {
-        if (!SlugPattern.IsMatch(slug))
-        {
-            return CreateProjectOutcome.InvalidSlug;
-        }
+        if (!SlugPattern.IsMatch(slug)) return CreateProjectOutcome.InvalidSlug;
 
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return CreateProjectOutcome.MissingName;
-        }
+        if (string.IsNullOrWhiteSpace(name)) return CreateProjectOutcome.MissingName;
 
         using var connection = await OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
@@ -79,7 +74,7 @@ public sealed partial class ControlDatabase
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT name FROM projects WHERE slug = $slug";
         command.Parameters.Add(new DuckDBParameter("slug", slug));
-        var name = await command.ExecuteScalarAsync(cancellationToken);
+        object? name = await command.ExecuteScalarAsync(cancellationToken);
         return name is string n ? new Project(slug, n) : null;
     }
 

@@ -18,7 +18,7 @@ trim_trailing_whitespace = false
 # Namespaces and usings
 csharp_style_namespace_declarations = file_scoped:error
 dotnet_sort_system_directives_first = true
-dotnet_diagnostic.IDE0005.severity = warning       # unnecessary using
+dotnet_diagnostic.IDE0005.severity = warning # unnecessary using
 
 # var: yes, except for built-in types used as counters and accumulators
 csharp_style_var_for_built_in_types = false:suggestion
@@ -33,13 +33,13 @@ csharp_style_prefer_pattern_matching = true:suggestion
 csharp_style_expression_bodied_methods = when_on_single_line:suggestion
 
 # Types are sealed unless designed for inheritance
-dotnet_diagnostic.CA1852.severity = warning        # seal internal types
+dotnet_diagnostic.CA1852.severity = warning # seal internal types
 
 # Correctness rules worth failing on
-dotnet_diagnostic.CA2016.severity = warning        # forward CancellationToken
-dotnet_diagnostic.CA2007.severity = none           # ConfigureAwait: not used in ASP.NET Core
-dotnet_diagnostic.CA1848.severity = none           # LoggerMessage delegates: not worth it here
-dotnet_diagnostic.CA1031.severity = suggestion     # catch-all is allowed where commented
+dotnet_diagnostic.CA2016.severity = warning # forward CancellationToken
+dotnet_diagnostic.CA2007.severity = none # ConfigureAwait: not used in ASP.NET Core
+dotnet_diagnostic.CA1848.severity = none # LoggerMessage delegates: not worth it here
+dotnet_diagnostic.CA1031.severity = suggestion # catch-all is allowed where commented
 
 # Accessibility and naming
 dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
