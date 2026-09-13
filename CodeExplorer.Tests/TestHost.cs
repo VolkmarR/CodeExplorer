@@ -46,11 +46,21 @@ public sealed class TestHost : IDisposable
     public void Dispose()
     {
         Factory.Dispose();
-        if (!Directory.Exists(_root)) return;
-        // libgit2 marks pack files read-only; Delete(recursive) refuses those unless cleared first.
-        foreach (var file in new DirectoryInfo(_root).EnumerateFiles("*", SearchOption.AllDirectories))
+        DeleteTree(_root);
+    }
+
+    /// <summary>
+    ///     Removes a directory git has written into. libgit2 marks pack files read-only and
+    ///     <c>Directory.Delete</c> refuses a read-only file, so the attributes are cleared first rather
+    ///     than left to fail on the first pack.
+    /// </summary>
+    private static void DeleteTree(string path)
+    {
+        if (!Directory.Exists(path)) return;
+
+        foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories))
             file.Attributes = FileAttributes.Normal;
-        Directory.Delete(_root, true);
+        Directory.Delete(path, true);
     }
 
     /// <summary>Builds a non-bare repository with one commit holding the given files and returns its path.</summary>
@@ -88,14 +98,7 @@ public sealed class TestHost : IDisposable
     public string FixturePath(string name) => Path.Combine(_root, "fixtures", name);
 
     /// <summary>Deletes a fixture, which is what a remote that was removed or renamed looks like from here.</summary>
-    public void RemoveGitRepository(string name)
-    {
-        string path = FixturePath(name);
-        // git writes loose objects and pack files read-only, and a recursive delete refuses those.
-        foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories))
-            file.Attributes = FileAttributes.Normal;
-        Directory.Delete(path, true);
-    }
+    public void RemoveGitRepository(string name) => DeleteTree(FixturePath(name));
 
     /// <summary>What the host was pointed at, for a test asserting which files a deletion left behind.</summary>
     public string DataDirectory => Path.Combine(_root, "data");

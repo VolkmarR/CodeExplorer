@@ -17,20 +17,22 @@ internal static class RefreshEndpoints
                     {
                         // Accepted, not OK: the shadow build has not started yet, and the Location header
                         // is where the caller watches it.
-                        { Accepted: true, Status: var status } => Results.Accepted(
+                        { Refused: null, Status: var status } => Results.Accepted(
                             $"/api/projects/{project}/refresh", status),
-                        // 507 and not another 409, so a cron can tell "someone else is rebuilding, try
-                        // later" from "this replica is out of disk", which need different responses.
-                        { Refusal: var refusal, OutOfDisk: true } => Results.Json(new { error = refusal },
-                            statusCode: StatusCodes.Status507InsufficientStorage),
-                        var refused => Results.Conflict(new { error = refused.Refusal })
+                        { Refused: var refused } => Results.Json(new { error = refused.Message },
+                            statusCode: refused.StatusCode)
                     }
                     : Results.NotFound(new { error = $"No project with slug '{project}'." }));
 
         api.MapGet("/projects/{project}/refresh",
             async (string project, ControlDatabase control, RefreshService refreshes, CancellationToken ct) =>
-                await control.FindAsync(project, ct) is null
-                    ? Results.NotFound(new { error = $"No project with slug '{project}'." })
-                    : Results.Ok(refreshes.Status(project)));
+                // A status exists only for a project that existed when it was asked for, so the common
+                // case — a page polling this once a second while a rebuild runs — answers from memory.
+                // The control database is read only to tell an unknown slug from one that never refreshed.
+                refreshes.Find(project) is { } status
+                    ? Results.Ok(status)
+                    : await control.FindAsync(project, ct) is null
+                        ? Results.NotFound(new { error = $"No project with slug '{project}'." })
+                        : Results.Ok(refreshes.Status(project)));
     }
 }
