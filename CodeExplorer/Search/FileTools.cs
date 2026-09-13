@@ -171,7 +171,8 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
                  - A file that is committed but not indexed (binary, oversized) is listed with the reason, so a name you expect never quietly disappears.
                  """)]
     public async Task<string> Glob(
-        [Description("Glob over the qualified path (`repo/path/in/repo`), e.g. \"main/src/**/*Commands.cs\" or \"*Entity.cs\".")]
+        [Description(
+            "Glob over the qualified path (`repo/path/in/repo`), e.g. \"main/src/**/*Commands.cs\" or \"*Entity.cs\".")]
         string glob,
         [Description("Repository slug to scope the glob to. Default: every repository in the project.")]
         string? repo = null,
@@ -285,12 +286,24 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
                    + $"Use \"{glob}**\" for everything under it, or list_tree to see the layout.";
         // A '[' opens a character class; without its ']' the operator matches nothing and says so to no one.
         if (glob.Count(c => c == '[') != glob.Count(c => c == ']'))
-            return $"\"{glob}\" has an unbalanced [ ]: a [ opens a character class such as [0-9] and matches nothing without its ]. "
-                   + "Close it, or write the character you meant.";
+            return
+                $"\"{glob}\" has an unbalanced [ ]: a [ opens a character class such as [0-9] and matches nothing without its ]. "
+                + "Close it, or write the character you meant.";
         return null;
     }
 
-    /// <summary>Result of one <c>read_file</c> entry's parse: the path and the inclusive window, or the <see cref="Problem" /> with it.</summary>
+    // "file.cs:1:60" would otherwise parse as the file "file.cs:1" read from line 60, a real-looking
+    // "no indexed file" answer to a typo; it is caught before the range is read.
+    [GeneratedRegex(@"^(?<path>.+?):(?<a>\d+):(?<b>\d+)$")]
+    private static partial Regex ColonRange();
+
+    [GeneratedRegex(@"^(?<path>.+?):(?<a>\d+)(?:-(?<b>\d+))?$")]
+    private static partial Regex Range();
+
+    /// <summary>
+    ///     Result of one <c>read_file</c> entry's parse: the path and the inclusive window, or the <see cref="Problem" />
+    ///     with it.
+    /// </summary>
     private sealed record ReadTarget(string Path, int Start, int End, bool ExplicitRange, string? Problem = null)
     {
         public static ReadTarget Parse(string entry, int startLine, int maxLines)
@@ -344,12 +357,4 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         public string UnknownRepository(string slug) =>
             $"No repository '{slug}' in project '{Project.Slug}'. Repositories: {Slugs}.";
     }
-
-    // "file.cs:1:60" would otherwise parse as the file "file.cs:1" read from line 60, a real-looking
-    // "no indexed file" answer to a typo; it is caught before the range is read.
-    [GeneratedRegex(@"^(?<path>.+?):(?<a>\d+):(?<b>\d+)$")]
-    private static partial Regex ColonRange();
-
-    [GeneratedRegex(@"^(?<path>.+?):(?<a>\d+)(?:-(?<b>\d+))?$")]
-    private static partial Regex Range();
 }
