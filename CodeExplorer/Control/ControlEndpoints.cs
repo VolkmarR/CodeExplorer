@@ -1,6 +1,11 @@
 namespace CodeExplorer;
 
-internal sealed record CreateProjectRequest(string Slug, string? Name);
+/// <summary>
+///     <paramref name="SingleRepository" /> is absent on an older client's request and defaults to the
+///     shape every project had before ADR-0006. It is accepted here and in no update, because it
+///     cannot change once the project exists.
+/// </summary>
+internal sealed record CreateProjectRequest(string Slug, string? Name, bool SingleRepository = false);
 
 internal sealed record AddRepositoryRequest(string Slug, string Url, string? Credential);
 
@@ -16,10 +21,10 @@ internal static class ControlEndpoints
     public static void MapControl(this RouteGroupBuilder api)
     {
         api.MapPost("/projects", async (CreateProjectRequest request, ControlDatabase control, CancellationToken ct) =>
-            await control.CreateAsync(request.Slug, request.Name, ct) switch
+            await control.CreateAsync(request.Slug, request.Name, request.SingleRepository, ct) switch
             {
                 CreateProjectOutcome.Created => Results.Created($"/projects/{request.Slug}/mcp",
-                    new Project(request.Slug, request.Name!.Trim())),
+                    new Project(request.Slug, request.Name!.Trim(), request.SingleRepository)),
                 CreateProjectOutcome.InvalidSlug => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
                 CreateProjectOutcome.MissingName => Results.BadRequest(new { error = "Name is required." }),
                 _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." })
@@ -38,6 +43,12 @@ internal static class ControlEndpoints
                     (AddRepositoryOutcome.InvalidSlug, _) => Results.BadRequest(
                         new { error = ControlDatabase.SlugRule }),
                     (AddRepositoryOutcome.InvalidUrl, _) => Results.BadRequest(new { error = RepositoryUrl.Rule }),
+                    (AddRepositoryOutcome.ProjectIsFull, _) => Results.Conflict(new
+                    {
+                        error =
+                            $"Project '{project}' was created as a single-repository project and already has its repository. "
+                            + "That cannot be changed, because its files are named without a repository slug. Create another project for a second repository."
+                    }),
                     _ => Results.Conflict(new
                         { error = $"Project '{project}' already has a repository with slug '{request.Slug}'." })
                 });

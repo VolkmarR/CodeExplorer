@@ -10,7 +10,12 @@ public sealed record ProjectIndexStatus(DateTimeOffset? BuiltAt, bool FtsIndexed
 }
 
 /// <summary>A project as the project list shows it.</summary>
-public sealed record ProjectSummary(string Slug, string Name, int Repositories, ProjectIndexStatus Index);
+public sealed record ProjectSummary(
+    string Slug,
+    string Name,
+    bool SingleRepository,
+    int Repositories,
+    ProjectIndexStatus Index);
 
 /// <summary>
 ///     One repository as the project page shows it: what the operator configured, plus where the last
@@ -29,6 +34,7 @@ public sealed record RepositoryDetail(
 public sealed record ProjectDetail(
     string Slug,
     string Name,
+    bool SingleRepository,
     ProjectIndexStatus Index,
     IReadOnlyList<RepositoryDetail> Repositories);
 
@@ -54,7 +60,8 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
         {
             var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
             var (status, _) = await ReadIndexAsync(project.Slug, cancellationToken);
-            summaries.Add(new ProjectSummary(project.Slug, project.Name, repositories.Count, status));
+            summaries.Add(new ProjectSummary(project.Slug, project.Name, project.SingleRepository, repositories.Count,
+                status));
         }
 
         return summaries;
@@ -75,7 +82,7 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
                     built.LineCount)
                 : new RepositoryDetail(r.Slug, r.Url, r.HasCredential, null, null, null))
             .ToList();
-        return new ProjectDetail(project.Slug, project.Name, status, repositories);
+        return new ProjectDetail(project.Slug, project.Name, project.SingleRepository, status, repositories);
     }
 
     /// <summary>

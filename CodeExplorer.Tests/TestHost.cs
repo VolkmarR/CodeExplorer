@@ -66,10 +66,11 @@ public sealed class TestHost : IDisposable
     /// <summary>What the host was pointed at, for a test asserting which files a deletion left behind.</summary>
     public string DataDirectory => Path.Combine(_root, "data");
 
-    public async Task CreateProjectAsync(string slug)
+    public async Task CreateProjectAsync(string slug, bool singleRepository = false)
     {
         using var http = Factory.CreateClient();
-        using var response = await http.PostAsJsonAsync("/api/projects", new { slug, name = slug }, Ct);
+        using var response =
+            await http.PostAsJsonAsync("/api/projects", new { slug, name = slug, singleRepository }, Ct);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
@@ -92,9 +93,10 @@ public sealed class TestHost : IDisposable
     }
 
     /// <summary>A project of the given repositories (slug to files), created, added and indexed.</summary>
-    public async Task IndexedProjectAsync(string project, Dictionary<string, Dictionary<string, string>> repositories)
+    public async Task IndexedProjectAsync(string project, Dictionary<string, Dictionary<string, string>> repositories,
+        bool singleRepository = false)
     {
-        await CreateProjectAsync(project);
+        await CreateProjectAsync(project, singleRepository);
         foreach ((string slug, var files) in repositories)
             await AddRepositoryAsync(project, slug, CreateGitRepository(slug, files));
         await IndexAsync(project);

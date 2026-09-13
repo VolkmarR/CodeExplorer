@@ -29,7 +29,7 @@ public sealed class ProjectIndexes : IDisposable
     ///     Bumped when the tables below change shape, so a Parquet export from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     /// <summary>
     ///     Paths inside <c>files</c> stay repository-relative and <c>repo_id</c> scopes them; the
@@ -41,9 +41,13 @@ public sealed class ProjectIndexes : IDisposable
     /// </summary>
     private const string Schema = """
                                   CREATE TABLE index_info (
-                                      schema_version INTEGER NOT NULL,
-                                      built_at       TIMESTAMPTZ NOT NULL,
-                                      fts_indexed    BOOLEAN NOT NULL);
+                                      schema_version    INTEGER NOT NULL,
+                                      built_at          TIMESTAMPTZ NOT NULL,
+                                      fts_indexed       BOOLEAN NOT NULL,
+                                      -- How this index named its files (ADR-0006). It is recorded here rather
+                                      -- than read from the control database, because a qualified path cannot be
+                                      -- parsed without it and Search answers from the index alone (ADR-0005).
+                                      single_repository BOOLEAN NOT NULL);
                                   CREATE TABLE repositories (
                                       repo_id     INTEGER PRIMARY KEY,
                                       slug        VARCHAR NOT NULL UNIQUE,
@@ -181,7 +185,8 @@ public sealed class ProjectIndexes : IDisposable
     ///     <c>lines(file_id)</c>: rows are appended in file order, so zone maps already prune a file's
     ///     lines to one or two row groups, and an ART index would cost memory and slow the Parquet restore.
     /// </summary>
-    public async Task<bool> CompleteBuildAsync(DuckDBConnection connection, CancellationToken cancellationToken)
+    public async Task<bool> CompleteBuildAsync(DuckDBConnection connection, bool singleRepository,
+        CancellationToken cancellationToken)
     {
         if (FtsAvailable)
             // Tokens are lower-cased identifiers: letters, digits and underscore. No stemming and no stop
@@ -195,7 +200,7 @@ public sealed class ProjectIndexes : IDisposable
 
         // Written last, so a row in index_info means the build completed and describes what exists.
         await ExecuteAsync(connection,
-            $"INSERT INTO index_info VALUES ({SchemaVersion}, now(), {(FtsAvailable ? "true" : "false")})",
+            $"INSERT INTO index_info VALUES ({SchemaVersion}, now(), {(FtsAvailable ? "true" : "false")}, {(singleRepository ? "true" : "false")})",
             cancellationToken);
         return FtsAvailable;
     }

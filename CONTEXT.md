@@ -12,7 +12,8 @@ _Avoid_: Workspace, solution, tenant
 
 **Repository**:
 One git remote belonging to exactly one project, which CodeExplorer keeps a local copy of and
-refreshes. A project of one repository is the common case, not a special case.
+refreshes. A project of one repository is the common case, and a project may be declared a
+single-repository project to be named accordingly (ADR-0006); it is a repository either way.
 _Avoid_: Source, codebase
 
 **Index**:
@@ -34,8 +35,16 @@ _Avoid_: Usage, call site, occurrence
 **Qualified Path**:
 How every file in a project is named: its repository, then its path within that repository. A
 project is therefore one flat namespace, and two repositories may each contain `src/index.ts`
-without collision.
+without collision. In a single-repository project it is the path inside that repository alone, with
+no leading slug to disambiguate a set of one (ADR-0006) — so a path cannot be read without knowing
+which project it belongs to.
 _Avoid_: Full path, absolute path
+
+**Single-Repository Project**:
+A project declared at creation to hold one repository and to name its files without a repository
+slug. It refuses a second repository, and the declaration cannot be changed afterwards, because
+either change would rename every file agents have been quoting.
+_Avoid_: Simple project, mono-repo, flat project
 
 **Refresh**:
 Bringing a project's local copies up to date with their git remotes and rebuilding its index from
@@ -57,5 +66,6 @@ _Avoid_: Project name, id, key
 **Repository Slug**:
 The stable name identifying a repository within its project, and the first segment of every
 qualified path in it. Assigned by an operator rather than derived from the git URL, so that moving
-a remote does not rename the paths agents have been quoting.
+a remote does not rename the paths agents have been quoting. In a single-repository project it
+heads no path, so the system assigns it and the operator is never asked for one.
 _Avoid_: Repo name, folder name

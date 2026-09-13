@@ -99,8 +99,12 @@ internal sealed class ProjectTools(
             return
                 $"Project '{project.Slug}' has no repositories yet. Ask the operator to add one with POST /api/projects/{project.Slug}/repositories.";
 
-        var qualified = QualifiedPath.Parse(path);
-        if (qualified is null) return await ListRootAsync(project, repositories, depth, cancellationToken);
+        var qualified = ProjectPaths.For(project, repositories).Parse(path);
+        // A single-repository project has no level above its one repository, so an empty path lists that
+        // repository's top level rather than a list of one (ADR-0006).
+        if (qualified is null && !project.SingleRepository)
+            return await ListRootAsync(project, repositories, depth, cancellationToken);
+        qualified ??= new QualifiedPath(repositories[0].Slug, "", false);
 
         var repository = repositories.FirstOrDefault(r => r.Slug == qualified.RepositorySlug);
         if (repository is null)

@@ -53,7 +53,7 @@ export function FileTree({ project, path }: { project: string; path: string }) {
 
       {level.entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {level.path === ''
+          {level.repositoryLevel
             ? 'This project has no repositories in its index.'
             : 'Nothing here in the index.'}
         </p>
@@ -89,7 +89,7 @@ export function FileTree({ project, path }: { project: string; path: string }) {
                     >
                       {entry.files === null ? (
                         <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                      ) : level.path === '' ? (
+                      ) : level.repositoryLevel ? (
                         <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
                       ) : (
                         <Folder className="size-3.5 shrink-0 text-muted-foreground" />
