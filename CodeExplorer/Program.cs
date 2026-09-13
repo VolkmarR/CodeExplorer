@@ -9,6 +9,7 @@ builder.Services.AddSingleton<ControlDatabase>();
 builder.Services.AddSingleton<GitClones>();
 builder.Services.AddSingleton<ProjectIndexes>();
 builder.Services.AddSingleton<IndexBuilder>();
+builder.Services.AddSingleton<RefreshService>();
 builder.Services.AddSingleton<GrepSearch>();
 builder.Services.AddSingleton<ProjectOverview>();
 builder.Services.AddHttpContextAccessor();
@@ -22,7 +23,7 @@ var app = builder.Build();
 // Operator endpoints, one group per module (ADR-0005).
 var api = app.MapGroup("/api");
 api.MapControl();
-api.MapIndex();
+api.MapRefresh();
 api.MapSearch();
 api.MapOperator();
 

@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using LibGit2Sharp;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Xunit;
@@ -18,12 +20,22 @@ public sealed class TestHost : IDisposable
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
 
-    public TestHost(SearchEngine engine)
+    /// <param name="engine">Pinned in every test: the two engines build different schemas and rank differently.</param>
+    /// <param name="drainSeconds">
+    ///     How long a swap waits for in-flight queries. Zero proves what happens to a connection the
+    ///     drain gave up on; the default is long enough that a test holding one blocks the swap.
+    /// </param>
+    /// <param name="minimumFreeBytes">Raised past any real disk to prove the free-space refusal.</param>
+    public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null)
     {
         Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseSetting("Storage:DataDirectory", Path.Combine(_root, "data"));
             builder.UseSetting("Index:SearchEngine", engine.ToString());
+            if (drainSeconds is { } seconds)
+                builder.UseSetting("Index:DrainSeconds", seconds.ToString(CultureInfo.InvariantCulture));
+            if (minimumFreeBytes is { } bytes)
+                builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
         });
     }
 
@@ -46,6 +58,18 @@ public sealed class TestHost : IDisposable
     {
         string path = Path.Combine(_root, "fixtures", name);
         Repository.Init(path);
+        return Commit(path, files);
+    }
+
+    /// <summary>
+    ///     Adds a commit to a fixture already created, which is what a push to the remote looks like
+    ///     from here: the clone made earlier still holds the old tree until something fetches.
+    /// </summary>
+    public string CommitToGitRepository(string name, Dictionary<string, string> files) =>
+        Commit(Path.Combine(_root, "fixtures", name), files);
+
+    private static string Commit(string path, Dictionary<string, string> files)
+    {
         using var repo = new Repository(path);
         foreach ((string relative, string content) in files)
         {
@@ -62,6 +86,16 @@ public sealed class TestHost : IDisposable
 
     /// <summary>Where <see cref="CreateGitRepository" /> put the fixture with this name.</summary>
     public string FixturePath(string name) => Path.Combine(_root, "fixtures", name);
+
+    /// <summary>Deletes a fixture, which is what a remote that was removed or renamed looks like from here.</summary>
+    public void RemoveGitRepository(string name)
+    {
+        string path = FixturePath(name);
+        // git writes loose objects and pack files read-only, and a recursive delete refuses those.
+        foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories))
+            file.Attributes = FileAttributes.Normal;
+        Directory.Delete(path, true);
+    }
 
     /// <summary>What the host was pointed at, for a test asserting which files a deletion left behind.</summary>
     public string DataDirectory => Path.Combine(_root, "data");
@@ -82,24 +116,89 @@ public sealed class TestHost : IDisposable
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
-    public async Task<IndexSummary> IndexAsync(string project)
+    /// <summary>
+    ///     Asks for a refresh and waits for it to finish. The endpoint answers as soon as the work is
+    ///     queued, so the wait is on the service's own task rather than on a poll: a test that polled
+    ///     would trade determinism for a sleep. <see cref="RefreshStatusAsync" /> covers the polling.
+    /// </summary>
+    public async Task<IndexSummary> RefreshAsync(string project)
+    {
+        using (var response = await RequestRefreshAsync(project))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
+        await WaitForRefreshesAsync();
+        var status = await RefreshStatusAsync(project);
+        Assert.Equal(RefreshState.Succeeded, status.State);
+        Assert.NotNull(status.Summary);
+        return status.Summary;
+    }
+
+    /// <summary>Asks for a refresh and returns the response, for a test that asserts on the refusal.</summary>
+    public async Task<HttpResponseMessage> RequestRefreshAsync(string project)
     {
         using var http = Factory.CreateClient();
-        using var response = await http.PostAsync($"/api/projects/{project}/index", null, Ct);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var summary = await response.Content.ReadFromJsonAsync<IndexSummary>(Ct);
-        Assert.NotNull(summary);
-        return summary;
+        return await http.PostAsync($"/api/projects/{project}/refresh", null, Ct);
+    }
+
+    /// <summary>The host's refresh service, for a test asserting on the queue rather than on a response.</summary>
+    public RefreshService Refreshes => Factory.Services.GetRequiredService<RefreshService>();
+
+    /// <summary>Waits for every refresh asked for so far, including one queued behind another.</summary>
+    public Task WaitForRefreshesAsync() => Refreshes.Pending.WaitAsync(Ct);
+
+    /// <summary>
+    ///     The host's index store, for a test that reads a project's tables directly rather than
+    ///     through an endpoint. Resolved on each use: it is a singleton, so this is the same instance
+    ///     the server answers requests from.
+    /// </summary>
+    public ProjectIndexes Indexes => Factory.Services.GetRequiredService<ProjectIndexes>();
+
+    /// <summary>A lease on a project that is expected to have an index; the caller disposes it.</summary>
+    public async Task<IndexLease> OpenIndexAsync(string slug)
+    {
+        var lease = await Indexes.OpenAsync(slug, Ct);
+        Assert.NotNull(lease);
+        return lease;
+    }
+
+    /// <summary>
+    ///     The first column of every row the query returns, read through a lease of its own. Tests
+    ///     assert on a list of strings — paths, reasons, schema names — often enough that spelling out
+    ///     the reader each time is the whole body of the test.
+    /// </summary>
+    public async Task<List<string>> ScalarsAsync(string slug, string sql)
+    {
+        using var lease = await OpenIndexAsync(slug);
+        return await ScalarsAsync(lease, sql);
+    }
+
+    /// <summary>The same, against a lease already held: a test proving what a swap does to one in flight.</summary>
+    public static async Task<List<string>> ScalarsAsync(IndexLease lease, string sql)
+    {
+        using var command = lease.Connection.CreateCommand();
+        command.CommandText = sql;
+        using var reader = await command.ExecuteReaderAsync(Ct);
+        var values = new List<string>();
+        while (await reader.ReadAsync(Ct)) values.Add(reader.GetString(0));
+        return values;
+    }
+
+    public async Task<RefreshStatus> RefreshStatusAsync(string project)
+    {
+        using var http = Factory.CreateClient();
+        var status = await http.GetFromJsonAsync<RefreshStatus>($"/api/projects/{project}/refresh", Ct);
+        Assert.NotNull(status);
+        return status;
     }
 
     /// <summary>A project of the given repositories (slug to files), created, added and indexed.</summary>
-    public async Task IndexedProjectAsync(string project, Dictionary<string, Dictionary<string, string>> repositories,
-        bool singleRepository = false)
+    public async Task<IndexSummary> IndexedProjectAsync(string project,
+        Dictionary<string, Dictionary<string, string>> repositories, bool singleRepository = false)
     {
         await CreateProjectAsync(project, singleRepository);
         foreach ((string slug, var files) in repositories)
             await AddRepositoryAsync(project, slug, CreateGitRepository(slug, files));
-        await IndexAsync(project);
+        return await RefreshAsync(project);
     }
 
     public async Task<McpClient> ConnectAsync(string slug)
