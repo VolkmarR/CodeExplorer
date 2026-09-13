@@ -4,9 +4,6 @@ using Microsoft.AspNetCore.DataProtection;
 
 namespace CodeExplorer;
 
-/// <summary>A project as stored in the control database: the stable slug plus a free display name.</summary>
-public sealed record Project(string Slug, string Name);
-
 /// <summary>
 ///     A repository of a project. <paramref name="ProtectedCredential" /> is <c>IDataProtector</c>
 ///     ciphertext or null; it leaves this record only through <see cref="GitClones" />, never through
@@ -116,6 +113,22 @@ public sealed partial class ControlDatabase
             : CreateProjectOutcome.SlugTaken;
     }
 
+    /// <summary>
+    ///     Every project, by slug. This is the only list of what exists: MCP has no discovery, so the
+    ///     operator UI is where a project becomes visible at all.
+    /// </summary>
+    public async Task<IReadOnlyList<Project>> ListAsync(CancellationToken cancellationToken)
+    {
+        using var connection = await OpenAsync(cancellationToken);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT slug, name FROM projects ORDER BY slug";
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var projects = new List<Project>();
+        while (await reader.ReadAsync(cancellationToken))
+            projects.Add(new Project(reader.GetString(0), reader.GetString(1)));
+        return projects;
+    }
+
     public async Task<Project?> FindAsync(string slug, CancellationToken cancellationToken)
     {
         using var connection = await OpenAsync(cancellationToken);
@@ -171,6 +184,38 @@ public sealed partial class ControlDatabase
             repositories.Add(new ProjectRepository(projectSlug, reader.GetString(0), reader.GetString(1),
                 reader.IsDBNull(2) ? null : reader.GetString(2)));
         return repositories;
+    }
+
+    /// <summary>
+    ///     Forgets the project and every repository of it. What remains on disk — the clones and the
+    ///     index file — is the caller's to remove; this class owns <c>control.duckdb</c> and nothing else.
+    ///     False when there was no such project.
+    /// </summary>
+    public async Task<bool> DeleteProjectAsync(string slug, CancellationToken cancellationToken)
+    {
+        using var connection = await OpenAsync(cancellationToken);
+        using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        using var command = connection.CreateCommand();
+        command.Transaction = (DuckDBTransaction)transaction;
+        command.CommandText = "DELETE FROM repositories WHERE project_slug = $slug";
+        command.Parameters.Add(new DuckDBParameter("slug", slug));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        command.CommandText = "DELETE FROM projects WHERE slug = $slug";
+        int deleted = await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return deleted == 1;
+    }
+
+    /// <summary>Forgets one repository of a project. False when the project or the repository is unknown.</summary>
+    public async Task<bool> DeleteRepositoryAsync(string projectSlug, string slug,
+        CancellationToken cancellationToken)
+    {
+        using var connection = await OpenAsync(cancellationToken);
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM repositories WHERE project_slug = $project AND slug = $slug";
+        command.Parameters.Add(new DuckDBParameter("project", projectSlug));
+        command.Parameters.Add(new DuckDBParameter("slug", slug));
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
     private async Task<DuckDBConnection> OpenAsync(CancellationToken cancellationToken)

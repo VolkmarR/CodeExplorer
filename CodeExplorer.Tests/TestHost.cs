@@ -63,6 +63,9 @@ public sealed class TestHost : IDisposable
     /// <summary>Where <see cref="CreateGitRepository" /> put the fixture with this name.</summary>
     public string FixturePath(string name) => Path.Combine(_root, "fixtures", name);
 
+    /// <summary>What the host was pointed at, for a test asserting which files a deletion left behind.</summary>
+    public string DataDirectory => Path.Combine(_root, "data");
+
     public async Task CreateProjectAsync(string slug)
     {
         using var http = Factory.CreateClient();
@@ -70,10 +73,11 @@ public sealed class TestHost : IDisposable
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
-    public async Task AddRepositoryAsync(string project, string slug, string url)
+    public async Task AddRepositoryAsync(string project, string slug, string url, string? credential = null)
     {
         using var http = Factory.CreateClient();
-        using var response = await http.PostAsJsonAsync($"/api/projects/{project}/repositories", new { slug, url }, Ct);
+        using var response =
+            await http.PostAsJsonAsync($"/api/projects/{project}/repositories", new { slug, url, credential }, Ct);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 

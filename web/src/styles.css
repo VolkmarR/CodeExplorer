@@ -1,0 +1,134 @@
+@import 'tailwindcss';
+
+/* The one stylesheet the project has: Tailwind's entry and the theme tokens shadcn components read.
+   Everything else is a utility class on the element that needs it (CODING_STANDARDS, TypeScript). */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.03 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.03 264);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.03 264);
+  --primary: oklch(0.55 0.16 245);
+  --primary-foreground: oklch(0.99 0.01 245);
+  --secondary: oklch(0.97 0.01 264);
+  --secondary-foreground: oklch(0.28 0.03 264);
+  --muted: oklch(0.97 0.01 264);
+  --muted-foreground: oklch(0.55 0.02 264);
+  --accent: oklch(0.96 0.02 245);
+  --accent-foreground: oklch(0.28 0.03 264);
+  --destructive: oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.99 0.01 27);
+  --border: oklch(0.92 0.01 264);
+  --input: oklch(0.92 0.01 264);
+  --ring: oklch(0.55 0.16 245);
+}
+
+.dark {
+  --background: oklch(0.18 0.02 264);
+  --foreground: oklch(0.96 0.01 264);
+  --card: oklch(0.22 0.02 264);
+  --card-foreground: oklch(0.96 0.01 264);
+  --popover: oklch(0.22 0.02 264);
+  --popover-foreground: oklch(0.96 0.01 264);
+  --primary: oklch(0.72 0.13 232);
+  --primary-foreground: oklch(0.19 0.04 245);
+  --secondary: oklch(0.28 0.02 264);
+  --secondary-foreground: oklch(0.96 0.01 264);
+  --muted: oklch(0.28 0.02 264);
+  --muted-foreground: oklch(0.71 0.02 264);
+  --accent: oklch(0.31 0.03 245);
+  --accent-foreground: oklch(0.96 0.01 264);
+  --destructive: oklch(0.66 0.19 25);
+  --destructive-foreground: oklch(0.18 0.02 264);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.6 0.11 232);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Token classes @tanstack/highlight emits. It ships markup and no colours, so the palette is here,
+   in the one stylesheet, rather than as inline styles on every token. */
+@layer components {
+  .th-keyword {
+    @apply text-sky-400;
+  }
+
+  .th-type {
+    @apply text-teal-300;
+  }
+
+  .th-string {
+    @apply text-amber-300;
+  }
+
+  .th-comment {
+    @apply text-muted-foreground italic;
+  }
+
+  .th-number {
+    @apply text-fuchsia-300;
+  }
+
+  .th-literal {
+    @apply text-fuchsia-300;
+  }
+
+  .th-function {
+    @apply text-violet-300;
+  }
+
+  .th-property {
+    @apply text-foreground;
+  }
+
+  .th-meta {
+    @apply text-emerald-300;
+  }
+
+  .th-operator,
+  .th-variable,
+  .th-attr,
+  .th-tag {
+    @apply text-foreground/80;
+  }
+}

@@ -1,0 +1,65 @@
+import path from 'node:path'
+import tailwindcss from '@tailwindcss/vite'
+import { tanstackRouter } from '@tanstack/router-plugin/vite'
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite-plus'
+import { reactDoctorRules } from './lint.rules'
+
+// The one configuration file for the whole toolchain (ADR-0004): dev server and build, oxlint and
+// oxfmt. `vp dev` serves the UI on 5173 and proxies /api to the server `dotnet run` starts; `vp
+// build` writes into the server's wwwroot, so one `dotnet run` then serves the API and the UI
+// together. The router plugin must come before the React plugin: it generates routeTree.gen.ts from
+// src/routes, and React Fast Refresh has to see the generated file.
+export default defineConfig({
+  plugins: [
+    tanstackRouter({ target: 'react', autoCodeSplitting: true }),
+    // React Compiler through `oxc-transform-react`, the Rust port, rather than the Babel plugin:
+    // Babel is the only thing this toolchain would otherwise have to install. The plugin calls its
+    // native compiler support experimental, and a fatal diagnostic fails the transform loudly rather
+    // than silently miscompiling, so the failure mode is a build error.
+    react({ compiler: true }),
+    tailwindcss(),
+  ],
+  resolve: {
+    alias: { '@': path.resolve(import.meta.dirname, 'src') },
+  },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': { target: 'http://localhost:5080', changeOrigin: true },
+    },
+  },
+  build: {
+    outDir: '../CodeExplorer/wwwroot',
+    emptyOutDir: true,
+  },
+  lint: {
+    // routeTree.gen.ts is written by the router plugin on every run; linting it would only ever
+    // report on generated code nobody edits.
+    ignorePatterns: ['src/routeTree.gen.ts', 'dist'],
+    // `unicorn` and `oxc` are on by default and are named here because listing plugins replaces that
+    // default. `react-perf` is deliberately absent: its rules forbid the inline handlers and object
+    // props that React Compiler exists to memoize, so it would argue with the compiler.
+    plugins: ['import', 'jsx-a11y', 'node', 'oxc', 'promise', 'react', 'typescript', 'unicorn'],
+    // React Doctor's rules, for the security, correctness and accessibility checks the native
+    // plugins have no equivalent of. See lint.rules.ts for which of its 906 rules are on and why.
+    jsPlugins: [{ name: 'react-doctor', specifier: 'oxlint-plugin-react-doctor' }],
+    // Every category that finds real defects is an error. `pedantic` is off on purpose: on a React
+    // codebase it is mostly max-lines-per-function and max-dependencies on components that are long
+    // because JSX is long, and `style` overlaps with what oxfmt already decides.
+    categories: { correctness: 'error', perf: 'error', suspicious: 'error' },
+    rules: {
+      ...reactDoctorRules,
+      // `jsx: 'react-jsx'` makes the compiler import the factory itself. The rule predates the
+      // automatic runtime and would otherwise fire on every element in the app.
+      'react/react-in-jsx-scope': 'off',
+      'react-doctor/react-in-jsx-scope': 'off',
+      // The Tailwind entry is imported for its side effect; that is how a Vite CSS entry is written.
+      'import/no-unassigned-import': 'off',
+    },
+  },
+  fmt: {
+    semi: false,
+    singleQuote: true,
+  },
+})

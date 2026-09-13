@@ -21,7 +21,8 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
 ## Layout
 
 - Two C# projects: `CodeExplorer` (host, endpoints, storage, MCP tools) and `CodeExplorer.Tests`.
-  The web app is a Vite build into `CodeExplorer/wwwroot` and stays out of the solution file.
+  The web app is `web/`, a Vite+ build into `CodeExplorer/wwwroot`, and stays out of the solution
+  file.
 - **Modular monolith (ADR-0005).** Inside the host, one folder per module, named after the concept
   in `CONTEXT.md` it owns: `Control/` (projects, repositories, credentials), `Git/` (local copies),
   `Index/`, `Search/`, `Refresh/`, `Operator/`. Folders follow the module boundary, never the
@@ -127,11 +128,25 @@ Two kinds of failure, two mechanisms. Never mix them.
   anyway; there is no reason to inherit the gap.)
 - Named function declarations for components, not arrow consts. One component per file, PascalCase
   filename matching the export.
+- **The web app mirrors the server's module folders** (ADR-0005): `web/src/features/<concept>/`
+  holds that concept's components and its query definitions, `web/src/routes/` the file-based
+  routes, `web/src/components/` only what every feature uses, `web/src/lib/` the API client and the
+  shared query-key roots. A feature folder is a boundary, not a bucket.
 - Shareable state lives in the URL as TanStack Router search params, typed with `validateSearch`,
-  so a view can be linked. No state library.
-- Tailwind utility classes and shadcn components. A shadcn component, once copied into
+  so a view can be linked. No state library. TanStack Query is the read cache and not an exception
+  to that: nothing a link should carry may live only in it.
+- A route loader primes a query with `ensureQueryData` and the component reads it with
+  `useSuspenseQuery`. Writes are `useMutation` and invalidate a key built from `lib/queryKeys.ts`,
+  never a key spelled out at the call site.
+- Tailwind utility classes and shadcn components, in their Base UI flavour (ADR-0004): compose with
+  `render={<Link … />}`, not Radix's `asChild`. A shadcn component, once copied into
   `src/components/ui`, is project source: edit it there and never regenerate over it. No global
-  stylesheet beyond Tailwind's entry file and the theme tokens; inline styles only for computed
-  values.
-- Syntax highlighting is `@tanstack/highlight` with the C# definition kept in this repo. A language
-  the library lacks gets a definition here, not a second highlighter.
+  stylesheet beyond Tailwind's entry file, the theme tokens, and the `th-*` palette the highlighter
+  needs — `@tanstack/highlight` emits class names onto spans this code never sees, so its colours
+  cannot be utility classes and belong with the other tokens. Inline styles only for computed values.
+- Syntax highlighting is `@tanstack/highlight` with the C# and X# definitions kept in this repo,
+  sharing the pattern collector in `highlight/patterns.ts`. A language the library lacks gets a
+  definition here, not a second highlighter, and gets tests: a bad pattern mis-colours a file
+  instead of throwing, so pattern order is asserted rather than eyeballed.
+- `vp check` and `vp test` are the gate (ADR-0004). Lint rules are configured in `vite.config.ts`;
+  a rule switched off carries the decision it conflicts with, never "it was noisy".

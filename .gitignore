@@ -31,3 +31,7 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Vite+ / oxlint caches
+.vite/
+.vp/

@@ -1,0 +1,164 @@
+using System.Net;
+using System.Net.Http.Json;
+using Xunit;
+
+namespace CodeExplorer.Tests;
+
+/// <summary>
+///     The JSON browse, search and file reads the web UI renders. The engine is pinned in every test
+///     and both paths are covered, because <c>INSTALL fts</c> fails offline and an unpinned suite
+///     would test full-text on a laptop and a substring scan on CI, which rank differently.
+/// </summary>
+public sealed class SearchEndpointTests
+{
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    /// <summary>A project of two repositories that each hold a <c>src/Widget.cs</c>, plus a doc file.</summary>
+    private static async Task<TestHost> ProjectAsync(SearchEngine engine)
+    {
+        var host = new TestHost(engine);
+        try
+        {
+            await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+            {
+                ["one"] = new()
+                {
+                    ["docs/Widget.md"] = "widget notes\n",
+                    ["src/Widget.cs"] = "class Widget\n{\n    int Size;\n}\n"
+                },
+                ["two"] = new() { ["src/Widget.cs"] = "class Widget { }\n" }
+            });
+            return host;
+        }
+        catch
+        {
+            // The host owns a data directory and an open DuckDB instance; a failure here would leak both.
+            host.Dispose();
+            throw;
+        }
+    }
+
+    [Theory]
+    [InlineData(SearchEngine.Substring)]
+    [InlineData(SearchEngine.Fts)]
+    public async Task Search_answers_with_qualified_paths_the_file_endpoint_accepts(SearchEngine engine)
+    {
+        using var host = await ProjectAsync(engine);
+
+        var result = await GetAsync<GrepResult>(host, "/api/projects/alpha/search?q=Widget");
+
+        Assert.Equal(3, result.TotalFiles);
+        // Two repositories each hold src/Widget.cs; only the qualified path tells them apart, which is
+        // exactly what the result list must link through with.
+        Assert.Contains(result.Files, f => f.QualifiedPath == "one/src/Widget.cs");
+        Assert.Contains(result.Files, f => f.QualifiedPath == "two/src/Widget.cs");
+
+        var file = await GetAsync<FileContentResponse>(host,
+            "/api/projects/alpha/file?path=" + Uri.EscapeDataString("one/src/Widget.cs"));
+        Assert.Equal("one", file.RepositorySlug);
+        Assert.Equal(4, file.LineCount);
+        Assert.Equal("class Widget\n{\n    int Size;\n}", file.Content);
+        Assert.Null(file.SkipReason);
+    }
+
+    [Theory]
+    [InlineData(SearchEngine.Substring)]
+    [InlineData(SearchEngine.Fts)]
+    public async Task Search_filters_by_extension_and_pages(SearchEngine engine)
+    {
+        using var host = await ProjectAsync(engine);
+
+        var scoped = await GetAsync<GrepResult>(host, "/api/projects/alpha/search?q=Widget&extension=cs");
+        Assert.Equal(2, scoped.TotalFiles);
+        Assert.DoesNotContain(scoped.Files, f => f.QualifiedPath.EndsWith(".md", StringComparison.Ordinal));
+
+        var page = await GetAsync<GrepResult>(host, "/api/projects/alpha/search?q=Widget&pageSize=1&page=2");
+        Assert.Equal(3, page.TotalFiles);
+        Assert.Single(page.Files);
+    }
+
+    [Theory]
+    [InlineData(SearchEngine.Substring)]
+    [InlineData(SearchEngine.Fts)]
+    public async Task Browsing_lists_files_by_glob_and_by_repository(SearchEngine engine)
+    {
+        using var host = await ProjectAsync(engine);
+
+        var all = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files");
+        Assert.Equal(3, all.Total);
+
+        var sources = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?glob=*.cs");
+        Assert.Equal(2, sources.Total);
+        Assert.All(sources.Files, f => Assert.EndsWith(".cs", f.QualifiedPath, StringComparison.Ordinal));
+
+        // Both repositories hold src/Widget.cs, so scoping is the only thing that separates them.
+        var scoped = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?repository=two");
+        Assert.Equal("two/src/Widget.cs", Assert.Single(scoped.Files).QualifiedPath);
+    }
+
+    [Theory]
+    [InlineData(SearchEngine.Substring, 1)]
+    [InlineData(SearchEngine.Fts, 0)]
+    public async Task The_engine_the_result_names_is_the_one_that_answered(SearchEngine engine, int expected)
+    {
+        using var host = new TestHost(engine);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+            { ["one"] = new() { ["src/A.cs"] = "class WidgetFactory { }\n" } });
+
+        var result = await GetAsync<GrepResult>(host, "/api/projects/alpha/search?q=Widget");
+
+        // The one place the two engines legitimately disagree, and why the result carries the engine:
+        // full-text matches whole identifier tokens, so `WidgetFactory` is not a hit for `Widget`,
+        // while a substring scan finds it. Neither is wrong; the UI shows which one ran.
+        Assert.Equal(expected, result.TotalFiles);
+        Assert.Equal(engine == SearchEngine.Fts ? GrepSearch.FullTextEngine : GrepSearch.SubstringEngine,
+            result.Engine);
+    }
+
+    [Fact]
+    public async Task A_pattern_RE2_refuses_is_an_explanation_not_an_empty_result()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        using var http = host.Factory.CreateClient();
+        using var response = await http.GetAsync("/api/projects/alpha/search?q=(?%3D%3Dfoo)&regex=true", Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("lookahead", await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Searching_or_browsing_a_project_with_no_index_says_that_rather_than_returning_nothing()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.CreateProjectAsync("alpha");
+
+        using var http = host.Factory.CreateClient();
+        using var search = await http.GetAsync("/api/projects/alpha/search?q=Widget", Ct);
+        using var files = await http.GetAsync("/api/projects/alpha/files", Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, search.StatusCode);
+        Assert.Contains("alpha", await search.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.NotFound, files.StatusCode);
+        Assert.Contains("alpha", await files.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_unknown_file_is_a_not_found()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        using var http = host.Factory.CreateClient();
+        using var response = await http.GetAsync("/api/projects/alpha/file?path=one/src/Missing.cs", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    private static async Task<T> GetAsync<T>(TestHost host, string url)
+    {
+        using var http = host.Factory.CreateClient();
+        var value = await http.GetFromJsonAsync<T>(url, Ct);
+        Assert.NotNull(value);
+        return value;
+    }
+}

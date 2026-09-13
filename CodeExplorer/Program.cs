@@ -10,6 +10,7 @@ builder.Services.AddSingleton<GitClones>();
 builder.Services.AddSingleton<ProjectIndexes>();
 builder.Services.AddSingleton<IndexBuilder>();
 builder.Services.AddSingleton<GrepSearch>();
+builder.Services.AddSingleton<ProjectOverview>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMcpServer().WithHttpTransport()
     .WithTools<ProjectTools>()
@@ -22,9 +23,19 @@ var app = builder.Build();
 var api = app.MapGroup("/api");
 api.MapControl();
 api.MapIndex();
+api.MapSearch();
+api.MapOperator();
 
 // One MCP endpoint per project (ADR-0002), bound from the route before the SDK sees the request.
 app.MapGroup("/projects/{slug}").BindProject().MapMcp("/mcp");
+
+// The operator web UI is a Vite build into wwwroot. It is absent until someone runs that build, and
+// the server must still start: MapFallbackToFile would 404 at request time, which is the same answer
+// the browser gets today for an unbuilt UI. Every client-side route falls back to index.html, and the
+// fallback runs last so it cannot shadow /api or /projects/{slug}/mcp.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+app.MapFallbackToFile("index.html");
 
 app.Run();
 

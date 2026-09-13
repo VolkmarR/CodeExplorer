@@ -62,6 +62,53 @@ public sealed class GitClones(
     }
 
     /// <summary>
+    ///     Deletes the local copy of one repository, or of a whole project when
+    ///     <paramref name="repositorySlug" /> is null. Called after the control database has forgotten
+    ///     them, so a failure here leaves disused bytes behind rather than a repository the operator
+    ///     removed and still sees.
+    /// </summary>
+    public async Task RemoveAsync(string projectSlug, string? repositorySlug,
+        CancellationToken cancellationToken)
+    {
+        string path = repositorySlug is null
+            ? Path.Combine(_cloneRoot, projectSlug)
+            : Path.Combine(_cloneRoot, projectSlug, repositorySlug + ".git");
+        var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            // The gate is keyed by clone path, so removing a project does not exclude a clone of one of
+            // its repositories running under a different key. The control database forgot them first,
+            // so nothing can start a new clone; one already in flight loses the race and leaves a folder.
+            await Task.Run(() => Delete(path), cancellationToken);
+            foreach (string known in _lfsByPath.Keys.Where(p => p.StartsWith(path, StringComparison.Ordinal)))
+                _lfsByPath.TryRemove(known, out _);
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        // Dropped after the gate is released, so the dictionary does not grow by one entry for every
+        // repository ever removed. A clone starting now takes a fresh gate for a path that no longer
+        // exists in the control database, which is the same race the comment above describes.
+        _cloneGates.TryRemove(path, out _);
+    }
+
+    /// <summary>
+    ///     libgit2 marks pack files read-only, and <c>Directory.Delete</c> refuses a read-only file; the
+    ///     attributes are cleared first rather than left to fail on the first pack.
+    /// </summary>
+    private static void Delete(string path)
+    {
+        if (!Directory.Exists(path)) return;
+
+        foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories))
+            file.Attributes = FileAttributes.Normal;
+        Directory.Delete(path, true);
+    }
+
+    /// <summary>
     ///     True when any <c>.gitattributes</c> in the HEAD tree declares <c>filter=lfs</c>. Walks the whole
     ///     tree because git honours attributes files at any depth, not only at the root. Remembered per
     ///     clone, since HEAD only moves on a refresh, which is where the entry will be dropped.
