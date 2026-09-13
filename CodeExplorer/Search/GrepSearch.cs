@@ -119,9 +119,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
 
         using var connection = await indexes.OpenAsync(slug, cancellationToken);
         if (connection is null)
-            return new GrepProblem(
-                $"Project '{slug}' has no index to search right now: it was never built, or a rebuild is in progress. "
-                + $"Ask the operator to build it with POST /api/projects/{slug}/index, or retry shortly.");
+            return new GrepProblem(ToolReply.NoIndex(slug));
 
         var bounds = Bounds.From(request);
         try

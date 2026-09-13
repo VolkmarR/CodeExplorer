@@ -9,19 +9,6 @@ namespace CodeExplorer;
 [McpServerToolType]
 internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, GrepSearch grep)
 {
-    /// <summary>
-    ///     Hard ceiling on one reply, roughly 10k tokens. A line cap alone is not enough: two hundred
-    ///     ordinary hits still flood a context. An exact multiple of 1024, so the "capped at N KB" the
-    ///     caller reads is the real number.
-    /// </summary>
-    private const int MaxOutputChars = 40 * 1024;
-
-    /// <summary>
-    ///     Longer than any hand-written source line, shorter than a minified bundle or a data literal,
-    ///     which would otherwise spend the whole reply budget on one hit.
-    /// </summary>
-    private const int MaxLineChars = 500;
-
     [McpServerTool(Name = "grep", ReadOnly = true, Idempotent = true, Title = "Search the project's code")]
     [Description("""
                  Searches every indexed line of every repository in this project and returns the matching lines grouped by file, with qualified paths (`repo/path/in/repo`) and line numbers. This is the fastest way to locate code; reach for it before reading files.
@@ -90,7 +77,7 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
         {
             case > 0:
                 text.Append(CultureInfo.InvariantCulture,
-                    $"The pattern does match in {result.FilesMatchingWithoutFilters} {Plural(result.FilesMatchingWithoutFilters.Value, "file")} outside your path/ext/exclude filters; the filters hid every match. Widen or drop them to see those.");
+                    $"The pattern does match in {result.FilesMatchingWithoutFilters} {ToolReply.Plural(result.FilesMatchingWithoutFilters.Value, "file")} outside your path/ext/exclude filters; the filters hid every match. Widen or drop them to see those.");
                 break;
             case 0:
                 text.Append("Nothing matches anywhere in the project, with or without your filters. ");
@@ -122,9 +109,9 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
         // Spell out that the counts are project-wide totals, not this page; read as per-page numbers they
         // turn a paging decision into a guess.
         text.Append(CultureInfo.InvariantCulture,
-                $"{result.TotalFiles} {Plural(result.TotalFiles, "file")} match in total")
+                $"{result.TotalFiles} {ToolReply.Plural(result.TotalFiles, "file")} match in total")
             .Append(CultureInfo.InvariantCulture,
-                $" ({result.TotalLines} matching {Plural(result.TotalLines, "line")})")
+                $" ({result.TotalLines} matching {ToolReply.Plural(result.TotalLines, "line")})")
             .Append(lastPage == 1
                 ? ", all shown below"
                 : string.Create(CultureInfo.InvariantCulture,
@@ -151,13 +138,14 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
             text.Append(CultureInfo.InvariantCulture,
                 $"\nMore files match. Call grep again with page={result.Page + 1}.\n");
 
-        return Cap(text.ToString());
+        return ToolReply.Cap(text.ToString(),
+            "Narrow with path/ext/exclude, lower pageSize or maxLinesPerFile, or use filesOnly=true to see the shape of the answer first.");
     }
 
     private static void AppendFile(StringBuilder text, GrepRequest request, GrepFile file)
     {
         text.Append(CultureInfo.InvariantCulture,
-            $"\n{file.QualifiedPath}  -  {file.MatchCount} {Plural(file.MatchCount, "match", "matches")}\n");
+            $"\n{file.QualifiedPath}  -  {file.MatchCount} {ToolReply.Plural(file.MatchCount, "match", "matches")}\n");
 
         int width = file.Lines.Count == 0 ? 1 : file.Lines[^1].LineNumber.ToString(CultureInfo.InvariantCulture).Length;
         string pad = new(' ', width);
@@ -170,36 +158,13 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
                 text.Append(pad).Append("  ...\n");
             // ':' marks a match and '-' a context line, the way grep does it.
             text.Append(line.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
-                .Append(line.IsMatch ? ':' : '-').Append(' ').Append(Clip(line.Text)).Append('\n');
+                .Append(line.IsMatch ? ':' : '-').Append(' ').Append(ToolReply.Clip(line.Text)).Append('\n');
             previous = line.LineNumber;
         }
 
         int hidden = file.MatchCount - file.MatchesShown;
         if (hidden > 0)
             text.Append(pad).Append("  ... ").Append(hidden).Append(" more ")
-                .Append(Plural(hidden, "match", "matches")).Append(" in this file (raise maxLinesPerFile)\n");
+                .Append(ToolReply.Plural(hidden, "match", "matches")).Append(" in this file (raise maxLinesPerFile)\n");
     }
-
-    private static string Cap(string text)
-    {
-        if (text.Length <= MaxOutputChars) return text;
-
-        int cut = text.LastIndexOf('\n', MaxOutputChars);
-        if (cut < MaxOutputChars / 2) cut = MaxOutputChars;
-        string notice = string.Create(CultureInfo.InvariantCulture,
-            $"\n\n... results truncated at {MaxOutputChars / 1024} KB ({text.Length - cut:N0} more characters). ");
-        return text[..cut] + notice
-                           + "Narrow with path/ext/exclude, lower pageSize or maxLinesPerFile, or use filesOnly=true to see the shape of the answer first.\n";
-    }
-
-    private static string Clip(string text)
-    {
-        string trimmed = text.TrimEnd();
-        return trimmed.Length <= MaxLineChars
-            ? trimmed
-            : string.Create(CultureInfo.InvariantCulture,
-                $"{trimmed[..MaxLineChars]} ... [{trimmed.Length - MaxLineChars} more characters on this line]");
-    }
-
-    private static string Plural(long n, string one, string? many = null) => n == 1 ? one : many ?? one + "s";
 }
