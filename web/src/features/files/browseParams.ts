@@ -14,6 +14,14 @@ export interface BrowseParameters {
  * sources at any depth. An empty `path` is the project root, which lists its repositories: a qualified
  * path begins with one, so there is no level above them.
  */
+/**
+ * The URL of the tree at one level. Written here rather than spelled out at each link, so the empty
+ * glob that selects the tree cannot be forgotten at one of them and quietly open the flat list.
+ */
+export function treeSearch(path = ''): BrowseParameters {
+  return { glob: '', path }
+}
+
 export function validateBrowseSearch(search: Record<string, unknown>): BrowseParameters {
   return {
     glob: typeof search.glob === 'string' ? search.glob : '',
