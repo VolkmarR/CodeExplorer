@@ -20,8 +20,8 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
 
 ## Layout
 
-- Two C# projects: `CodeExplorer.Api` (host, endpoints, storage, MCP tools) and `CodeExplorer.Tests`.
-  The web app is a Vite build into `CodeExplorer.Api/wwwroot` and stays out of the solution file.
+- Two C# projects: `CodeExplorer` (host, endpoints, storage, MCP tools) and `CodeExplorer.Tests`.
+  The web app is a Vite build into `CodeExplorer/wwwroot` and stays out of the solution file.
 - Endpoints are inline lambdas in `Program.cs`, grouped with `MapGroup`. Logic lives in a service;
   a handler that needs more than one statement of its own is a handler doing too much.
 - Group related DTOs at the top of the file that uses them. One type per file is not a rule here.

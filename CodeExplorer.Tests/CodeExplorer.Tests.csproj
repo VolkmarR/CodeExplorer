@@ -13,7 +13,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="../CodeExplorer.Api/CodeExplorer.Api.csproj"/>
+        <ProjectReference Include="../CodeExplorer/CodeExplorer.csproj"/>
     </ItemGroup>
 
 </Project>
