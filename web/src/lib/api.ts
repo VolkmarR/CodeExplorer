@@ -13,6 +13,8 @@ export interface ProjectIndexStatus {
 export interface ProjectSummary {
   slug: string
   name: string
+  /** Declared at creation and never editable: its files are named without a repository slug (ADR-0006). */
+  singleRepository: boolean
   repositories: number
   index: ProjectIndexStatus
 }
@@ -29,6 +31,7 @@ export interface RepositoryDetail {
 export interface ProjectDetail {
   slug: string
   name: string
+  singleRepository: boolean
   index: ProjectIndexStatus
   repositories: RepositoryDetail[]
 }
@@ -104,9 +107,14 @@ export interface TreeEntry {
   skipReason: string | null
 }
 
-/** One level of the tree. `path` is empty at the project root, where the entries are repositories. */
+/** One level of the tree. `path` is empty at the project root. */
 export interface TreeLevel {
   path: string
+  /**
+   * Whether the entries are repositories rather than directories. An empty `path` no longer implies
+   * it: a single-repository project's root is already inside its one repository (ADR-0006).
+   */
+  repositoryLevel: boolean
   entries: TreeEntry[]
 }
 
@@ -162,8 +170,8 @@ export const api = {
       .post(`projects/${project}/repositories`, { json: { slug, url, credential } })
       .json<CreatedRepository>(),
 
-  createProject: (slug: string, name: string) =>
-    http.post('projects', { json: { slug, name } }).json<CreatedProject>(),
+  createProject: (slug: string, name: string, singleRepository: boolean) =>
+    http.post('projects', { json: { name, singleRepository, slug } }).json<CreatedProject>(),
 
   browse: (project: string, glob: string, repository?: string) =>
     http

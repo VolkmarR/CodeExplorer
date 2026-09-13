@@ -215,6 +215,46 @@ public sealed class SearchEndpointTests
         Assert.Empty(level.Entries);
     }
 
+    [Fact]
+    public async Task A_single_repository_project_names_files_without_a_slug()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("solo", new Dictionary<string, Dictionary<string, string>>
+            { ["only"] = new() { ["README.md"] = "read me\n", ["src/Widget.cs"] = "class Widget { }\n" } },
+            true);
+
+        // The stored qualified path is the short one, so a listing, a search and a file read all agree
+        // without anyone rewriting anything (ADR-0006).
+        var files = await GetAsync<FileListResponse>(host, "/api/projects/solo/files?glob=*");
+        Assert.Equal(["README.md", "src/Widget.cs"], files.Files.Select(f => f.QualifiedPath).Order());
+
+        var file = await GetAsync<FileContentResponse>(host,
+            "/api/projects/solo/file?path=" + Uri.EscapeDataString("src/Widget.cs"));
+        Assert.Equal("src/Widget.cs", file.QualifiedPath);
+
+        var search = await GetAsync<GrepResult>(host, "/api/projects/solo/search?q=Widget");
+        Assert.Equal("src/Widget.cs", Assert.Single(search.Files).QualifiedPath);
+    }
+
+    [Fact]
+    public async Task The_tree_of_a_single_repository_project_opens_inside_it()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("solo", new Dictionary<string, Dictionary<string, string>>
+            { ["only"] = new() { ["README.md"] = "read me\n", ["src/Widget.cs"] = "class Widget { }\n" } },
+            true);
+
+        // There is no repository level to walk through: the root is the repository's own top level, and
+        // the entries under it are named without a slug.
+        var root = await GetAsync<TreeResponse>(host, "/api/projects/solo/tree");
+        Assert.Equal(["src", "README.md"], root.Entries.Select(e => e.Name));
+        Assert.Equal("src", root.Entries[0].QualifiedPath);
+        Assert.Equal("README.md", root.Entries[1].QualifiedPath);
+
+        var source = await GetAsync<TreeResponse>(host, "/api/projects/solo/tree?path=src");
+        Assert.Equal("src/Widget.cs", Assert.Single(source.Entries).QualifiedPath);
+    }
+
     private static async Task<T> GetAsync<T>(TestHost host, string url)
     {
         using var http = host.Factory.CreateClient();

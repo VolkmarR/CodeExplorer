@@ -6,6 +6,7 @@ import { ErrorPanel } from '@/components/ErrorPanel'
 import { IndexStatus } from '@/features/projects/IndexStatus'
 import { NewRepositoryForm } from '@/features/projects/NewRepositoryForm'
 import { RepositoryTable } from '@/features/projects/RepositoryTable'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { invalidateProject, projectQuery, projectsQuery } from '@/features/projects/queries'
@@ -40,8 +41,13 @@ export function ProjectPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
           <p className="mt-1 font-mono text-sm text-muted-foreground">{project.slug}</p>
-          <div className="mt-3">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <IndexStatus status={project.index} />
+            {project.singleRepository ? (
+              <Badge variant="outline" className="text-muted-foreground">
+                single repository
+              </Badge>
+            ) : null}
           </div>
         </div>
         <div className="flex gap-2">
@@ -81,7 +87,16 @@ export function ProjectPage() {
         </CardContent>
       </Card>
 
-      <NewRepositoryForm project={slug} />
+      {/* A single-repository project takes its one and no more, and the declaration cannot be undone,
+          so once it is full there is no form to show — only the reason there is none (ADR-0006). */}
+      {project.singleRepository && project.repositories.length > 0 ? (
+        <p className="text-sm text-muted-foreground">
+          This is a single-repository project, so it holds the one repository above and cannot take
+          another. Create a separate project for a second repository.
+        </p>
+      ) : (
+        <NewRepositoryForm project={slug} singleRepository={project.singleRepository} />
+      )}
     </div>
   )
 }

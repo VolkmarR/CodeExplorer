@@ -12,7 +12,13 @@ import { invalidateProject } from '@/features/projects/queries'
  * Adding a repository. The credential is write-only everywhere: it is typed once here and the API
  * never hands it back, so there is nothing to prefill and no field to edit — a new one replaces it.
  */
-export function NewRepositoryForm({ project }: { project: string }) {
+export function NewRepositoryForm({
+  project,
+  singleRepository,
+}: {
+  project: string
+  singleRepository: boolean
+}) {
   const queryClient = useQueryClient()
   const [slug, setSlug] = useState('')
   const [url, setUrl] = useState('')
@@ -43,21 +49,25 @@ export function NewRepositoryForm({ project }: { project: string }) {
           className="space-y-4"
         >
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="repository-slug">Slug</Label>
-              <Input
-                id="repository-slug"
-                value={slug}
-                onChange={(event) => setSlug(event.target.value)}
-                placeholder="platform"
-                className="font-mono"
-                required
-              />
-              <p className="text-xs text-muted-foreground">
-                The first segment of every qualified path in this repository. Yours to choose, so
-                moving the remote does not rename the paths agents quote.
-              </p>
-            </div>
+            {/* A single-repository project heads no path with a slug, so there is nothing to choose:
+                the server assigns one and it is never shown in a path (ADR-0006). */}
+            {singleRepository ? null : (
+              <div className="space-y-2">
+                <Label htmlFor="repository-slug">Slug</Label>
+                <Input
+                  id="repository-slug"
+                  value={slug}
+                  onChange={(event) => setSlug(event.target.value)}
+                  placeholder="platform"
+                  className="font-mono"
+                  required
+                />
+                <p className="text-xs text-muted-foreground">
+                  The first segment of every qualified path in this repository. Yours to choose, so
+                  moving the remote does not rename the paths agents quote.
+                </p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="repository-url">Git URL</Label>
               <Input

@@ -83,9 +83,9 @@ public sealed class IndexBuilder(
                 using var connection = await indexes.CreateAsync(project.Slug, cancellationToken);
                 // The tree walk and the appender are synchronous libgit2 and DuckDB calls; a worker thread
                 // keeps them off the request thread, and the token is checked between files.
-                (files, lines) = await Task.Run(() => Ingest(connection, project.Slug, opened, cancellationToken),
+                (files, lines) = await Task.Run(() => Ingest(connection, project.Slug, project.SingleRepository, opened, cancellationToken),
                     cancellationToken);
-                fts = await indexes.CompleteBuildAsync(connection, cancellationToken);
+                fts = await indexes.CompleteBuildAsync(connection, project.SingleRepository, cancellationToken);
             }
             catch
             {
@@ -107,7 +107,7 @@ public sealed class IndexBuilder(
     }
 
     private (long Files, long Lines) Ingest(
-        DuckDBConnection connection, string slug,
+        DuckDBConnection connection, string slug, bool singleRepository,
         IReadOnlyList<(ProjectRepository Repository, Repository Clone)> repositories,
         CancellationToken cancellationToken)
     {
@@ -144,7 +144,11 @@ public sealed class IndexBuilder(
                 string name = entry.Path[(slash + 1)..];
                 var row = files.CreateRow()
                     .AppendValue(fileId).AppendValue(repoId)
-                    .AppendValue(entry.Path).AppendValue($"{repository.Slug}/{entry.Path}")
+                    // The stored qualified path is what every read path answers with, so the shape is
+                    // decided once, here: a single-repository project stores the short one (ADR-0006)
+                    // and nothing downstream has to know which kind of project it is reading.
+                    .AppendValue(entry.Path)
+                    .AppendValue(singleRepository ? entry.Path : $"{repository.Slug}/{entry.Path}")
                     .AppendValue(slash < 0 ? "" : entry.Path[..slash]).AppendValue(name)
                     .AppendValue(Path.GetExtension(name).TrimStart('.').ToLowerInvariant())
                     .AppendValue(blob.Size).AppendValue(text.Count);

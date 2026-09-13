@@ -84,16 +84,22 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
     private static async Task AppendReadAsync(
         StringBuilder text, Scope scope, ReadTarget target, int allowance, CancellationToken cancellationToken)
     {
-        var qualified = QualifiedPath.Parse(target.Path);
+        var paths = scope.Paths;
+        var qualified = paths.Parse(target.Path);
         if (qualified is null || qualified.PathInRepository.Length == 0)
         {
-            text.Append(CultureInfo.InvariantCulture,
-                $"'{target.Path}' names no file: a qualified path must start with a repository slug, then the path inside it, like `{scope.ExampleSlug}/src/File.cs`. Repositories: {scope.Slugs}.\n");
+            if (paths.SingleRepository)
+                text.Append(CultureInfo.InvariantCulture,
+                    $"'{target.Path}' names no file: this project holds one repository, so a path is the path inside it, like `{paths.Example(scope.ExampleSlug)}`.\n");
+            else
+                text.Append(CultureInfo.InvariantCulture,
+                    $"'{target.Path}' names no file: a qualified path must start with a repository slug, then the path inside it, like `{paths.Example(scope.ExampleSlug)}`. Repositories: {scope.Slugs}.\n");
             return;
         }
 
         // The slug is matched like the rest of the path, case-insensitively, and the file lookup gets
-        // the spelling the index holds so the two cannot disagree.
+        // the spelling the index holds so the two cannot disagree. A single-repository project wrote no
+        // slug for us to match, and the one it resolves to is the only one there is.
         var repository = scope.Find(qualified.RepositorySlug);
         if (repository is null)
         {
@@ -342,6 +348,14 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         public string Slugs => string.Join(", ", Repositories.Select(r => r.Slug));
 
         public string ExampleSlug => Repositories.Count > 0 ? Repositories[0].Slug : "repo";
+
+        /// <summary>
+        ///     How this project names files (ADR-0006). Built from the index's own repositories rather
+        ///     than the control database, so a tool parses paths the way the index it is reading spells
+        ///     them, even if a repository has been added since the last build.
+        /// </summary>
+        public ProjectPaths Paths =>
+            new(Project.SingleRepository, Repositories.Count > 0 ? Repositories[0].Slug : Project.Slug);
 
         public IndexedRepository? Find(string slug) =>
             Repositories.FirstOrDefault(r => string.Equals(r.Slug, slug, StringComparison.OrdinalIgnoreCase));

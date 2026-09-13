@@ -107,6 +107,49 @@ public sealed class ProjectEndpointTests : IDisposable
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
+    [Fact]
+    public async Task A_single_repository_project_refuses_a_second_repository()
+    {
+        using var http = _factory.CreateClient();
+        var ct = TestContext.Current.CancellationToken;
+        using var created = await http.PostAsJsonAsync("/api/projects",
+            new { slug = "solo", name = "Solo", singleRepository = true }, ct);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        // The slug sent with the first repository is ignored: a single-repository project heads no path
+        // with one, so the system assigns it and the operator is never asked (ADR-0006).
+        using var first = await http.PostAsJsonAsync("/api/projects/solo/repositories",
+            new { slug = "ignored", url = "https://example.com/one.git", credential = (string?)null }, ct);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var repositories = await http.GetFromJsonAsync<RepositoryResponse[]>("/api/projects/solo/repositories", ct);
+        Assert.Equal("solo", Assert.Single(repositories!).Slug);
+
+        using var second = await http.PostAsJsonAsync("/api/projects/solo/repositories",
+            new { slug = "two", url = "https://example.com/two.git", credential = (string?)null }, ct);
+
+        // Refused for good, not until something changes: the declaration cannot be edited, so the
+        // message has to send the operator to a new project rather than to a setting.
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        var error = await second.Content.ReadFromJsonAsync<ErrorBody>(ct);
+        Assert.Contains("single-repository project", error!.Error, StringComparison.Ordinal);
+        Assert.Contains("Create another project", error.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Single_repository_is_off_unless_asked_for()
+    {
+        using var http = _factory.CreateClient();
+        var ct = TestContext.Current.CancellationToken;
+
+        // A request that predates ADR-0006 carries no flag, and must keep the shape it had: the field
+        // decides how every file in the project is named.
+        using var created = await http.PostAsJsonAsync("/api/projects", new { slug = "plain", name = "Plain" }, ct);
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var project = await created.Content.ReadFromJsonAsync<Project>(ct);
+        Assert.False(project!.SingleRepository);
+    }
+
     private async Task<McpClient> ConnectAsync(string slug)
     {
         var http = _factory.CreateClient();
