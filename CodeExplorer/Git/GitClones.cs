@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using LibGit2Sharp;
 using Microsoft.AspNetCore.DataProtection;
 using ModelContextProtocol;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer;
 
@@ -28,14 +29,14 @@ public sealed class GitClones(
         + "content and would show pointer files as if they were source, so it refuses the repository rather "
         + "than answer wrongly. Ask the operator to point the project at a repository without LFS.";
 
-    private readonly string _cloneRoot = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones");
-    private readonly IDataProtector _protector = dataProtection.CreateProtector(ControlDatabase.CredentialPurpose);
-
     // One gate per clone directory, so two first uses of the same repository clone it once and the
     // second waits for the first instead of racing it on the same folder. Both dictionaries hold one
     // entry per repository for the life of the process, which is bounded by the control database.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
+
+    private readonly string _cloneRoot = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones");
     private readonly ConcurrentDictionary<string, bool> _lfsByPath = new();
+    private readonly IDataProtector _protector = dataProtection.CreateProtector(ControlDatabase.CredentialPurpose);
 
     /// <summary>
     ///     Opens the repository, cloning it first if no clone exists. Throws <see cref="McpException" />
@@ -49,7 +50,8 @@ public sealed class GitClones(
         await gate.WaitAsync(cancellationToken);
         try
         {
-            if (!Repository.IsValid(path)) await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken);
+            if (!Repository.IsValid(path))
+                await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken);
         }
         finally
         {
@@ -76,10 +78,9 @@ public sealed class GitClones(
             using var stream = ((Blob)entry.Target).GetContentStream();
             using var reader = new StreamReader(stream);
             while (reader.ReadLine() is { } line)
-            {
                 // Attribute lines are `pattern attr attr...`; the pattern itself is never `filter=lfs`.
-                if (line.Split(' ', '\t').Skip(1).Any(a => a == "filter=lfs")) return true;
-            }
+                if (line.Split(' ', '\t').Skip(1).Any(a => a == "filter=lfs"))
+                    return true;
         }
 
         return false;
@@ -107,7 +108,8 @@ public sealed class GitClones(
 
     private static void Collect(Tree tree, string prefix, int depth, List<TreeEntryInfo> entries)
     {
-        foreach (var entry in tree.OrderBy(e => e.TargetType != TreeEntryTargetType.Tree).ThenBy(e => e.Name, StringComparer.Ordinal))
+        foreach (var entry in tree.OrderBy(e => e.TargetType != TreeEntryTargetType.Tree)
+                     .ThenBy(e => e.Name, StringComparer.Ordinal))
         {
             string relative = prefix + entry.Name;
             // A submodule (GitLink) is another repository; list it as a directory that cannot be entered.
@@ -165,7 +167,7 @@ public sealed class GitClones(
         }
 
         // The credential is deliberately absent from this line and every other log line.
-        if (logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Information))
+        if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation("Cloning repository {Repository} of project {Project} from {Url}",
                 repository.Slug, repository.ProjectSlug, repository.Url);
         try

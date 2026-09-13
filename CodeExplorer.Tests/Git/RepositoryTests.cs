@@ -19,10 +19,10 @@ public sealed class RepositoryTests : IDisposable
 {
     private const string Secret = "pat-secret-token-3f9a";
 
+    private readonly WebApplicationFactory<Program> _factory;
+
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
-
-    private readonly WebApplicationFactory<Program> _factory;
 
     public RepositoryTests()
     {
@@ -173,7 +173,7 @@ public sealed class RepositoryTests : IDisposable
         Assert.Equal(HttpStatusCode.NotFound, noProject.StatusCode);
 
         using var badSlug = await http.PostAsJsonAsync("/api/projects/alpha/repositories",
-            new { slug = "Bad Slug", url = body.url }, ct);
+            new { slug = "Bad Slug", body.url }, ct);
         Assert.Equal(HttpStatusCode.BadRequest, badSlug.StatusCode);
 
         // A token in the URL would land on disk in the clone's remote config; the API refuses it.
@@ -210,7 +210,7 @@ public sealed class RepositoryTests : IDisposable
         string path = Path.Combine(_root, "fixtures", name);
         Repository.Init(path);
         using var repo = new Repository(path);
-        foreach (var (relative, content) in files)
+        foreach ((string relative, string content) in files)
         {
             string full = Path.Combine(path, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(full)!);

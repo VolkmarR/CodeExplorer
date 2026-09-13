@@ -30,18 +30,22 @@ internal static class ControlEndpoints
             async (string project, AddRepositoryRequest request, ControlDatabase control, CancellationToken ct) =>
                 await control.AddRepositoryAsync(project, request.Slug, request.Url, request.Credential, ct) switch
                 {
-                    (AddRepositoryOutcome.Created, { } added) => Results.Created($"/api/projects/{project}/repositories",
+                    (AddRepositoryOutcome.Created, { } added) => Results.Created(
+                        $"/api/projects/{project}/repositories",
                         new RepositoryResponse(added.Slug, added.Url, added.HasCredential)),
-                    (AddRepositoryOutcome.NoProject, _) => Results.NotFound(new { error = $"No project with slug '{project}'." }),
-                    (AddRepositoryOutcome.InvalidSlug, _) => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
+                    (AddRepositoryOutcome.NoProject, _) => Results.NotFound(new
+                        { error = $"No project with slug '{project}'." }),
+                    (AddRepositoryOutcome.InvalidSlug, _) => Results.BadRequest(
+                        new { error = ControlDatabase.SlugRule }),
                     (AddRepositoryOutcome.InvalidUrl, _) => Results.BadRequest(new { error = RepositoryUrl.Rule }),
                     _ => Results.Conflict(new
                         { error = $"Project '{project}' already has a repository with slug '{request.Slug}'." })
                 });
-        api.MapGet("/projects/{project}/repositories", async (string project, ControlDatabase control, CancellationToken ct) =>
-            await control.FindAsync(project, ct) is null
-                ? Results.NotFound(new { error = $"No project with slug '{project}'." })
-                : Results.Ok((await control.ListRepositoriesAsync(project, ct))
-                    .Select(r => new RepositoryResponse(r.Slug, r.Url, r.HasCredential))));
+        api.MapGet("/projects/{project}/repositories",
+            async (string project, ControlDatabase control, CancellationToken ct) =>
+                await control.FindAsync(project, ct) is null
+                    ? Results.NotFound(new { error = $"No project with slug '{project}'." })
+                    : Results.Ok((await control.ListRepositoriesAsync(project, ct))
+                        .Select(r => new RepositoryResponse(r.Slug, r.Url, r.HasCredential))));
     }
 }

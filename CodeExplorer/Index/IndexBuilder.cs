@@ -2,6 +2,7 @@ using System.Text;
 using DuckDB.NET.Data;
 using LibGit2Sharp;
 using ModelContextProtocol;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer;
 
@@ -16,7 +17,11 @@ public sealed record IndexSummary(int Repositories, long Files, long Lines, IRea
 ///     come from the HEAD tree and content from blobs (ADR-0003); there is no working copy to walk.
 /// </summary>
 public sealed class IndexBuilder(
-    IConfiguration configuration, ControlDatabase control, GitClones clones, ProjectIndexes indexes, ILogger<IndexBuilder> logger)
+    IConfiguration configuration,
+    ControlDatabase control,
+    GitClones clones,
+    ProjectIndexes indexes,
+    ILogger<IndexBuilder> logger)
 {
     /// <summary>
     ///     Default for <c>Index:MaxFileBytes</c>. Text blobs above it are generated code, data dumps or
@@ -43,9 +48,11 @@ public sealed class IndexBuilder(
                 try
                 {
                     clone = await clones.OpenAsync(repository, cancellationToken);
-                    string? reason = !GitClones.HasCommits(clone) ? $"Repository '{repository.Slug}' has no commits yet."
-                        : clones.DeclaresLfs(clone) ? $"Repository '{repository.Slug}': {GitClones.LfsRefusal}"
-                        : null;
+                    string? reason = !GitClones.HasCommits(clone)
+                        ? $"Repository '{repository.Slug}' has no commits yet."
+                        : clones.DeclaresLfs(clone)
+                            ? $"Repository '{repository.Slug}': {GitClones.LfsRefusal}"
+                            : null;
                     if (reason is null)
                     {
                         opened.Add((repository, clone));
@@ -76,7 +83,8 @@ public sealed class IndexBuilder(
                 using var connection = await indexes.CreateAsync(project.Slug, cancellationToken);
                 // The tree walk and the appender are synchronous libgit2 and DuckDB calls; a worker thread
                 // keeps them off the request thread, and the token is checked between files.
-                (files, lines) = await Task.Run(() => Ingest(connection, project.Slug, opened, cancellationToken), cancellationToken);
+                (files, lines) = await Task.Run(() => Ingest(connection, project.Slug, opened, cancellationToken),
+                    cancellationToken);
                 fts = await indexes.CompleteBuildAsync(connection, cancellationToken);
             }
             catch
@@ -86,7 +94,7 @@ public sealed class IndexBuilder(
                 throw;
             }
 
-            if (logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Information))
+            if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation(
                     "Indexed project {Project}: {Repositories} repositories, {Files} files, {Lines} lines, full-text {Fts}",
                     project.Slug, opened.Count, files, lines, fts);
@@ -100,7 +108,8 @@ public sealed class IndexBuilder(
 
     private (long Files, long Lines) Ingest(
         DuckDBConnection connection, string slug,
-        IReadOnlyList<(ProjectRepository Repository, Repository Clone)> repositories, CancellationToken cancellationToken)
+        IReadOnlyList<(ProjectRepository Repository, Repository Clone)> repositories,
+        CancellationToken cancellationToken)
     {
         long fileId = 0, lineId = 0;
         // Appenders target the attached catalog explicitly; after USE they would resolve there too, but
@@ -123,10 +132,12 @@ public sealed class IndexBuilder(
                 fileId++;
                 fileCount++;
                 var blob = entry.Blob;
-                string? skipReason = blob.IsBinary ? "binary" : blob.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" : null;
+                string? skipReason = blob.IsBinary ? "binary" :
+                    blob.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" : null;
                 var text = skipReason is null ? SplitLines(blob.GetContentText()) : [];
                 for (int i = 0; i < text.Count; i++)
-                    lines.CreateRow().AppendValue(++lineId).AppendValue(fileId).AppendValue(i + 1).AppendValue(text[i]).EndRow();
+                    lines.CreateRow().AppendValue(++lineId).AppendValue(fileId).AppendValue(i + 1).AppendValue(text[i])
+                        .EndRow();
                 lineCount += text.Count;
 
                 int slash = entry.Path.LastIndexOf('/');
@@ -152,7 +163,6 @@ public sealed class IndexBuilder(
     private static IEnumerable<(string Path, Blob Blob)> Blobs(Tree tree, string prefix)
     {
         foreach (var entry in tree)
-        {
             switch (entry.TargetType)
             {
                 case TreeEntryTargetType.Blob:
@@ -162,7 +172,6 @@ public sealed class IndexBuilder(
                     foreach (var child in Blobs((Tree)entry.Target, prefix + entry.Name + "/")) yield return child;
                     break;
             }
-        }
     }
 
     /// <summary>
@@ -174,7 +183,6 @@ public sealed class IndexBuilder(
         var result = new List<string>();
         var current = new StringBuilder();
         foreach (char c in content)
-        {
             if (c == '\n')
             {
                 result.Add(current.ToString());
@@ -186,7 +194,6 @@ public sealed class IndexBuilder(
                 // (classic Mac) is rare enough that treating it as no break is the lesser surprise.
                 current.Append(c);
             }
-        }
 
         if (current.Length > 0) result.Add(current.ToString());
         return result;

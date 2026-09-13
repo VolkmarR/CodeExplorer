@@ -31,8 +31,43 @@ public sealed class ProjectIndexes : IDisposable
     /// </summary>
     public const int SchemaVersion = 1;
 
-    private readonly string _directory;
-    private readonly string _connectionString;
+    /// <summary>
+    ///     Paths inside <c>files</c> stay repository-relative and <c>repo_id</c> scopes them; the
+    ///     materialised <c>qualified_path</c> and <c>directory</c> keep the read paths join-free
+    ///     (ADR-0003). A file that is committed but not indexed (binary, oversized) is still a row with
+    ///     a <c>skip_reason</c>, so a tree listing shows it and a search can say why it was excluded.
+    ///     <c>lines</c> carries one row per text line; a file's content is reassembled from them rather
+    ///     than stored twice, which halves the file next to the proof of concept's layout.
+    /// </summary>
+    private const string Schema = """
+                                  CREATE TABLE index_info (
+                                      schema_version INTEGER NOT NULL,
+                                      built_at       TIMESTAMPTZ NOT NULL,
+                                      fts_indexed    BOOLEAN NOT NULL);
+                                  CREATE TABLE repositories (
+                                      repo_id     INTEGER PRIMARY KEY,
+                                      slug        VARCHAR NOT NULL UNIQUE,
+                                      url         VARCHAR NOT NULL,
+                                      head_commit VARCHAR NOT NULL,
+                                      file_count  INTEGER NOT NULL,
+                                      line_count  BIGINT NOT NULL);
+                                  CREATE TABLE files (
+                                      file_id        BIGINT PRIMARY KEY,
+                                      repo_id        INTEGER NOT NULL,
+                                      path           VARCHAR NOT NULL,
+                                      qualified_path VARCHAR NOT NULL,
+                                      directory      VARCHAR NOT NULL,
+                                      name           VARCHAR NOT NULL,
+                                      extension      VARCHAR NOT NULL,
+                                      size_bytes     BIGINT NOT NULL,
+                                      line_count     INTEGER NOT NULL,
+                                      skip_reason    VARCHAR);
+                                  CREATE TABLE lines (
+                                      line_id     BIGINT PRIMARY KEY,
+                                      file_id     BIGINT NOT NULL,
+                                      line_number INTEGER NOT NULL,
+                                      content     VARCHAR NOT NULL);
+                                  """;
 
     // Attached databases and loaded extensions belong to the instance, and DuckDB.NET disposes the
     // instance once its last connection closes. This connection is never used for queries; it only
@@ -43,6 +78,9 @@ public sealed class ProjectIndexes : IDisposable
     // file. The gate serialises attach and detach; the set remembers what the instance already holds.
     private readonly SemaphoreSlim _attachGate = new(1, 1);
     private readonly HashSet<string> _attached = [];
+    private readonly string _connectionString;
+
+    private readonly string _directory;
 
     public ProjectIndexes(IConfiguration configuration, ILogger<ProjectIndexes> logger)
     {
@@ -65,6 +103,12 @@ public sealed class ProjectIndexes : IDisposable
     ///     every search is a substring scan, which ranks differently; tests pin the engine for that reason.
     /// </summary>
     public bool FtsAvailable { get; }
+
+    public void Dispose()
+    {
+        _anchor.Dispose();
+        _attachGate.Dispose();
+    }
 
     public string FilePath(string slug) => Path.Combine(_directory, slug + ".duckdb");
 
@@ -140,16 +184,14 @@ public sealed class ProjectIndexes : IDisposable
     public async Task<bool> CompleteBuildAsync(DuckDBConnection connection, CancellationToken cancellationToken)
     {
         if (FtsAvailable)
-        {
             // Tokens are lower-cased identifiers: letters, digits and underscore. No stemming and no stop
             // words, because `Get`, `if` and `id` are exactly what an agent searches code for. Runs inside
             // the attached database because match_bm25 only resolves its tables in the current one.
             await ExecuteAsync(connection, """
-                PRAGMA create_fts_index('lines', 'line_id', 'content',
-                    stemmer = 'none', stopwords = 'none', ignore = '[^a-z0-9_]+',
-                    lower = 1, strip_accents = 0, overwrite = 1)
-                """, cancellationToken);
-        }
+                                           PRAGMA create_fts_index('lines', 'line_id', 'content',
+                                               stemmer = 'none', stopwords = 'none', ignore = '[^a-z0-9_]+',
+                                               lower = 1, strip_accents = 0, overwrite = 1)
+                                           """, cancellationToken);
 
         // Written last, so a row in index_info means the build completed and describes what exists.
         await ExecuteAsync(connection,
@@ -178,44 +220,6 @@ public sealed class ProjectIndexes : IDisposable
             _attachGate.Release();
         }
     }
-
-    /// <summary>
-    ///     Paths inside <c>files</c> stay repository-relative and <c>repo_id</c> scopes them; the
-    ///     materialised <c>qualified_path</c> and <c>directory</c> keep the read paths join-free
-    ///     (ADR-0003). A file that is committed but not indexed (binary, oversized) is still a row with
-    ///     a <c>skip_reason</c>, so a tree listing shows it and a search can say why it was excluded.
-    ///     <c>lines</c> carries one row per text line; a file's content is reassembled from them rather
-    ///     than stored twice, which halves the file next to the proof of concept's layout.
-    /// </summary>
-    private const string Schema = """
-        CREATE TABLE index_info (
-            schema_version INTEGER NOT NULL,
-            built_at       TIMESTAMPTZ NOT NULL,
-            fts_indexed    BOOLEAN NOT NULL);
-        CREATE TABLE repositories (
-            repo_id     INTEGER PRIMARY KEY,
-            slug        VARCHAR NOT NULL UNIQUE,
-            url         VARCHAR NOT NULL,
-            head_commit VARCHAR NOT NULL,
-            file_count  INTEGER NOT NULL,
-            line_count  BIGINT NOT NULL);
-        CREATE TABLE files (
-            file_id        BIGINT PRIMARY KEY,
-            repo_id        INTEGER NOT NULL,
-            path           VARCHAR NOT NULL,
-            qualified_path VARCHAR NOT NULL,
-            directory      VARCHAR NOT NULL,
-            name           VARCHAR NOT NULL,
-            extension      VARCHAR NOT NULL,
-            size_bytes     BIGINT NOT NULL,
-            line_count     INTEGER NOT NULL,
-            skip_reason    VARCHAR);
-        CREATE TABLE lines (
-            line_id     BIGINT PRIMARY KEY,
-            file_id     BIGINT NOT NULL,
-            line_number INTEGER NOT NULL,
-            content     VARCHAR NOT NULL);
-        """;
 
     private async Task AttachAsync(DuckDBConnection connection, string slug, CancellationToken cancellationToken)
     {
@@ -281,10 +285,4 @@ public sealed class ProjectIndexes : IDisposable
 
     /// <summary>A file path as a SQL string literal. Paths come from configuration and the slug, never from a request.</summary>
     private static string Literal(string path) => $"'{path.Replace("'", "''")}'";
-
-    public void Dispose()
-    {
-        _anchor.Dispose();
-        _attachGate.Dispose();
-    }
 }
