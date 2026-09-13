@@ -35,9 +35,11 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
                  - "No matches" replies say whether matches existed outside your path/ext/exclude filters, so a filtered miss is never mistaken for a clean negative.
                  """)]
     public async Task<string> Grep(
-        [Description("What to search for: text tokens, or an RE2 regular expression when regex=true or multiline=true.")]
+        [Description(
+            "What to search for: text tokens, or an RE2 regular expression when regex=true or multiline=true.")]
         string query,
-        [Description("Treat the query as an RE2 regular expression. Needed for substring and prefix matches and for alternation.")]
+        [Description(
+            "Treat the query as an RE2 regular expression. Needed for substring and prefix matches and for alternation.")]
         bool regex = false,
         [Description("Match case exactly. Default false.")]
         bool caseSensitive = false,
@@ -101,13 +103,16 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
 
         return text.ToString();
 
-        static string Hint(GrepRequest request) => request.Regex || request.Multiline
-            ? request.WholeWord
-                ? "Try again without wholeWord=true: the match may be part of a longer identifier."
-                : "Try a looser pattern."
-            : request.Query.Any(c => !char.IsLetterOrDigit(c) && c != '_' && !char.IsWhiteSpace(c))
-                ? "Text mode requires every token on one line. Retry with regex=true and escape metacharacters with a backslash, or search a single distinctive token."
-                : "Text mode requires every token on one line, and the full-text path matches whole identifier tokens. Retry with regex=true for a partial name.";
+        static string Hint(GrepRequest request)
+        {
+            return request.Regex || request.Multiline
+                ? request.WholeWord
+                    ? "Try again without wholeWord=true: the match may be part of a longer identifier."
+                    : "Try a looser pattern."
+                : request.Query.Any(c => !char.IsLetterOrDigit(c) && c != '_' && !char.IsWhiteSpace(c))
+                    ? "Text mode requires every token on one line. Retry with regex=true and escape metacharacters with a backslash, or search a single distinctive token."
+                    : "Text mode requires every token on one line, and the full-text path matches whole identifier tokens. Retry with regex=true for a partial name.";
+        }
     }
 
     private static string Format(GrepRequest request, GrepResult result)
@@ -116,8 +121,10 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
         var text = new StringBuilder();
         // Spell out that the counts are project-wide totals, not this page; read as per-page numbers they
         // turn a paging decision into a guess.
-        text.Append(CultureInfo.InvariantCulture, $"{result.TotalFiles} {Plural(result.TotalFiles, "file")} match in total")
-            .Append(CultureInfo.InvariantCulture, $" ({result.TotalLines} matching {Plural(result.TotalLines, "line")})")
+        text.Append(CultureInfo.InvariantCulture,
+                $"{result.TotalFiles} {Plural(result.TotalFiles, "file")} match in total")
+            .Append(CultureInfo.InvariantCulture,
+                $" ({result.TotalLines} matching {Plural(result.TotalLines, "line")})")
             .Append(lastPage == 1
                 ? ", all shown below"
                 : string.Create(CultureInfo.InvariantCulture,
@@ -141,7 +148,8 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
         }
 
         if (result.Page < lastPage)
-            text.Append(CultureInfo.InvariantCulture, $"\nMore files match. Call grep again with page={result.Page + 1}.\n");
+            text.Append(CultureInfo.InvariantCulture,
+                $"\nMore files match. Call grep again with page={result.Page + 1}.\n");
 
         return Cap(text.ToString());
     }
@@ -158,7 +166,8 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
         {
             // A gap means two context windows did not touch; mark it so the numbers read right. Pointless
             // without context, where every line is already its own hit.
-            if (request.Context > 0 && previous > 0 && line.LineNumber > previous + 1) text.Append(pad).Append("  ...\n");
+            if (request.Context > 0 && previous > 0 && line.LineNumber > previous + 1)
+                text.Append(pad).Append("  ...\n");
             // ':' marks a match and '-' a context line, the way grep does it.
             text.Append(line.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
                 .Append(line.IsMatch ? ':' : '-').Append(' ').Append(Clip(line.Text)).Append('\n');
@@ -180,7 +189,7 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
         string notice = string.Create(CultureInfo.InvariantCulture,
             $"\n\n... results truncated at {MaxOutputChars / 1024} KB ({text.Length - cut:N0} more characters). ");
         return text[..cut] + notice
-               + "Narrow with path/ext/exclude, lower pageSize or maxLinesPerFile, or use filesOnly=true to see the shape of the answer first.\n";
+                           + "Narrow with path/ext/exclude, lower pageSize or maxLinesPerFile, or use filesOnly=true to see the shape of the answer first.\n";
     }
 
     private static string Clip(string text)
