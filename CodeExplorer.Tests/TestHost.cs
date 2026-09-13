@@ -28,18 +28,63 @@ public sealed class TestHost : IDisposable
     /// <param name="minimumFreeBytes">Raised past any real disk to prove the free-space refusal.</param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null)
     {
-        Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        {
-            builder.UseSetting("Storage:DataDirectory", Path.Combine(_root, "data"));
-            builder.UseSetting("Index:SearchEngine", engine.ToString());
-            if (drainSeconds is { } seconds)
-                builder.UseSetting("Index:DrainSeconds", seconds.ToString(CultureInfo.InvariantCulture));
-            if (minimumFreeBytes is { } bytes)
-                builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
-        });
+        _engine = engine;
+        _drainSeconds = drainSeconds;
+        _minimumFreeBytes = minimumFreeBytes;
+        Factory = Build();
     }
 
-    public WebApplicationFactory<Program> Factory { get; }
+    private readonly SearchEngine _engine;
+    private readonly int? _drainSeconds;
+    private readonly long? _minimumFreeBytes;
+
+    public WebApplicationFactory<Program> Factory { get; private set; }
+
+    private WebApplicationFactory<Program> Build() =>
+        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Storage:DataDirectory", DataDirectory);
+            builder.UseSetting("Storage:DurableDirectory", DurableDirectory);
+            builder.UseSetting("Index:SearchEngine", _engine.ToString());
+            if (_drainSeconds is { } seconds)
+                builder.UseSetting("Index:DrainSeconds", seconds.ToString(CultureInfo.InvariantCulture));
+            if (_minimumFreeBytes is { } bytes)
+                builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
+        });
+
+    /// <summary>
+    ///     Stops the server and starts a new one over the same directories, which is what a scale to
+    ///     zero and a wake look like from here: the singletons, the attach state and the in-memory
+    ///     refresh statuses are all gone, and only what is on disk and in the durable store remains.
+    /// </summary>
+    public void Restart()
+    {
+        Factory.Dispose();
+        Factory = Build();
+    }
+
+    /// <summary>
+    ///     Removes a project's index file, which is what the container's disk being wiped leaves behind:
+    ///     a project that exists, has a durable copy, and has nothing local to answer from.
+    /// </summary>
+    public void DeleteIndexFile(string slug) =>
+        DeleteDatabase(Path.Combine(DataDirectory, "indexes", slug + ".duckdb"));
+
+    /// <summary>The same for the control database, whose backup is a file rather than a Parquet set.</summary>
+    public void DeleteControlDatabase() => DeleteDatabase(Path.Combine(DataDirectory, "control.duckdb"));
+
+    /// <summary>A database file and the write-ahead log beside it, which a stop leaves behind.</summary>
+    private static void DeleteDatabase(string path)
+    {
+        File.Delete(path);
+        File.Delete(path + ".wal");
+    }
+
+    /// <summary>Where the folder durable store keeps a project's Parquet set, whether or not it has one.</summary>
+    public string DurableIndexDirectory(string slug) => Path.Combine(DurableDirectory, "indexes", slug);
+
+    /// <summary>The folder standing in for a blob container, which is what an unconfigured app uses.</summary>
+    public string DurableDirectory => Path.Combine(_root, "durable");
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 

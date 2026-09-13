@@ -14,6 +14,7 @@ public sealed class ProjectRefresh(
     ControlDatabase control,
     GitClones clones,
     IndexBuilder builder,
+    DurableIndex durable,
     ProjectIndexes indexes,
     ILogger<ProjectRefresh> logger)
 {
@@ -25,6 +26,13 @@ public sealed class ProjectRefresh(
     public const string IngestPhase = "Reading the repositories into the shadow index";
 
     public const string SwapPhase = "Swapping the new index in";
+
+    /// <summary>
+    ///     Writing the durable copy, which happens before the swap: a store that cannot be reached is a
+    ///     build that failed, and an index nothing could make durable is not one to put in front of
+    ///     agents on a server whose disk is wiped on every stop (#9).
+    /// </summary>
+    public const string StorePhase = "Storing the durable copy of the new index";
 
     /// <param name="project">The project to refresh, as the control database holds it.</param>
     /// <param name="report">
@@ -56,7 +64,16 @@ public sealed class ProjectRefresh(
                 // Scoped so the shadow connection is closed before the swap: the file cannot be moved
                 // over the live one while the instance still holds it open.
                 using (var shadow = await indexes.CreateShadowAsync(project.Slug, cancellationToken))
+                {
                     summary = await builder.FillAsync(shadow, opened, project.SingleRepository, cancellationToken);
+                    report(StorePhase);
+                    // Exported from the shadow rather than from the live index after the swap, which is
+                    // what the tables about to be swapped in are. Doing it here means the export needs
+                    // no second attach of the live catalog — one that would quietly re-bind a connection
+                    // ADR-0003 says the swap must strand — and a store that is unreachable discards the
+                    // shadow and leaves the old index serving, like any other failure of a build.
+                    await durable.StoreAsync(shadow.Connection, project.Slug, cancellationToken);
+                }
 
                 report(SwapPhase);
                 await indexes.SwapShadowAsync(project.Slug, cancellationToken);

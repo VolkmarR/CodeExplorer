@@ -57,6 +57,20 @@ The replacement index a refresh builds alongside the one still serving queries. 
 once complete, so a project is never searchable in a half-built state.
 _Avoid_: Staging index, temp index, rebuild
 
+**Durable Copy**:
+What a project's index is stored as outside the container: its tables as Parquet under the project's
+own prefix, written by the build that produced them and read back when the index file is absent. The
+container's disk is wiped on every stop, so this is the only copy of an index that outlives a
+replica. The control database has one too, kept as a file rather than as Parquet, and that one alone
+is called a backup because nothing rebuilds it.
+_Avoid_: Snapshot, archive, cache
+
+**Warm-Up**:
+Attaching every project ahead of the working day, so the first agent of the morning does not wait
+for a restore. It is an operator action an external cron calls, never a schedule the server keeps:
+a server that has scaled to zero has nothing running to fire one.
+_Avoid_: Preload, prefetch, cache warming
+
 **Project Slug**:
 The stable name identifying a project everywhere it is addressed — in its endpoint URL above all.
 Distinct from the project's display name, which can change freely; the slug cannot, because agents

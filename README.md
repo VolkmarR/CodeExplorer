@@ -16,6 +16,15 @@ complete, offline, unauthenticated server (ADR-0004). Traces and metrics are one
 set `Telemetry:OtlpEndpoint` (or the standard `OTEL_EXPORTER_OTLP_ENDPOINT`) to export them, and
 leave it unset to run with no exporter at all.
 
+The durable copy is another of those defaults: with no `Storage:BlobContainerUrl` set, every
+project's Parquet export and the control database's backup go to a folder under `data/durable`
+instead of Blob Storage, and the app needs no Azure at all.
+
+Projects attach on first connection rather than at startup, so a replica waking with an empty disk
+restores the one project being connected to. `POST /api/warmup` walks every project and restores
+each; an external cron calls it before working hours, because a server that scales to zero has
+nothing running to fire an in-process timer.
+
 The web UI is served from `CodeExplorer/wwwroot`, which `web/` builds into. To work on it with hot
 reload, run `vp dev` in `web/` alongside the server and use <http://localhost:5173>; see
 [`web/README.md`](web/README.md).

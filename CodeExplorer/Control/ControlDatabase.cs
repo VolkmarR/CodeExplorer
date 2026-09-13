@@ -45,7 +45,7 @@ public enum AddRepositoryOutcome
 ///     plain file next to the project indexes and is never shadow-rebuilt. It is opened standalone, not
 ///     attached, so the "USE slug before every query" rule for project indexes does not apply here.
 /// </summary>
-public sealed partial class ControlDatabase
+public sealed partial class ControlDatabase : IDisposable
 {
     public const string SlugRule =
         "Slug must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit.";
@@ -57,17 +57,48 @@ public sealed partial class ControlDatabase
     /// </summary>
     public const string CredentialPurpose = "CodeExplorer.RepositoryCredential";
 
-    private readonly string _connectionString;
-    private readonly IDataProtector _protector;
+    /// <summary>
+    ///     Where the control database's backup lives in the durable store. It is backed up as a file
+    ///     and never exported to Parquet (ADR-0004): it is not shadow-rebuilt, it is small, and what is
+    ///     in it — credentials above all — cannot be rebuilt from anything else if it is lost.
+    /// </summary>
+    private const string BackupName = "control/control.duckdb";
 
-    public ControlDatabase(IConfiguration configuration, IDataProtectionProvider dataProtection)
+    // Backups are serialised so that two operator actions at once cannot land out of order and leave
+    // the store holding the older of the two states. Each takes its own consistent snapshot inside the
+    // engine, so the wait is on the upload and not on the work.
+    private readonly SemaphoreSlim _backupGate = new(1, 1);
+
+    private readonly string _connectionString;
+
+    /// <summary>The file itself, which the backup snapshots beside and the restore writes.</summary>
+    private readonly string _path;
+
+    private readonly IDataProtector _protector;
+    private readonly DurableStore _store;
+
+    public ControlDatabase(IConfiguration configuration, IDataProtectionProvider dataProtection, DurableStore store,
+        ILogger<ControlDatabase> logger)
     {
         _protector = dataProtection.CreateProtector(CredentialPurpose);
+        _store = store;
 
         // Absent configuration selects a local folder, so `dotnet run` needs no settings at all.
         string directory = configuration["Storage:DataDirectory"] ?? "data";
         Directory.CreateDirectory(directory);
-        _connectionString = $"Data Source={Path.Combine(directory, "control.duckdb")}";
+        _path = Path.Combine(directory, "control.duckdb");
+        _connectionString = $"Data Source={_path}";
+
+        // The container's disk is wiped on every stop, so an absent file is the ordinary state of a
+        // replica waking up rather than a first run. Restoring before the CREATE TABLEs below is what
+        // keeps the statements harmless: against a restored file they all find their tables already there.
+        if (!File.Exists(_path) && _store.Fetch(BackupName, _path))
+        {
+            // The backup is a clean copy taken inside the engine, so anything named .wal beside this
+            // path belongs to an earlier life of it and would replay a tail from a different file.
+            File.Delete(_path + ".wal");
+            logger.LogInformation("Restored the control database from its backup");
+        }
 
         // Synchronous on purpose: this runs once at startup, before any request could cancel it.
         using var connection = new DuckDBConnection(_connectionString);
@@ -104,6 +135,8 @@ public sealed partial class ControlDatabase
     [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")]
     private static partial Regex SlugPattern { get; }
 
+    public void Dispose() => _backupGate.Dispose();
+
     public static bool IsValidSlug(string slug) => SlugPattern.IsMatch(slug);
 
     /// <summary>
@@ -129,9 +162,10 @@ public sealed partial class ControlDatabase
         command.Parameters.Add(new DuckDBParameter("slug", slug));
         command.Parameters.Add(new DuckDBParameter("name", name.Trim()));
         command.Parameters.Add(new DuckDBParameter("single", singleRepository));
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-            ? CreateProjectOutcome.Created
-            : CreateProjectOutcome.SlugTaken;
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1) return CreateProjectOutcome.SlugTaken;
+
+        await BackupAsync();
+        return CreateProjectOutcome.Created;
     }
 
     /// <summary>
@@ -206,9 +240,10 @@ public sealed partial class ControlDatabase
         command.Parameters.Add(new DuckDBParameter("url", repository.Url));
         command.Parameters.Add(new DuckDBParameter("credential",
             (object?)repository.ProtectedCredential ?? DBNull.Value));
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-            ? (AddRepositoryOutcome.Created, repository)
-            : (AddRepositoryOutcome.SlugTaken, null);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1) return (AddRepositoryOutcome.SlugTaken, null);
+
+        await BackupAsync();
+        return (AddRepositoryOutcome.Created, repository);
     }
 
     public async Task<IReadOnlyList<ProjectRepository>> ListRepositoriesAsync(
@@ -244,7 +279,10 @@ public sealed partial class ControlDatabase
         command.CommandText = "DELETE FROM projects WHERE slug = $slug";
         int deleted = await command.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return deleted == 1;
+        if (deleted != 1) return false;
+
+        await BackupAsync();
+        return true;
     }
 
     /// <summary>Forgets one repository of a project. False when the project or the repository is unknown.</summary>
@@ -256,7 +294,57 @@ public sealed partial class ControlDatabase
         command.CommandText = "DELETE FROM repositories WHERE project_slug = $project AND slug = $slug";
         command.Parameters.Add(new DuckDBParameter("project", projectSlug));
         command.Parameters.Add(new DuckDBParameter("slug", slug));
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1) return false;
+
+        await BackupAsync();
+        return true;
+    }
+
+    /// <summary>
+    ///     Backs the control database up to the durable store, as a file and not as Parquet (ADR-0004).
+    ///     Called after every write rather than on a schedule: operator actions are rare, and a schedule
+    ///     on a server that scales to zero has nothing running to fire it (#9).
+    ///     The snapshot is taken by the engine rather than by copying the live file, because a copy
+    ///     started while another connection is committing would store a torn database — and what makes
+    ///     this worth doing at all is that it is the only copy of the credentials.
+    ///     Not the caller's cancellation token: the write it follows is already committed, and a browser
+    ///     closing a tab must not be what leaves the store holding the state before it.
+    /// </summary>
+    private async Task BackupAsync()
+    {
+        await _backupGate.WaitAsync(CancellationToken.None);
+        try
+        {
+            string snapshot = _path + ".backup";
+            Delete(snapshot);
+            using (var connection = await OpenAsync(CancellationToken.None))
+            {
+                using var command = connection.CreateCommand();
+                // "control" is the catalog DuckDB names after the file stem, which this class fixes as
+                // control.duckdb; the snapshot is detached so that it is checkpointed and closed before
+                // it is read off disk.
+                command.CommandText = $"""
+                                       ATTACH '{snapshot.Replace("'", "''")}' AS backup;
+                                       COPY FROM DATABASE control TO backup;
+                                       DETACH backup;
+                                       """;
+                await command.ExecuteNonQueryAsync(CancellationToken.None);
+            }
+
+            await _store.StoreAsync(BackupName, snapshot, CancellationToken.None);
+            Delete(snapshot);
+        }
+        finally
+        {
+            _backupGate.Release();
+        }
+    }
+
+    /// <summary>A database file and the write-ahead log beside it, which outlives it after an unclean stop.</summary>
+    private static void Delete(string path)
+    {
+        File.Delete(path);
+        File.Delete(path + ".wal");
     }
 
     private async Task<DuckDBConnection> OpenAsync(CancellationToken cancellationToken)
