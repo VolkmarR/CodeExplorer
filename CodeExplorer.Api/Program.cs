@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using CodeExplorer.Api;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,19 +15,18 @@ var app = builder.Build();
 // configuration means an unauthenticated server).
 var api = app.MapGroup("/api");
 api.MapPost("/projects", async (CreateProjectRequest request, ControlDatabase control, CancellationToken ct) =>
-    request switch
+    await control.CreateAsync(request.Slug, request.Name, ct) switch
     {
-        _ when !ControlDatabase.IsValidSlug(request.Slug) =>
-            Results.BadRequest(new { error = "Slug must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit." }),
-        _ when string.IsNullOrWhiteSpace(request.Name) =>
-            Results.BadRequest(new { error = "Name is required." }),
-        _ when await control.TryCreateAsync(new Project(request.Slug, request.Name.Trim()), ct) =>
-            Results.Created($"/projects/{request.Slug}/mcp", new Project(request.Slug, request.Name.Trim())),
+        CreateProjectOutcome.Created => Results.Created($"/projects/{request.Slug}/mcp", new Project(request.Slug, request.Name!.Trim())),
+        CreateProjectOutcome.InvalidSlug => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
+        CreateProjectOutcome.MissingName => Results.BadRequest(new { error = "Name is required." }),
         _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." }),
     });
 
 // One MCP endpoint per project (ADR-0002). The filter binds the project from the route before the
 // SDK sees the request, so every tool in the session answers for that project and nothing else.
+// Once authentication arrives, the unknown-slug 404 moves to OnResourceMetadataRequest (ADR-0004)
+// so protected-resource metadata is path-scoped as well; until then this filter stands in.
 var projects = app.MapGroup("/projects/{slug}");
 projects.AddEndpointFilter(async (context, next) =>
 {
@@ -45,7 +45,7 @@ projects.MapMcp("/mcp");
 
 app.Run();
 
-internal sealed record CreateProjectRequest(string Slug, string Name);
+internal sealed record CreateProjectRequest(string Slug, string? Name);
 
 /// <summary>Marker so the tests can host the app through <c>WebApplicationFactory</c>.</summary>
 public partial class Program;
@@ -59,9 +59,16 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor)
     [Description("Reports which project this MCP endpoint is bound to. The project comes from the URL you connected to, not from an argument; use it to confirm the server before searching.")]
     public string WhichProject()
     {
-        // The Streamable HTTP transport runs each handler inside the HTTP request that carried it,
-        // so the project the route filter resolved is still on the current context.
-        var project = (Project)httpContextAccessor.HttpContext!.Items[ProjectItemKey]!;
+        var project = BoundProject();
         return $"This endpoint serves the project '{project.Name}' (slug: {project.Slug}).";
     }
+
+    /// <summary>
+    /// The Streamable HTTP transport runs each handler inside the HTTP request that carried it, so
+    /// the project the route filter resolved is on the current context. If the SDK ever dispatches
+    /// off-request this fails loudly rather than binding to nothing.
+    /// </summary>
+    private Project BoundProject() =>
+        httpContextAccessor.HttpContext?.Items[ProjectItemKey] as Project
+        ?? throw new McpException("No project is bound to this request. Connect through /projects/{slug}/mcp.");
 }
