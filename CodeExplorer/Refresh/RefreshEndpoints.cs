@@ -1,10 +1,10 @@
 namespace CodeExplorer;
 
 /// <summary>
-///     The two endpoints a refresh is driven by: one that asks for it and one that reports on it.
-///     They are separate because the work outlives the request — a Container Apps Job on a cron fires
-///     the first and never looks again, while the web UI polls the second (ADR-0004). Authentication
-///     is off until the ticket that adds it, so nothing here checks a caller yet.
+///     The two endpoints a refresh is driven by, and the warm-up beside them (ADR-0005). The first two
+///     are separate because the work outlives the request — a Container Apps Job on a cron fires the
+///     one and never looks again, while the web UI polls the other (ADR-0004). Authentication is off
+///     until the ticket that adds it, so nothing here checks a caller yet.
 /// </summary>
 internal static class RefreshEndpoints
 {
@@ -34,5 +34,11 @@ internal static class RefreshEndpoints
                     : await control.FindAsync(project, ct) is null
                         ? Results.NotFound(new { error = $"No project with slug '{project}'." })
                         : Results.Ok(refreshes.Status(project)));
+
+        // POST because it does work rather than reports it, and no UI calls it: an external cron fires
+        // this before working hours so the first agent of the morning does not wait for a restore (#9).
+        // It answers when the last project is warm, which is what a cron waits on; a refresh cannot be
+        // answered that way and is the endpoint above with a status to poll.
+        api.MapPost("/warmup", (WarmUp warmUp, CancellationToken ct) => warmUp.RunAsync(ct));
     }
 }

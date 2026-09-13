@@ -116,6 +116,7 @@ public sealed class TelemetryTests
     [Theory]
     [InlineData("GrepSearch.cs", $"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(")]
     [InlineData("IndexBuilder.cs", $"{nameof(Telemetry)}.{nameof(Telemetry.IndexBuild)}(")]
+    [InlineData("DurableIndex.cs", $"{nameof(Telemetry)}.{nameof(Telemetry.DurableCopy)}(")]
     public void Only_one_file_starts_each_recording(string file, string call) =>
         Assert.Equal([file], SourceFilesMentioning(call));
 

@@ -68,7 +68,7 @@ public sealed class ShadowIndex(DuckDBConnection connection, string catalog, str
 public sealed class ProjectIndexes : IDisposable
 {
     /// <summary>
-    ///     Bumped when the tables below change shape, so a Parquet export from an older build is rebuilt
+    ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
     public const int SchemaVersion = 2;
@@ -135,17 +135,28 @@ public sealed class ProjectIndexes : IDisposable
     private readonly HashSet<string> _attached = [];
     private readonly string _connectionString;
 
+    private readonly DurableIndex _durable;
+
     private readonly string _directory;
     private readonly TimeSpan _drainTimeout;
     private readonly ILogger<ProjectIndexes> _logger;
+
+    // One gate per project, like the swap gates and kept for the same reason. It is what makes "one
+    // writer at a time" a guarantee of this class rather than of its callers: a swap, a delete and a
+    // restore all replace the same file, and a restore does not hold the server's single rebuild slot
+    // the way a refresh does. Per project and not one shared gate, because a wake that restores a
+    // large index must not hold up a swap of a small one.
+    private readonly Dictionary<string, SemaphoreSlim> _writerGates = [];
+    private readonly Lock _writerGatesSync = new();
 
     // One gate per project, kept for the life of the process: the count is bounded by the control
     // database, and a gate holds nothing but a reader count.
     private readonly Dictionary<string, SwapGate> _swapGates = [];
     private readonly Lock _swapGatesSync = new();
 
-    public ProjectIndexes(IConfiguration configuration, ILogger<ProjectIndexes> logger)
+    public ProjectIndexes(IConfiguration configuration, DurableIndex durable, ILogger<ProjectIndexes> logger)
     {
+        _durable = durable;
         _logger = logger;
         _directory = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "indexes");
         Directory.CreateDirectory(_directory);
@@ -202,6 +213,26 @@ public sealed class ProjectIndexes : IDisposable
     /// </summary>
     public async Task<IndexLease?> OpenAsync(string slug, CancellationToken cancellationToken)
     {
+        // Lazily, and here rather than at startup: a replica that scaled to zero has an empty disk, and
+        // an off-hours wake should cost the restore of the one project being connected to rather than
+        // everyone's (#9). Projects attach on first connection for the same reason, which is what the
+        // rest of this method has always done.
+        if (!HasIndex(slug)) await RestoreAsync(slug, cancellationToken);
+
+        return await AttachAndLeaseAsync(slug, cancellationToken);
+    }
+
+    /// <summary>
+    ///     A lease on a project that is already on disk, and null when it is not — where
+    ///     <see cref="OpenAsync" /> would restore it from the durable copy first. It is what a read
+    ///     about a project rather than of it uses: the operator's project list touches every project at
+    ///     once, and restoring all of them is the cost lazy attach exists to avoid.
+    /// </summary>
+    public Task<IndexLease?> PeekAsync(string slug, CancellationToken cancellationToken) =>
+        AttachAndLeaseAsync(slug, cancellationToken);
+
+    private async Task<IndexLease?> AttachAndLeaseAsync(string slug, CancellationToken cancellationToken)
+    {
         var gate = GateFor(slug);
         // Taken before the file is looked for: during the moment of a swap there is no file to find,
         // and a caller arriving then should read the new index rather than be told there is none.
@@ -231,6 +262,76 @@ public sealed class ProjectIndexes : IDisposable
         {
             gate.Leave();
             throw;
+        }
+    }
+
+    /// <summary>
+    ///     Rebuilds a project's file from its durable copy, and answers whether there was one. The
+    ///     Parquet is loaded into a file of its own and that file is moved into place, so a restore
+    ///     racing a first refresh cannot have the swap replace the file it is still writing — the move
+    ///     goes through the same drain a swap does, and is the same one-file overwrite.
+    ///     One project at a time and only that project: the gate is per project, so a wake that restores
+    ///     a large index does not hold up a connection to a small one.
+    /// </summary>
+    private async Task<bool> RestoreAsync(string slug, CancellationToken cancellationToken)
+    {
+        var gate = WriterGateFor(slug);
+        // Held from here to the end, not just around the file work: a swap that started while this was
+        // downloading would otherwise install the newer index and have the move below overwrite it with
+        // the older durable copy. Holding the writer gate across the whole restore is what makes the
+        // recheck below decisive rather than a guess about what happens next.
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            // Another caller may have restored it, or a refresh may have swapped one in, while this one
+            // waited. Either way there is now an index and nothing to restore.
+            if (HasIndex(slug)) return true;
+
+            // Null is a project that has never been indexed, or a copy an older schema wrote. Both
+            // mean "rebuild from git", and both have recorded themselves on the way out.
+            using var copy = await _durable.FetchAsync(slug, cancellationToken);
+            if (copy is null) return false;
+
+            string path = RestorePath(slug);
+            string catalog = RestoreCatalog(slug);
+            using (var connection = await ConnectAsync(cancellationToken))
+            {
+                await UnderAttachGateAsync(async () =>
+                {
+                    // Whatever an abandoned restore left is worthless, for the reason an abandoned
+                    // shadow is: the file is written from the Parquet from scratch every time.
+                    await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+                    _attached.Remove(catalog);
+                    DeleteIndexFile(path);
+                    await ExecuteAsync(connection, $"ATTACH {Literal(path)} AS {Quote(catalog)}", cancellationToken);
+                    _attached.Add(catalog);
+                }, cancellationToken);
+
+                await ExecuteAsync(connection, $"USE {Quote(catalog)}", cancellationToken);
+                await ExecuteAsync(connection, Schema, cancellationToken);
+                await _durable.LoadAsync(connection, copy, FtsAvailable, cancellationToken);
+            }
+
+            // ReplaceFileAsync and not WithoutReadersAsync: the writer gate is already held, and taking
+            // it twice would deadlock on a semaphore that is deliberately not reentrant.
+            await ReplaceFileAsync(slug, "the restored index was put in place anyway", async connection =>
+            {
+                await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+                _attached.Remove(catalog);
+                await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
+                _attached.Remove(slug);
+                File.Move(path, FilePath(slug), true);
+                File.Delete(FilePath(slug) + ".wal");
+                File.Delete(path + ".wal");
+            }, cancellationToken);
+
+            if (_logger.IsEnabled(LogLevel.Information))
+                _logger.LogInformation("Restored project {Project} from its durable copy", slug);
+            return true;
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 
@@ -347,8 +448,9 @@ public sealed class ProjectIndexes : IDisposable
     ///     project that has no index is not an error, so a missing file is not one. Waits for in-flight
     ///     queries the same way a swap does, so a delete cannot pull the file out from under a search.
     /// </summary>
-    public Task DiscardAsync(string slug, CancellationToken cancellationToken) =>
-        WithoutReadersAsync(slug,
+    public async Task DiscardAsync(string slug, CancellationToken cancellationToken)
+    {
+        await WithoutReadersAsync(slug,
             "the project was deleted anyway",
             async connection =>
             {
@@ -356,6 +458,12 @@ public sealed class ProjectIndexes : IDisposable
                 _attached.Remove(slug);
                 DeleteIndexFile(FilePath(slug));
             }, cancellationToken);
+
+        // The durable copy goes with it. Left behind, it would restore a deleted project's files the
+        // first time someone connected to a project that reused the slug — the one case where the
+        // durable copy outliving the disk is wrong.
+        await _durable.RemoveAsync(slug, cancellationToken);
+    }
 
     /// <summary>
     ///     Runs work that replaces or removes a project's file, with as few readers holding it as the
@@ -373,6 +481,26 @@ public sealed class ProjectIndexes : IDisposable
     /// <param name="work">Given a connection of its own, run with the gate shut.</param>
     /// <param name="cancellationToken">Cancels the drain wait and the connection.</param>
     private async Task WithoutReadersAsync(string slug, string timedOut,
+        Func<DuckDBConnection, Task> work, CancellationToken cancellationToken)
+    {
+        await WriterGateFor(slug).WaitAsync(cancellationToken);
+        try
+        {
+            await ReplaceFileAsync(slug, timedOut, work, cancellationToken);
+        }
+        finally
+        {
+            WriterGateFor(slug).Release();
+        }
+    }
+
+    /// <summary>
+    ///     The drain, the shut gate and the file work, with the project's writer gate assumed to be held
+    ///     already. Separate from <see cref="WithoutReadersAsync" /> for the one caller that has to hold
+    ///     that gate across more than the file work: a restore holds it from the download onwards, so
+    ///     that nothing swaps a newer index in underneath the older one it is about to move into place.
+    /// </summary>
+    private async Task ReplaceFileAsync(string slug, string timedOut,
         Func<DuckDBConnection, Task> work, CancellationToken cancellationToken)
     {
         var gate = GateFor(slug);
@@ -499,6 +627,21 @@ public sealed class ProjectIndexes : IDisposable
     }
 
     private string ShadowPath(string slug) => Path.Combine(_directory, slug + ".shadow.duckdb");
+
+    private string RestorePath(string slug) => Path.Combine(_directory, slug + ".restore.duckdb");
+
+    /// <summary>The catalog a restore fills, kept apart from the live one the way a shadow's is.</summary>
+    private static string RestoreCatalog(string slug) => slug + "$restore";
+
+    /// <summary>The gate that lets one writer of a project run at a time, created on first use.</summary>
+    private SemaphoreSlim WriterGateFor(string slug)
+    {
+        lock (_writerGatesSync)
+        {
+            if (!_writerGates.TryGetValue(slug, out var gate)) _writerGates[slug] = gate = new SemaphoreSlim(1, 1);
+            return gate;
+        }
+    }
 
     /// <summary>
     ///     The catalog the shadow of a project is attached under. A slug is lowercase letters, digits

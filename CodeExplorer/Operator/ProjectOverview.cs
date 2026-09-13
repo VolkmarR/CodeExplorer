@@ -59,7 +59,10 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
         foreach (var project in projects)
         {
             var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
-            var (status, _) = await ReadIndexAsync(project.Slug, cancellationToken);
+            // Peeked, not opened: the list touches every project, and restoring every durable copy to
+            // draw one page is exactly what lazy attach exists to avoid (#9). A project whose file the
+            // last shutdown wiped reads as not indexed here until someone opens it.
+            var (status, _) = await ReadIndexAsync(project.Slug, false, cancellationToken);
             summaries.Add(new ProjectSummary(project.Slug, project.Name, project.SingleRepository, repositories.Count,
                 status));
         }
@@ -73,7 +76,9 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
         if (await control.FindAsync(slug, cancellationToken) is not { } project) return null;
 
         var configured = await control.ListRepositoriesAsync(slug, cancellationToken);
-        var (status, indexed) = await ReadIndexAsync(slug, cancellationToken);
+        // One project's page restores that one project, which is the whole of what lazy attach asks:
+        // a deliberate visit to a project pays for it, and the list above does not pay for all of them.
+        var (status, indexed) = await ReadIndexAsync(slug, true, cancellationToken);
         // Driven by the configured repositories, not the indexed ones: a repository removed since the
         // last build is gone from the page immediately, even though its files are still searchable.
         var repositories = configured
@@ -110,10 +115,18 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
         return true;
     }
 
+    /// <param name="slug">The project to read.</param>
+    /// <param name="restore">
+    ///     Whether a project whose file is absent is restored from its durable copy first. True for one
+    ///     project's own page, false for a read that walks every project (#9).
+    /// </param>
+    /// <param name="cancellationToken">Threaded through the restore and the queries.</param>
     private async Task<(ProjectIndexStatus Status, Dictionary<string, IndexedRepository> Indexed)> ReadIndexAsync(
-        string slug, CancellationToken cancellationToken)
+        string slug, bool restore, CancellationToken cancellationToken)
     {
-        using var index = await FileQueries.OpenAsync(indexes, slug, cancellationToken);
+        using var index = restore
+            ? await FileQueries.OpenAsync(indexes, slug, cancellationToken)
+            : await FileQueries.PeekAsync(indexes, slug, cancellationToken);
         if (index is null) return (ProjectIndexStatus.None, []);
 
         // A file left behind by an interrupted build has no index_info row. It reads as not built,
