@@ -74,7 +74,7 @@ and a ticket that breaks that has a defect.
 
 ## Web UI
 
-- **React 19.3, Vite 8.3, TypeScript 7.0, pnpm**, built into `CodeExplorer.Api/wwwroot`.
+- **React 19.3, Vite 8.3, TypeScript 7.0, pnpm**, built into `CodeExplorer/wwwroot`.
 - **TanStack Router 1.170** (`@tanstack/react-router` + `@tanstack/router-plugin`): file-based
   routes, typed search params via `validateSearch`. Shareable state lives in the URL through the
   router's search params; there is no state library.

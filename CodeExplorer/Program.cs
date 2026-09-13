@@ -1,5 +1,5 @@
 using System.ComponentModel;
-using CodeExplorer.Api;
+using CodeExplorer;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
