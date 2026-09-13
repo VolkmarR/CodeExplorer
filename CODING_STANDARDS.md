@@ -54,8 +54,12 @@ Two kinds of failure, two mechanisms. Never mix them.
 
 ## Storage
 
-- Every connection runs `USE <project slug>` before querying. Unqualified `match_bm25` resolves
-  against the current database only.
+- Every connection runs `USE <project slug>` before querying, every time it is checked out. Never
+  cache a connection still bound to a project: `DETACH` succeeds regardless of who is using the
+  database, and the next statement on that connection fails with `Binder Error: Catalog does not
+  exist!`.
+- Qualify nothing against `fts_main_lines`. `match_bm25` resolves its internal tables unqualified,
+  so it works only against the current database (duckdb/duckdb#13523).
 - No transaction writes to two projects. DuckDB forbids it and nothing here needs it.
 - A refresh builds a shadow index and swaps. Never mutate a live index in place.
 - Annotate non-obvious SQL inline — why a join is skipped, why a value is safe to inline, what a
