@@ -146,7 +146,7 @@ public sealed partial class ControlDatabase
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var projects = new List<Project>();
         while (await reader.ReadAsync(cancellationToken))
-            projects.Add(new Project(reader.GetString(0), reader.GetString(1), reader.GetBoolean(2)));
+            projects.Add(new Project(reader.Text("slug"), reader.Text("name"), reader.Flag("single_repository")));
         return projects;
     }
 
@@ -158,7 +158,7 @@ public sealed partial class ControlDatabase
         command.Parameters.Add(new DuckDBParameter("slug", slug));
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? new Project(slug, reader.GetString(0), reader.GetBoolean(1))
+            ? new Project(slug, reader.Text("name"), reader.Flag("single_repository"))
             : null;
     }
 
@@ -222,8 +222,8 @@ public sealed partial class ControlDatabase
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var repositories = new List<ProjectRepository>();
         while (await reader.ReadAsync(cancellationToken))
-            repositories.Add(new ProjectRepository(projectSlug, reader.GetString(0), reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2)));
+            repositories.Add(new ProjectRepository(projectSlug, reader.Text("slug"), reader.Text("url"),
+                reader.TextOrNull("credential")));
         return repositories;
     }
 
