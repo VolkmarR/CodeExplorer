@@ -13,8 +13,10 @@ namespace CodeExplorer;
 public sealed record IndexSummary(int Repositories, long Files, long Lines, IReadOnlyList<string> Skipped);
 
 /// <summary>
-///     Reads every repository of a project from its bare clone into the project's index file. Files
-///     come from the HEAD tree and content from blobs (ADR-0003); there is no working copy to walk.
+///     Refreshes a project (CONTEXT.md): brings every local copy up to date, reads them into a shadow
+///     index beside the live one, and swaps it in. Files come from the HEAD tree and content from
+///     blobs (ADR-0003); there is no working copy to walk. The live index answers every query
+///     throughout, so a project is never searchable in a half-built state.
 /// </summary>
 public sealed class IndexBuilder(
     IConfiguration configuration,
@@ -32,22 +34,41 @@ public sealed class IndexBuilder(
     /// </summary>
     private const long DefaultMaxFileBytes = 4 * 1024 * 1024;
 
+    /// <summary>
+    ///     What <see cref="RefreshAsync" /> reports while it reads the repositories, and while it puts
+    ///     the result in place. Constants rather than literals at the call site: the status endpoint
+    ///     hands this prose to an operator, and a test waiting for a phase must not be waiting on a
+    ///     wording that a rewrite of the sentence quietly breaks.
+    /// </summary>
+    public const string IngestPhase = "Reading the repositories into the shadow index";
+
+    public const string SwapPhase = "Swapping the new index in";
+
     private readonly long _maxFileBytes = configuration.GetValue("Index:MaxFileBytes", DefaultMaxFileBytes);
 
-    public async Task<IndexSummary> BuildAsync(Project project, CancellationToken cancellationToken)
+    /// <param name="project">The project to rebuild, as the control database holds it.</param>
+    /// <param name="report">
+    ///     Called with the phase the refresh has reached, for the status endpoint the web UI and an
+    ///     external cron poll. Synchronous, so a status read straight after a phase change sees it.
+    /// </param>
+    /// <param name="cancellationToken">Threaded through the fetch, the ingest and the swap.</param>
+    public async Task<IndexSummary> RefreshAsync(Project project, Action<string> report,
+        CancellationToken cancellationToken)
     {
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         var skipped = new List<string>();
         var opened = new List<(ProjectRepository Repository, Repository Clone)>();
         try
         {
-            // Clone before touching the index, so a clone failure leaves the previous index serving.
+            // Fetch before touching the index, so a fetch failure leaves the previous index serving.
+            int fetched = 0;
             foreach (var repository in repositories)
             {
+                report($"Fetching '{repository.Slug}' ({++fetched} of {repositories.Count})");
                 Repository? clone = null;
                 try
                 {
-                    clone = await clones.OpenAsync(repository, cancellationToken);
+                    clone = await clones.OpenRefreshedAsync(repository, cancellationToken);
                     string? reason = !GitClones.HasCommits(clone)
                         ? $"Repository '{repository.Slug}' has no commits yet."
                         : clones.DeclaresLfs(clone)
@@ -76,27 +97,47 @@ public sealed class IndexBuilder(
                 }
             }
 
+            // Every repository failed, so the shadow would be an empty index and the swap would throw
+            // the project's whole searchable history away over what is usually a transient network
+            // fault. Leaving the old index serving, and saying so, is the answer an operator can act on.
+            // InvalidOperationException and not McpException: no MCP tool is on this path, and the
+            // refresh reports a failure through its status, which is where this message ends up.
+            if (repositories.Count > 0 && opened.Count == 0)
+                throw new InvalidOperationException(
+                    $"No repository of project '{project.Slug}' could be read, so its index was left as it was: "
+                    + string.Join(" ", skipped));
+
             long files, lines;
             bool fts;
             try
             {
-                using var connection = await indexes.CreateAsync(project.Slug, cancellationToken);
-                // The tree walk and the appender are synchronous libgit2 and DuckDB calls; a worker thread
-                // keeps them off the request thread, and the token is checked between files.
-                (files, lines) = await Task.Run(() => Ingest(connection, project.Slug, project.SingleRepository, opened, cancellationToken),
-                    cancellationToken);
-                fts = await indexes.CompleteBuildAsync(connection, project.SingleRepository, cancellationToken);
+                report(IngestPhase);
+                // Scoped so the shadow connection is closed before the swap: the file cannot be moved
+                // over the live one while the instance still holds it open.
+                using (var shadow = await indexes.CreateShadowAsync(project.Slug, cancellationToken))
+                {
+                    // The tree walk and the appender are synchronous libgit2 and DuckDB calls; a worker thread
+                    // keeps them off the request thread, and the token is checked between files.
+                    (files, lines) = await Task.Run(
+                        () => Ingest(shadow.Connection, shadow.Catalog, project.SingleRepository, opened,
+                            cancellationToken), cancellationToken);
+                    fts = await indexes.CompleteBuildAsync(shadow.Connection, project.SingleRepository,
+                        cancellationToken);
+                }
+
+                report(SwapPhase);
+                await indexes.SwapShadowAsync(project.Slug, cancellationToken);
             }
             catch
             {
-                // A half-written file must not be mistaken for an index; the caller sees the original error.
-                await indexes.DiscardAsync(project.Slug, CancellationToken.None);
+                // The live index is untouched and still serving; only the half-written shadow goes.
+                await indexes.DiscardShadowAsync(project.Slug, CancellationToken.None);
                 throw;
             }
 
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation(
-                    "Indexed project {Project}: {Repositories} repositories, {Files} files, {Lines} lines, full-text {Fts}",
+                    "Refreshed project {Project}: {Repositories} repositories, {Files} files, {Lines} lines, full-text {Fts}",
                     project.Slug, opened.Count, files, lines, fts);
             return new IndexSummary(opened.Count, files, lines, skipped);
         }
@@ -107,16 +148,17 @@ public sealed class IndexBuilder(
     }
 
     private (long Files, long Lines) Ingest(
-        DuckDBConnection connection, string slug, bool singleRepository,
+        DuckDBConnection connection, string catalog, bool singleRepository,
         IReadOnlyList<(ProjectRepository Repository, Repository Clone)> repositories,
         CancellationToken cancellationToken)
     {
         long fileId = 0, lineId = 0;
         // Appenders target the attached catalog explicitly; after USE they would resolve there too, but
-        // naming it keeps the write independent of connection state.
-        using var files = connection.CreateAppender(slug, "main", "files");
-        using var lines = connection.CreateAppender(slug, "main", "lines");
-        using var repos = connection.CreateAppender(slug, "main", "repositories");
+        // naming it keeps the write independent of connection state. It is the shadow's catalog, which
+        // is not the project slug — writing to the live one is exactly the mistake to make impossible.
+        using var files = connection.CreateAppender(catalog, "main", "files");
+        using var lines = connection.CreateAppender(catalog, "main", "lines");
+        using var repos = connection.CreateAppender(catalog, "main", "repositories");
 
         int repoId = 0;
         foreach (var (repository, clone) in repositories)

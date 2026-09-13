@@ -217,7 +217,7 @@ public sealed class GrepTests : IDisposable
         string text = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "needle" });
 
         Assert.Contains("no index to read from", text);
-        Assert.Contains("POST /api/projects/alpha/index", text);
+        Assert.Contains("POST /api/projects/alpha/refresh", text);
     }
 
     private async Task<McpClient> StartAsync(SearchEngine engine)

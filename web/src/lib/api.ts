@@ -43,6 +43,23 @@ export interface IndexSummary {
   skipped: string[]
 }
 
+/** The states the server names, serialised as words rather than ordinals so this union is stable. */
+export type RefreshState = 'NeverRun' | 'Queued' | 'Running' | 'Succeeded' | 'Failed'
+
+/**
+ * Where a refresh stands. It is in-memory on the server, so a replica that scaled to zero comes back
+ * saying `NeverRun` even for a project with an index; when that index was built is on the project.
+ */
+export interface RefreshStatus {
+  project: string
+  state: RefreshState
+  phase: string
+  startedAt: string | null
+  finishedAt: string | null
+  summary: IndexSummary | null
+  error: string | null
+}
+
 export interface GrepLine {
   lineNumber: number
   text: string
@@ -160,8 +177,9 @@ const http = ky.create({
   // No retries: every failure this API produces is a decision it made about the request, not a
   // transient one, and repeating a rejected pattern only delays the explanation.
   retry: 0,
-  // A first index build clones every repository of the project, which is minutes on a large one.
-  timeout: 300_000,
+  // No request here waits on a rebuild any more — a refresh answers as soon as it is queued and the
+  // progress is polled — but a search over a large project is still seconds rather than milliseconds.
+  timeout: 30_000,
 })
 
 export const api = {
@@ -186,7 +204,9 @@ export const api = {
   file: (project: string, path: string) =>
     http.get(`projects/${project}/file`, { searchParams: { path } }).json<FileContent>(),
 
-  index: (project: string) => http.post(`projects/${project}/index`).json<IndexSummary>(),
+  refresh: (project: string) => http.post(`projects/${project}/refresh`).json<RefreshStatus>(),
+
+  refreshStatus: (project: string) => http.get(`projects/${project}/refresh`).json<RefreshStatus>(),
 
   project: (slug: string) => http.get(`projects/${slug}`).json<ProjectDetail>(),
 

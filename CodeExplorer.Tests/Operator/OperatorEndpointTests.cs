@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -108,11 +107,9 @@ public sealed class OperatorEndpointTests : IDisposable
                 { ["one"] = new() { ["src/B.cs"] = "class B;\n" } });
         // A build writes index_info last, so removing the row is exactly the file a process killed
         // mid-build leaves behind: tables present, nothing saying the build finished.
-        var indexes = _host.Factory.Services.GetRequiredService<ProjectIndexes>();
-        using (var connection = await indexes.OpenAsync("broken", Ct))
+        using (var lease = await _host.OpenIndexAsync("broken"))
         {
-            Assert.NotNull(connection);
-            using var command = connection.CreateCommand();
+            using var command = lease.Connection.CreateCommand();
             command.CommandText = "DELETE FROM index_info";
             await command.ExecuteNonQueryAsync(Ct);
         }

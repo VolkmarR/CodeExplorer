@@ -24,8 +24,8 @@ internal static class ToolReply
 
     /// <summary>The one explanation every index-backed tool gives when there is nothing to read from.</summary>
     public static string NoIndex(string slug) =>
-        $"Project '{slug}' has no index to read from right now: it was never built, or a rebuild is in progress. "
-        + $"Ask the operator to build it with POST /api/projects/{slug}/index, or retry shortly.";
+        $"Project '{slug}' has no index to read from right now: it was never built, or a refresh is still building the first one. "
+        + $"Ask the operator to refresh it with POST /api/projects/{slug}/refresh, or retry shortly.";
 
     /// <summary>Trims a reply to the ceiling at a line boundary, saying how much was cut and how to get the rest.</summary>
     public static string Cap(string text, string advice)

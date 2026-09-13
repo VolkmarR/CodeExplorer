@@ -75,7 +75,7 @@ internal sealed class ProjectTools(
                 $"  {repository.FileCount} {ToolReply.Plural(repository.FileCount, "file")}, {repository.LineCount} {ToolReply.Plural(repository.LineCount, "line")}, commit {repository.HeadCommit[..Math.Min(12, repository.HeadCommit.Length)]}, {repository.Url}\n");
         foreach (var repository in configured.Where(c => indexed.All(i => i.Slug != c.Slug)))
             text.Append(repository.Slug.PadRight(width)).Append(CultureInfo.InvariantCulture,
-                $"  not indexed yet: added after the last build. The operator includes it with POST /api/projects/{project.Slug}/index.\n");
+                $"  not indexed yet: added after the last refresh. The operator includes it with POST /api/projects/{project.Slug}/refresh.\n");
 
         return text.ToString();
     }
