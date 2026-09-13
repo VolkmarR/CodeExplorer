@@ -9,6 +9,7 @@ builder.Services.AddSingleton<ControlDatabase>();
 builder.Services.AddSingleton<GitClones>();
 builder.Services.AddSingleton<ProjectIndexes>();
 builder.Services.AddSingleton<IndexBuilder>();
+builder.Services.AddSingleton<ProjectRefresh>();
 builder.Services.AddSingleton<RefreshService>();
 builder.Services.AddSingleton<GrepSearch>();
 builder.Services.AddSingleton<ProjectOverview>();

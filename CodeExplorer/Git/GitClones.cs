@@ -43,23 +43,8 @@ public sealed class GitClones(
     ///     when the clone fails; the message names the repository and what to check and never carries
     ///     the credential, which only ever reaches libgit2 through <c>CredentialsProvider</c>.
     /// </summary>
-    public async Task<Repository> OpenAsync(ProjectRepository repository, CancellationToken cancellationToken)
-    {
-        string path = Path.Combine(_cloneRoot, repository.ProjectSlug, repository.Slug + ".git");
-        var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            if (!Repository.IsValid(path))
-                await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken);
-        }
-        finally
-        {
-            gate.Release();
-        }
-
-        return new Repository(path);
-    }
+    public Task<Repository> OpenAsync(ProjectRepository repository, CancellationToken cancellationToken) =>
+        OpenAsync(repository, false, cancellationToken);
 
     /// <summary>
     ///     Opens the repository with its local copy brought up to date: a shallow fetch when it is
@@ -67,7 +52,17 @@ public sealed class GitClones(
     ///     first half of a refresh (CONTEXT.md); without it a rebuild re-reads whatever was fetched
     ///     when the repository was first added, however long ago that was.
     /// </summary>
-    public async Task<Repository> OpenRefreshedAsync(ProjectRepository repository,
+    public Task<Repository> OpenRefreshedAsync(ProjectRepository repository,
+        CancellationToken cancellationToken) =>
+        OpenAsync(repository, true, cancellationToken);
+
+    /// <param name="repository">The repository to open, as the control database holds it.</param>
+    /// <param name="fetch">
+    ///     Whether an existing clone is brought up to date first. Only a refresh asks for it: a tool
+    ///     call reads what is already there, because an agent must not make the server talk to a remote.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the transfer, which is the long part.</param>
+    private async Task<Repository> OpenAsync(ProjectRepository repository, bool fetch,
         CancellationToken cancellationToken)
     {
         string path = Path.Combine(_cloneRoot, repository.ProjectSlug, repository.Slug + ".git");
@@ -75,9 +70,11 @@ public sealed class GitClones(
         await gate.WaitAsync(cancellationToken);
         try
         {
+            // Both branches are synchronous libgit2 over the network; a worker thread keeps them off
+            // the request thread. A clone is already up to date, so it is never followed by a fetch.
             if (!Repository.IsValid(path))
                 await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken);
-            else
+            else if (fetch)
                 await Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
         }
         finally

@@ -173,8 +173,12 @@ public sealed class ProjectIndexes : IDisposable
     public bool HasIndex(string slug) => File.Exists(FilePath(slug));
 
     /// <summary>Bytes the live index occupies, and zero when there is none: what a refresh has to find room for again.</summary>
-    public long LiveSizeBytes(string slug) =>
-        File.Exists(FilePath(slug)) ? new FileInfo(FilePath(slug)).Length : 0;
+    public long LiveSizeBytes(string slug)
+    {
+        // One FileInfo answers both questions; File.Exists followed by a second FileInfo stats twice.
+        var file = new FileInfo(FilePath(slug));
+        return file.Exists ? file.Length : 0;
+    }
 
     /// <summary>
     ///     Free bytes on the volume holding the indexes. In the container that is the ephemeral disk
@@ -235,8 +239,7 @@ public sealed class ProjectIndexes : IDisposable
         try
         {
             string catalog = ShadowCatalog(slug);
-            await _attachGate.WaitAsync(cancellationToken);
-            try
+            await UnderAttachGateAsync(async () =>
             {
                 // Whatever a previous refresh left behind is worthless: the shadow is written from
                 // scratch every time, and an abandoned one is only a file in the way.
@@ -246,11 +249,7 @@ public sealed class ProjectIndexes : IDisposable
                 await ExecuteAsync(connection, $"ATTACH {Literal(ShadowPath(slug))} AS {Quote(catalog)}",
                     cancellationToken);
                 _attached.Add(catalog);
-            }
-            finally
-            {
-                _attachGate.Release();
-            }
+            }, cancellationToken);
 
             await ExecuteAsync(connection, $"USE {Quote(catalog)}", cancellationToken);
             await ExecuteAsync(connection, Schema, cancellationToken);
@@ -326,18 +325,15 @@ public sealed class ProjectIndexes : IDisposable
     public async Task DiscardShadowAsync(string slug, CancellationToken cancellationToken)
     {
         using var connection = await ConnectAsync(cancellationToken);
-        await _attachGate.WaitAsync(cancellationToken);
-        try
+        // No drain: nothing reads a shadow, so there is nobody to wait for. This is the one attach-gate
+        // caller that is not replacing what the readers are using.
+        await UnderAttachGateAsync(async () =>
         {
             string catalog = ShadowCatalog(slug);
             await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
             _attached.Remove(catalog);
             DeleteIndexFile(ShadowPath(slug));
-        }
-        finally
-        {
-            _attachGate.Release();
-        }
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -396,15 +392,7 @@ public sealed class ProjectIndexes : IDisposable
         try
         {
             using var connection = await ConnectAsync(cancellationToken);
-            await _attachGate.WaitAsync(cancellationToken);
-            try
-            {
-                await work(connection);
-            }
-            finally
-            {
-                _attachGate.Release();
-            }
+            await UnderAttachGateAsync(() => work(connection), cancellationToken);
         }
         finally
         {
@@ -414,6 +402,30 @@ public sealed class ProjectIndexes : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Runs work that attaches or detaches, with the instance-wide <c>ATTACH</c> state to itself.
+    ///     Every caller that touches <c>_attached</c> goes through here, so the one ordering rule this
+    ///     class has is written once.
+    /// </summary>
+    private async Task UnderAttachGateAsync(Func<Task> work, CancellationToken cancellationToken)
+    {
+        await _attachGate.WaitAsync(cancellationToken);
+        try
+        {
+            await work();
+        }
+        finally
+        {
+            _attachGate.Release();
+        }
+    }
+
+    /// <summary>
+    ///     The gate for a project, created on first use. Kept afterwards: the count is bounded by the
+    ///     control database, a gate holds nothing but a reader count, and dropping one while a reader
+    ///     waits on it would let the next caller past a hold that has not ended. A deleted project's
+    ///     gate is the cost of that, and it is a few bytes.
+    /// </summary>
     private SwapGate GateFor(string slug)
     {
         lock (_swapGatesSync)
@@ -423,22 +435,15 @@ public sealed class ProjectIndexes : IDisposable
         }
     }
 
-    private async Task AttachAsync(DuckDBConnection connection, string catalog, string path,
-        CancellationToken cancellationToken)
-    {
-        await _attachGate.WaitAsync(cancellationToken);
-        try
+    private Task AttachAsync(DuckDBConnection connection, string catalog, string path,
+        CancellationToken cancellationToken) =>
+        UnderAttachGateAsync(async () =>
         {
             if (_attached.Contains(catalog)) return;
             await ExecuteAsync(connection, $"ATTACH IF NOT EXISTS {Literal(path)} AS {Quote(catalog)}",
                 cancellationToken);
             _attached.Add(catalog);
-        }
-        finally
-        {
-            _attachGate.Release();
-        }
-    }
+        }, cancellationToken);
 
     private bool TryLoadFts(SearchEngine engine, ILogger logger)
     {
@@ -516,10 +521,13 @@ public sealed class ProjectIndexes : IDisposable
     private sealed class SwapGate
     {
         private readonly Lock _sync = new();
-        private TaskCompletionSource _drained = Settled();
-        private bool _exclusive;
+
+        // Null is the ordinary state of both: nobody is waiting to be told the readers have gone, and
+        // the gate is open. A source exists exactly while someone is waiting on what it reports, so
+        // "shut" and "someone wants the drain" need no flag beside them.
+        private TaskCompletionSource? _drained;
         private int _readers;
-        private TaskCompletionSource _reopened = Settled();
+        private TaskCompletionSource? _reopened;
 
         /// <summary>Waits out an exclusive hold in progress, then counts this caller as in flight.</summary>
         public async Task EnterAsync(CancellationToken cancellationToken)
@@ -529,7 +537,7 @@ public sealed class ProjectIndexes : IDisposable
                 Task reopened;
                 lock (_sync)
                 {
-                    if (!_exclusive)
+                    if (_reopened is null)
                     {
                         _readers++;
                         return;
@@ -546,7 +554,7 @@ public sealed class ProjectIndexes : IDisposable
         {
             lock (_sync)
                 if (--_readers == 0)
-                    _drained.TrySetResult();
+                    _drained?.TrySetResult();
         }
 
         /// <summary>
@@ -567,27 +575,16 @@ public sealed class ProjectIndexes : IDisposable
         /// <summary>Keeps new readers waiting. Held only for the file work, never for the drain.</summary>
         public void Shut()
         {
-            lock (_sync)
-            {
-                _exclusive = true;
-                _reopened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            }
+            lock (_sync) _reopened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
         public void Reopen()
         {
             lock (_sync)
             {
-                _exclusive = false;
-                _reopened.TrySetResult();
+                _reopened?.TrySetResult();
+                _reopened = null;
             }
-        }
-
-        private static TaskCompletionSource Settled()
-        {
-            var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            source.SetResult();
-            return source;
         }
     }
 }
