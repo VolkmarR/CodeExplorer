@@ -2,6 +2,11 @@
 
 A server that clones git repos and exposes the code to coding agents with a remote MCP server.
 
+## Coding standards
+
+`CODING_STANDARDS.md` holds the rules tooling cannot check — layout, testing, error shape,
+cancellation, telemetry and comments. Formatting and style are enforced by `.editorconfig`.
+
 ## Agent skills
 
 ### Issue tracker
