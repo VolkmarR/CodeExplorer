@@ -14,8 +14,9 @@ builder.Services.AddSingleton<ControlDatabase>();
 builder.Services.AddSingleton<GitClones>();
 builder.Services.AddSingleton<ProjectIndexes>();
 builder.Services.AddSingleton<IndexBuilder>();
+builder.Services.AddSingleton<GrepSearch>();
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddMcpServer().WithHttpTransport().WithTools<ProjectTools>();
+builder.Services.AddMcpServer().WithHttpTransport().WithTools<ProjectTools>().WithTools<SearchTools>();
 
 var app = builder.Build();
 
@@ -36,9 +37,9 @@ projects.AddEndpointFilter(async (context, next) =>
         .FindAsync(slug, context.HttpContext.RequestAborted);
     if (project is null)
         return Results.NotFound(new
-            { error = $"No project with slug '{slug}'. Create it with POST /api/projects first." });
+        { error = $"No project with slug '{slug}'. Create it with POST /api/projects first." });
 
-    context.HttpContext.Items[ProjectTools.ProjectItemKey] = project;
+    context.HttpContext.Items[BoundProject.ItemKey] = project;
     return await next(context);
 });
 projects.MapMcp("/mcp");
@@ -72,8 +73,6 @@ public partial class Program;
 [McpServerToolType]
 internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor, ControlDatabase control, GitClones clones)
 {
-    public const string ProjectItemKey = "CodeExplorer.Project";
-
     /// <summary>
     ///     Enough to show a whole mid-sized tree in one call while keeping a runaway `depth` on a large
     ///     monorepo from returning megabytes; the agent is told how to narrow down.
@@ -85,7 +84,7 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor, Con
         "Reports which project this MCP endpoint is bound to. The project comes from the URL you connected to, not from an argument; use it to confirm the server before searching.")]
     public string WhichProject()
     {
-        var project = BoundProject();
+        var project = BoundProject.Get(httpContextAccessor);
         return $"This endpoint serves the project '{project.Name}' (slug: {project.Slug}).";
     }
 
@@ -99,7 +98,7 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor, Con
         int depth = 1,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject();
+        var project = BoundProject.Get(httpContextAccessor);
         if (depth < 1)
             return "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on.";
 
@@ -177,13 +176,4 @@ internal sealed class ProjectTools(IHttpContextAccessor httpContextAccessor, Con
             text.Append(CultureInfo.InvariantCulture,
                 $"... {entries.Count - MaxEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
     }
-
-    /// <summary>
-    ///     The Streamable HTTP transport runs each handler inside the HTTP request that carried it, so
-    ///     the project the route filter resolved is on the current context. If the SDK ever dispatches
-    ///     off-request this fails loudly rather than binding to nothing.
-    /// </summary>
-    private Project BoundProject() =>
-        httpContextAccessor.HttpContext?.Items[ProjectItemKey] as Project
-        ?? throw new McpException("No project is bound to this request. Connect through /projects/{slug}/mcp.");
 }
