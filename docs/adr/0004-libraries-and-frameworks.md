@@ -127,15 +127,20 @@ below replaced that, and the reasoning for each is recorded here rather than in 
 
 ## The in-process warm-up, added on 2026-09-14
 
-Asked for after #9 shipped, and added as `WarmUpService`, a framework `BackgroundService` with a
-`PeriodicTimer` — no library, so the decision above still holds on its own terms. What changed is
-the claim that an in-process timer is useless here, which is true only under scale to zero and was
+Asked for after #9 shipped, and added as `WarmUpService`, a framework `BackgroundService` — no
+library, and no schedule, so the decision above still holds on its own terms. What changed is the
+claim that nothing in process can fire the warm-up, which is true under scale to zero and was
 written as though it were true always.
 
+- **It runs once, as the application starts.** The first draft also took an interval and a delay,
+  both reflex rather than reasoning. A start is the only moment a replica's disk is empty, and
+  nothing removes an index file underneath a running replica — deleting a project is the exception
+  and is meant to leave it cold, and a refresh replaces the file rather than removing it — so the
+  interval guarded against nothing. The delay only postponed work the operator asked for. What holds
+  the warm-up off the startup path is a `Task.Yield`, not a clock: the server begins listening while
+  the projects restore behind it.
 - **It is off unless `Refresh:WarmUpOnStart` is set**, and absent configuration therefore keeps the
-  behaviour #9 shipped. `Refresh:WarmUpDelaySeconds` (default 30) holds it back so that the request
-  which woke the container is answered before every other project starts restoring, and
-  `Refresh:WarmUpIntervalMinutes` (absent: once per start) repeats it.
+  behaviour #9 shipped.
 - **It cannot replace the Container Apps Job.** A hosted service runs only while the container does.
   Under scale to zero the call that has to happen before working hours is also the call that wakes
   the container, and nothing inside a stopped container can make it. The endpoint stays, and a cron
