@@ -89,15 +89,29 @@ public sealed class DurableStore
     {
         if (_container is null)
         {
-            string stored = Resolve(name);
-            Directory.CreateDirectory(Path.GetDirectoryName(stored)!);
-            // Copy and not move: the caller owns the local file and may still be writing siblings of it.
-            File.Copy(localPath, stored, true);
+            CopyOut(name, localPath);
             return;
         }
 
         await using var file = File.OpenRead(localPath);
         await _container.GetBlobClient(name).UploadAsync(file, true, cancellationToken);
+    }
+
+    /// <summary>
+    ///     The same, synchronously, for the same one caller <see cref="Fetch" /> exists for: a startup
+    ///     that migrated the control database has to leave the store holding the migrated shape, and it
+    ///     does that from a constructor.
+    /// </summary>
+    public void Store(string name, string localPath)
+    {
+        if (_container is null)
+        {
+            CopyOut(name, localPath);
+            return;
+        }
+
+        using var file = File.OpenRead(localPath);
+        _container.GetBlobClient(name).Upload(file, true);
     }
 
     /// <summary>
@@ -121,6 +135,14 @@ public sealed class DurableStore
                            cancellationToken))
             await _container.DeleteBlobIfExistsAsync(blob.Name, DeleteSnapshotsOption.IncludeSnapshots,
                 cancellationToken: cancellationToken);
+    }
+
+    private void CopyOut(string name, string localPath)
+    {
+        string stored = Resolve(name);
+        Directory.CreateDirectory(Path.GetDirectoryName(stored)!);
+        // Copy and not move: the caller owns the local file and may still be writing siblings of it.
+        File.Copy(localPath, stored, true);
     }
 
     private bool CopyIn(string name, string localPath)

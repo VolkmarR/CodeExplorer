@@ -104,6 +104,20 @@ public sealed partial class ControlDatabase : IDisposable
         using var connection = new DuckDBConnection(_connectionString);
         connection.Open();
         using var command = connection.CreateCommand();
+        // Asked before the statements below run, because afterwards there is no telling whether they
+        // did anything. A wake that migrates nothing must not upload the file again every time, and a
+        // wake that does migrate must not leave the store holding the shape the older build wrote —
+        // the next wake would restore that one and migrate it again, for as long as nobody happens to
+        // create a project. A database with no projects table at all is not a migration but a first
+        // run: it has nothing to lose, and its first operator write backs it up.
+        command.CommandText = """
+                              SELECT count(*) > 0
+                                  AND count(*) FILTER (WHERE column_name = 'single_repository') = 0
+                                  AS migrating
+                              FROM duckdb_columns() WHERE table_name = 'projects'
+                              """;
+        bool migrating = command.ExecuteScalar() is true;
+
         command.CommandText = """
                               CREATE TABLE IF NOT EXISTS projects (slug VARCHAR PRIMARY KEY, name VARCHAR NOT NULL);
                               -- Added after the table existed, so it arrives as an ALTER rather than in the
@@ -124,6 +138,16 @@ public sealed partial class ControlDatabase : IDisposable
                                   PRIMARY KEY (project_slug, slug));
                               """;
         command.ExecuteNonQuery();
+
+        if (!migrating) return;
+
+        // No gate: this is still the constructor, so nothing else can be holding this instance to back
+        // it up at the same time. The connection above is reused rather than opened again, which the
+        // snapshot allows because it is the source catalog it copies from.
+        Snapshot(command);
+        _store.Store(BackupName, SnapshotPath);
+        Delete(SnapshotPath);
+        logger.LogInformation("Migrated the control database and stored the migrated shape as its backup");
     }
 
     /// <summary>
@@ -302,8 +326,9 @@ public sealed partial class ControlDatabase : IDisposable
 
     /// <summary>
     ///     Backs the control database up to the durable store, as a file and not as Parquet (ADR-0004).
-    ///     Called after every write rather than on a schedule: operator actions are rare, and a schedule
-    ///     on a server that scales to zero has nothing running to fire it (#9).
+    ///     Called after every write, and from the constructor when a startup migrated the file, rather
+    ///     than on a schedule: operator actions are rare, and a schedule on a server that scales to zero
+    ///     has nothing running to fire it (#9).
     ///     The snapshot is taken by the engine rather than by copying the live file, because a copy
     ///     started while another connection is committing would store a torn database — and what makes
     ///     this worth doing at all is that it is the only copy of the credentials.
@@ -315,29 +340,44 @@ public sealed partial class ControlDatabase : IDisposable
         await _backupGate.WaitAsync(CancellationToken.None);
         try
         {
-            string snapshot = _path + ".backup";
-            Delete(snapshot);
             using (var connection = await OpenAsync(CancellationToken.None))
             {
                 using var command = connection.CreateCommand();
-                // "control" is the catalog DuckDB names after the file stem, which this class fixes as
-                // control.duckdb; the snapshot is detached so that it is checkpointed and closed before
-                // it is read off disk.
-                command.CommandText = $"""
-                                       ATTACH '{snapshot.Replace("'", "''")}' AS backup;
-                                       COPY FROM DATABASE control TO backup;
-                                       DETACH backup;
-                                       """;
-                await command.ExecuteNonQueryAsync(CancellationToken.None);
+                Snapshot(command);
             }
 
-            await _store.StoreAsync(BackupName, snapshot, CancellationToken.None);
-            Delete(snapshot);
+            await _store.StoreAsync(BackupName, SnapshotPath, CancellationToken.None);
+            Delete(SnapshotPath);
         }
         finally
         {
             _backupGate.Release();
         }
+    }
+
+    /// <summary>
+    ///     Where the copy is taken before it is stored: beside the database, on the volume ADR-0003
+    ///     budgets, and named so that the two are obviously the same thing.
+    /// </summary>
+    private string SnapshotPath => _path + ".backup";
+
+    /// <summary>
+    ///     Writes the consistent copy the store is given, on a command whose connection has the control
+    ///     database as its default catalog. Synchronous because <c>ExecuteNonQuery</c> is what both
+    ///     callers have: the constructor cannot await, and the write paths await the connection and not
+    ///     this. <c>control</c> is the catalog DuckDB names after the file stem, which this class fixes
+    ///     as <c>control.duckdb</c>; detaching is what checkpoints and closes the copy before it is read
+    ///     off disk.
+    /// </summary>
+    private void Snapshot(DuckDBCommand command)
+    {
+        Delete(SnapshotPath);
+        command.CommandText = $"""
+                               ATTACH '{SnapshotPath.Replace("'", "''")}' AS backup;
+                               COPY FROM DATABASE control TO backup;
+                               DETACH backup;
+                               """;
+        command.ExecuteNonQuery();
     }
 
     /// <summary>A database file and the write-ahead log beside it, which outlives it after an unclean stop.</summary>
