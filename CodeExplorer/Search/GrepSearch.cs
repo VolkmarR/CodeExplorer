@@ -20,9 +20,13 @@ public sealed record GrepRequest(
     int Page = 1,
     int PageSize = 20)
 {
-    public bool HasFileFilters =>
-        !string.IsNullOrWhiteSpace(Path) || !string.IsNullOrWhiteSpace(Exclude) ||
-        !string.IsNullOrWhiteSpace(Extension);
+    /// <summary>
+    ///     The three filters as the shape every index search shares. Grep spans every repository in
+    ///     the project by design, so it never sets one, and its tool description promises as much.
+    /// </summary>
+    internal FileFilter Filter => new(null, Path, Exclude, Extension);
+
+    public bool HasFileFilters => Filter.Any;
 }
 
 /// <summary>
@@ -96,18 +100,6 @@ public sealed class GrepSearch(ProjectIndexes indexes)
     private const char MatchEnd = '';
 
     /// <summary>
-    ///     RE2 rejects these; each is a .NET or PCRE habit an agent brings along. Recognised up front so
-    ///     the explanation names the construct rather than quoting an engine error.
-    /// </summary>
-    private static readonly (string Needle, string Name)[] UnsupportedSyntax =
-    [
-        ("(?<=", "lookbehind (?<=...)"),
-        ("(?<!", "negative lookbehind (?<!...)"),
-        ("(?=", "lookahead (?=...)"),
-        ("(?!", "negative lookahead (?!...)")
-    ];
-
-    /// <summary>
     ///     Every search goes through here — the MCP tool, the operator endpoint and whatever comes
     ///     next — which is what makes this the one place a search is recorded. A new entry point cannot
     ///     report a different set of attributes, because it does not record at all.
@@ -128,7 +120,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
             return new GrepProblem("The query is empty. Pass the text or RE2 pattern to search for.");
 
         bool regex = request.Regex || request.Multiline;
-        if (regex && UnsupportedRegex(query) is { } unsupported) return new GrepProblem(unsupported);
+        if (regex && Re2.Unsupported(query) is { } unsupported) return new GrepProblem(unsupported);
         if (regex && request.WholeWord) query = $@"\b(?:{query})\b";
 
         using var lease = await indexes.OpenAsync(slug, cancellationToken);
@@ -144,15 +136,11 @@ public sealed class GrepSearch(ProjectIndexes indexes)
                 ? await SearchMultilineAsync(connection, request, query, bounds, cancellationToken)
                 : await SearchLinesAsync(connection, request, query, regex, bounds, cancellationToken);
         }
-        catch (DuckDBException ex) when
-            (regex && ex.Message.StartsWith("Invalid Input Error", StringComparison.Ordinal))
+        catch (DuckDBException ex) when (regex && Re2.IsPatternRejection(ex))
         {
-            // Only regex mode hands user text to a parser, and RE2 rejections surface as DuckDB's
-            // "Invalid Input Error: missing ): ..." with no other marker. A missing table or a detached
-            // catalog is a Catalog or Binder error and propagates as infrastructure.
-            return new GrepProblem(
-                $"The pattern is not a valid RE2 regular expression: {FirstLine(ex.Message)}. "
-                + "RE2 has no lookaround and no backreferences; escape literal metacharacters with a backslash.");
+            // Only regex mode hands user text to a parser; anything else DuckDB raises here is
+            // infrastructure and propagates.
+            return new GrepProblem(Re2.Rejected(ex));
         }
     }
 
@@ -203,7 +191,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         }
 
         var fileParameters = new List<DuckDBParameter>();
-        string fileFilter = FileFilter(request, fileParameters);
+        string fileFilter = request.Filter.Sql(fileParameters);
         string common = $"""
                          WITH hits AS (
                              SELECT l.file_id, l.line_number, f.qualified_path
@@ -258,7 +246,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         var files = new List<GrepFile>();
         int totalFiles = 0;
         long totalLines = 0;
-        using (var command = Command(connection, sql, [.. matchParameters, .. fileParameters]))
+        using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             string? currentPath = null;
@@ -290,7 +278,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         int? withoutFilters = null;
         if (totalFiles == 0 && request.HasFileFilters)
             // Same match, no file filters: a second pass only on the empty answer, so the common case pays nothing.
-            withoutFilters = await CountAsync(connection,
+            withoutFilters = (int)await connection.CountAsync(
                 $"SELECT count(DISTINCT l.file_id) FROM lines l WHERE {match}", matchParameters, cancellationToken);
 
         return new GrepResult(engine, totalFiles, totalLines, bounds.Page, bounds.PageSize, files, withoutFilters);
@@ -325,10 +313,10 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         }
 
         var fileParameters = new List<DuckDBParameter>();
-        string fileFilter = FileFilter(request, fileParameters);
+        string fileFilter = request.Filter.Sql(fileParameters);
 
         var counts = new List<(long FileId, string Path, int Count)>();
-        using (var command = Command(connection, $"""
+        using (var command = connection.Query($"""
                                                   {Documents(fileFilter + literalFilter)}
                                                   SELECT file_id, qualified_path, len(regexp_extract_all(content, $q, 0, $flags)) AS match_count
                                                   FROM docs WHERE regexp_matches(content, $q, $flags)
@@ -343,7 +331,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
 
         int? withoutFilters = null;
         if (counts.Count == 0 && request.HasFileFilters)
-            withoutFilters = await CountAsync(connection,
+            withoutFilters = (int)await connection.CountAsync(
                 $"{Documents(literalFilter)} SELECT count(*) FROM docs WHERE regexp_matches(content, $q, $flags)",
                 matchParameters, cancellationToken);
 
@@ -359,7 +347,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         // request, so inlining them is safe.
         string ids = string.Join(",", pageFiles.Select(f => f.FileId.ToString(CultureInfo.InvariantCulture)));
         var marked = new Dictionary<long, string>();
-        using (var command = Command(connection, $"""
+        using (var command = connection.Query($"""
                                                   {Documents($" AND f.file_id IN ({ids})")}
                                                   SELECT file_id,
                                                          regexp_replace(content, '(' || $q || ')', chr(1) || '\1' || chr(2), $gflags) AS marked
@@ -529,110 +517,15 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         return literal.Trim().Length == 0 ? null : literal;
     }
 
-    private static string? UnsupportedRegex(string pattern)
-    {
-        foreach ((string needle, string name) in UnsupportedSyntax)
-            if (pattern.Contains(needle, StringComparison.Ordinal))
-                return $"The pattern uses {name}, which RE2 does not support. "
-                       + "Match the wider text instead and read the hit, or grep for the inner part with context.";
-
-        // \1..\9 is a backreference; \0 is not one and \\1 is an escaped backslash followed by a digit.
-        for (int i = 0; i + 1 < pattern.Length; i++)
-        {
-            if (pattern[i] != '\\') continue;
-            if (pattern[i + 1] is >= '1' and <= '9')
-                return $"The pattern uses a backreference (\\{pattern[i + 1]}), which RE2 does not support. "
-                       + "Repeat the text instead of referring back to a group.";
-            i++;
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    ///     Path terms are OR-ed (one call over several folders), exclude terms AND-ed, both against the
-    ///     lower-cased qualified path. A term with <c>*</c> or <c>?</c> is a SQL GLOB over the whole path,
-    ///     where <c>*</c> crosses <c>/</c>; anything else is a plain substring.
-    /// </summary>
-    private static string FileFilter(GrepRequest request, List<DuckDBParameter> parameters)
-    {
-        var where = new StringBuilder();
-        var includes = SplitTerms(request.Path);
-        if (includes.Count > 0)
-        {
-            where.Append(" AND (");
-            for (int i = 0; i < includes.Count; i++)
-            {
-                if (i > 0) where.Append(" OR ");
-                where.Append(Match(includes[i], $"$p{i}"));
-                parameters.Add(new DuckDBParameter($"p{i}", includes[i]));
-            }
-
-            where.Append(')');
-        }
-
-        var excludes = SplitTerms(request.Exclude);
-        for (int i = 0; i < excludes.Count; i++)
-        {
-            where.Append(" AND NOT (").Append(Match(excludes[i], $"$x{i}")).Append(')');
-            parameters.Add(new DuckDBParameter($"x{i}", excludes[i]));
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.Extension))
-        {
-            where.Append(" AND f.extension = $ext");
-            parameters.Add(new DuckDBParameter("ext", request.Extension.Trim().TrimStart('.').ToLowerInvariant()));
-        }
-
-        return where.ToString();
-
-        static string Match(string term, string parameter)
-        {
-            return term.Contains('*') || term.Contains('?')
-                ? $"lower(f.qualified_path) GLOB {parameter}"
-                : $"contains(lower(f.qualified_path), {parameter})";
-        }
-    }
-
-    private static List<string> SplitTerms(string? terms) =>
-    [
-        .. (terms ?? "")
-        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Select(t => t.Replace('\\', '/').ToLowerInvariant())
-    ];
-
     private static async Task<bool> HasFullTextIndexAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
     {
-        using var command = Command(connection, "SELECT fts_indexed FROM index_info", []);
+        using var command = connection.Query("SELECT fts_indexed FROM index_info", []);
         return await command.ExecuteScalarAsync(cancellationToken) is true;
-    }
-
-    private static async Task<int> CountAsync(
-        DuckDBConnection connection, string sql, IEnumerable<DuckDBParameter> parameters,
-        CancellationToken cancellationToken)
-    {
-        using var command = Command(connection, sql, parameters);
-        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-    }
-
-    private static DuckDBCommand Command(DuckDBConnection connection, string sql,
-        IEnumerable<DuckDBParameter> parameters)
-    {
-        var command = connection.CreateCommand();
-        command.CommandText = sql;
-        foreach (var parameter in parameters) command.Parameters.Add(parameter);
-        return command;
     }
 
     /// <summary>The FTS tokenizer keeps letters, digits and underscore; a token with none of them has no index entry.</summary>
     private static bool HasIndexableChars(string token) => token.Any(c => char.IsLetterOrDigit(c) || c == '_');
-
-    private static string FirstLine(string text)
-    {
-        int newline = text.IndexOf('\n');
-        return (newline < 0 ? text : text[..newline]).Trim();
-    }
 
     /// <summary>Request numbers clamped to the ranges the tool description promises.</summary>
     private readonly record struct Bounds(int Page, int PageSize, int Context, int MaxLinesPerFile)
