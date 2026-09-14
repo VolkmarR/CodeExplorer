@@ -265,18 +265,18 @@ public sealed class TelemetryTests
     [Fact]
     public void Telemetry_is_off_until_an_otlp_endpoint_is_configured()
     {
-        Assert.Null(Telemetry.OtlpEndpoint(Configuration([])));
+        Assert.Null(Telemetry.OtlpEndpoint(Settings.Of([])));
         Assert.Equal(new Uri("http://collector:4317"),
-            Telemetry.OtlpEndpoint(Configuration(new Dictionary<string, string?>
+            Telemetry.OtlpEndpoint(Settings.Of(new Dictionary<string, string?>
                 { ["Telemetry:OtlpEndpoint"] = "http://collector:4317" })));
         // The exporter reads the standard variable itself; honouring it here keeps the switch in one
         // place, so "is telemetry on" is not answered differently by the app and by the exporter.
         Assert.Equal(new Uri("http://standard:4317"),
-            Telemetry.OtlpEndpoint(Configuration(new Dictionary<string, string?>
+            Telemetry.OtlpEndpoint(Settings.Of(new Dictionary<string, string?>
                 { ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://standard:4317" })));
         // A setting that is not a URL names itself rather than crashing with "Invalid URI".
         var bad = Assert.Throws<InvalidOperationException>(() =>
-            Telemetry.OtlpEndpoint(Configuration(new Dictionary<string, string?>
+            Telemetry.OtlpEndpoint(Settings.Of(new Dictionary<string, string?>
                 { ["Telemetry:OtlpEndpoint"] = "collector" })));
         Assert.Contains("Telemetry:OtlpEndpoint", bad.Message, StringComparison.Ordinal);
     }
@@ -290,9 +290,6 @@ public sealed class TelemetryTests
         using var host = await ProjectAsync(SearchEngine.Substring, "tele-offline");
         Assert.Equal(3, (await SearchAsync(host, "/api/projects/tele-offline/search?q=Widget")).TotalFiles);
     }
-
-    private static IConfiguration Configuration(Dictionary<string, string?> values) =>
-        new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
     private static async Task<GrepResult> SearchAsync(TestHost host, string url)
     {
