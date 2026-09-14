@@ -7,7 +7,11 @@ namespace CodeExplorer;
 
 /// <summary>The MCP tools that answer from a project's index (ADR-0005, <c>Search/</c>).</summary>
 [McpServerToolType]
-internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, GrepSearch grep)
+internal sealed class SearchTools(
+    IHttpContextAccessor httpContextAccessor,
+    GrepSearch grep,
+    ReferenceSearch references,
+    MatchList matches)
 {
     [McpServerTool(Name = "grep", ReadOnly = true, Idempotent = true, Title = "Search the project's code")]
     [Description("""
@@ -166,5 +170,241 @@ internal sealed class SearchTools(IHttpContextAccessor httpContextAccessor, Grep
         if (hidden > 0)
             text.Append(pad).Append("  ... ").Append(hidden).Append(" more ")
                 .Append(ToolReply.Plural(hidden, "match", "matches")).Append(" in this file (raise maxLinesPerFile)\n");
+    }
+
+    [McpServerTool(Name = "find_references", ReadOnly = true, Idempotent = true,
+        Title = "Find references to an identifier")]
+    [Description("""
+                 Finds where an identifier is declared, written, called and read, each reference labelled with the enclosing `Type.Member` it sits in. It answers "who calls this?" and "what changes this?" in one call.
+
+                 - IMPORTANT: this is a heuristic over text, not a compiler. It reads one line at a time and decides what each appearance of the name looks like, so an unrelated symbol that happens to share the name is reported too, and a call routed through an interface, a delegate or reflection is not reported at all, because the name never appears where that call is made. Treat a clean result as strong evidence and an empty one as weak evidence; confirm anything you are about to change by reading the file.
+                 - Prefer it over grep for an identifier: it matches whole names only, and it tells a declaration from a call from a mention in a comment instead of handing you one flat list.
+                 - To answer "what changes this field?", use writesOnly=true. Writes are assignments — `x.Status = …`, `Status += …`, and the receiver-less object-initializer form `Status = dao.Status` that a `\.Status\s*=` regex silently misses. Comparisons (`==`, `>=`) and lambda arrows stay out, so a write list is not padded with reads.
+                 - Comments, strings and import lines are counted but not listed unless includeNoise=true.
+                 - For an interface, a call names the method rather than the interface, so run it again on the member you care about.
+                 - Scope with `repo`, `path`, `ext` and `exclude` exactly as grep does. When a filter is set the reply says how many further files matched outside it, because a declaration hidden by `exclude` makes a thin answer look complete.
+                 """)]
+    public async Task<string> FindReferences(
+        [Description(
+            "The identifier to look for, e.g. \"UpdateDeliveryNoteStatus\" or \"OrderEntity\". One name, matched whole and case-sensitively.")]
+        string symbol,
+        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        string? repo = null,
+        [Description(
+            "Only look in files whose qualified path matches; comma-separated terms are OR-ed. Same syntax as grep.")]
+        string? path = null,
+        [Description(
+            "Skip files whose qualified path matches any of these comma-separated terms, e.g. \"*.g.cs,/tests/\".")]
+        string? exclude = null,
+        [Description("Only look in files with this extension, without the dot, e.g. \"cs\".")]
+        string? ext = null,
+        [Description("Show only declarations and writes — the answer to \"what changes this?\".")]
+        bool writesOnly = false,
+        [Description("Also list the comment, string and import mentions instead of only counting them.")]
+        bool includeNoise = false,
+        [Description("Maximum files to examine, 1-100. Default 60. The files naming it most often come first.")]
+        int maxFiles = ReferenceSearch.DefaultMaxFiles,
+        CancellationToken cancellationToken = default)
+    {
+        var project = BoundProject.Get(httpContextAccessor);
+        var request = new ReferenceRequest(symbol, new FileFilter(repo, path, exclude, ext), maxFiles);
+
+        var outcome = await references.FindAsync(project.Slug, request, cancellationToken);
+        if (outcome is ReferenceProblem problem) return problem.Explanation;
+        var result = (ReferenceResult)outcome;
+        return result.TotalFiles == 0
+            ? NoReferences(symbol.Trim(), result)
+            : ToolReply.Cap(FormatReferences(symbol.Trim(), result, writesOnly, includeNoise),
+                "Narrow with repo/path/ext/exclude, or lower maxFiles.");
+    }
+
+    private static string NoReferences(string symbol, ReferenceResult result)
+    {
+        var text = new StringBuilder($"Nothing in this project spells \"{symbol}\". ");
+        if (result.FilesMatchingWithoutFilters > 0)
+            text.Append(CultureInfo.InvariantCulture,
+                $"It does appear in {ToolReply.HiddenByFilters(result.FilesMatchingWithoutFilters.Value, "file")}");
+        else
+            text.Append(
+                "The name is matched whole and case-sensitively, so check the spelling and the case, or search for the interface that declares it. grep with regex=true finds a partial name.");
+        return text.ToString();
+    }
+
+    private static string FormatReferences(
+        string symbol, ReferenceResult result, bool writesOnly, bool includeNoise)
+    {
+        int Count(ReferenceKind kind) => result.Count(kind);
+
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture,
+                $"\"{symbol}\" in {result.FilesExamined} {ToolReply.Plural(result.FilesExamined, "file")}: {result.CodeReferences} {ToolReply.Plural(result.CodeReferences, "reference")}, {result.Noise} in comments, strings or imports\n")
+            .Append(CultureInfo.InvariantCulture,
+                $"  {Count(ReferenceKind.Definition)} {ToolReply.Plural(Count(ReferenceKind.Definition), "declaration")}, {Count(ReferenceKind.Write)} {ToolReply.Plural(Count(ReferenceKind.Write), "write")}, ")
+            .Append(CultureInfo.InvariantCulture,
+                $"{Count(ReferenceKind.Call)} {ToolReply.Plural(Count(ReferenceKind.Call), "call")}, {Count(ReferenceKind.Instantiation)} {ToolReply.Plural(Count(ReferenceKind.Instantiation), "instantiation")}, ")
+            .Append(CultureInfo.InvariantCulture,
+                $"{Count(ReferenceKind.TypeUse)} type {ToolReply.Plural(Count(ReferenceKind.TypeUse), "use")}, {Count(ReferenceKind.MemberAccess)} {ToolReply.Plural(Count(ReferenceKind.MemberAccess), "read")}, ")
+            .Append(CultureInfo.InvariantCulture, $"{Count(ReferenceKind.Other)} unplaced\n");
+
+        if (result.TotalFiles > result.FilesExamined)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  NOTE: {result.TotalFiles} files hold the name in total; only the {result.FilesExamined} that hold it most often were examined. Narrow with repo/path/ext/exclude, or raise maxFiles.\n");
+
+        // A file cut short at the per-file ceiling would otherwise be indistinguishable from one that
+        // simply holds that many lines, and the unread ones could include the declaration.
+        var cutShort = result.CutShortFiles;
+        if (cutShort.Count > 0)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  NOTE: {ToolReply.Plural(cutShort.Count, "one file holds", $"{cutShort.Count} files hold")} {ReferenceSearch.MaxLinesPerFile} or more lines naming it and {ToolReply.Plural(cutShort.Count, "was", "were")} read no further ({string.Join(", ", cutShort)}). The name is too common to enumerate; narrow with path, or search a more distinctive one.\n");
+
+        // A thin answer under a filter is the footgun: the declaration may sit in a file the filter
+        // hid, and a generated partial is the usual case.
+        int hiddenFiles = (result.FilesMatchingWithoutFilters ?? result.TotalFiles) - result.TotalFiles;
+        if (hiddenFiles > 0)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  NOTE: your filters hid {hiddenFiles} further matching {ToolReply.Plural(hiddenFiles, "file")}. A declaration you cannot see below may be in one of them. Re-run without them to check.\n");
+
+        Section("DECLARATIONS", ReferenceKind.Definition);
+        Section("WRITES", ReferenceKind.Write);
+        if (writesOnly)
+        {
+            if (Count(ReferenceKind.Definition) + Count(ReferenceKind.Write) == 0)
+                text.Append(
+                    "\nNo declarations or writes. The name is only read here — drop writesOnly to see the calls, reads and type uses.\n");
+        }
+        else
+        {
+            Section("CALLS", ReferenceKind.Call);
+            Section("INSTANTIATIONS", ReferenceKind.Instantiation);
+            Section("TYPE USES", ReferenceKind.TypeUse);
+            Section("READS", ReferenceKind.MemberAccess);
+            Section("UNPLACED", ReferenceKind.Other);
+            if (includeNoise)
+            {
+                Section("COMMENTS", ReferenceKind.Comment);
+                Section("STRINGS", ReferenceKind.StringLiteral);
+                Section("IMPORTS", ReferenceKind.Import);
+            }
+        }
+
+        // An interface asked about by its own name looks inert: callers write _service.DoThing(), so
+        // the type name appears only where it is declared or injected, never where the call is made.
+        // Answering "who uses this?" means searching the member, and saying so beats a bare zero.
+        if (Count(ReferenceKind.Call) == 0 && Count(ReferenceKind.TypeUse) > 0
+                                           && symbol.Length > 1 && symbol[0] == 'I' && char.IsUpper(symbol[1]))
+            text.Append(CultureInfo.InvariantCulture,
+                $"\n0 calls but {Count(ReferenceKind.TypeUse)} type uses, and \"{symbol}\" looks like an interface. A call names the METHOD, not the interface, so this cannot answer \"who uses it?\". Read one implementation for its member names, then run find_references on the method you care about.\n");
+
+        text.Append(
+            "\nClassification is textual — line shape, no compiler. An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n");
+        return text.ToString();
+
+        void Section(string title, ReferenceKind kind)
+        {
+            var items = result.References.Where(r => r.Kind == kind).ToList();
+            if (items.Count == 0) return;
+
+            // The heading counts the references, but the same line is printed once however many of
+            // them it holds: two type uses on one line are two references and one thing to read.
+            text.Append(CultureInfo.InvariantCulture, $"\n{title}  ({items.Count})\n");
+            foreach (var group in items.DistinctBy(r => (r.QualifiedPath, r.LineNumber))
+                         .GroupBy(r => r.QualifiedPath))
+            {
+                text.Append("  ").Append(group.Key).Append('\n');
+                int width = group.Max(r => r.LineNumber.ToString(CultureInfo.InvariantCulture).Length);
+                foreach (var reference in group)
+                    text.Append("  ")
+                        .Append(reference.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
+                        .Append(": ")
+                        .Append(reference.Scope is null ? "" : $"[{reference.Scope}] ")
+                        .Append(ToolReply.Clip(reference.Text).TrimStart())
+                        .Append('\n');
+            }
+        }
+    }
+
+    [McpServerTool(Name = "list_matches", ReadOnly = true, Idempotent = true,
+        Title = "List the distinct values a pattern matches")]
+    [Description("""
+                 Returns the DISTINCT strings an RE2 pattern matches across every repository in this project, each with how often and in how many files it occurs — the indexed equivalent of `grep -o … | sort | uniq -c`.
+
+                 Use it whenever the question is "what values exist?" rather than "where is this?". It answers in one call what otherwise takes a grep plus reading dozens of files:
+
+                 - What packages does this project depend on? query="PackageReference Include=\"([^\"]+)\"", group=1
+                 - Which projects are in a solution? query="([^\"\\]+\.csproj)", group=1
+                 - Every distinct status constant, HTTP route, config key, error code, table name or imported namespace — anything spelled out in many files that you want deduplicated.
+
+                 - Always a pattern; there is nothing to deduplicate about a literal. `group=1` returns the first capture group instead of the whole match, which is usually what you want: put the parentheses around the part that varies and leave the boilerplate outside them.
+                 - Results are ordered by frequency, so the common cases come first and a one-off outlier is visible at the bottom. `count` is how often the value was matched and `files` is how many files those matches came from; the two differ where a value repeats within one file.
+                 - Prefer grep when you need to see WHERE something appears. This is also the cheap way to learn a code base's vocabulary before searching it: list the distinct status constants first, then grep for the one you want.
+                 - "No matches" replies say whether the pattern matched outside your filters, so a filtered miss is never mistaken for a pattern that matches nothing.
+                 """)]
+    public async Task<string> ListMatches(
+        [Description(
+            "RE2 regular expression. Put parentheses around the part you want and pass group=1. RE2 has no lookaround and no backreferences.")]
+        string query,
+        [Description(
+            "Return this capture group instead of the whole match. 1 is usually what you want; 0 is the whole match.")]
+        int group = 0,
+        [Description("Match case exactly. Default false.")]
+        bool caseSensitive = false,
+        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        string? repo = null,
+        [Description(
+            "Only search files whose qualified path matches; comma-separated terms are OR-ed. Same syntax as grep.")]
+        string? path = null,
+        [Description(
+            "Skip files whose qualified path matches any of these comma-separated terms, e.g. \"*.g.cs,/tests/\".")]
+        string? exclude = null,
+        [Description("Only search files with this extension, without the dot, e.g. \"csproj\" or \"cs\".")]
+        string? ext = null,
+        [Description("Only match whole words, by anchoring the pattern on word boundaries.")]
+        bool wholeWord = false,
+        [Description("Maximum distinct values to return, 1-1000. Default 200, ordered by frequency.")]
+        int limit = MatchList.DefaultLimit,
+        CancellationToken cancellationToken = default)
+    {
+        var project = BoundProject.Get(httpContextAccessor);
+        var request = new MatchListRequest(query, new FileFilter(repo, path, exclude, ext), group, caseSensitive,
+            wholeWord, limit);
+
+        var outcome = await matches.ListAsync(project.Slug, request, cancellationToken);
+        if (outcome is MatchListProblem problem) return problem.Explanation;
+        var result = (MatchListResult)outcome;
+        return result.TotalDistinct == 0
+            ? NoValues(request, result)
+            : ToolReply.Cap(FormatValues(result), "Lower limit, or narrow with repo/path/ext/exclude.");
+    }
+
+    private static string NoValues(MatchListRequest request, MatchListResult result)
+    {
+        var text = new StringBuilder($"No matches for \"{request.Query}\". ");
+        if (result.MatchesWithoutFilters > 0)
+            text.Append(CultureInfo.InvariantCulture,
+                $"The pattern does match {ToolReply.HiddenByFilters(result.MatchesWithoutFilters.Value, "line")}");
+        else
+            // Do not imply the group is at fault: the pattern may simply match nothing, and saying
+            // otherwise sends the caller off fixing a parenthesis that was never wrong.
+            text.Append(CultureInfo.InvariantCulture,
+                $"The pattern matched nothing{(request.Group > 0 ? $", or matched but capture group {request.Group} was always empty" : "")}. Try the same pattern with grep to see whether it matches at all.");
+        return text.ToString();
+    }
+
+    private static string FormatValues(MatchListResult result)
+    {
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture,
+                $"{result.TotalDistinct} distinct {ToolReply.Plural(result.TotalDistinct, "value")} from {result.TotalMatches} {ToolReply.Plural(result.TotalMatches, "match", "matches")} in {result.TotalFiles} {ToolReply.Plural(result.TotalFiles, "file")}")
+            .Append(result.Matches.Count < result.TotalDistinct
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"; showing the {result.Matches.Count} most frequent (raise limit for the rest)\n")
+                : ", all shown\n")
+            .Append("\ncount  files  value\n");
+
+        foreach (var match in result.Matches)
+            text.Append(CultureInfo.InvariantCulture,
+                $"{match.Count,5}  {match.Files,5}  {ToolReply.Clip(match.Value.Trim())}\n");
+
+        return text.ToString();
     }
 }

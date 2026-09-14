@@ -91,7 +91,33 @@ public sealed class TelemetryTests
     }
 
     /// <summary>
-    ///     The chokepoint is the shape of the two services, not a convention: each exposes exactly one
+    ///     The two heuristic searches (#11) are searches and report as ones: same instrument, same
+    ///     tags, and an engine name of their own so a dashboard can tell a reference scan from a grep
+    ///     rather than seeing one undivided search rate.
+    /// </summary>
+    [Theory]
+    [InlineData("find_references", "symbol", "Widget", ReferenceSearch.Engine, "tele-references")]
+    [InlineData("list_matches", "query", "class (\\w+)", MatchList.Engine, "tele-matches")]
+    public async Task The_heuristic_searches_record_under_their_own_engine_names(
+        string tool, string argument, string value, string engine, string slug)
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+
+        using var probe = new TelemetryProbe(slug);
+        await using (var client = await host.ConnectAsync(slug))
+            await TestHost.CallAsync(client, tool, new Dictionary<string, object?> { [argument] = value });
+
+        var duration = Assert.Single(probe.For(Telemetry.SearchDuration));
+        Assert.Equal(
+            new[] { Telemetry.OutcomeTag, Telemetry.ProjectTag, Telemetry.EngineTag },
+            duration.Tags.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(engine, duration.Tags[Telemetry.EngineTag]);
+        Assert.Equal(Telemetry.MatchedOutcome, duration.Tags[Telemetry.OutcomeTag]);
+        Assert.NotEmpty(probe.For(Telemetry.SearchFiles));
+    }
+
+    /// <summary>
+    ///     The chokepoint is the shape of these services, not a convention: each exposes exactly one
     ///     public method, and that method records. A second entry point therefore has one thing to
     ///     call, and calling it is what reports the telemetry — there is no inner search or inner build
     ///     to reach past it. Asserted here because a new public method is the one edit that would
@@ -99,6 +125,8 @@ public sealed class TelemetryTests
     /// </summary>
     [Theory]
     [InlineData(typeof(GrepSearch), nameof(GrepSearch.SearchAsync))]
+    [InlineData(typeof(ReferenceSearch), nameof(ReferenceSearch.FindAsync))]
+    [InlineData(typeof(MatchList), nameof(MatchList.ListAsync))]
     [InlineData(typeof(IndexBuilder), nameof(IndexBuilder.FillAsync))]
     public void The_recorded_method_is_the_services_only_way_in(Type service, string only)
     {
@@ -111,14 +139,18 @@ public sealed class TelemetryTests
     /// <summary>
     ///     And the recording is started in that one method: the instruments are private to
     ///     <see cref="Telemetry" />, so this is about which file holds the call, which only the source
-    ///     shows.
+    ///     shows. A search recording may be started in each of the three search services and nowhere
+    ///     else — it is the recording type that fixes the tag set, so three services cannot report
+    ///     different attributes, but a fourth file appearing here would be an entry point that
+    ///     measured a search without being one.
     /// </summary>
     [Theory]
-    [InlineData("GrepSearch.cs", $"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(")]
-    [InlineData("IndexBuilder.cs", $"{nameof(Telemetry)}.{nameof(Telemetry.IndexBuild)}(")]
-    [InlineData("DurableIndex.cs", $"{nameof(Telemetry)}.{nameof(Telemetry.DurableCopy)}(")]
-    public void Only_one_file_starts_each_recording(string file, string call) =>
-        Assert.Equal([file], SourceFilesMentioning(call));
+    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "GrepSearch.cs", "MatchList.cs",
+        "ReferenceSearch.cs")]
+    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.IndexBuild)}(", "IndexBuilder.cs")]
+    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.DurableCopy)}(", "DurableIndex.cs")]
+    public void Only_the_recording_services_start_a_recording(string call, params string[] files) =>
+        Assert.Equal(files, SourceFilesMentioning(call));
 
     [Fact]
     public async Task A_search_that_answers_with_a_problem_is_recorded_as_one()
