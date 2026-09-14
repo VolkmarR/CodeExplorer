@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using LibGit2Sharp;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -30,13 +32,19 @@ public sealed class TestHost : IDisposable
     ///     Switches on the background warm-up, which is off everywhere else so that a restart in a test
     ///     is a cold wake and nothing restores behind the assertions.
     /// </param>
+    /// <param name="authenticated">
+    ///     Points the host at <see cref="Tenant" />. Off everywhere else, because an unauthenticated
+    ///     server is the shape ADR-0004 requires an empty appsettings to produce and therefore the one
+    ///     the rest of the suite should be proving still works.
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
-        bool warmUpOnStart = false)
+        bool warmUpOnStart = false, bool authenticated = false)
     {
         _engine = engine;
         _drainSeconds = drainSeconds;
         _minimumFreeBytes = minimumFreeBytes;
         _warmUpOnStart = warmUpOnStart;
+        _authenticated = authenticated;
         Factory = Build();
     }
 
@@ -44,6 +52,7 @@ public sealed class TestHost : IDisposable
     private readonly int? _drainSeconds;
     private readonly long? _minimumFreeBytes;
     private readonly bool _warmUpOnStart;
+    private readonly bool _authenticated;
 
     public WebApplicationFactory<Program> Factory { get; private set; }
 
@@ -58,6 +67,10 @@ public sealed class TestHost : IDisposable
             if (_minimumFreeBytes is { } bytes)
                 builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
+            if (!_authenticated) return;
+
+            foreach ((string key, string value) in Tenant.Configuration) builder.UseSetting(key, value);
+            builder.ConfigureTestServices(Tenant.StubDiscovery);
         });
 
     /// <summary>The host's warm-up service, for a test that awaits the pass it does rather than polling.</summary>
@@ -164,7 +177,7 @@ public sealed class TestHost : IDisposable
 
     public async Task CreateProjectAsync(string slug, bool singleRepository = false)
     {
-        using var http = Factory.CreateClient();
+        using var http = Fixture();
         using var response =
             await http.PostAsJsonAsync("/api/projects", new { slug, name = slug, singleRepository }, Ct);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -172,7 +185,7 @@ public sealed class TestHost : IDisposable
 
     public async Task AddRepositoryAsync(string project, string slug, string url, string? credential = null)
     {
-        using var http = Factory.CreateClient();
+        using var http = Fixture();
         using var response =
             await http.PostAsJsonAsync($"/api/projects/{project}/repositories", new { slug, url, credential }, Ct);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -198,7 +211,7 @@ public sealed class TestHost : IDisposable
     /// <summary>Asks for a refresh and returns the response, for a test that asserts on the refusal.</summary>
     public async Task<HttpResponseMessage> RequestRefreshAsync(string project)
     {
-        using var http = Factory.CreateClient();
+        using var http = Fixture();
         return await http.PostAsync($"/api/projects/{project}/refresh", null, Ct);
     }
 
@@ -247,7 +260,7 @@ public sealed class TestHost : IDisposable
 
     public async Task<RefreshStatus> RefreshStatusAsync(string project)
     {
-        using var http = Factory.CreateClient();
+        using var http = Fixture();
         var status = await http.GetFromJsonAsync<RefreshStatus>($"/api/projects/{project}/refresh", Ct);
         Assert.NotNull(status);
         return status;
@@ -263,9 +276,31 @@ public sealed class TestHost : IDisposable
         return await RefreshAsync(project);
     }
 
-    public async Task<McpClient> ConnectAsync(string slug)
+    /// <summary>
+    ///     The client the fixture steps use, which is authenticated exactly when the host is. A project
+    ///     has to exist before anything about protecting it can be asserted, and on a host with a tenant
+    ///     even creating one needs a token — so the fixture presents one rather than every
+    ///     authentication test starting with a sign-in it is not testing.
+    /// </summary>
+    private HttpClient Fixture() => CreateClient(_authenticated ? Tenant.Token() : null);
+
+    /// <summary>
+    ///     An HTTP client that presents a bearer token, or none when there is nothing to present. The
+    ///     one place a test says how it is authenticated, so that a test asserting on a tool's answer
+    ///     does not also spell out a header. Redirects are not followed: where a caller is sent is what
+    ///     several of these tests are about.
+    /// </summary>
+    public HttpClient CreateClient(string? token = null)
     {
-        var http = Factory.CreateClient();
+        var http = Factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        if (token is not null)
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return http;
+    }
+
+    public async Task<McpClient> ConnectAsync(string slug, string? token = null)
+    {
+        var http = CreateClient(token);
         var transport = new HttpClientTransport(
             new HttpClientTransportOptions { Endpoint = new Uri(http.BaseAddress!, $"/projects/{slug}/mcp") },
             http,
