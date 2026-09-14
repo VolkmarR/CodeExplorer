@@ -77,6 +77,10 @@ public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes in
         foreach (var (repository, clone) in repositories)
         {
             repoId++;
+            // The naming rule itself lives in ProjectPaths, which is also what every read path parses
+            // with. Spelling it out here as well is how the two halves drift: a change to how a
+            // single-repository project names its files would have to be made in both (ADR-0006).
+            var paths = new ProjectPaths(singleRepository, repository.Slug);
             int fileCount = 0;
             long lineCount = 0;
             // Sorted by path so a repository's files, and each file's lines, are contiguous: the zone
@@ -103,7 +107,7 @@ public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes in
                     // decided once, here: a single-repository project stores the short one (ADR-0006)
                     // and nothing downstream has to know which kind of project it is reading.
                     .AppendValue(entry.Path)
-                    .AppendValue(singleRepository ? entry.Path : $"{repository.Slug}/{entry.Path}")
+                    .AppendValue(paths.Format(repository.Slug, entry.Path))
                     .AppendValue(slash < 0 ? "" : entry.Path[..slash]).AppendValue(name)
                     .AppendValue(Path.GetExtension(name).TrimStart('.').ToLowerInvariant())
                     .AppendValue(blob.Size).AppendValue(text.Count);
