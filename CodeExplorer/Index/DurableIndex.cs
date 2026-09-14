@@ -133,7 +133,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
             // index_info is the one table not copied straight back: whether a BM25 index exists is a
             // property of this replica and of the load below, not of the build that wrote the Parquet.
             string columns = table == "index_info"
-                ? $"schema_version, built_at, {(ftsAvailable ? "true" : "false")}, single_repository"
+                ? $"schema_version, built_at, {(ftsAvailable ? "true" : "false")} AS fts_indexed, single_repository"
                 : "*";
             await ExecuteAsync(connection,
                 $"INSERT INTO {table} SELECT {columns} FROM read_parquet('{Escape(Parquet(copy, table))}')",
