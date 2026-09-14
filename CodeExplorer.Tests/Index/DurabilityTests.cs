@@ -65,7 +65,7 @@ public sealed class DurabilityTests : IDisposable
                                                        """);
 
         Assert.Equal(["void Needle() {}"], matches);
-        var info = await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info");
+        var info = await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR AS indexed FROM index_info");
         Assert.Equal(["true"], info);
     }
 
@@ -182,6 +182,43 @@ public sealed class DurabilityTests : IDisposable
     }
 
     [Fact]
+    public async Task A_startup_that_migrates_the_control_database_stores_the_migrated_shape()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.CreateProjectAsync("alpha");
+        // The backup an older build left: projects without single_repository, which is the column
+        // ADR-0006 added. Replacing the stored copy is how a wake meets one.
+        await WritePreMigrationBackupAsync(host);
+        host.DeleteControlDatabase();
+
+        host.Restart();
+
+        // Restored, migrated, and stored again. Without the last step the store would still hold the
+        // older shape, and every wake until someone happened to create a project would migrate afresh.
+        using var http = host.Factory.CreateClient();
+        var detail = await http.GetFromJsonAsync<ProjectDetail>("/api/projects/legacy", Ct);
+        Assert.NotNull(detail);
+        Assert.False(detail.SingleRepository);
+        Assert.True(await StoredControlIsMigratedAsync(host));
+    }
+
+    [Fact]
+    public async Task A_startup_that_migrates_nothing_leaves_the_backup_alone()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.CreateProjectAsync("alpha");
+        var written = File.GetLastWriteTimeUtc(host.DurableControlBackup);
+        host.DeleteControlDatabase();
+
+        host.Restart();
+
+        // The ordinary wake: the restored file is already the shape this build reads, so the statements
+        // change nothing and the store is not written again. Uploading on every wake would be the
+        // easy way to be correct here, and it is the one this deliberately does not take.
+        Assert.Equal(written, File.GetLastWriteTimeUtc(host.DurableControlBackup));
+    }
+
+    [Fact]
     public async Task Deleting_a_project_takes_its_durable_copy_with_it()
     {
         var host = Start(SearchEngine.Substring);
@@ -262,6 +299,54 @@ public sealed class DurabilityTests : IDisposable
         Assert.True(await store.FetchAsync("indexes/alpha/files.parquet", Path.Combine(root, "back.txt"), Ct));
         Assert.False(await store.FetchAsync("indexes/ghost/files.parquet", Path.Combine(root, "ghost.txt"), Ct));
         Directory.Delete(root, true);
+    }
+
+    /// <summary>
+    ///     Replaces the stored control-database backup with one an older build wrote: a <c>projects</c>
+    ///     table without <c>single_repository</c>. Built with DuckDB rather than hand-written, because
+    ///     what it has to be is a database this build's own constructor can open and migrate.
+    /// </summary>
+    private static async Task WritePreMigrationBackupAsync(TestHost host)
+    {
+        string path = Path.Combine(host.DataDirectory, "legacy.duckdb");
+        using (var connection = new DuckDBConnection($"Data Source={path}"))
+        {
+            await connection.OpenAsync(Ct);
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                                  CREATE TABLE projects (slug VARCHAR PRIMARY KEY, name VARCHAR NOT NULL);
+                                  INSERT INTO projects VALUES ('legacy', 'Legacy');
+                                  CREATE TABLE repositories (
+                                      project_slug VARCHAR NOT NULL,
+                                      slug VARCHAR NOT NULL,
+                                      url VARCHAR NOT NULL,
+                                      credential VARCHAR,
+                                      PRIMARY KEY (project_slug, slug));
+                                  """;
+            await command.ExecuteNonQueryAsync(Ct);
+        }
+
+        File.Copy(path, host.DurableControlBackup, true);
+    }
+
+    /// <summary>
+    ///     Whether the stored backup has the migrated column, read back out of the store the way a
+    ///     later wake would read it.
+    /// </summary>
+    private static async Task<bool> StoredControlIsMigratedAsync(TestHost host)
+    {
+        string path = Path.Combine(host.DataDirectory, "stored.duckdb");
+        File.Copy(host.DurableControlBackup, path, true);
+        using var connection = new DuckDBConnection($"Data Source={path}");
+        await connection.OpenAsync(Ct);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT count(*) FILTER (WHERE column_name = 'single_repository') = 1 AS migrated
+                              FROM duckdb_columns() WHERE table_name = 'projects'
+                              """;
+        using var reader = await command.ExecuteReaderAsync(Ct);
+        Assert.True(await reader.ReadAsync(Ct));
+        return reader.Flag("migrated");
     }
 
     /// <summary>

@@ -83,6 +83,9 @@ public sealed class TestHost : IDisposable
     /// <summary>Where the folder durable store keeps a project's Parquet set, whether or not it has one.</summary>
     public string DurableIndexDirectory(string slug) => Path.Combine(DurableDirectory, "indexes", slug);
 
+    /// <summary>The control database's backup, which is a file under its own prefix rather than Parquet.</summary>
+    public string DurableControlBackup => Path.Combine(DurableDirectory, "control", "control.duckdb");
+
     /// <summary>The folder standing in for a blob container, which is what an unconfigured app uses.</summary>
     public string DurableDirectory => Path.Combine(_root, "durable");
 
