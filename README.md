@@ -25,11 +25,10 @@ restores the one project being connected to. `POST /api/warmup` walks every proj
 each; an external cron calls it before working hours, because a stopped container has nothing
 running to fire a timer and that call is also what wakes it.
 
-A replica you keep running can warm itself instead: set `Refresh:WarmUpOnStart` to warm every
-project once per start, `Refresh:WarmUpDelaySeconds` (default 30) to let the request that woke the
-container be served first, and `Refresh:WarmUpIntervalMinutes` to repeat it. It is off by default
-and is not a replacement for the cron — under scale to zero, warming every project on every wake is
-the cost attaching lazily exists to avoid.
+A replica you keep running can warm itself instead: set `Refresh:WarmUpOnStart` and every project is
+restored once, as the application starts, in the background while the server is already answering.
+It is off by default and is not a replacement for the cron — under scale to zero, warming every
+project on every wake is the cost attaching lazily exists to avoid.
 
 The web UI is served from `CodeExplorer/wwwroot`, which `web/` builds into. To work on it with hot
 reload, run `vp dev` in `web/` alongside the server and use <http://localhost:5173>; see
