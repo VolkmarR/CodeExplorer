@@ -290,7 +290,7 @@ public sealed class DurabilityTests : IDisposable
         string local = Path.Combine(root, "local.txt");
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(local, "durable", Ct);
-        var store = new DurableStore(Configuration(
+        var store = new DurableStore(Settings.Of(
             new Dictionary<string, string?> { ["Storage:DataDirectory"] = root }));
 
         await store.StoreAsync("indexes/alpha/files.parquet", local, Ct);
@@ -367,9 +367,6 @@ public sealed class DurabilityTests : IDisposable
             + $"TO '{path.Replace("'", "''")}' (FORMAT parquet)";
         await command.ExecuteNonQueryAsync(Ct);
     }
-
-    private static IConfiguration Configuration(Dictionary<string, string?> values) =>
-        new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
     private static async Task<ProjectDetail> DetailAsync(TestHost host, string slug)
     {

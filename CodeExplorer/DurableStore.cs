@@ -1,4 +1,5 @@
 using Azure;
+using Azure.Core;
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
@@ -17,6 +18,26 @@ namespace CodeExplorer;
 /// </summary>
 public sealed class DurableStore
 {
+    /// <summary>
+    ///     The container this account's blobs live in, named here because it selects the whole
+    ///     local-or-Azure decision and because <see cref="KeyRing" /> shares the same container.
+    /// </summary>
+    public const string ContainerSetting = "Storage:BlobContainerUrl";
+
+    /// <summary>
+    ///     The identity every Azure client in this app authenticates with. One instance and not one per
+    ///     client: a credential is a token cache and a chain of probes for where the token comes from,
+    ///     and a second instance means both are paid twice for the same account. DefaultAzureCredential
+    ///     rather than a connection string, here and in <see cref="KeyRing" />: a key in configuration
+    ///     is a secret to rotate, and the app already has an identity for the container and the vault.
+    /// </summary>
+    public static TokenCredential Credential { get; } = new DefaultAzureCredential();
+
+    /// <summary>What an unusable container URL is told to do, which is also what the key ring loses.</summary>
+    public const string ContainerRemedy =
+        "Give it one such as https://account.blob.core.windows.net/codeexplorer, or remove it to keep the "
+        + "durable copy and the Data Protection key ring on local disk.";
+
     // Null is the local path. It is the whole of the local-or-Azure decision, made once here, so
     // every method below is one branch rather than a virtual call into a second implementation.
     private readonly BlobContainerClient? _container;
@@ -25,11 +46,10 @@ public sealed class DurableStore
 
     public DurableStore(IConfiguration configuration)
     {
-        string? container = configuration["Storage:BlobContainerUrl"];
-        // DefaultAzureCredential rather than a connection string: a key in configuration is a secret
-        // to rotate, and the app already has an identity for Key Vault and the key ring.
-        if (!string.IsNullOrWhiteSpace(container))
-            _container = new BlobContainerClient(new Uri(container), new DefaultAzureCredential());
+        // Read through Setting so that a container URL that is not a URL names itself, as the key ring
+        // setting and the OTLP endpoint do; the alternative is UriFormatException from inside the SDK.
+        if (Setting.Url(configuration, ContainerSetting, ContainerRemedy) is { } container)
+            _container = new BlobContainerClient(container, Credential);
 
         // Beside the data directory rather than inside it: what the container wipes and what survives
         // the wipe are different things, and a folder standing in for a blob account should read that

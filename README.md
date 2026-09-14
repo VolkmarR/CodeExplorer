@@ -20,6 +20,23 @@ The durable copy is another of those defaults: with no `Storage:BlobContainerUrl
 project's Parquet export and the control database's backup go to a folder under `data/durable`
 instead of Blob Storage, and the app needs no Azure at all.
 
+The Data Protection key ring is the third: with no `Storage:BlobContainerUrl` set it stays the
+framework's default, a folder under the user profile, which is correct on a developer machine and
+wrong in a container — the disk is wiped on every stop, so a new key ring comes up each time and
+every stored repository credential becomes undecryptable. Set that container and the key ring is
+persisted to `keyring/keys.xml` in it; set `Storage:KeyVaultKeyUrl` as well and the keys are wrapped
+by that Key Vault key, which is the deployed shape. The server says which of the three it came up in
+as it starts, and warns about the two that are not the deployed one. Pointing a machine that has been
+running locally at a container is a one-way step: a persisted key ring is read under a fixed
+application name rather than the framework's path-derived one, so credentials stored before the
+switch have to be set again.
+
+The Azure half of that is not covered by the tests — they assert that a configured deployment gets a
+blob repository and a Key Vault encryptor, and nothing reaches an account. To check it for real:
+point both settings at a container and a key the signed-in identity may use, start the server, add a
+repository with a credential, confirm `keyring/keys.xml` appeared in the container, then restart and
+refresh that repository — a clone that authenticates is the key ring having survived.
+
 Projects attach on first connection rather than at startup, so a replica waking with an empty disk
 restores the one project being connected to. `POST /api/warmup` walks every project and restores
 each; an external cron calls it before working hours, because a stopped container has nothing
