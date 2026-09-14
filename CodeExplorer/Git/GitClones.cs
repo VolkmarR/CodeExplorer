@@ -297,7 +297,8 @@ public sealed class GitClones(
         }
         catch (CryptographicException)
         {
-            // The key ring that protected it is gone (a restart without #13, or a rotated key).
+            // The key ring that protected it is gone: a restart with the key ring still local (see
+            // KeyRing, which logs which shape the replica came up in), or a rotated Key Vault key.
             throw new McpException(
                 $"The stored credential for repository '{repository.Slug}' cannot be decrypted because the "
                 + "Data Protection key ring has changed. Ask the operator to set the credential again.");

@@ -117,20 +117,12 @@ public static class Telemetry
     ///     <c>appsettings</c> gets (ADR-0004). The standard variable is honoured alongside the
     ///     configuration key so that the app and the exporter cannot disagree on whether it is on.
     /// </summary>
-    public static Uri? OtlpEndpoint(IConfiguration configuration)
-    {
-        string? value = configuration["Telemetry:OtlpEndpoint"] ?? configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
-        if (string.IsNullOrWhiteSpace(value)) return null;
+    public static Uri? OtlpEndpoint(IConfiguration configuration) =>
+        Setting.Url(configuration, "Telemetry:OtlpEndpoint", Remedy)
+        ?? Setting.Url(configuration, "OTEL_EXPORTER_OTLP_ENDPOINT", Remedy);
 
-        // Named rather than left to UriFormatException: the server refuses to start over this, and
-        // "Invalid URI: The format of the URI could not be determined" does not say which setting.
-        // InvalidOperationException and not McpException: no MCP tool is on this path, startup is.
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var endpoint))
-            throw new InvalidOperationException(
-                $"Telemetry:OtlpEndpoint (or OTEL_EXPORTER_OTLP_ENDPOINT) is '{value}', which is not an absolute "
-                + "URL. Give it one such as http://localhost:4317, or remove it to run without telemetry.");
-        return endpoint;
-    }
+    private const string Remedy =
+        "Give it one such as http://localhost:4317, or remove it to run without telemetry.";
 
     /// <summary>
     ///     Registers tracing and metrics when an OTLP endpoint is configured, and does nothing at all
