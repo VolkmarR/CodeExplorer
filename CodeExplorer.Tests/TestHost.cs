@@ -57,12 +57,7 @@ public sealed class TestHost : IDisposable
                 builder.UseSetting("Index:DrainSeconds", seconds.ToString(CultureInfo.InvariantCulture));
             if (_minimumFreeBytes is { } bytes)
                 builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
-            if (!_warmUpOnStart) return;
-
-            builder.UseSetting("Refresh:WarmUpOnStart", "true");
-            // No delay: the delay exists so a real wake serves the request that caused it first, and a
-            // test that waited thirty seconds for that would be asserting on the clock.
-            builder.UseSetting("Refresh:WarmUpDelaySeconds", "0");
+            if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
         });
 
     /// <summary>The host's warm-up service, for a test that awaits the pass it does rather than polling.</summary>
