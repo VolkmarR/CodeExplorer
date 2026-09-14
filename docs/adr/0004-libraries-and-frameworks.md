@@ -41,7 +41,8 @@ freely within the same major and records anything larger here.
 - **No scheduler library.** The app scales to zero, so an in-process timer cannot fire the warm-up
   or a scheduled refresh. The API exposes operator endpoints for refresh and warm-up and a
   Container Apps Job on a cron calls them. Progress reaches the web UI by polling a status
-  endpoint.
+  endpoint. Amended on 2026-09-14: still no library, but a `BackgroundService` may now run the
+  warm-up in process — see the note below, which says what that can and cannot replace.
 - **xunit.v3 4.0.1** with its built-in `Assert`, **Microsoft.AspNetCore.Mvc.Testing 10.0.12** for
   the in-process host, and the MCP SDK's own client for tests that connect to an endpoint. No
   assertion library.
@@ -123,6 +124,25 @@ below replaced that, and the reasoning for each is recorded here rather than in 
   for frameworks this app does not use and rules that need the `react-doctor` CLI's whole-project
   view. It earned its place on the first run by finding a real defect: a search form that copied the
   URL's parameters into state once and went stale when the pager navigated.
+
+## The in-process warm-up, added on 2026-09-14
+
+Asked for after #9 shipped, and added as `WarmUpService`, a framework `BackgroundService` with a
+`PeriodicTimer` — no library, so the decision above still holds on its own terms. What changed is
+the claim that an in-process timer is useless here, which is true only under scale to zero and was
+written as though it were true always.
+
+- **It is off unless `Refresh:WarmUpOnStart` is set**, and absent configuration therefore keeps the
+  behaviour #9 shipped. `Refresh:WarmUpDelaySeconds` (default 30) holds it back so that the request
+  which woke the container is answered before every other project starts restoring, and
+  `Refresh:WarmUpIntervalMinutes` (absent: once per start) repeats it.
+- **It cannot replace the Container Apps Job.** A hosted service runs only while the container does.
+  Under scale to zero the call that has to happen before working hours is also the call that wakes
+  the container, and nothing inside a stopped container can make it. The endpoint stays, and a cron
+  is still how a scale-to-zero deployment warms up.
+- **Switching it on under scale to zero is worse than leaving it off.** Wakes are frequent there, and
+  warming every project on each one is exactly the cost lazy attach was built to avoid: an off-hours
+  wake would pay for everyone's restore rather than one project's. It is for `minReplicas` at one.
 
 ## Consequences
 

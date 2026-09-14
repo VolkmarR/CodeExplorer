@@ -67,8 +67,9 @@ _Avoid_: Snapshot, archive, cache
 
 **Warm-Up**:
 Attaching every project ahead of the working day, so the first agent of the morning does not wait
-for a restore. It is an operator action an external cron calls, never a schedule the server keeps:
-a server that has scaled to zero has nothing running to fire one.
+for a restore. An external cron calls it where the server scales to zero, because a stopped server
+has nothing running to fire one and the call is also what wakes it; a server kept running can also
+warm itself on start. Either way it is one walk of every project, and the same walk.
 _Avoid_: Preload, prefetch, cache warming
 
 **Project Slug**:

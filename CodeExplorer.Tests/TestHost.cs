@@ -26,17 +26,24 @@ public sealed class TestHost : IDisposable
     ///     drain gave up on; the default is long enough that a test holding one blocks the swap.
     /// </param>
     /// <param name="minimumFreeBytes">Raised past any real disk to prove the free-space refusal.</param>
-    public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null)
+    /// <param name="warmUpOnStart">
+    ///     Switches on the background warm-up, which is off everywhere else so that a restart in a test
+    ///     is a cold wake and nothing restores behind the assertions.
+    /// </param>
+    public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
+        bool warmUpOnStart = false)
     {
         _engine = engine;
         _drainSeconds = drainSeconds;
         _minimumFreeBytes = minimumFreeBytes;
+        _warmUpOnStart = warmUpOnStart;
         Factory = Build();
     }
 
     private readonly SearchEngine _engine;
     private readonly int? _drainSeconds;
     private readonly long? _minimumFreeBytes;
+    private readonly bool _warmUpOnStart;
 
     public WebApplicationFactory<Program> Factory { get; private set; }
 
@@ -50,7 +57,16 @@ public sealed class TestHost : IDisposable
                 builder.UseSetting("Index:DrainSeconds", seconds.ToString(CultureInfo.InvariantCulture));
             if (_minimumFreeBytes is { } bytes)
                 builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
+            if (!_warmUpOnStart) return;
+
+            builder.UseSetting("Refresh:WarmUpOnStart", "true");
+            // No delay: the delay exists so a real wake serves the request that caused it first, and a
+            // test that waited thirty seconds for that would be asserting on the clock.
+            builder.UseSetting("Refresh:WarmUpDelaySeconds", "0");
         });
+
+    /// <summary>The host's warm-up service, for a test that awaits the pass it does rather than polling.</summary>
+    public WarmUpService WarmUpService => Factory.Services.GetRequiredService<WarmUpService>();
 
     /// <summary>
     ///     Stops the server and starts a new one over the same directories, which is what a scale to
