@@ -1,5 +1,6 @@
 import { Link, useLocation, useParams } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
+import { AccountBar } from '@/features/auth/AccountBar'
 import { treeSearch } from '@/features/files/browseParams'
 import { cn } from '@/lib/utils'
 
@@ -65,6 +66,7 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
               </nav>
             </>
           ) : null}
+          <AccountBar />
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>

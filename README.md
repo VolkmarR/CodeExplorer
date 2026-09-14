@@ -31,6 +31,30 @@ running locally at a container is a one-way step: a persisted key ring is read u
 application name rather than the framework's path-derived one, so credentials stored before the
 switch have to be set again.
 
+Authentication is the fourth, and the one that changes what the server *is*: with no
+`AzureAd:ClientId` set there is no tenant to check anything against, so every endpoint answers
+anonymously and local work stays a single `dotnet run`. Set `AzureAd:ClientId` and `AzureAd:TenantId`
+(plus `AzureAd:Instance` for a cloud other than the public one, and `AzureAd:ClientSecret` for the
+web UI's sign-in) and every endpoint requires an authenticated caller by default: an API client or an
+MCP client presents a bearer token, and the browser signs in through this server and holds a cookie,
+never a token. A client id with no tenant id stops the server rather than coming up half-configured,
+and the server says at start which of the two shapes it is in.
+
+Three things stay anonymous on purpose, and they are the whole list: the sign-in endpoints, the
+per-project protected-resource documents below, and the UI's own static bundle. The last of those is
+not a policy decision but a consequence of how it is served — `Program.cs` says why, and what is
+open is the bundle and nothing it renders, because every byte of that comes from `/api`.
+
+An MCP client discovers the tenant from the 401 itself: a project endpoint answers
+`WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/projects/{slug}/mcp"`,
+and that document — anonymous, one per project, a 404 for a slug that is no project — names the
+authority to sign in against. There is deliberately no per-project authorization: every project
+shares one audience, so any authenticated user reaches every project.
+
+The sign-in cookie is protected by the same Data Protection key ring as the credentials above, which
+is why it survives a restart only where that key ring does. A container without
+`Storage:BlobContainerUrl` signs every operator out on every stop.
+
 The Azure half of that is not covered by the tests — they assert that a configured deployment gets a
 blob repository and a Key Vault encryptor, and nothing reaches an account. To check it for real:
 point both settings at a container and a key the signed-in identity may use, start the server, add a
