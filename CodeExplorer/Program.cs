@@ -20,6 +20,8 @@ builder.Services.AddSingleton<IndexBuilder>();
 builder.Services.AddSingleton<ProjectRefresh>();
 builder.Services.AddSingleton<RefreshService>();
 builder.Services.AddSingleton<GrepSearch>();
+builder.Services.AddSingleton<ReferenceSearch>();
+builder.Services.AddSingleton<MatchList>();
 builder.Services.AddSingleton<ProjectOverview>();
 builder.Services.AddSingleton<WarmUp>();
 // Registered twice on purpose: as a singleton so a caller can await the pass it does, and as the

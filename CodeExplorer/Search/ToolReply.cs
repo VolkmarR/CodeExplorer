@@ -50,6 +50,17 @@ internal static class ToolReply
 
     public static string Plural(long n, string one, string? many = null) => n == 1 ? one : many ?? one + "s";
 
+    /// <summary>
+    ///     The one sentence every filtered tool ends a miss with. Written once because a filtered miss
+    ///     and a clean negative read identically to an agent and mean opposite things, and a tool that
+    ///     spelled the warning its own way would be the one an agent skims past.
+    /// </summary>
+    /// <param name="count">How many of <paramref name="unit" /> the filters hid.</param>
+    /// <param name="unit">What was hidden, singular: "file", "line".</param>
+    public static string HiddenByFilters(long count, string unit) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"{count} {Plural(count, unit)} outside your repo/path/ext/exclude filters; the filters hid every one. Widen or drop them to see those.");
+
     public static string Bytes(long size) => size switch
     {
         < 1024 => string.Create(CultureInfo.InvariantCulture, $"{size} B"),
