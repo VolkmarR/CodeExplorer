@@ -6,6 +6,12 @@
  */
 export const projectsKey = ['projects'] as const
 
+/**
+ * Its own root and under nothing: who is signed in belongs to the session rather than to any project,
+ * and no refresh, creation or deletion makes it stale.
+ */
+export const authKey = ['auth'] as const
+
 export function projectKey(slug: string) {
   return ['project', slug] as const
 }

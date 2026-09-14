@@ -13,8 +13,10 @@ internal sealed record AddRepositoryRequest(string Slug, string Url, string? Cre
 internal sealed record RepositoryResponse(string Slug, string Url, bool HasCredential);
 
 /// <summary>
-///     Operator endpoints for projects and repositories. Authentication is off until the ticket that
-///     adds it (ADR-0004: absent configuration means an unauthenticated server).
+///     Operator endpoints for projects and repositories. Nothing here says anything about who may
+///     call it: the fallback policy <see cref="Authentication" /> installs requires an authenticated
+///     caller of every endpoint that does not opt out, and where no tenant is configured there is no
+///     policy and the server is open by design (ADR-0004).
 /// </summary>
 internal static class ControlEndpoints
 {

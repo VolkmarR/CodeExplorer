@@ -10,6 +10,9 @@ builder.AddTelemetry();
 // they are not (ADR-0004) — which is what protects stored credentials on a developer machine and
 // what would lose them in a container.
 var keyRing = builder.AddKeyRing();
+// Entra where a tenant is configured and an open server where none is (ADR-0004). Read here rather
+// than at first use because a half-configured tenant has to stop the server, not a request.
+var authentication = builder.AddAuthentication();
 // Blob Storage when a container is configured and a folder on disk when none is (ADR-0004), so a
 // plain `dotnet run` with an empty appsettings needs no Azure and still keeps a durable copy.
 builder.Services.AddSingleton<DurableStore>();
@@ -41,21 +44,41 @@ var app = builder.Build();
 // application that has a logger and because the answer is what a credential that stops decrypting
 // needs. It warns about the two shapes that are not the deployed one.
 keyRing.Report(app.Logger);
+authentication.Report(app.Logger);
+
+// Only where there is a tenant: with no scheme registered these throw, and an empty appsettings must
+// still yield a complete server. The pair sits before the endpoints so that the fallback policy has a
+// principal to judge, and before the static files so that the metadata document — which the MCP
+// scheme serves from inside UseAuthentication — is answered without reaching an endpoint at all.
+if (authentication.Enabled)
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
 
 // Operator endpoints, one group per module (ADR-0005).
 var api = app.MapGroup("/api");
+api.MapAuthentication(authentication);
 api.MapControl();
 api.MapRefresh();
 api.MapSearch();
 api.MapOperator();
 
 // One MCP endpoint per project (ADR-0002), bound from the route before the SDK sees the request.
-app.MapGroup("/projects/{slug}").BindProject().MapMcp("/mcp");
+app.MapGroup("/projects/{slug}").BindProject().MapMcp("/mcp").ProtectMcp(authentication);
 
 // The operator web UI is a Vite build into wwwroot. It is absent until someone runs that build, and
 // the server must still start: MapFallbackToFile would 404 at request time, which is the same answer
 // the browser gets today for an unbuilt UI. Every client-side route falls back to index.html, and the
 // fallback runs last so it cannot shadow /api or /projects/{slug}/mcp.
+//
+// The fallback is an endpoint and is therefore behind the fallback policy, so a browser asking for a
+// page is sent to sign in. The files beside it are not: MapFallbackToFile matches `{*path:nonfile}`,
+// so anything with an extension reaches UseStaticFiles, which is middleware and enforces no policy.
+// Left that way knowingly — what is anonymous is the UI's own bundle and nothing it renders, since
+// every byte of that comes from /api. MapStaticAssets would close it by making them endpoints, and
+// cannot be used: its manifest is built by msbuild, and wwwroot is filled by a Vite build that runs
+// outside it, so every asset would 404 instead.
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapFallbackToFile("index.html");

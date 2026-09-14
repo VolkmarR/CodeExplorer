@@ -13,9 +13,12 @@ internal static class BoundProject
 
     /// <summary>
     ///     Resolves the <c>{slug}</c> route value to a project before the MCP SDK sees the request, so
-    ///     every tool in the session answers for that project and nothing else. Once authentication
-    ///     arrives, the unknown-slug 404 moves to <c>OnResourceMetadataRequest</c> (ADR-0004) so
-    ///     protected-resource metadata is path-scoped as well; until then this filter stands in.
+    ///     every tool in the session answers for that project and nothing else.
+    ///     It is not the only place a slug is checked: <see cref="Authentication" /> refuses a
+    ///     protected-resource document for one that is no project, because that answer has to be given
+    ///     before any token exists and therefore cannot come from here. The two are the same question
+    ///     asked at two points of the same request, not a duplicate — this one runs after authorization
+    ///     and binds; that one runs instead of it and only says no.
     /// </summary>
     public static RouteGroupBuilder BindProject(this RouteGroupBuilder projects)
     {

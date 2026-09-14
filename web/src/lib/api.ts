@@ -3,6 +3,20 @@ import type { SearchParameters } from '@/features/search/searchParams'
 
 /** The shapes `/api` answers with. Each mirrors a record in the C# host; nothing is invented here. */
 
+/**
+ * Whether this server has a tenant at all, and who is signed in to it. Two questions and not one: a
+ * development server is deliberately unauthenticated (ADR-0004), so a UI reading only `signedIn`
+ * would offer every developer a sign-in that goes nowhere.
+ *
+ * There is no token here, and that is the design rather than an omission: the browser holds a cookie
+ * this server issued and never sees a token at all.
+ */
+export interface AuthStatus {
+  enabled: boolean
+  signedIn: boolean
+  name: string | null
+}
+
 export interface ProjectIndexStatus {
   builtAt: string | null
   ftsIndexed: boolean
@@ -151,8 +165,39 @@ export interface FileContent {
  */
 export { HTTPError as ApiError } from 'ky'
 
+/**
+ * Sign-in and sign-out are navigations and not calls, so they are URLs the browser goes to rather
+ * than methods on the client below. They have to be: the server answers each with a redirect to the
+ * tenant, and only the address bar can follow one cross-origin.
+ */
+export function signInHref(returnTo: string) {
+  return `/api/auth/signin?returnUrl=${encodeURIComponent(returnTo)}`
+}
+
+/**
+ * A form action and not an href: the server takes sign-out as a POST, so that a cross-site page
+ * cannot force one and the cookie's SameSite=Lax is what stops it. Submitted, never linked.
+ */
+export const signOutAction = '/api/auth/signout'
+
 const http = ky.create({
   hooks: {
+    afterResponse: [
+      (request, _options, response) => {
+        // The cookie expired while the page was open. The server refuses in prose rather than
+        // redirecting, because a cross-origin 302 to the tenant would fail CORS and arrive here as a
+        // network error — so the navigation that fixes it has to be made from this side.
+        //
+        // `/api/auth` is exempt: it is anonymous and never 401s, and a loop through the sign-in
+        // endpoint is the one failure this hook could cause.
+        if (response.status === 401 && !request.url.includes('/api/auth/')) {
+          globalThis.location.assign(
+            signInHref(globalThis.location.pathname + globalThis.location.search),
+          )
+        }
+        return response
+      },
+    ],
     beforeError: [
       ({ error }) => {
         // A timeout or a dropped connection is not an HTTPError and has no body to read.
@@ -183,6 +228,9 @@ const http = ky.create({
 })
 
 export const api = {
+  /** Anonymous, and mapped whether or not there is a tenant: it is what says which of those it is. */
+  auth: () => http.get('auth/me').json<AuthStatus>(),
+
   addRepository: (project: string, slug: string, url: string, credential: string | null) =>
     http
       .post(`projects/${project}/repositories`, { json: { slug, url, credential } })
