@@ -22,6 +22,10 @@ builder.Services.AddSingleton<RefreshService>();
 builder.Services.AddSingleton<GrepSearch>();
 builder.Services.AddSingleton<ProjectOverview>();
 builder.Services.AddSingleton<WarmUp>();
+// Registered twice on purpose: as a singleton so a caller can await the pass it does, and as the
+// hosted service that runs it. It does nothing unless Refresh:WarmUpOnStart is set.
+builder.Services.AddSingleton<WarmUpService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<WarmUpService>());
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMcpServer().WithHttpTransport()
     .WithTools<ProjectTools>()
