@@ -1,6 +1,9 @@
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import type { BrowseParameters } from '@/features/files/browseParams'
+import { projectQuery } from '@/features/projects/queries'
+import { RepositorySelect } from '@/features/projects/RepositorySelect'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -11,6 +14,7 @@ import { Label } from '@/components/ui/label'
  */
 export function BrowseFilter({ project, search }: { project: string; search: BrowseParameters }) {
   const navigate = useNavigate()
+  const { data: detail } = useSuspenseQuery(projectQuery(project))
   const [draft, setDraft] = useState(search)
 
   // Re-seeded when the URL changes under the form, for the reason SearchForm gives at length.
@@ -19,6 +23,9 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
     setSeeded(search)
     setDraft(search)
   }
+
+  // One repository has nothing to choose between; the tree's root already is it (ADR-0006).
+  const multiRepository = !detail.singleRepository && detail.repositories.length > 1
 
   return (
     <form
@@ -35,21 +42,21 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
           name="glob"
           value={draft.glob}
           onChange={(event) => setDraft({ ...draft, glob: event.target.value })}
-          placeholder="empty to browse the tree"
+          placeholder="*Handler.cs — empty to browse the tree"
           className="font-mono"
         />
       </div>
-      <div className="w-56 space-y-2">
-        <Label htmlFor="browse-repository">Repository</Label>
-        <Input
-          id="browse-repository"
-          name="repository"
-          value={draft.repository ?? ''}
-          onChange={(event) => setDraft({ ...draft, repository: event.target.value || undefined })}
-          placeholder="all"
-          className="font-mono"
-        />
-      </div>
+      {multiRepository ? (
+        <div className="w-52 space-y-2">
+          <Label htmlFor="browse-repository">Repository</Label>
+          <RepositorySelect
+            id="browse-repository"
+            repositories={detail.repositories}
+            value={draft.repository ?? ''}
+            onChange={(slug) => setDraft({ ...draft, repository: slug || undefined })}
+          />
+        </div>
+      ) : null}
       <Button type="submit">Filter</Button>
     </form>
   )

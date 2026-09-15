@@ -2,14 +2,14 @@ import { useEffect } from 'react'
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
 import { api } from '@/lib/api'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { IndexStatus } from '@/features/projects/IndexStatus'
-import { NewRepositoryForm } from '@/features/projects/NewRepositoryForm'
 import { RefreshProgress } from '@/features/refresh/RefreshProgress'
 import { RepositoryTable } from '@/features/projects/RepositoryTable'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { toast } from '@/components/ui/toast'
 import { invalidateProject, projectQuery, projectsQuery } from '@/features/projects/queries'
 import { refreshStatusQuery } from '@/features/refresh/queries'
 
@@ -45,6 +45,9 @@ export function ProjectPage() {
     mutationFn: () => api.removeProject(slug),
     onSuccess: async () => {
       await queryClient.invalidateQueries(projectsQuery())
+      // The toast outlives the page, which is the point: the list this lands on shows the project
+      // gone and nothing else, so the toast is what says it was this click that did it.
+      toast.add({ title: `Deleted ${project.name}`, type: 'success' })
       await navigate({ to: '/' })
     },
   })
@@ -54,7 +57,7 @@ export function ProjectPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-          <p className="mt-1 font-mono text-sm text-muted-foreground">{project.slug}</p>
+          <p className="mt-1 font-mono text-xs text-muted-foreground">{project.slug}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <IndexStatus status={project.index} />
             {project.singleRepository ? (
@@ -64,26 +67,15 @@ export function ProjectPage() {
             ) : null}
           </div>
         </div>
-        <div className="flex gap-2">
-          {/* "Refresh" as CONTEXT.md defines it, and for a project that has never been built too: the
-              first one clones rather than fetches, but it is the same action and a second name for it
-              would only suggest there are two. The label says what is happening rather than what was
-              asked for, because the work outlives the click and a page reopened mid-refresh must read
-              the same. */}
-          <Button onClick={() => refresh.mutate()} disabled={running || refresh.isPending}>
-            {running ? 'Refreshing…' : 'Refresh'}
-          </Button>
-          <Button
-            variant="destructive"
-            disabled={remove.isPending}
-            onClick={() => {
-              if (globalThis.confirm(`Delete project '${slug}', its index and its local copies?`))
-                remove.mutate()
-            }}
-          >
-            Delete
-          </Button>
-        </div>
+        {/* "Refresh" as CONTEXT.md defines it, and for a project that has never been built too: the
+            first one clones rather than fetches, but it is the same action and a second name for it
+            would only suggest there are two. The label says what is happening rather than what was
+            asked for, because the work outlives the click and a page reopened mid-refresh must read
+            the same. It stands alone up here: it is the one action on this page done more than once,
+            and deleting the project sits at the bottom where a slip of the hand does not reach it. */}
+        <Button onClick={() => refresh.mutate()} disabled={running || refresh.isPending}>
+          {running ? 'Refreshing…' : 'Refresh'}
+        </Button>
       </div>
 
       {/* A refusal — another refresh running, or too little disk — is the server's prose and belongs
@@ -92,29 +84,38 @@ export function ProjectPage() {
       {remove.error ? <ErrorPanel error={remove.error} /> : null}
       <RefreshProgress status={status} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Repositories</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <RepositoryTable
-            project={slug}
-            repositories={project.repositories}
-            builtAt={project.index.builtAt}
-          />
-        </CardContent>
-      </Card>
+      <RepositoryTable project={project} />
 
-      {/* A single-repository project takes its one and no more, and the declaration cannot be undone,
-          so once it is full there is no form to show — only the reason there is none (ADR-0006). */}
-      {project.singleRepository && project.repositories.length > 0 ? (
-        <p className="text-sm text-muted-foreground">
-          This is a single-repository project, so it holds the one repository above and cannot take
-          another. Create a separate project for a second repository.
-        </p>
-      ) : (
-        <NewRepositoryForm project={slug} singleRepository={project.singleRepository} />
-      )}
+      <section
+        aria-labelledby="danger-title"
+        className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-destructive/40 px-5 py-4"
+      >
+        <div>
+          <h2 id="danger-title" className="text-sm font-medium text-destructive">
+            Delete this project
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Removes the index and the local copies of its repositories. An agent connected to this
+            project stops getting answers.
+          </p>
+        </div>
+        <ConfirmDialog
+          trigger="Delete project"
+          title={`Delete ${project.name}?`}
+          description={
+            <>
+              Its index and the local copies of{' '}
+              {project.repositories.length === 0
+                ? 'its repositories'
+                : project.repositories.map((r) => r.slug).join(', ')}{' '}
+              are removed. This cannot be undone.
+            </>
+          }
+          action="Delete project"
+          disabled={remove.isPending}
+          onConfirm={() => remove.mutate()}
+        />
+      </section>
     </div>
   )
 }
