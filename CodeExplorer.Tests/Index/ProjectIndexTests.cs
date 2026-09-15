@@ -36,7 +36,7 @@ public sealed class ProjectIndexTests : IDisposable
             }
         });
 
-        Assert.True(File.Exists(Path.Combine(host.DataDirectory, "indexes", "alpha.duckdb")));
+        Assert.True(File.Exists(host.IndexFile("alpha")));
 
         var qualified = await host.ScalarsAsync("alpha", "SELECT qualified_path FROM files ORDER BY qualified_path");
         Assert.Equal(["one/README.md", "one/src/index.ts", "two/logo.png", "two/src/index.ts"], qualified);

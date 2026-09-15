@@ -6,6 +6,7 @@ using LibGit2Sharp;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Xunit;
@@ -61,7 +62,17 @@ public sealed class TestHost : IDisposable
     private readonly bool _authenticated;
     private readonly string? _extensionDirectory;
 
-    public WebApplicationFactory<Program> Factory { get; private set; }
+    /// <summary>
+    ///     Private, so a test cannot build a client that bypasses <see cref="CreateClient" /> or reach a
+    ///     path the host has not named. The interface is the test surface (#41).
+    /// </summary>
+    private WebApplicationFactory<Program> Factory { get; set; }
+
+    /// <summary>
+    ///     The server's services, for the few tests whose subject is one of them — a cookie minted the
+    ///     way the server mints it, a protector with the server's purpose, a search run without HTTP.
+    /// </summary>
+    public IServiceProvider Services => Factory.Services;
 
     private WebApplicationFactory<Program> Build() =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
@@ -99,8 +110,20 @@ public sealed class TestHost : IDisposable
     ///     Removes a project's index file, which is what the container's disk being wiped leaves behind:
     ///     a project that exists, has a durable copy, and has nothing local to answer from.
     /// </summary>
-    public void DeleteIndexFile(string slug) =>
-        DeleteDatabase(Path.Combine(DataDirectory, "indexes", slug + ".duckdb"));
+    public void DeleteIndexFile(string slug) => DeleteDatabase(IndexFile(slug));
+
+    /// <summary>
+    ///     The file a process killed mid-build leaves behind: every table present and nothing saying the
+    ///     build finished. A build writes <c>index_info</c> last, so removing its row is exactly that
+    ///     state, and the project must read as not built rather than as built from half its files.
+    /// </summary>
+    public async Task InterruptBuildAsync(string slug)
+    {
+        using var lease = await OpenIndexAsync(slug);
+        using var command = lease.Connection.CreateCommand();
+        command.CommandText = "DELETE FROM index_info";
+        await command.ExecuteNonQueryAsync(Ct);
+    }
 
     /// <summary>The same for the control database, whose backup is a file rather than a Parquet set.</summary>
     public void DeleteControlDatabase() => DeleteDatabase(Path.Combine(DataDirectory, "control.duckdb"));
@@ -119,7 +142,19 @@ public sealed class TestHost : IDisposable
     public string DurableControlBackup => Path.Combine(DurableDirectory, "control", "control.duckdb");
 
     /// <summary>The folder standing in for a blob container, which is what an unconfigured app uses.</summary>
-    public string DurableDirectory => Path.Combine(_root, "durable");
+    private string DurableDirectory => Path.Combine(_root, "durable");
+
+    /// <summary>A project's index file, for a test asserting that a deletion took it or a build made it.</summary>
+    public string IndexFile(string slug) => Path.Combine(DataDirectory, "indexes", slug + ".duckdb");
+
+    /// <summary>The folder holding every local copy of one project.</summary>
+    public string ProjectClones(string slug) => Path.Combine(DataDirectory, "clones", slug);
+
+    /// <summary>
+    ///     A path under the host's data directory for a file the test itself writes, or names and never
+    ///     writes. Nothing in the server looks there, and the directory goes when the host does.
+    /// </summary>
+    public string ScratchFile(string name) => Path.Combine(DataDirectory, name);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -215,14 +250,17 @@ public sealed class TestHost : IDisposable
     /// <summary>Deletes a fixture, which is what a remote that was removed or renamed looks like from here.</summary>
     public void RemoveGitRepository(string name) => DeleteTree(FixturePath(name));
 
-    /// <summary>What the host was pointed at, for a test asserting which files a deletion left behind.</summary>
-    public string DataDirectory => Path.Combine(_root, "data");
+    /// <summary>What the host was pointed at. The layout under it is named by the members above.</summary>
+    private string DataDirectory => Path.Combine(_root, "data");
 
-    public async Task CreateProjectAsync(string slug, bool singleRepository = false)
+    /// <param name="slug">The project's slug, which is also its display name unless <paramref name="name" /> says otherwise.</param>
+    /// <param name="singleRepository">Declares the project single-repository (ADR-0006).</param>
+    /// <param name="name">A display name, for a test asserting that the name and not the slug is shown.</param>
+    public async Task CreateProjectAsync(string slug, bool singleRepository = false, string? name = null)
     {
         using var http = Fixture();
         using var response =
-            await http.PostAsJsonAsync("/api/projects", new { slug, name = slug, singleRepository }, Ct);
+            await http.PostAsJsonAsync("/api/projects", new { slug, name = name ?? slug, singleRepository }, Ct);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
@@ -351,11 +389,18 @@ public sealed class TestHost : IDisposable
         return await McpClient.CreateAsync(transport, cancellationToken: Ct);
     }
 
-    /// <summary>Calls a tool and returns its single text block.</summary>
+    /// <summary>
+    ///     Calls a tool and returns its single text block. A refused call — the SDK reports a handler's
+    ///     <see cref="McpException" /> as an error result rather than throwing on the client — is
+    ///     re-raised here with the tool's text, so an assertion on an answer cannot be met by a refusal
+    ///     that happens to contain the right words. A test that wants the refusal asserts on the throw.
+    /// </summary>
     public static async Task<string> CallAsync(McpClient client, string tool, Dictionary<string, object?> arguments)
     {
         var result = await client.CallToolAsync(tool, arguments, cancellationToken: Ct);
         var block = Assert.Single(result.Content);
-        return Assert.IsType<TextContentBlock>(block).Text;
+        string text = Assert.IsType<TextContentBlock>(block).Text;
+        if (result.IsError == true) throw new McpException(text);
+        return text;
     }
 }

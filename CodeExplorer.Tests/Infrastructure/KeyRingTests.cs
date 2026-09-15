@@ -139,11 +139,11 @@ public sealed class KeyRingTests
         // then substitutes a different key ring into. The wipe itself is the README's manual check.
         host.Restart();
 
-        var control = host.Factory.Services.GetRequiredService<ControlDatabase>();
+        var control = host.Services.GetRequiredService<ControlDatabase>();
         var repository = Assert.Single(await control.ListRepositoriesAsync("keyring", Ct));
         Assert.NotNull(repository.ProtectedCredential);
         // Through the same purpose GitClones unprotects with, so a purpose that drifted fails here too.
-        var protector = host.Factory.Services.GetRequiredService<IDataProtectionProvider>()
+        var protector = host.Services.GetRequiredService<IDataProtectionProvider>()
             .CreateProtector(ControlDatabase.CredentialPurpose);
         Assert.Equal("a-token", protector.Unprotect(repository.ProtectedCredential));
     }
