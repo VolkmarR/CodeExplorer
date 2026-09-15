@@ -124,19 +124,12 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
     private async Task<(ProjectIndexStatus Status, Dictionary<string, IndexedRepository> Indexed)> ReadIndexAsync(
         string slug, bool restore, CancellationToken cancellationToken)
     {
-        using var index = restore
-            ? await FileQueries.OpenAsync(indexes, slug, cancellationToken)
-            : await FileQueries.PeekAsync(indexes, slug, cancellationToken);
-        if (index is null) return (ProjectIndexStatus.None, []);
-
-        // A file left behind by an interrupted build has no index_info row. It reads as not built,
+        // Null is no index, and also a file left behind by an interrupted build: it reads as not built,
         // which is what it is and what the operator fixes by building again.
-        if (await index.InfoAsync(cancellationToken) is not { } info) return (ProjectIndexStatus.None, []);
-
-        var repositories = await index.RepositoriesAsync(cancellationToken);
-        return (
-            new ProjectIndexStatus(info.BuiltAt, info.FtsIndexed, repositories.Sum(r => r.FileCount),
-                repositories.Sum(r => r.LineCount)),
-            repositories.ToDictionary(r => r.Slug));
+        var status = await IndexReader.StatusAsync(indexes, slug, restore, cancellationToken);
+        return status is null
+            ? (ProjectIndexStatus.None, [])
+            : (new ProjectIndexStatus(status.BuiltAt, status.FtsIndexed, status.Files, status.Lines),
+                status.Repositories.ToDictionary(r => r.Slug));
     }
 }

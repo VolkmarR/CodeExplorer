@@ -31,6 +31,17 @@ public sealed partial class ModuleBoundaryTests
     }
 
     [Theory]
+    [InlineData("Control")]
+    [InlineData("Operator")]
+    public void Search_is_referenced_by_nothing_in(string module)
+    {
+        // Search is the tools and the searches behind them. What repo_info and the operator's pages
+        // need from an index — open it, describe it — is the index reader in Infrastructure, so a
+        // reference from here into Search is a second reader growing where the first one already is.
+        Assert.Empty(ReferencesFrom(module, TypesDeclaredIn("Search")));
+    }
+
+    [Theory]
     [InlineData("Search")]
     [InlineData("Refresh")]
     [InlineData("Operator")]

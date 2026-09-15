@@ -9,7 +9,7 @@ namespace CodeExplorer;
 ///     service: three services spelling "skip generated files" three ways would answer the same
 ///     <c>exclude="*.g.cs"</c> differently, which is the kind of drift an agent cannot see.
 ///     <see cref="Repository" /> is a slug already resolved against the index by
-///     <see cref="ResolveRepositoryAsync" />; an unresolved one never reaches the SQL, because an
+///     <see cref="IndexReader.OpenAsync" />; an unresolved one never reaches the SQL, because an
 ///     unknown repository must be explained rather than answered with an empty result.
 /// </summary>
 public sealed record FileFilter(
@@ -79,38 +79,6 @@ public sealed record FileFilter(
                 ? $"lower(f.qualified_path) GLOB {parameter}"
                 : $"contains(lower(f.qualified_path), {parameter})";
         }
-    }
-
-    /// <summary>
-    ///     The <c>repo</c> argument a tool was given, matched against the slugs the index holds. Null
-    ///     for both means "every repository"; a slug that matches nothing comes back as the explanation
-    ///     to hand the caller, because an unknown repository that silently matched nothing would read
-    ///     as a clean negative.
-    /// </summary>
-    /// <param name="connection">An index connection already bound to the project.</param>
-    /// <param name="projectSlug">Named in the explanation, so an agent on the wrong endpoint sees it.</param>
-    /// <param name="repo">What the caller asked for, trimmed and matched case-insensitively.</param>
-    /// <param name="cancellationToken">Threaded through to the DuckDB command.</param>
-    internal static async Task<(string? Slug, string? Unknown)> ResolveRepositoryAsync(
-        DuckDBConnection connection, string projectSlug, string? repo, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(repo)) return (null, null);
-
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT slug FROM repositories ORDER BY repo_id";
-        var slugs = new List<string>();
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken)) slugs.Add(reader.Text("slug"));
-        }
-
-        string wanted = repo.Trim();
-        // Matched the way a path is, so an agent quoting a slug from memory in the wrong case is not
-        // told the repository does not exist.
-        string? found = slugs.FirstOrDefault(s => string.Equals(s, wanted, StringComparison.OrdinalIgnoreCase));
-        return found is not null
-            ? (found, null)
-            : (null, $"No repository '{wanted}' in project '{projectSlug}'. Repositories: {string.Join(", ", slugs)}.");
     }
 
     private static List<string> SplitTerms(string? terms) =>

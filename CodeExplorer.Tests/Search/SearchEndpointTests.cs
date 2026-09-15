@@ -144,6 +144,31 @@ public sealed class SearchEndpointTests
     }
 
     [Fact]
+    public async Task Browsing_an_unknown_repository_is_an_explanation_not_an_empty_listing()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        // A repository slug that names nothing is the one browse argument that could pass for a clean
+        // negative: an empty list looks exactly like "nothing matched". Both routes that take one say
+        // what exists instead, as a 400 because the project is there and the request named something
+        // in it that is not.
+        using var http = host.Factory.CreateClient();
+        using var files = await http.GetAsync("/api/projects/alpha/files?repository=three", Ct);
+        using var tree = await http.GetAsync("/api/projects/alpha/tree?path=three/src", Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, files.StatusCode);
+        string explanation = await files.Content.ReadAsStringAsync(Ct);
+        Assert.Contains("No repository 'three' in project 'alpha'", explanation, StringComparison.Ordinal);
+        Assert.Contains("one, two", explanation, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.BadRequest, tree.StatusCode);
+        Assert.Contains("No repository 'three'", await tree.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+
+        // Case is forgiven the way it is for a path, and the answer is spelled the way the index holds it.
+        var scoped = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?repository=TWO");
+        Assert.Equal("two", Assert.Single(scoped.Files).RepositorySlug);
+    }
+
+    [Fact]
     public async Task An_unknown_file_is_a_not_found()
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
