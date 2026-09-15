@@ -32,33 +32,36 @@ internal static class ControlEndpoints
                 _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." })
             });
 
+        // The project is bound from the route (BoundProject): an unknown slug never reaches these.
+        var project = api.MapProject();
+
         // The credential is accepted here and nowhere else surfaces it: responses carry only whether one is set.
-        api.MapPost("/projects/{project}/repositories",
-            async (string project, AddRepositoryRequest request, ControlDatabase control, CancellationToken ct) =>
-                await control.AddRepositoryAsync(project, request.Slug, request.Url, request.Credential, ct) switch
+        project.MapPost("/repositories",
+            async (Project project, AddRepositoryRequest request, ControlDatabase control, CancellationToken ct) =>
+                await control.AddRepositoryAsync(project.Slug, request.Slug, request.Url, request.Credential, ct) switch
                 {
                     (AddRepositoryOutcome.Created, { } added) => Results.Created(
-                        $"/api/projects/{project}/repositories",
+                        $"/api/projects/{project.Slug}/repositories",
                         new RepositoryResponse(added.Slug, added.Url, added.HasCredential)),
+                    // Bound a moment ago and gone now: an operator deleted it between the two reads.
                     (AddRepositoryOutcome.NoProject, _) => Results.NotFound(new
-                        { error = $"No project with slug '{project}'." }),
+                        { error = BoundProject.NotFound(project.Slug) }),
                     (AddRepositoryOutcome.InvalidSlug, _) => Results.BadRequest(
                         new { error = ControlDatabase.SlugRule }),
                     (AddRepositoryOutcome.InvalidUrl, _) => Results.BadRequest(new { error = RepositoryUrl.Rule }),
                     (AddRepositoryOutcome.ProjectIsFull, _) => Results.Conflict(new
                     {
                         error =
-                            $"Project '{project}' was created as a single-repository project and already has its repository. "
+                            $"Project '{project.Slug}' was created as a single-repository project and already has its repository. "
                             + "That cannot be changed, because its files are named without a repository slug. Create another project for a second repository."
                     }),
                     _ => Results.Conflict(new
-                        { error = $"Project '{project}' already has a repository with slug '{request.Slug}'." })
+                        { error = $"Project '{project.Slug}' already has a repository with slug '{request.Slug}'." })
                 });
-        api.MapGet("/projects/{project}/repositories",
-            async (string project, ControlDatabase control, CancellationToken ct) =>
-                await control.FindAsync(project, ct) is null
-                    ? Results.NotFound(new { error = $"No project with slug '{project}'." })
-                    : Results.Ok((await control.ListRepositoriesAsync(project, ct))
-                        .Select(r => new RepositoryResponse(r.Slug, r.Url, r.HasCredential))));
+
+        project.MapGet("/repositories",
+            async (Project project, ControlDatabase control, CancellationToken ct) =>
+                (await control.ListRepositoriesAsync(project.Slug, ct))
+                .Select(r => new RepositoryResponse(r.Slug, r.Url, r.HasCredential)));
     }
 }

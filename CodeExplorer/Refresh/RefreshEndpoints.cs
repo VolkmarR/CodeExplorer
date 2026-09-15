@@ -10,30 +10,25 @@ internal static class RefreshEndpoints
 {
     public static void MapRefresh(this RouteGroupBuilder api)
     {
-        api.MapPost("/projects/{project}/refresh",
-            async (string project, ControlDatabase control, RefreshService refreshes, CancellationToken ct) =>
-                await control.FindAsync(project, ct) is { } found
-                    ? refreshes.Request(found) switch
-                    {
-                        // Accepted, not OK: the shadow build has not started yet, and the Location header
-                        // is where the caller watches it.
-                        { Refused: null, Status: var status } => Results.Accepted(
-                            $"/api/projects/{project}/refresh", status),
-                        { Refused: var refused } => Results.Json(new { error = refused.Message },
-                            statusCode: refused.StatusCode)
-                    }
-                    : Results.NotFound(new { error = $"No project with slug '{project}'." }));
+        // The project is bound from the route (BoundProject): an unknown slug never reaches these.
+        var project = api.MapProject();
 
-        api.MapGet("/projects/{project}/refresh",
-            async (string project, ControlDatabase control, RefreshService refreshes, CancellationToken ct) =>
-                // A status exists only for a project that existed when it was asked for, so the common
-                // case — a page polling this once a second while a rebuild runs — answers from memory.
-                // The control database is read only to tell an unknown slug from one that never refreshed.
-                refreshes.Find(project) is { } status
-                    ? Results.Ok(status)
-                    : await control.FindAsync(project, ct) is null
-                        ? Results.NotFound(new { error = $"No project with slug '{project}'." })
-                        : Results.Ok(refreshes.Status(project)));
+        project.MapPost("/refresh", (Project project, RefreshService refreshes) =>
+            refreshes.Request(project) switch
+            {
+                // Accepted, not OK: the shadow build has not started yet, and the Location header
+                // is where the caller watches it.
+                { Refused: null, Status: var status } => Results.Accepted(
+                    $"/api/projects/{project.Slug}/refresh", status),
+                { Refused: var refused } => Results.Json(new { error = refused.Message },
+                    statusCode: refused.StatusCode)
+            });
+
+        // A status exists only for a project that existed when it was asked for, so the common case —
+        // a page polling this once a second while a rebuild runs — answers from memory, and a project
+        // that never refreshed gets the idle status.
+        project.MapGet("/refresh", (Project project, RefreshService refreshes) =>
+            refreshes.Find(project.Slug) ?? refreshes.Status(project.Slug));
 
         // POST because it does work rather than reports it, and no UI calls it: an external cron fires
         // this before working hours so the first agent of the morning does not wait for a restore (#9).

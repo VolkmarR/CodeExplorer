@@ -37,6 +37,9 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
   a handler that needs more than one statement of its own is a handler doing too much. Once
   `Program.cs` passes about 150 lines, an endpoint group moves to a `static void MapX(this
   RouteGroupBuilder)` extension in its module's folder, and the handlers stay one statement each.
+- A handler under `/api/projects/{project}` maps onto `api.MapProject()` and declares a `Project`
+  parameter, never a slug. Whether the project exists is `BoundProject`'s question, asked once per
+  request and answered with one sentence; a handler that asks it again is a handler on the wrong group.
 - Group related DTOs at the top of the file that uses them. One type per file is not a rule here.
 - No interfaces for the sake of mocking. Tests use a real DuckDB.
 

@@ -12,21 +12,27 @@ internal static class OperatorEndpoints
         api.MapGet("/projects",
             (ProjectOverview overview, CancellationToken ct) => overview.ListAsync(ct));
 
-        api.MapGet("/projects/{project}", async (string project, ProjectOverview overview, CancellationToken ct) =>
-            await overview.FindAsync(project, ct) is { } detail
-                ? Results.Ok(detail)
-                : Results.NotFound(new { error = $"No project with slug '{project}'." }));
+        // The project is bound from the route (BoundProject): an unknown slug never reaches these.
+        var project = api.MapProject();
 
-        api.MapDelete("/projects/{project}", async (string project, ProjectOverview overview, CancellationToken ct) =>
-            await overview.DeleteAsync(project, ct)
-                ? Results.NoContent()
-                : Results.NotFound(new { error = $"No project with slug '{project}'." }));
+        project.MapGet("", (Project project, ProjectOverview overview, CancellationToken ct) =>
+            overview.FindAsync(project, ct));
 
-        api.MapDelete("/projects/{project}/repositories/{repository}",
-            async (string project, string repository, ProjectOverview overview, CancellationToken ct) =>
+        project.MapDelete("", (Project project, ProjectOverview overview, CancellationToken ct) =>
+            NoContentAfter(overview.DeleteAsync(project, ct)));
+
+        project.MapDelete("/repositories/{repository}",
+            async (Project project, string repository, ProjectOverview overview, CancellationToken ct) =>
                 await overview.DeleteRepositoryAsync(project, repository, ct)
                     ? Results.NoContent()
                     : Results.NotFound(new
-                        { error = $"Project '{project}' has no repository with slug '{repository}'." }));
+                        { error = $"Project '{project.Slug}' has no repository with slug '{repository}'." }));
+    }
+
+    /// <summary>A removal that cannot fail once the project is bound answers 204, which a Task alone would not.</summary>
+    private static async Task<IResult> NoContentAfter(Task removal)
+    {
+        await removal;
+        return Results.NoContent();
     }
 }
