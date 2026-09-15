@@ -37,14 +37,20 @@ public sealed class TestHost : IDisposable
     ///     server is the shape ADR-0004 requires an empty appsettings to produce and therefore the one
     ///     the rest of the suite should be proving still works.
     /// </param>
+    /// <param name="extensionDirectory">
+    ///     Where DuckDB looks for the fts extension. Absent everywhere else, which leaves DuckDB's own
+    ///     default; the container arrangement (#14) is the one thing that sets it, so the one test that
+    ///     asserts on it is the one that passes it.
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
-        bool warmUpOnStart = false, bool authenticated = false)
+        bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null)
     {
         _engine = engine;
         _drainSeconds = drainSeconds;
         _minimumFreeBytes = minimumFreeBytes;
         _warmUpOnStart = warmUpOnStart;
         _authenticated = authenticated;
+        _extensionDirectory = extensionDirectory;
         Factory = Build();
     }
 
@@ -53,6 +59,7 @@ public sealed class TestHost : IDisposable
     private readonly long? _minimumFreeBytes;
     private readonly bool _warmUpOnStart;
     private readonly bool _authenticated;
+    private readonly string? _extensionDirectory;
 
     public WebApplicationFactory<Program> Factory { get; private set; }
 
@@ -62,6 +69,7 @@ public sealed class TestHost : IDisposable
             builder.UseSetting("Storage:DataDirectory", DataDirectory);
             builder.UseSetting("Storage:DurableDirectory", DurableDirectory);
             builder.UseSetting("Index:SearchEngine", _engine.ToString());
+            if (_extensionDirectory is { } extensions) builder.UseSetting("Index:ExtensionDirectory", extensions);
             if (_drainSeconds is { } seconds)
                 builder.UseSetting("Index:DrainSeconds", seconds.ToString(CultureInfo.InvariantCulture));
             if (_minimumFreeBytes is { } bytes)
@@ -124,9 +132,10 @@ public sealed class TestHost : IDisposable
     /// <summary>
     ///     Removes a directory git has written into. libgit2 marks pack files read-only and
     ///     <c>Directory.Delete</c> refuses a read-only file, so the attributes are cleared first rather
-    ///     than left to fail on the first pack.
+    ///     than left to fail on the first pack. It does not defeat a file another process still holds
+    ///     open, or one mapped into this one — a caller with such a tree catches the failure itself.
     /// </summary>
-    private static void DeleteTree(string path)
+    public static void DeleteTree(string path)
     {
         if (!Directory.Exists(path)) return;
 

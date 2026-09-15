@@ -75,6 +75,43 @@ The web UI is served from `CodeExplorer/wwwroot`, which `web/` builds into. To w
 reload, run `vp dev` in `web/` alongside the server and use <http://localhost:5173>; see
 [`web/README.md`](web/README.md).
 
+## Running it in a container
+
+```
+docker build -t codeexplorer .
+docker run -p 8080:8080 codeexplorer
+```
+
+One build from a clean checkout: the `Dockerfile` builds the UI, publishes the API and serves both.
+It runs as the non-root `app` user, contains no `git` binary — LibGit2Sharp bundles libgit2 — and
+carries the DuckDB `fts` extension, installed during the build so that nothing reaches the network
+for it at runtime. That last one is the reason the image exists at all. `INSTALL fts` fails silently
+when it cannot reach out, and the replica then answers every search by substring scan: not an error,
+just different rankings, on every project at once (ADR-0004). The image therefore also sets
+`Index:SearchEngine` to `Fts`, so an extension that ever went missing from it stops the replica at
+startup instead of quietly reordering results. Off the image that setting stays absent, where `Auto`
+and its substring fallback are what make a plain `dotnet run` work offline.
+
+Two paths are settings rather than fixed, because both are on the 8 GiB ephemeral disk ADR-0003
+budgets and an operator has to be able to watch and move them:
+
+| Setting                    | In the image         | What lives there                                            |
+| -------------------------- | -------------------- | ----------------------------------------------------------- |
+| `Storage:DataDirectory`    | `/data`              | Clones, project indexes, scratch Parquet, control database. |
+| `Index:ExtensionDirectory` | `/duckdb/extensions` | The `fts` extension the build installed.                    |
+
+DuckDB's spill files have no setting of their own and need none: it spills beside the database file,
+which is the shared instance catalog under `indexes/`, so moving the data directory moves the spill
+with everything else.
+
+In a container, set `Storage:BlobContainerUrl` as well. The disk is wiped on every stop, so without
+it the Data Protection key ring comes up new each time and every stored repository credential — and
+every operator's sign-in cookie — stops decrypting. The section above says what else that unlocks.
+
+Outside the image, `Index:ExtensionDirectory` is best left unset: DuckDB then uses its own folder
+under the user profile, which is shared with every other DuckDB on the machine and is why a
+developer downloads the extension once rather than once per checkout.
+
 ## Layout
 
 | Path                 | What it is                                                        |
@@ -83,5 +120,6 @@ reload, run `vp dev` in `web/` alongside the server and use <http://localhost:51
 | `CodeExplorer.Tests/`| xunit.v3 against a real DuckDB, mirroring those folders.           |
 | `web/`               | The operator UI. Outside the solution; builds into `wwwroot`.      |
 | `docs/adr/`          | The decisions the code follows from.                               |
+| `Dockerfile`         | UI, API and the baked `fts` extension in one build.                |
 
 `CONTEXT.md` holds the vocabulary; `CODING_STANDARDS.md` holds the rules tooling cannot check.

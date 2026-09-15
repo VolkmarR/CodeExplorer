@@ -168,6 +168,9 @@ public sealed class ProjectIndexes : IDisposable
         // Synchronous on purpose: runs once at startup, before any request could cancel it.
         _anchor = new DuckDBConnection(_connectionString);
         _anchor.Open();
+        // Before the load below, because that is what the directory is for: in the container it holds
+        // the copy the image build put there, so no search waits on a download that cannot happen.
+        FtsExtension.UseDirectory(_anchor, configuration["Index:ExtensionDirectory"]);
 
         var engine = configuration.GetValue("Index:SearchEngine", SearchEngine.Auto);
         FtsAvailable = engine != SearchEngine.Substring && TryLoadFts(engine, logger);
