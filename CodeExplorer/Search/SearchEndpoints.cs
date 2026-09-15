@@ -64,16 +64,13 @@ internal static class SearchEndpoints
     /// </summary>
     private const int MaxLinesPerFileView = 100_000;
 
-    /// <summary>
-    ///     Enough to browse a repository's whole source tree in one page. Past it the listing is not a
-    ///     thing to read, and the total in the response says so.
-    /// </summary>
-    private const int MaxFilesListed = 2000;
-
     public static void MapSearch(this RouteGroupBuilder api)
     {
         // A project with no index answers with the explanation rather than an empty page of results:
-        // "nothing matched" and "there is nothing to match against" mean opposite things.
+        // "nothing matched" and "there is nothing to match against" mean opposite things. The search
+        // route says it as a 400 like every other problem it has; the browsing routes below tell a 404
+        // for no index from a 400 for a repository that does not exist, because the view draws them
+        // differently.
         api.MapGet("/projects/{project}/search", async (
                 string project, string q, GrepSearch search, CancellationToken ct,
                 bool regex = false, bool caseSensitive = false, string? path = null,
@@ -107,10 +104,11 @@ internal static class SearchEndpoints
         ProjectIndexes indexes, string project, string glob, string? repository,
         CancellationToken cancellationToken)
     {
-        using var index = await FileQueries.OpenAsync(indexes, project, cancellationToken);
-        if (index is null) return Results.NotFound(new { error = ToolReply.NoIndex(project) });
+        var open = await IndexReader.OpenAsync(indexes, project, repository, cancellationToken);
+        if (open is IndexOpen.Refused refused) return Refuse(refused);
+        using var index = ((IndexOpen.Opened)open).Reader;
 
-        var result = await index.GlobAsync(glob, repository, MaxFilesListed, cancellationToken);
+        var result = await index.GlobAsync(glob, IndexReader.MaxFiles, cancellationToken);
         return Results.Ok(new FileListResponse(result.Total,
             result.Files
                 .Select(f => new FileListEntry(f.QualifiedPath, f.RepositorySlug, f.LineCount, f.SizeBytes,
@@ -119,23 +117,32 @@ internal static class SearchEndpoints
     }
 
     /// <summary>
-    ///     A level of the tree. An unknown repository or directory answers with an empty level rather
-    ///     than a 404: the view has a breadcrumb out of it, and the only 404 here means the project has
-    ///     no index at all, which is a different thing to say.
+    ///     A level of the tree. An unknown directory answers with an empty level rather than an error:
+    ///     the view has a breadcrumb out of it. A path whose first segment names no repository is a
+    ///     400 with the repositories that exist, the same answer every other reader gives that slug — a
+    ///     stale link is told what changed rather than shown an empty tree.
     /// </summary>
     private static async Task<IResult> TreeAsync(
         ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken)
     {
-        using var index = await FileQueries.OpenAsync(indexes, project, cancellationToken);
-        if (index is null) return Results.NotFound(new { error = ToolReply.NoIndex(project) });
+        var open = await IndexReader.OpenAsync(indexes, project, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return Refuse(refused);
+        using var index = ((IndexOpen.Opened)open).Reader;
 
         // The shape has to be known before the path can be read at all: `src/x.ts` is a file in one
         // project and a repository in another (ADR-0006). Null back from Parse is the repository level,
         // which a single-repository project does not have.
-        var paths = await index.PathsAsync(project, cancellationToken);
+        var paths = await index.PathsAsync(cancellationToken);
         var location = paths.Parse(path);
+        if (location is not null)
+        {
+            if (await index.FindRepositoryAsync(location.RepositorySlug, cancellationToken) is not { } repository)
+                return Results.BadRequest(new
+                    { error = await index.UnknownRepositoryAsync(location.RepositorySlug, cancellationToken) });
+            location = location with { RepositorySlug = repository.Slug };
+        }
 
-        var entries = await index.TreeAsync(paths, location, cancellationToken);
+        var entries = await index.TreeAsync(location, cancellationToken);
         return Results.Ok(new TreeResponse(location is null ? "" : paths.Format(location), location is null,
             entries
                 .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
@@ -146,8 +153,9 @@ internal static class SearchEndpoints
     private static async Task<IResult> ReadAsync(
         ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken)
     {
-        using var index = await FileQueries.OpenAsync(indexes, project, cancellationToken);
-        if (index is null) return Results.NotFound(new { error = ToolReply.NoIndex(project) });
+        var open = await IndexReader.OpenAsync(indexes, project, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return Refuse(refused);
+        using var index = ((IndexOpen.Opened)open).Reader;
 
         if (await index.FindFileAsync(path, cancellationToken) is not { } file)
             return Results.NotFound(new { error = $"No file '{path}' in project '{project}'." });
@@ -158,4 +166,18 @@ internal static class SearchEndpoints
         return Results.Ok(new FileContentResponse(file.QualifiedPath, file.RepositorySlug, file.LineCount,
             file.SizeBytes, file.SkipReason, string.Join('\n', lines)));
     }
+
+    /// <summary>
+    ///     No index is a 404 — the view renders it as the starting state a new project is in — and an
+    ///     unknown repository a 400, because the project is there and the request named something in it
+    ///     that is not.
+    /// </summary>
+    private static IResult Refuse(IndexOpen.Refused refused) => refused switch
+    {
+        IndexOpen.NoIndex => Results.NotFound(new { error = refused.Explanation }),
+        IndexOpen.UnknownRepository => Results.BadRequest(new { error = refused.Explanation }),
+        // Unreachable while Refused has two cases, and a 500 rather than a cast that throws if a
+        // third is ever added.
+        _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
+    };
 }

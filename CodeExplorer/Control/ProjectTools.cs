@@ -43,27 +43,25 @@ internal sealed class ProjectTools(
         var project = BoundProject.Get(httpContextAccessor);
         var configured = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
 
-        using var index = await FileQueries.OpenAsync(indexes, project.Slug, cancellationToken);
-        if (index is null)
-            return ToolReply.NoIndex(project.Slug) + (configured.Count == 0
+        // Null covers a build that was interrupted while filling the file as well as a project never
+        // built: the reader will not report half-built tables as the project, and either way the
+        // agent's next move is the same.
+        var status = await IndexReader.StatusAsync(indexes, project.Slug, true, cancellationToken);
+        if (status is null)
+            return IndexReader.NoIndex(project.Slug) + (configured.Count == 0
                 ? $" The project has no repositories yet either; add one with POST /api/projects/{project.Slug}/repositories."
                 : $" Repositories waiting to be indexed: {string.Join(", ", configured.Select(r => r.Slug))}.");
 
-        // No index_info row means a build was interrupted while filling this file. Saying so is an
-        // answer the agent can act on; reading the half-built tables and reporting them as the project
-        // would be a wrong answer shaped like a right one.
-        if (await index.InfoAsync(cancellationToken) is not { } info) return ToolReply.NoIndex(project.Slug);
-
-        var indexed = await index.RepositoriesAsync(cancellationToken);
+        var indexed = status.Repositories;
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"Project '{project.Slug}' ({project.Name}): {indexed.Count} {ToolReply.Plural(indexed.Count, "repository", "repositories")} indexed, {indexed.Sum(r => r.FileCount)} files, {indexed.Sum(r => r.LineCount)} lines.\n");
+            $"Project '{project.Slug}' ({project.Name}): {indexed.Count} {ToolReply.Plural(indexed.Count, "repository", "repositories")} indexed, {status.Files} files, {status.Lines} lines.\n");
         // One time for the project: a refresh rebuilds every repository together (CONTEXT.md), so there
         // is no per-repository index time to report.
         text.Append(CultureInfo.InvariantCulture,
-            $"Indexed at: {info.BuiltAt:yyyy-MM-dd HH:mm:ss} UTC (all repositories are indexed together)\n");
-        text.Append(info.FtsIndexed
+            $"Indexed at: {status.BuiltAt:yyyy-MM-dd HH:mm:ss} UTC (all repositories are indexed together)\n");
+        text.Append(status.FtsIndexed
             ? "Full-text index: built (text queries in grep use BM25 over identifier tokens)\n"
             : "Full-text index: not built (text queries in grep use a substring scan)\n");
 

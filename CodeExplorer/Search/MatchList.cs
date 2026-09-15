@@ -118,15 +118,13 @@ public sealed class MatchList(ProjectIndexes indexes)
         // Non-capturing, so the group numbers the caller passed still mean what they meant.
         if (request.WholeWord) query = $@"\b(?:{query})\b";
 
-        using var lease = await indexes.OpenAsync(slug, cancellationToken);
-        if (lease is null) return new MatchListProblem(ToolReply.NoIndex(slug));
-        var connection = lease.Connection;
+        var open = await IndexReader.OpenAsync(indexes, slug, request.Filter.Repository, cancellationToken);
+        if (open is IndexOpen.Refused refused) return new MatchListProblem(refused.Explanation);
+        using var index = ((IndexOpen.Opened)open).Reader;
+        var connection = index.Connection;
 
-        (string? repository, string? unknown) =
-            await FileFilter.ResolveRepositoryAsync(connection, slug, request.Filter.Repository, cancellationToken);
-        if (unknown is not null) return new MatchListProblem($"{unknown} Drop `repo` to search all of them.");
-
-        var filter = request.Filter with { Repository = repository };
+        // The slug the index holds, not the one the caller typed: the filter's subquery matches it exactly.
+        var filter = request.Filter with { Repository = index.Repository?.Slug };
         int limit = Math.Clamp(request.Limit, 1, MaxLimit);
 
         var matchParameters = new List<DuckDBParameter>

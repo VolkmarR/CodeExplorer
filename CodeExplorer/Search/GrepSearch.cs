@@ -123,11 +123,10 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         if (regex && Re2.Unsupported(query) is { } unsupported) return new GrepProblem(unsupported);
         if (regex && request.WholeWord) query = $@"\b(?:{query})\b";
 
-        using var lease = await indexes.OpenAsync(slug, cancellationToken);
-        if (lease is null)
-            return new GrepProblem(ToolReply.NoIndex(slug));
-
-        var connection = lease.Connection;
+        var open = await IndexReader.OpenAsync(indexes, slug, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return new GrepProblem(refused.Explanation);
+        using var index = ((IndexOpen.Opened)open).Reader;
+        var connection = index.Connection;
 
         var bounds = Bounds.From(request);
         try

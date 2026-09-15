@@ -22,9 +22,6 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
 
     private const int DefaultLinesPerRead = 400;
 
-    /// <summary>Enough to show every handler in a mid-sized service; beyond it the glob is too wide to act on.</summary>
-    private const int MaxGlobFiles = 2000;
-
     private const int DefaultGlobFiles = 500;
 
     /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
@@ -64,10 +61,9 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             targets.Add(parsed);
         }
 
-        using var index = await FileQueries.OpenAsync(indexes, project.Slug, cancellationToken);
-        if (index is null) return ToolReply.NoIndex(project.Slug);
-        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken),
-            await index.PathsAsync(project.Slug, cancellationToken));
+        var open = await IndexReader.OpenAsync(indexes, project.Slug, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return refused.Explanation;
+        using var index = ((IndexOpen.Opened)open).Reader;
 
         var text = new StringBuilder();
         for (int i = 0; i < targets.Count; i++)
@@ -76,44 +72,44 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             // Whatever the entries before this one left unused is handed on, so four small windows
             // and one large one read in full where an equal split would truncate the large one.
             int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (targets.Count - i);
-            await AppendReadAsync(text, scope, targets[i], allowance, cancellationToken);
+            await AppendReadAsync(text, index, targets[i], allowance, cancellationToken);
         }
 
         return text.ToString();
     }
 
     private static async Task AppendReadAsync(
-        StringBuilder text, Scope scope, ReadTarget target, int allowance, CancellationToken cancellationToken)
+        StringBuilder text, IndexReader index, ReadTarget target, int allowance, CancellationToken cancellationToken)
     {
-        var paths = scope.Paths;
+        var paths = await index.PathsAsync(cancellationToken);
         var qualified = paths.Parse(target.Path);
         if (qualified is null || qualified.PathInRepository.Length == 0)
         {
             text.Append(CultureInfo.InvariantCulture,
-                $"'{target.Path}' names no file: {scope.PathRule} Write it like `{paths.Example()}`.\n");
+                $"'{target.Path}' names no file: {await index.PathRuleAsync(cancellationToken)} Write it like `{paths.Example()}`.\n");
             return;
         }
 
         // The slug is matched like the rest of the path, case-insensitively, and the file lookup gets
         // the spelling the index holds so the two cannot disagree. A single-repository project wrote no
         // slug for us to match, and the one it resolves to is the only one there is.
-        var repository = scope.Find(qualified.RepositorySlug);
+        var repository = await index.FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
         if (repository is null)
         {
             text.Append(CultureInfo.InvariantCulture,
-                $"{scope.UnknownRepository(qualified.RepositorySlug)} The first path segment must be one of these.\n");
+                $"{await index.UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these.\n");
             return;
         }
 
         qualified = qualified with { RepositorySlug = repository.Slug };
         string spelled = paths.Format(qualified);
-        var file = await scope.Index.FindFileAsync(spelled, cancellationToken);
+        var file = await index.FindFileAsync(spelled, cancellationToken);
         if (file is null)
         {
             text.Append(CultureInfo.InvariantCulture,
-                $"No indexed file '{spelled}' in repository '{repository.Slug}' of project '{scope.Project.Slug}'. ");
+                $"No indexed file '{spelled}' in repository '{repository.Slug}' of project '{index.ProjectSlug}'. ");
             string name = qualified.PathInRepository[(qualified.PathInRepository.LastIndexOf('/') + 1)..];
-            var similar = await scope.Index.FilesNamedAsync(name, MaxSuggestions, cancellationToken);
+            var similar = await index.FilesNamedAsync(name, MaxSuggestions, cancellationToken);
             text.Append(similar.Count > 0
                 ? $"Did you mean {string.Join(" or ", similar)}? Otherwise use glob or list_tree to locate it.\n"
                 : "Use glob or list_tree to locate it; the path is case-insensitive here but must otherwise match the committed path.\n");
@@ -141,7 +137,7 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             text.Append(CultureInfo.InvariantCulture, $" (lines {target.Start}-{end} of {file.LineCount})");
         text.Append("\n\n");
 
-        var lines = await scope.Index.LinesAsync(file.FileId, target.Start, end, cancellationToken);
+        var lines = await index.LinesAsync(file.FileId, target.Start, end, cancellationToken);
         int width = end.ToString(CultureInfo.InvariantCulture).Length;
         int budget = text.Length + allowance;
         int last = end;
@@ -187,22 +183,23 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         var project = BoundProject.Get(httpContextAccessor);
         string pattern = glob.Trim().Replace('\\', '/');
         if (MalformedGlob(pattern) is { } malformed) return malformed;
-        limit = Math.Clamp(limit, 1, MaxGlobFiles);
 
-        using var index = await FileQueries.OpenAsync(indexes, project.Slug, cancellationToken);
-        if (index is null) return ToolReply.NoIndex(project.Slug);
-        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken),
-            await index.PathsAsync(project.Slug, cancellationToken));
-        (var repository, string? unknown) = scope.Resolve(repo);
-        if (unknown is not null) return $"{unknown} Drop `repo` to search all of them.";
+        var open = await IndexReader.OpenAsync(indexes, project.Slug, repo, cancellationToken);
+        if (open is IndexOpen.Refused refused) return refused.Explanation;
+        using var index = ((IndexOpen.Opened)open).Reader;
+        var repository = index.Repository;
 
-        var result = await index.GlobAsync(pattern, repository?.Slug, limit, cancellationToken);
+        var result = await index.GlobAsync(pattern, limit, cancellationToken);
         if (result.Total == 0)
         {
             if (repository is null)
+            {
+                var repositories = await index.RepositoriesAsync(cancellationToken);
                 return
-                    $"No indexed file matches \"{pattern}\" in project '{project.Slug}' ({scope.Repositories.Sum(r => r.FileCount)} files in repositories {scope.Slugs}). "
+                    $"No indexed file matches \"{pattern}\" in project '{project.Slug}' ({repositories.Sum(r => r.FileCount)} files in repositories {string.Join(", ", repositories.Select(r => r.Slug))}). "
                     + "Remember `*` crosses directories, so a bare \"*Commands.cs\" is usually the right shape, and the first path segment is the repository slug.";
+            }
+
             return $"No indexed file matches \"{pattern}\" in repository '{repository.Slug}'. "
                    + (result.MatchesInOtherRepositories > 0
                        ? $"{result.MatchesInOtherRepositories} {ToolReply.Plural(result.MatchesInOtherRepositories.Value, "file")} match in the other repositories of project '{project.Slug}'; drop `repo` to see them."
@@ -239,14 +236,12 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
     {
         var project = BoundProject.Get(httpContextAccessor);
 
-        using var index = await FileQueries.OpenAsync(indexes, project.Slug, cancellationToken);
-        if (index is null) return ToolReply.NoIndex(project.Slug);
-        var scope = new Scope(project, index, await index.RepositoriesAsync(cancellationToken),
-            await index.PathsAsync(project.Slug, cancellationToken));
-        (var repository, string? unknown) = scope.Resolve(repo);
-        if (unknown is not null) return $"{unknown} Drop `repo` to cover all of them.";
+        var open = await IndexReader.OpenAsync(indexes, project.Slug, repo, cancellationToken);
+        if (open is IndexOpen.Refused refused) return refused.Explanation;
+        using var index = ((IndexOpen.Opened)open).Reader;
+        var repository = index.Repository;
 
-        var extensions = await index.ExtensionsAsync(repository?.Slug, cancellationToken);
+        var extensions = await index.ExtensionsAsync(cancellationToken);
         if (extensions.Count == 0)
             return repository is null
                 ? $"Project '{project.Slug}' has no files in its index. Its repositories may be empty; repo_info shows what was indexed."
@@ -336,51 +331,5 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         }
 
         private static ReadTarget Refused(string path, string problem) => new(path, 0, 0, false, problem);
-    }
-
-    /// <summary>
-    ///     What every tool call knows once the index is open: the project, the connection and the
-    ///     repositories in the index. Owns repository resolution so the three tools name an unknown
-    ///     slug the same way.
-    /// </summary>
-    /// <param name="Project">The project the session is bound to, for the messages that name it.</param>
-    /// <param name="Index">The open index, bound to that project for this one call.</param>
-    /// <param name="Repositories">What the last build read, which is what a path may name.</param>
-    /// <param name="Paths">
-    ///     How this project names files (ADR-0006), read from the index by
-    ///     <see cref="FileQueries.PathsAsync" />. It comes from the index rather than the control
-    ///     database so that a tool parses and prints paths the way the index it is reading spells them,
-    ///     and so that nothing in <c>Search/</c> needs anything but the index (ADR-0005).
-    /// </param>
-    private sealed record Scope(
-        Project Project,
-        FileQueries Index,
-        IReadOnlyList<IndexedRepository> Repositories,
-        ProjectPaths Paths)
-    {
-        public string Slugs => string.Join(", ", Repositories.Select(r => r.Slug));
-
-        /// <summary>
-        ///     What a path in this project is made of, for the message that says one was not. The two
-        ///     shapes are described in one place so a tool cannot explain one project's naming in the
-        ///     other's words (ADR-0006).
-        /// </summary>
-        public string PathRule => Paths.SingleRepository
-            ? "this project holds one repository, so a path is the path inside it."
-            : $"a qualified path must start with a repository slug, then the path inside it. Repositories: {Slugs}.";
-
-        public IndexedRepository? Find(string slug) =>
-            Repositories.FirstOrDefault(r => string.Equals(r.Slug, slug, StringComparison.OrdinalIgnoreCase));
-
-        /// <summary>An optional <c>repo</c> argument: null repository for "all", or the explanation when the slug is unknown.</summary>
-        public (IndexedRepository? Repository, string? Unknown) Resolve(string? repo)
-        {
-            if (string.IsNullOrWhiteSpace(repo)) return (null, null);
-            var repository = Find(repo.Trim());
-            return repository is null ? (null, UnknownRepository(repo.Trim())) : (repository, null);
-        }
-
-        public string UnknownRepository(string slug) =>
-            $"No repository '{slug}' in project '{Project.Slug}'. Repositories: {Slugs}.";
     }
 }
