@@ -47,7 +47,7 @@ public sealed class RepositoryTests : IDisposable
     public async Task Clone_failure_is_an_actionable_message_that_never_carries_the_credential()
     {
         await _host.CreateProjectAsync("alpha");
-        string missing = Path.Combine(_host.DataDirectory, "does-not-exist");
+        string missing = _host.ScratchFile("does-not-exist");
         await _host.AddRepositoryAsync("alpha", "broken", missing, Secret);
 
         // The only repository could not be read, so the refresh fails as a whole and its error is the

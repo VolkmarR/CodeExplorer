@@ -74,7 +74,7 @@ public sealed class RefreshTests : IDisposable
         await host.IndexedProjectAsync("alpha", Fixture());
         host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using (await host.OpenIndexAsync("alpha"))
         {
             using (var response = await host.RequestRefreshAsync("alpha"))
@@ -216,7 +216,7 @@ public sealed class RefreshTests : IDisposable
         Assert.Equal(RefreshState.NeverRun, status.State);
         Assert.Null(status.StartedAt);
 
-        using var http = _host.Factory.CreateClient();
+        using var http = _host.CreateClient();
         using var missing = await http.GetAsync("/api/projects/nope/refresh", Ct);
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
     }

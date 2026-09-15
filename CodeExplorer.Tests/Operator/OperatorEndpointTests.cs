@@ -67,7 +67,7 @@ public sealed class OperatorEndpointTests : IDisposable
         await _host.AddRepositoryAsync("alpha", "with", url, "s3cret-token");
         await _host.AddRepositoryAsync("alpha", "without", url);
 
-        using var http = _host.Factory.CreateClient();
+        using var http = _host.CreateClient();
         string json = await http.GetStringAsync("/api/projects/alpha", Ct);
 
         Assert.DoesNotContain("s3cret-token", json, StringComparison.Ordinal);
@@ -82,12 +82,12 @@ public sealed class OperatorEndpointTests : IDisposable
         await _host.IndexedProjectAsync("alpha",
             new Dictionary<string, Dictionary<string, string>>
                 { ["one"] = new() { ["src/A.cs"] = "class A;\n" } });
-        string index = Path.Combine(_host.DataDirectory, "indexes", "alpha.duckdb");
-        string clones = Path.Combine(_host.DataDirectory, "clones", "alpha");
+        string index = _host.IndexFile("alpha");
+        string clones = _host.ProjectClones("alpha");
         Assert.True(File.Exists(index));
         Assert.True(Directory.Exists(clones));
 
-        using var http = _host.Factory.CreateClient();
+        using var http = _host.CreateClient();
         using var response = await http.DeleteAsync("/api/projects/alpha", Ct);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
@@ -105,14 +105,7 @@ public sealed class OperatorEndpointTests : IDisposable
         await _host.IndexedProjectAsync("broken",
             new Dictionary<string, Dictionary<string, string>>
                 { ["one"] = new() { ["src/B.cs"] = "class B;\n" } });
-        // A build writes index_info last, so removing the row is exactly the file a process killed
-        // mid-build leaves behind: tables present, nothing saying the build finished.
-        using (var lease = await _host.OpenIndexAsync("broken"))
-        {
-            using var command = lease.Connection.CreateCommand();
-            command.CommandText = "DELETE FROM index_info";
-            await command.ExecuteNonQueryAsync(Ct);
-        }
+        await _host.InterruptBuildAsync("broken");
 
         var projects = await ListAsync();
 
@@ -123,7 +116,7 @@ public sealed class OperatorEndpointTests : IDisposable
     [Fact]
     public async Task Deleting_an_unknown_project_says_so()
     {
-        using var http = _host.Factory.CreateClient();
+        using var http = _host.CreateClient();
         using var response = await http.DeleteAsync("/api/projects/ghost", Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -139,20 +132,20 @@ public sealed class OperatorEndpointTests : IDisposable
             ["two"] = new() { ["src/B.cs"] = "class B;\n" }
         });
 
-        using var http = _host.Factory.CreateClient();
+        using var http = _host.CreateClient();
         using var response = await http.DeleteAsync("/api/projects/alpha/repositories/one", Ct);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         var detail = await DetailAsync("alpha");
         Assert.Equal("two", Assert.Single(detail.Repositories).Slug);
-        Assert.False(Directory.Exists(Path.Combine(_host.DataDirectory, "clones", "alpha", "one.git")));
-        Assert.True(Directory.Exists(Path.Combine(_host.DataDirectory, "clones", "alpha", "two.git")));
+        Assert.False(Directory.Exists(_host.ClonePath("alpha", "one")));
+        Assert.True(Directory.Exists(_host.ClonePath("alpha", "two")));
     }
 
     [Fact]
     public async Task An_unknown_project_is_a_not_found_rather_than_an_empty_page()
     {
-        using var http = _host.Factory.CreateClient();
+        using var http = _host.CreateClient();
         using var response = await http.GetAsync("/api/projects/ghost", Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -160,7 +153,7 @@ public sealed class OperatorEndpointTests : IDisposable
 
     private async Task<IReadOnlyList<ProjectSummary>> ListAsync()
     {
-        using var http = _host.Factory.CreateClient();
+        using var http = _host.CreateClient();
         var projects = await http.GetFromJsonAsync<List<ProjectSummary>>("/api/projects", Ct);
         Assert.NotNull(projects);
         return projects;
@@ -168,7 +161,7 @@ public sealed class OperatorEndpointTests : IDisposable
 
     private async Task<ProjectDetail> DetailAsync(string slug)
     {
-        using var http = _host.Factory.CreateClient();
+        using var http = _host.CreateClient();
         var detail = await http.GetFromJsonAsync<ProjectDetail>($"/api/projects/{slug}", Ct);
         Assert.NotNull(detail);
         return detail;

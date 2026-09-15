@@ -120,7 +120,7 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var response = await http.GetAsync("/api/projects/alpha/search?q=(?%3D%3Dfoo)&regex=true", Ct);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -133,7 +133,7 @@ public sealed class SearchEndpointTests
         using var host = new TestHost(SearchEngine.Substring);
         await host.CreateProjectAsync("alpha");
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var search = await http.GetAsync("/api/projects/alpha/search?q=Widget", Ct);
         using var files = await http.GetAsync("/api/projects/alpha/files", Ct);
 
@@ -163,7 +163,7 @@ public sealed class SearchEndpointTests
         // negative: an empty list looks exactly like "nothing matched". Both routes that take one say
         // what exists instead, as a 400 because the project is there and the request named something
         // in it that is not.
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var files = await http.GetAsync("/api/projects/alpha/files?repository=three", Ct);
         using var tree = await http.GetAsync("/api/projects/alpha/tree?path=three/src", Ct);
 
@@ -184,7 +184,7 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var response = await http.GetAsync("/api/projects/alpha/file?path=one/src/Missing.cs", Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -293,7 +293,7 @@ public sealed class SearchEndpointTests
 
     private static async Task<T> GetAsync<T>(TestHost host, string url)
     {
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         var value = await http.GetFromJsonAsync<T>(url, Ct);
         Assert.NotNull(value);
         return value;
