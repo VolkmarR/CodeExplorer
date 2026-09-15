@@ -75,6 +75,10 @@ if (authentication.Enabled)
     app.UseAuthorization();
 }
 
+// After authorization, so an unauthenticated caller learns nothing about which slugs exist, and
+// before the endpoints, so a handler's Project parameter finds what it resolved (BoundProject).
+app.UseBoundProject();
+
 // Operator endpoints, one group per module (ADR-0005).
 var api = app.MapGroup("/api");
 api.MapAuthentication(authentication);
@@ -84,7 +88,7 @@ api.MapSearch();
 api.MapOperator();
 
 // One MCP endpoint per project (ADR-0002), bound from the route before the SDK sees the request.
-app.MapGroup("/projects/{slug}").BindProject().MapMcp("/mcp").ProtectMcp(authentication);
+app.MapGroup("/projects/{project}").BindProject().MapMcp("/mcp").ProtectMcp(authentication);
 
 // The operator web UI is a Vite build into wwwroot. It is absent until someone runs that build, and
 // the server must still start: MapFallbackToFile would 404 at request time, which is the same answer

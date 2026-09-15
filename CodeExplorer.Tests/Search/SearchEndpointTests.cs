@@ -141,6 +141,17 @@ public sealed class SearchEndpointTests
         Assert.Contains("alpha", await search.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
         Assert.Equal(HttpStatusCode.NotFound, files.StatusCode);
         Assert.Contains("alpha", await files.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+
+        // A project that does not exist is told apart from one that has no index yet: the route binds
+        // the project first (BoundProject), so every route under it gives the one sentence, and the
+        // search route does not get to say 400 about an index that has no project to belong to.
+        foreach (string route in new[] { "search?q=Widget", "files", "tree", "file?path=x" })
+        {
+            using var response = await http.GetAsync($"/api/projects/ghost/{route}", Ct);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Contains("No project with slug 'ghost'", await response.Content.ReadAsStringAsync(Ct),
+                StringComparison.Ordinal);
+        }
     }
 
     [Fact]

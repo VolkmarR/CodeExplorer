@@ -66,16 +66,20 @@ internal static class SearchEndpoints
 
     public static void MapSearch(this RouteGroupBuilder api)
     {
+        // The project is bound from the route (BoundProject), so an unknown slug is a 404 before the
+        // index is asked; only a real project can answer "no index" below.
+        var project = api.MapProject();
+
         // A project with no index answers with the explanation rather than an empty page of results:
         // "nothing matched" and "there is nothing to match against" mean opposite things. The search
         // route says it as a 400 like every other problem it has; the browsing routes below tell a 404
         // for no index from a 400 for a repository that does not exist, because the view draws them
         // differently.
-        api.MapGet("/projects/{project}/search", async (
-                string project, string q, GrepSearch search, CancellationToken ct,
+        project.MapGet("/search", async (
+                Project project, string q, GrepSearch search, CancellationToken ct,
                 bool regex = false, bool caseSensitive = false, string? path = null,
                 string? extension = null, int page = 1, int pageSize = 20) =>
-            await search.SearchAsync(project,
+            await search.SearchAsync(project.Slug,
                 new GrepRequest(q, regex, caseSensitive, path, Extension: extension, Page: page,
                     PageSize: pageSize), ct) switch
             {
@@ -86,18 +90,18 @@ internal static class SearchEndpoints
                 _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
             });
 
-        api.MapGet("/projects/{project}/files",
-            async (string project, ProjectIndexes indexes, CancellationToken ct, string glob = "*",
+        project.MapGet("/files",
+            async (Project project, ProjectIndexes indexes, CancellationToken ct, string glob = "*",
                     string? repository = null) =>
-                await ListAsync(indexes, project, glob, repository, ct));
+                await ListAsync(indexes, project.Slug, glob, repository, ct));
 
-        api.MapGet("/projects/{project}/tree",
-            async (string project, ProjectIndexes indexes, CancellationToken ct, string path = "") =>
-                await TreeAsync(indexes, project, path, ct));
+        project.MapGet("/tree",
+            async (Project project, ProjectIndexes indexes, CancellationToken ct, string path = "") =>
+                await TreeAsync(indexes, project.Slug, path, ct));
 
-        api.MapGet("/projects/{project}/file",
-            async (string project, string path, ProjectIndexes indexes, CancellationToken ct) =>
-                await ReadAsync(indexes, project, path, ct));
+        project.MapGet("/file",
+            async (Project project, string path, ProjectIndexes indexes, CancellationToken ct) =>
+                await ReadAsync(indexes, project.Slug, path, ct));
     }
 
     private static async Task<IResult> ListAsync(
