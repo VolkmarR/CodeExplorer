@@ -15,7 +15,7 @@ same name would make `vp run <name>` ambiguous.
 | Command          | What it does                                                 |
 | ---------------- | ------------------------------------------------------------ |
 | `vp install`     | Install dependencies. Run it after pulling.                  |
-| `vp dev`         | Dev server on 5173, proxying `/api` to the server on 5080.   |
+| `vp dev`         | Dev server on 5173, proxying `/api` to the server on 5000.   |
 | `vp build`       | Production build into `../CodeExplorer/wwwroot`.             |
 | `vp check --fix` | Format with oxfmt, then lint with oxlint and React Doctor.   |
 | `vp test`        | Vitest. Today that is the C# and X# highlighter definitions. |
@@ -26,12 +26,13 @@ Type checking is `tsc -b`, since `tsconfig.json` is a project-references file.
 ## Running it against the server
 
 ```
-dotnet run --project ../CodeExplorer          # http://localhost:5080
+dotnet run --project ../CodeExplorer          # http://localhost:5000
 vp dev                                        # http://localhost:5173
 ```
 
-The 5080 port is pinned in `CodeExplorer/appsettings.json` so the proxy in `vite.config.ts` has
-something to name. `ASPNETCORE_URLS` still overrides it.
+5000 is Kestrel's own default, so a plain `dotnet run` binds it with no configuration at all and the
+proxy in `vite.config.ts` has something to name. `ASPNETCORE_URLS` overrides it — move the proxy
+target with it if you do.
 
 ## Layout
 

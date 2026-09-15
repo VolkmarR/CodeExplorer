@@ -8,7 +8,7 @@ creates the projects, points them at repositories, and builds their indexes from
 ## Running it
 
 ```
-dotnet run --project CodeExplorer     # API, MCP and the built UI on http://localhost:5080
+dotnet run --project CodeExplorer     # API, MCP and the built UI on http://localhost:5000
 ```
 
 No configuration is needed: absent settings select local defaults, so a plain `dotnet run` is a
