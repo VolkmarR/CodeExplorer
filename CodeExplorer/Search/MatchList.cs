@@ -25,27 +25,19 @@ public sealed record MatchListRequest(
 public sealed record DistinctMatch(string Value, long Count, int Files);
 
 /// <summary>
-///     Either a <see cref="MatchListResult" /> or a <see cref="MatchListProblem" />: a semantic
-///     failure is an answer, never an exception.
-/// </summary>
-public abstract record MatchListOutcome;
-
-/// <summary>What went wrong and what to try instead, in agent-facing prose.</summary>
-public sealed record MatchListProblem(string Explanation) : MatchListOutcome;
-
-/// <summary>
-///     The distinct values, most frequent first. <see cref="TotalDistinct" /> counts every value and
+///     The distinct values, most frequent first; the answer when the listing was not a
+///     <see cref="SearchProblem" />. <see cref="TotalDistinct" /> counts every value and
 ///     <see cref="Matches" /> the first <c>limit</c> of them, so a caller can say what it is not
-///     showing. <see cref="MatchesWithoutFilters" /> is filled only when nothing matched under
+///     showing. <see cref="FilesMatchingWithoutFilters" /> is filled only when nothing matched under
 ///     filters: "this pattern matches nothing" and "your filters hid every value" read identically
-///     and mean opposite things.
+///     and mean opposite things. Files, not lines, so the three searches say a filtered miss in one unit.
 /// </summary>
 public sealed record MatchListResult(
     int TotalDistinct,
     long TotalMatches,
     int TotalFiles,
     IReadOnlyList<DistinctMatch> Matches,
-    long? MatchesWithoutFilters) : MatchListOutcome;
+    int? FilesMatchingWithoutFilters) : SearchOutcome;
 
 /// <summary>
 ///     The distinct values a pattern matches across a project — the indexed equivalent of
@@ -82,7 +74,7 @@ public sealed class MatchList(ProjectIndexes indexes)
     ///     is recorded. It is the only public method for the same reason grep has one: a second entry
     ///     point has nothing else to call.
     /// </summary>
-    public async Task<MatchListOutcome> ListAsync(string slug, MatchListRequest request,
+    public async Task<SearchOutcome> ListAsync(string slug, MatchListRequest request,
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
@@ -92,18 +84,18 @@ public sealed class MatchList(ProjectIndexes indexes)
         return outcome;
     }
 
-    private async Task<MatchListOutcome> RunAsync(string slug, MatchListRequest request,
+    private async Task<SearchOutcome> RunAsync(string slug, MatchListRequest request,
         CancellationToken cancellationToken)
     {
         string query = request.Query.Trim();
         if (query.Length == 0)
-            return new MatchListProblem(
+            return new SearchProblem(
                 "The pattern is empty. Pass an RE2 pattern with parentheses around the part you want, "
                 + "such as \"PackageReference Include=\\\"([^\\\"]+)\\\"\" with group=1.");
-        if (Re2.Unsupported(query) is { } unsupported) return new MatchListProblem(unsupported);
+        if (Re2.Unsupported(query) is { } unsupported) return new SearchProblem(unsupported);
 
         if (request.Group is < 0 or > MaxGroup)
-            return new MatchListProblem(
+            return new SearchProblem(
                 $"group={request.Group} is out of range; it must be 0 for the whole match or 1-{MaxGroup} for a capture group.");
 
         // Checked here rather than left to the engine: DuckDB reports a missing group as an invalid
@@ -111,7 +103,7 @@ public sealed class MatchList(ProjectIndexes indexes)
         // that was never wrong.
         int groups = Re2.CaptureGroups(query);
         if (request.Group > groups)
-            return new MatchListProblem(
+            return new SearchProblem(
                 $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
                 + "Put parentheses around the part that varies, or use group=0 for the whole match.");
 
@@ -119,7 +111,7 @@ public sealed class MatchList(ProjectIndexes indexes)
         if (request.WholeWord) query = $@"\b(?:{query})\b";
 
         var open = await IndexReader.OpenAsync(indexes, slug, request.Filter.Repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new MatchListProblem(refused.Explanation);
+        if (open is IndexOpen.Refused refused) return new SearchProblem(refused.Explanation);
         using var index = ((IndexOpen.Opened)open).Reader;
         var connection = index.Connection;
 
@@ -180,12 +172,12 @@ public sealed class MatchList(ProjectIndexes indexes)
                 }
             }
 
-            long? withoutFilters = null;
+            int? withoutFilters = null;
             if (totalDistinct == 0 && filter.Any)
                 // Same pattern, no file filters: a second pass only on the empty answer, so the common
                 // case pays nothing.
-                withoutFilters = await connection.CountAsync(
-                    "SELECT count(*) FROM lines l WHERE regexp_matches(l.content, $q, $flags)",
+                withoutFilters = (int)await connection.CountAsync(
+                    "SELECT count(DISTINCT l.file_id) FROM lines l WHERE regexp_matches(l.content, $q, $flags)",
                     matchParameters, cancellationToken);
 
             return new MatchListResult(totalDistinct, totalMatches, totalFiles, matches, withoutFilters);
@@ -194,7 +186,7 @@ public sealed class MatchList(ProjectIndexes indexes)
         {
             // The pattern is the only caller text a parser sees here; anything else DuckDB raises is
             // infrastructure and propagates.
-            return new MatchListProblem(Re2.Rejected(ex));
+            return new SearchProblem(Re2.Rejected(ex));
         }
     }
 

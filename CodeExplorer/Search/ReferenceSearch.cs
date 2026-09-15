@@ -22,16 +22,7 @@ public sealed record ReferenceRequest(
 public sealed record Reference(string QualifiedPath, int LineNumber, string Text, ReferenceKind Kind, string? Scope);
 
 /// <summary>
-///     Either a <see cref="ReferenceResult" /> or a <see cref="ReferenceProblem" />: a semantic
-///     failure is an answer, never an exception.
-/// </summary>
-public abstract record ReferenceOutcome;
-
-/// <summary>What went wrong and what to try instead, in agent-facing prose.</summary>
-public sealed record ReferenceProblem(string Explanation) : ReferenceOutcome;
-
-/// <summary>
-///     Everything read, already classified. <see cref="TotalFiles" /> and <see cref="TotalLines" />
+///     Everything read, already classified; the answer when the search was not a <see cref="SearchProblem" />. <see cref="TotalFiles" /> and <see cref="TotalLines" />
 ///     are project-wide under the filters, while <see cref="References" /> covers only the
 ///     <see cref="FilesExamined" /> files that were read, so a caller can say what it is not showing.
 ///     <see cref="FilesMatchingWithoutFilters" /> is filled whenever the request carried filters: a
@@ -48,7 +39,7 @@ public sealed record ReferenceResult(
     int FilesExamined,
     long TotalLines,
     IReadOnlyList<Reference> References,
-    int? FilesMatchingWithoutFilters) : ReferenceOutcome
+    int? FilesMatchingWithoutFilters) : SearchOutcome
 {
     /// <summary>The references that are code: everything but a comment, a string literal or an import.</summary>
     public int CodeReferences => References.Count - Noise;
@@ -116,7 +107,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     ///     search is recorded. It is the only public method for the same reason grep has one: a second
     ///     entry point has nothing else to call.
     /// </summary>
-    public async Task<ReferenceOutcome> FindAsync(string slug, ReferenceRequest request,
+    public async Task<SearchOutcome> FindAsync(string slug, ReferenceRequest request,
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
@@ -126,14 +117,14 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         return outcome;
     }
 
-    private async Task<ReferenceOutcome> RunAsync(string slug, ReferenceRequest request,
+    private async Task<SearchOutcome> RunAsync(string slug, ReferenceRequest request,
         CancellationToken cancellationToken)
     {
         string symbol = request.Symbol.Trim();
-        if (Unusable(symbol) is { } unusable) return new ReferenceProblem(unusable);
+        if (Unusable(symbol) is { } unusable) return new SearchProblem(unusable);
 
         var open = await IndexReader.OpenAsync(indexes, slug, request.Filter.Repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new ReferenceProblem(refused.Explanation);
+        if (open is IndexOpen.Refused refused) return new SearchProblem(refused.Explanation);
         using var index = ((IndexOpen.Opened)open).Reader;
         var connection = index.Connection;
 

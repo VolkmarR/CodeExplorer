@@ -89,7 +89,7 @@ public sealed class GrepTests : IDisposable
         string hidden =
             await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "needle", ["ext"] = "md" });
         Assert.StartsWith("No matches", hidden);
-        Assert.Contains("does match in 3 files outside your path/ext/exclude filters", hidden);
+        Assert.Contains("does match in 3 files outside your filters", hidden);
 
         string excluded = await GrepAsync(client,
             new Dictionary<string, object?> { ["query"] = "haystack", ["exclude"] = "*.ts" });
