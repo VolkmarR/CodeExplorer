@@ -1,5 +1,6 @@
 import type { HighlightRenderNode } from '@tanstack/highlight'
 import { renderTokens } from '@tanstack/highlight'
+import { Link } from '@tanstack/react-router'
 import { useCallback, useMemo } from 'react'
 import { highlighter, languageFor } from '@/highlight/highlighter'
 import { cn } from '@/lib/utils'
@@ -13,13 +14,17 @@ import { cn } from '@/lib/utils'
  * points at.
  */
 export function CodeView({
+  project,
   content,
   path,
   line,
+  wrap = false,
 }: {
+  project: string
   content: string
   path: string
   line?: number
+  wrap?: boolean
 }) {
   const lines = useMemo(() => {
     const { tokens } = highlighter.tokenize(content, { lang: languageFor(path) })
@@ -50,12 +55,35 @@ export function CodeView({
               key={number}
               id={`L${number}`}
               ref={number === line ? reveal : undefined}
-              className={cn(number === line && 'bg-primary/15')}
+              className={cn('group', number === line && 'bg-primary/15')}
             >
-              <td className="w-14 border-r px-2 py-0.5 text-right align-top text-muted-foreground select-none">
-                {number}
+              <td
+                className={cn(
+                  'w-14 border-r px-2 py-0.5 text-right align-top text-muted-foreground/70 select-none',
+                  number === line && 'shadow-[inset_2px_0_0_var(--primary)] text-primary',
+                )}
+              >
+                {/* The number is the link to itself, so the way to share a line from the file is the
+                    same as from a search result: click the number, copy the address bar. `replace`,
+                    because each line clicked is not a page the back button should revisit. */}
+                <Link
+                  to="/projects/$project/file"
+                  params={{ project }}
+                  search={{ line: number, path }}
+                  replace
+                  className="hover:text-primary hover:underline"
+                >
+                  {number}
+                </Link>
               </td>
-              <td className="px-3 py-0.5 whitespace-pre">{renderNodes(children)}</td>
+              <td
+                className={cn(
+                  'px-3 py-0.5',
+                  wrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre',
+                )}
+              >
+                {renderNodes(children)}
+              </td>
             </tr>
           ))}
         </tbody>

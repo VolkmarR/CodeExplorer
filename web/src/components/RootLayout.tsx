@@ -1,4 +1,4 @@
-import { Link, useLocation, useParams } from '@tanstack/react-router'
+import { Link, useLocation, useParams, useRouterState } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
 import { AccountBar } from '@/features/auth/AccountBar'
 import { treeSearch } from '@/features/files/browseParams'
@@ -28,11 +28,23 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
       ? 'files'
       : 'settings'
 
+  // Code and search results are wide; the project list and settings are prose and forms. The reading
+  // views drop the column so a long line of code is not folded at 1152px on a wide screen.
+  const wide = view === 'files' || view === 'search'
+
+  // The bar is the one place a pending navigation shows before the pending component takes over,
+  // so a click on a tab answers within a frame rather than after the loader's delay.
+  const loading = useRouterState({ select: (state) => state.isLoading })
+
   return (
     <div className="min-h-dvh">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-6 py-3">
-          <Link to="/" className="text-lg font-semibold tracking-tight">
+      <header className="relative border-b">
+        <div className="mx-auto flex max-w-(--breakpoint-2xl) flex-wrap items-center gap-2 px-6 py-3">
+          <Link to="/" className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+            <span
+              aria-hidden="true"
+              className="size-4 rounded-sm bg-linear-to-br from-primary to-primary/50"
+            />
             CodeExplorer
           </Link>
           {project ? (
@@ -68,8 +80,17 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
           ) : null}
           <AccountBar />
         </div>
+        {/* Decorative: the pending component below already announces the wait with `aria-busy`, so
+            this is hidden from readers rather than made a second progress announcement. */}
+        {loading ? (
+          <div aria-hidden="true" className="absolute inset-x-0 -bottom-px h-0.5 overflow-hidden">
+            <div className="h-full w-1/3 bg-primary motion-safe:animate-[slide_1s_ease-in-out_infinite]" />
+          </div>
+        ) : null}
       </header>
-      <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
+      <main className={cn('mx-auto px-6 py-8', wide ? 'max-w-(--breakpoint-2xl)' : 'max-w-6xl')}>
+        {children}
+      </main>
     </div>
   )
 }

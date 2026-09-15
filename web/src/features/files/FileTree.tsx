@@ -1,7 +1,8 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ChevronRight, FileText, Folder, GitBranch } from 'lucide-react'
+import { FileText, Folder, GitBranch } from 'lucide-react'
 import { treeSearch } from '@/features/files/browseParams'
+import { PathBreadcrumb } from '@/features/files/PathBreadcrumb'
 import { treeQuery } from '@/features/files/queries'
 import { formatBytes, formatCount } from '@/lib/format'
 import {
@@ -20,37 +21,10 @@ import {
  */
 export function FileTree({ project, path }: { project: string; path: string }) {
   const { data: level } = useSuspenseQuery(treeQuery(project, path))
-  const segments = level.path === '' ? [] : level.path.split('/')
 
   return (
     <div className="space-y-3">
-      <nav className="flex flex-wrap items-center gap-1 text-sm" aria-label="Breadcrumb">
-        <Link
-          to="/projects/$project/files"
-          params={{ project }}
-          search={treeSearch()}
-          className="text-muted-foreground hover:text-foreground hover:underline"
-        >
-          {project}
-        </Link>
-        {segments.map((segment, index) => (
-          <span key={segments.slice(0, index + 1).join('/')} className="flex items-center gap-1">
-            <ChevronRight className="size-3.5 text-muted-foreground/60" />
-            {index === segments.length - 1 ? (
-              <span className="font-mono font-medium">{segment}</span>
-            ) : (
-              <Link
-                to="/projects/$project/files"
-                params={{ project }}
-                search={treeSearch(segments.slice(0, index + 1).join('/'))}
-                className="font-mono text-muted-foreground hover:text-foreground hover:underline"
-              >
-                {segment}
-              </Link>
-            )}
-          </span>
-        ))}
-      </nav>
+      <PathBreadcrumb project={project} path={level.path} />
 
       {level.entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">
@@ -76,8 +50,8 @@ export function FileTree({ project, path }: { project: string; path: string }) {
                 const isFile = files === null
                 const Icon = isFile ? FileText : level.repositoryLevel ? GitBranch : Folder
                 return (
-                  <TableRow key={entry.qualifiedPath}>
-                    <TableCell className="font-mono text-xs">
+                  <TableRow key={entry.qualifiedPath} className="hover:bg-muted/40">
+                    <TableCell className="py-1.5 font-mono text-xs">
                       <Link
                         to={isFile ? '/projects/$project/file' : '/projects/$project/files'}
                         params={{ project }}
@@ -102,10 +76,10 @@ export function FileTree({ project, path }: { project: string; path: string }) {
                         </span>
                       ) : null}
                     </TableCell>
-                    <TableCell className="text-right text-sm text-muted-foreground">
+                    <TableCell className="py-1.5 text-right text-sm text-muted-foreground tabular-nums">
                       {formatCount(entry.lines)}
                     </TableCell>
-                    <TableCell className="text-right text-sm text-muted-foreground">
+                    <TableCell className="py-1.5 text-right text-sm text-muted-foreground tabular-nums">
                       {formatBytes(entry.sizeBytes)}
                     </TableCell>
                   </TableRow>

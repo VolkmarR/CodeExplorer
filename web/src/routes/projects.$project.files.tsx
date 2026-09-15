@@ -3,6 +3,7 @@ import { BrowseUnavailable } from '@/features/files/BrowseUnavailable'
 import { BrowsePage } from '@/features/files/BrowsePage'
 import { validateBrowseSearch } from '@/features/files/browseParams'
 import { browseQuery, treeQuery } from '@/features/files/queries'
+import { projectQuery } from '@/features/projects/queries'
 
 export const Route = createFileRoute('/projects/$project/files')({
   component: BrowsePage,
@@ -12,9 +13,13 @@ export const Route = createFileRoute('/projects/$project/files')({
   // is not going to render.
   // The call is branched rather than the argument: the two queries have different key shapes, and a
   // ternary inside `ensureQueryData` would have to unify them into one that fits neither.
+  // The project too, because the filter offers its repositories to narrow by.
   loader: ({ context, deps, params }) =>
-    deps.glob === ''
-      ? context.queryClient.ensureQueryData(treeQuery(params.project, deps.path))
-      : context.queryClient.ensureQueryData(browseQuery(params.project, deps)),
+    Promise.all([
+      context.queryClient.ensureQueryData(projectQuery(params.project)),
+      deps.glob === ''
+        ? context.queryClient.ensureQueryData(treeQuery(params.project, deps.path))
+        : context.queryClient.ensureQueryData(browseQuery(params.project, deps)),
+    ]),
   validateSearch: validateBrowseSearch,
 })

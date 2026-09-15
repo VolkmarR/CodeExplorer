@@ -16,14 +16,8 @@ export function SearchPage() {
           a second time. */}
       <SearchForm project={project} search={search} />
 
-      {search.q === '' ? (
-        <p className="text-sm text-muted-foreground">
-          Type a query. Text search matches whole identifiers; turn on regex for an RE2 pattern — no
-          lookaround, no backreferences.
-        </p>
-      ) : (
-        <SearchResults project={project} search={search} />
-      )}
+      {/* The form already says how a query is read, next to the box; nothing to add here. */}
+      {search.q === '' ? null : <SearchResults project={project} search={search} />}
     </div>
   )
 }
