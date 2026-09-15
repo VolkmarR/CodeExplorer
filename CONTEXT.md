@@ -16,6 +16,12 @@ refreshes. A project of one repository is the common case, and a project may be 
 single-repository project to be named accordingly (ADR-0006); it is a repository either way.
 _Avoid_: Source, codebase
 
+**Local copy**:
+The shallow bare clone of a repository that a refresh brings up to date and reads to build the
+index. It exists for that and nothing else: no tool, endpoint or view reads it, it is temporary,
+and it may be deleted at any time without anything but the next refresh noticing.
+_Avoid_: Clone (as a noun for the thing), checkout, working copy
+
 **Index**:
 The queryable representation of a project's code, built from its repositories and rebuilt as they
 are refreshed. Every MCP tool answers from the index, never from the local copy directly.

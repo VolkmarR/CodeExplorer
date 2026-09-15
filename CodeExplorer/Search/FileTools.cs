@@ -24,6 +24,12 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
 
     private const int DefaultGlobFiles = 500;
 
+    /// <summary>
+    ///     Enough to show a whole mid-sized tree in one call while keeping a runaway `depth` on a large
+    ///     monorepo from returning megabytes; the agent is told how to narrow down.
+    /// </summary>
+    private const int MaxTreeEntries = 2000;
+
     /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
     private const int MaxSuggestions = 5;
 
@@ -223,6 +229,87 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         }
 
         return ToolReply.Cap(text.ToString(), "Narrow the glob, or lower limit.");
+    }
+
+    [McpServerTool(Name = "list_tree", ReadOnly = true, Idempotent = true, Title = "List directories and files")]
+    [Description("""
+                 Lists directories and files of this project, like `tree -L depth`. Paths are qualified: the first segment is the repository slug, the rest is the path inside that repository (`main/src/Lib`). An empty path lists the repositories, and with depth 2 or more their top-level entries as well. Directories end with `/`.
+
+                 - The listing is the index: the files the last refresh committed, with no working copy and no .gitignore filtering. A repository added since is not here yet; repo_info names it.
+                 - A file that is committed but not indexed (binary, oversized) is listed with the reason, so a name you expect never quietly disappears.
+                 - Use list_tree to understand the layout, glob to find a name whose shape you know, and grep for the files that contain something.
+                 """)]
+    public async Task<string> ListTree(
+        [Description("Qualified path of the directory to list: `repo` or `repo/dir/sub`. Empty for the project root.")]
+        string path = "",
+        [Description("How many levels to descend, at least 1. Default 1 lists only direct children.")]
+        int depth = 1,
+        CancellationToken cancellationToken = default)
+    {
+        var project = BoundProject.Get(httpContextAccessor);
+        if (depth < 1)
+            return "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on.";
+
+        var open = await IndexReader.OpenAsync(indexes, project.Slug, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return refused.Explanation;
+        using var index = ((IndexOpen.Opened)open).Reader;
+
+        // Null is the repository level, which a single-repository project does not have: there an empty
+        // path already means that repository's own top level (ADR-0006).
+        var paths = await index.PathsAsync(cancellationToken);
+        var location = paths.Parse(path);
+        string listed = "";
+        if (location is not null)
+        {
+            if (await index.FindRepositoryAsync(location.RepositorySlug, cancellationToken) is not { } repository)
+                return await index.UnknownRepositoryAsync(location.RepositorySlug, cancellationToken);
+            location = location with { RepositorySlug = repository.Slug };
+            listed = paths.Format(location);
+        }
+
+        var entries = await index.TreeAsync(location, depth, cancellationToken);
+        if (entries.Count == 0)
+        {
+            if (location is null || location.PathInRepository.Length == 0)
+                return
+                    $"{(listed.Length == 0 ? $"Project '{project.Slug}'" : $"Repository '{listed}'")} has no indexed files. Call repo_info to see what the index holds.";
+            if (await index.FindFileAsync(listed, cancellationToken) is not null)
+                return $"'{listed}' is a file, not a directory, in project '{project.Slug}'. Use read_file to read it.";
+            return
+                $"'{location.PathInRepository}' is not a directory in repository '{location.RepositorySlug}'. Call list_tree with a parent path to see what exists there.";
+        }
+
+        var text = new StringBuilder();
+        if (location is null)
+        {
+            var repositories = await index.RepositoriesAsync(cancellationToken);
+            text.Append(CultureInfo.InvariantCulture,
+                $"{project.Slug} (depth {depth}, {repositories.Count} {ToolReply.Plural(repositories.Count, "repository", "repositories")})\n");
+        }
+        else
+        {
+            // A single-repository project's root formats as the empty path (ADR-0006); it is headed by
+            // the project, which is what the caller asked for.
+            text.Append(CultureInfo.InvariantCulture,
+                $"{(listed.Length == 0 ? project.Slug : listed + "/")} (depth {depth}, {entries.Count} entries)\n");
+        }
+
+        // Entries are printed relative to what was listed, as `tree` does; at the repository level the
+        // qualified path already starts with the slug and nothing is stripped.
+        int skip = listed.Length == 0 ? 0 : listed.Length + 1;
+        foreach (var entry in entries.Take(MaxTreeEntries))
+        {
+            text.Append(entry.QualifiedPath, skip, entry.QualifiedPath.Length - skip);
+            if (entry.Files is not null) text.Append('/');
+            else if (entry.SkipReason is not null)
+                text.Append(CultureInfo.InvariantCulture, $"  (not indexed: {entry.SkipReason})");
+            text.Append('\n');
+        }
+
+        if (entries.Count > MaxTreeEntries)
+            text.Append(CultureInfo.InvariantCulture,
+                $"... {entries.Count - MaxTreeEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
+        return text.ToString();
     }
 
     [McpServerTool(Name = "list_extensions", ReadOnly = true, Idempotent = true, Title = "List file extensions")]
