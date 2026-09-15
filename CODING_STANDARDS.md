@@ -29,7 +29,10 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
   ticket or the endpoint; a refresh touches `Refresh/`, not a folder per endpoint. Everything stays
   in the single `CodeExplorer` namespace, so a folder is navigation and a boundary, not a `using`.
   A module reaches another only through its public types; `Search/` never opens `control.duckdb`.
-  The test project mirrors the folders.
+  What no concept owns and more than one module is handed — telemetry, the durable store, the key
+  ring, authentication, the index reader — lives in `Infrastructure/`, the one folder not named
+  after a concept; only `Program.cs` stays at the root. `ModuleBoundaryTests` turns the arrows into
+  a failing build. The test project mirrors the folders.
 - Endpoints are inline lambdas in `Program.cs`, grouped with `MapGroup`. Logic lives in a service;
   a handler that needs more than one statement of its own is a handler doing too much. Once
   `Program.cs` passes about 150 lines, an endpoint group moves to a `static void MapX(this
