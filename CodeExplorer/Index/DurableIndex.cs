@@ -140,14 +140,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
                 cancellationToken);
         }
 
-        if (ftsAvailable)
-            // The same settings the build used, because a different tokenizer would rank the restored
-            // index differently from the one it is a copy of.
-            await ExecuteAsync(connection, """
-                                           PRAGMA create_fts_index('lines', 'line_id', 'content',
-                                               stemmer = 'none', stopwords = 'none', ignore = '[^a-z0-9_]+',
-                                               lower = 1, strip_accents = 0, overwrite = 1)
-                                           """, cancellationToken);
+        if (ftsAvailable) await FtsExtension.CreateIndexAsync(connection, cancellationToken);
 
         copy.Recording.Moved();
     }

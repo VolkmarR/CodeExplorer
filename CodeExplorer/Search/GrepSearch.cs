@@ -125,7 +125,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         {
             return request.Multiline
                 ? await SearchMultilineAsync(connection, request, query, bounds, cancellationToken)
-                : await SearchLinesAsync(connection, request, query, regex, bounds, cancellationToken);
+                : await SearchLinesAsync(index, request, query, regex, bounds, cancellationToken);
         }
         catch (DuckDBException ex) when (regex && Re2.IsPatternRejection(ex))
         {
@@ -135,10 +135,11 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         }
     }
 
-    private async Task<SearchOutcome> SearchLinesAsync(
-        DuckDBConnection connection, GrepRequest request, string query, bool regex, Bounds bounds,
+    private static async Task<SearchOutcome> SearchLinesAsync(
+        IndexReader index, GrepRequest request, string query, bool regex, Bounds bounds,
         CancellationToken cancellationToken)
     {
+        var connection = index.Connection;
         // Match parameters and file-filter parameters are kept apart: the "without filters" recount
         // below reuses the match alone, and DuckDB rejects a parameter the statement does not reference.
         var matchParameters = new List<DuckDBParameter>();
@@ -156,10 +157,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         {
             string[] tokens = query.Split((char[]?)null,
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            // The decision is per index, not per process: an index built under Substring has no BM25 tables
-            // even when the extension is loaded now, and match_bm25 would fail on it.
-            bool useFts = indexes.FtsAvailable && tokens.Any(HasIndexableChars)
-                                               && await HasFullTextIndexAsync(connection, cancellationToken);
+            bool useFts = tokens.Any(HasIndexableChars) && await index.HasFullTextAsync(cancellationToken);
             engine = useFts ? FullTextEngine : SubstringEngine;
 
             if (useFts)
@@ -506,13 +504,6 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         Break();
         string literal = best.ToString();
         return literal.Trim().Length == 0 ? null : literal;
-    }
-
-    private static async Task<bool> HasFullTextIndexAsync(DuckDBConnection connection,
-        CancellationToken cancellationToken)
-    {
-        using var command = connection.Query("SELECT fts_indexed FROM index_info", []);
-        return await command.ExecuteScalarAsync(cancellationToken) is true;
     }
 
     /// <summary>The FTS tokenizer keeps letters, digits and underscore; a token with none of them has no index entry.</summary>

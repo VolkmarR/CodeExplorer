@@ -64,12 +64,11 @@ public sealed class RefreshService(
     ILogger<RefreshService> logger)
 {
     /// <summary>
-    ///     Default for <c>Refresh:MinimumFreeBytes</c>. The shadow index is a second copy of the whole
-    ///     project, so a refresh needs room for one more of what the project already occupies, and
-    ///     <c>create_fts_index</c> needs working space on top; twice the live size is the judgement.
-    ///     A project with no index yet has nothing to scale from, so the floor stands in — 512 MiB out
-    ///     of the 8 GiB ceiling ADR-0003 measured, which is a first build of a large repository and
-    ///     still leaves room for the other projects.
+    ///     Default for <c>Refresh:MinimumFreeBytes</c>, the least free space a refresh is granted; what a
+    ///     shadow index costs beyond it is <see cref="ProjectIndexes.RoomForShadow" />'s judgement. A
+    ///     project with no index yet has nothing to scale from, so the floor stands in — 512 MiB out of
+    ///     the 8 GiB ceiling ADR-0003 measured, which is a first build of a large repository and still
+    ///     leaves room for the other projects.
     /// </summary>
     private const long DefaultMinimumFreeBytes = 512L * 1024 * 1024;
 
@@ -183,12 +182,11 @@ public sealed class RefreshService(
     /// </summary>
     private RefreshRefusal? InsufficientDisk(string slug)
     {
-        long free = indexes.FreeBytes();
-        long required = Math.Max(_minimumFreeBytes, indexes.LiveSizeBytes(slug) * 2);
-        return free >= required
+        var room = indexes.RoomForShadow(slug, _minimumFreeBytes);
+        return room.Enough
             ? null
             : new RefreshRefusal(
-                $"A refresh of project '{slug}' needs about {Mib(required)} free where the indexes live, and only {Mib(free)} is left. "
+                $"A refresh of project '{slug}' needs about {Mib(room.Required)} free where the indexes live, and only {Mib(room.Free)} is left. "
                 + "That disk holds every project's index, the shadow index a refresh builds beside it, and the local copies, and it cannot be enlarged (ADR-0003). "
                 + "Delete a project that is no longer needed, then refresh again.",
                 // 507 rather than another 409: a cron reading only the status line still learns that
