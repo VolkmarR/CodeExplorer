@@ -9,13 +9,13 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer;
 
-/// <summary>One entry of a tree listing: a path relative to the listed directory.</summary>
-public sealed record TreeEntryInfo(string RelativePath, bool IsDirectory);
-
 /// <summary>
-///     Keeps the local copy of every repository: a shallow bare clone under
-///     <c>{DataDirectory}/clones/{project}/{repository}.git</c>, made on first use. Files are read
-///     from the HEAD tree, so there is no working copy and nothing to walk on disk (ADR-0003).
+///     Keeps the local copy of every repository (CONTEXT.md): a shallow bare clone under
+///     <c>{DataDirectory}/clones/{project}/{repository}.git</c>, made on the first refresh and
+///     brought up to date on every later one. The refresh is its only reader, and reads it through
+///     the <see cref="LocalCopy" /> this hands out; the copy is temporary and nothing may depend on
+///     its being there. Files are read from the HEAD tree, so there is no working copy and nothing to
+///     walk on disk (ADR-0003).
 /// </summary>
 public sealed class GitClones(
     IConfiguration configuration,
@@ -32,39 +32,26 @@ public sealed class GitClones(
         + "than answer wrongly. Ask the operator to point the project at a repository without LFS.";
 
     // One gate per clone directory, so two first uses of the same repository clone it once and the
-    // second waits for the first instead of racing it on the same folder. Both dictionaries hold one
+    // second waits for the first instead of racing it on the same folder. The dictionary holds one
     // entry per repository for the life of the process, which is bounded by the control database.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
 
     private readonly string _cloneRoot = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones");
-    private readonly ConcurrentDictionary<string, bool> _lfsByPath = new();
     private readonly IDataProtector _protector = dataProtection.CreateProtector(ControlDatabase.CredentialPurpose);
-
-    /// <summary>
-    ///     Opens the repository, cloning it first if no clone exists. Throws <see cref="McpException" />
-    ///     when the clone fails; the message names the repository and what to check and never carries
-    ///     the credential, which only ever reaches libgit2 through <c>CredentialsProvider</c>.
-    /// </summary>
-    public Task<Repository> OpenAsync(ProjectRepository repository, CancellationToken cancellationToken) =>
-        OpenAsync(repository, false, cancellationToken);
 
     /// <summary>
     ///     Opens the repository with its local copy brought up to date: a shallow fetch when it is
     ///     already cloned, and the clone itself when it is not, which is already current. This is the
-    ///     first half of a refresh (CONTEXT.md); without it a rebuild re-reads whatever was fetched
-    ///     when the repository was first added, however long ago that was.
+    ///     first half of a refresh (CONTEXT.md), and the only way a local copy is ever read; a tool
+    ///     call answers from the index, because an agent must not make the server talk to a remote.
+    ///     Throws <see cref="McpException" /> when the transfer fails; the message names the repository
+    ///     and what to check and never carries the credential, which only ever reaches libgit2 through
+    ///     <c>CredentialsProvider</c>. A copy that transferred but is not to be read comes back as a
+    ///     <see cref="CloneOpen.Refused" /> with the sentence to report, and nothing left open.
     /// </summary>
-    public Task<Repository> OpenRefreshedAsync(ProjectRepository repository,
-        CancellationToken cancellationToken) =>
-        OpenAsync(repository, true, cancellationToken);
-
     /// <param name="repository">The repository to open, as the control database holds it.</param>
-    /// <param name="fetch">
-    ///     Whether an existing clone is brought up to date first. Only a refresh asks for it: a tool
-    ///     call reads what is already there, because an agent must not make the server talk to a remote.
-    /// </param>
     /// <param name="cancellationToken">Cancels the transfer, which is the long part.</param>
-    private async Task<Repository> OpenAsync(ProjectRepository repository, bool fetch,
+    public async Task<CloneOpen> OpenRefreshedAsync(ProjectRepository repository,
         CancellationToken cancellationToken)
     {
         string path = Path.Combine(_cloneRoot, repository.ProjectSlug, repository.Slug + ".git");
@@ -76,7 +63,7 @@ public sealed class GitClones(
             // the request thread. A clone is already up to date, so it is never followed by a fetch.
             if (!Repository.IsValid(path))
                 await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken);
-            else if (fetch)
+            else
                 await Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
         }
         finally
@@ -84,7 +71,32 @@ public sealed class GitClones(
             gate.Release();
         }
 
-        return new Repository(path);
+        var clone = new Repository(path);
+        try
+        {
+            // Decided here, once, in this order: an empty remote has no tree to scan, and a tree that
+            // declares LFS is refused before anyone reads a pointer file as source.
+            if (clone.Head.Tip is null)
+            {
+                clone.Dispose();
+                return new CloneOpen.Empty($"Repository '{repository.Slug}' has no commits yet.");
+            }
+
+            // The LFS scan reads every .gitattributes in the tree, which is a walk of the whole tree; off
+            // the request thread like the transfer, and before the thread is handed a copy to read.
+            if (await Task.Run(() => LocalCopy.DeclaresLfs(clone), cancellationToken))
+            {
+                clone.Dispose();
+                return new CloneOpen.UsesLfs($"Repository '{repository.Slug}': {LfsRefusal}");
+            }
+
+            return new CloneOpen.Opened(new LocalCopy(clone));
+        }
+        catch
+        {
+            clone.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -107,8 +119,6 @@ public sealed class GitClones(
             // its repositories running under a different key. The control database forgot them first,
             // so nothing can start a new clone; one already in flight loses the race and leaves a folder.
             await Task.Run(() => Delete(path), cancellationToken);
-            foreach (string known in _lfsByPath.Keys.Where(p => p.StartsWith(path, StringComparison.Ordinal)))
-                _lfsByPath.TryRemove(known, out _);
         }
         finally
         {
@@ -133,80 +143,6 @@ public sealed class GitClones(
             file.Attributes = FileAttributes.Normal;
         Directory.Delete(path, true);
     }
-
-    /// <summary>
-    ///     True when any <c>.gitattributes</c> in the HEAD tree declares <c>filter=lfs</c>. Walks the whole
-    ///     tree because git honours attributes files at any depth, not only at the root. Remembered per
-    ///     clone, since HEAD only moves on a refresh, which is where the entry will be dropped.
-    /// </summary>
-    public bool DeclaresLfs(Repository repository) =>
-        _lfsByPath.GetOrAdd(repository.Info.Path, static (_, repo) => ScanForLfs(repo), repository);
-
-    private static bool ScanForLfs(Repository repository)
-    {
-        if (HeadTree(repository) is not { } tree) return false;
-        foreach (var entry in Walk(tree))
-        {
-            if (entry.TargetType != TreeEntryTargetType.Blob || entry.Name != ".gitattributes") continue;
-            using var stream = ((Blob)entry.Target).GetContentStream();
-            using var reader = new StreamReader(stream);
-            while (reader.ReadLine() is { } line)
-                // Attribute lines are `pattern attr attr...`; the pattern itself is never `filter=lfs`.
-                if (line.Split(' ', '\t').Skip(1).Any(a => a == "filter=lfs"))
-                    return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    ///     Lists the HEAD tree under <paramref name="directory" /> (empty for the root) down to
-    ///     <paramref name="depth" /> levels. Returns null when the path is not a directory in HEAD, or
-    ///     there is no HEAD commit at all.
-    /// </summary>
-    public static IReadOnlyList<TreeEntryInfo>? ListTree(Repository repository, string directory, int depth)
-    {
-        if (HeadTree(repository) is not { } tree) return null;
-        if (directory.Length > 0)
-        {
-            var entry = tree[directory];
-            if (entry?.TargetType != TreeEntryTargetType.Tree) return null;
-            tree = (Tree)entry.Target;
-        }
-
-        var entries = new List<TreeEntryInfo>();
-        Collect(tree, "", depth, entries);
-        return entries;
-    }
-
-    private static void Collect(Tree tree, string prefix, int depth, List<TreeEntryInfo> entries)
-    {
-        foreach (var entry in tree.OrderBy(e => e.TargetType != TreeEntryTargetType.Tree)
-                     .ThenBy(e => e.Name, StringComparer.Ordinal))
-        {
-            string relative = prefix + entry.Name;
-            // A submodule (GitLink) is another repository; list it as a directory that cannot be entered.
-            bool isDirectory = entry.TargetType is TreeEntryTargetType.Tree or TreeEntryTargetType.GitLink;
-            entries.Add(new TreeEntryInfo(relative, isDirectory));
-            if (entry.TargetType == TreeEntryTargetType.Tree && depth > 1)
-                Collect((Tree)entry.Target, relative + "/", depth - 1, entries);
-        }
-    }
-
-    private static IEnumerable<TreeEntry> Walk(Tree tree)
-    {
-        foreach (var entry in tree)
-        {
-            yield return entry;
-            if (entry.TargetType != TreeEntryTargetType.Tree) continue;
-            foreach (var child in Walk((Tree)entry.Target)) yield return child;
-        }
-    }
-
-    /// <summary>False for a freshly initialised remote: an empty repository is an answer, not a failure.</summary>
-    public static bool HasCommits(Repository repository) => repository.Head.Tip is not null;
-
-    private static Tree? HeadTree(Repository repository) => repository.Head.Tip?.Tree;
 
     private void Clone(ProjectRepository repository, string path, CancellationToken cancellationToken)
     {
@@ -275,9 +211,6 @@ public sealed class GitClones(
         }
 
         AlignHead(clone, repository, cancellationToken);
-
-        // HEAD has moved, so what a previous scan concluded about LFS is about the old tree.
-        _lfsByPath.TryRemove(clone.Info.Path, out _);
     }
 
     /// <summary>

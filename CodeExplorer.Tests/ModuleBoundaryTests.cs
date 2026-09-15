@@ -53,6 +53,27 @@ public sealed partial class ModuleBoundaryTests
         Assert.Empty(ReferencesFrom("Infrastructure", TypesDeclaredIn(module)));
     }
 
+    /// <summary>
+    ///     A package boundary rather than a folder one: LibGit2Sharp is how <c>Git/</c> reads a local
+    ///     copy, and the refresh and the build are handed what it read as <c>LocalCopy</c> and
+    ///     <c>CommittedFile</c>. Naming the namespace anywhere else is the seam turning hypothetical
+    ///     again (#37). The test project is not held to this: its fixtures are repositories, and it
+    ///     builds them with the same library.
+    /// </summary>
+    [Fact]
+    public void Only_Git_names_LibGit2Sharp()
+    {
+        var found = new List<string>();
+        foreach (string file in SourceTree.ServerFiles())
+        {
+            if (Path.GetFileName(Path.GetDirectoryName(file)) == "Git") continue;
+            if (Regex.IsMatch(SourceTree.Code(file), @"\bLibGit2Sharp\b"))
+                found.Add(Path.GetRelativePath(SourceTree.Server(), file));
+        }
+
+        Assert.Empty(found);
+    }
+
     /// <summary>The names of the types each <c>.cs</c> file under the module's folder declares.</summary>
     private static HashSet<string> TypesDeclaredIn(string module)
     {

@@ -1,6 +1,5 @@
 using System.Text;
 using DuckDB.NET.Data;
-using LibGit2Sharp;
 
 namespace CodeExplorer;
 
@@ -10,17 +9,14 @@ namespace CodeExplorer;
 /// </summary>
 public sealed record IndexSummary(int Repositories, long Files, long Lines, IReadOnlyList<string> Skipped);
 
-/// <summary>
-///     One repository of a project and the open local copy a build reads it from. <c>LocalCopy</c> and
-///     not <c>Clone</c>: a record may not declare a member of that name, and it is CONTEXT.md's word.
-/// </summary>
-public sealed record OpenedRepository(ProjectRepository Repository, Repository LocalCopy);
+/// <summary>One repository of a project and the open local copy a build reads it from.</summary>
+public sealed record OpenedRepository(ProjectRepository Repository, LocalCopy LocalCopy);
 
 /// <summary>
-///     Reads open clones into an index, which is all this module does: files come from the HEAD tree
-///     and content from blobs (ADR-0003), and there is no working copy to walk. Fetching the clones
-///     and deciding what becomes of the result belong to a refresh and live in <c>Refresh/</c>
-///     (ADR-0005).
+///     Reads open local copies into an index, which is all this module does: the files come as
+///     <see cref="LocalCopy" /> hands them out — committed at HEAD, with no working copy behind them
+///     (ADR-0003) — and nothing here knows what git library read them. Fetching the copies and deciding
+///     what becomes of the result belong to a refresh and live in <c>Refresh/</c> (ADR-0005).
 /// </summary>
 public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes indexes)
 {
@@ -50,7 +46,7 @@ public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes in
         // same metrics by calling this, which is the only way to fill an index at all.
         using var recording = Telemetry.IndexBuild(shadow.Slug);
 
-        // The tree walk and the appender are synchronous libgit2 and DuckDB calls; a worker thread
+        // The tree walk and the appender are synchronous git and DuckDB calls; a worker thread
         // keeps them off the request thread, and the token is checked between files.
         var (files, lines) = await Task.Run(
             () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, repositories, cancellationToken),
@@ -85,15 +81,14 @@ public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes in
             long lineCount = 0;
             // Sorted by path so a repository's files, and each file's lines, are contiguous: the zone
             // maps then prune by repo_id and file_id without an index.
-            foreach (var entry in Blobs(clone.Head.Tip.Tree, "").OrderBy(e => e.Path, StringComparer.Ordinal))
+            foreach (var entry in clone.Files().OrderBy(e => e.Path, StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 fileId++;
                 fileCount++;
-                var blob = entry.Blob;
-                string? skipReason = blob.IsBinary ? "binary" :
-                    blob.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" : null;
-                var text = skipReason is null ? SplitLines(blob.GetContentText()) : [];
+                string? skipReason = entry.IsBinary ? "binary" :
+                    entry.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" : null;
+                var text = skipReason is null ? SplitLines(entry.Text()) : [];
                 for (int i = 0; i < text.Count; i++)
                     lines.CreateRow().AppendValue(++lineId).AppendValue(fileId).AppendValue(i + 1).AppendValue(text[i])
                         .EndRow();
@@ -110,31 +105,16 @@ public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes in
                     .AppendValue(paths.Format(repository.Slug, entry.Path))
                     .AppendValue(slash < 0 ? "" : entry.Path[..slash]).AppendValue(name)
                     .AppendValue(Path.GetExtension(name).TrimStart('.').ToLowerInvariant())
-                    .AppendValue(blob.Size).AppendValue(text.Count);
+                    .AppendValue(entry.Size).AppendValue(text.Count);
                 if (skipReason is null) row.AppendNullValue().EndRow();
                 else row.AppendValue(skipReason).EndRow();
             }
 
             repos.CreateRow().AppendValue(repoId).AppendValue(repository.Slug).AppendValue(repository.Url)
-                .AppendValue(clone.Head.Tip.Sha).AppendValue(fileCount).AppendValue(lineCount).EndRow();
+                .AppendValue(clone.HeadSha).AppendValue(fileCount).AppendValue(lineCount).EndRow();
         }
 
         return (fileId, lineId);
-    }
-
-    /// <summary>Every blob under the tree with its repository-relative path. Submodules are not files and are left out.</summary>
-    private static IEnumerable<(string Path, Blob Blob)> Blobs(Tree tree, string prefix)
-    {
-        foreach (var entry in tree)
-            switch (entry.TargetType)
-            {
-                case TreeEntryTargetType.Blob:
-                    yield return (prefix + entry.Name, (Blob)entry.Target);
-                    break;
-                case TreeEntryTargetType.Tree:
-                    foreach (var child in Blobs((Tree)entry.Target, prefix + entry.Name + "/")) yield return child;
-                    break;
-            }
     }
 
     /// <summary>
