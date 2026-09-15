@@ -64,6 +64,16 @@ container never reaches out at runtime. `INSTALL fts` fails silently offline and
 downgrade a whole replica to substring scan on an egress restriction or a transient fault. The base
 image needs no git binary; LibGit2Sharp bundles libgit2.
 
+Built in #14, and two things about the bake are worth recording because neither is obvious from the
+Dockerfile alone. **The install runs the published application** — `dotnet CodeExplorer.dll
+--install-fts <directory>`, a switch that installs and exits — rather than a tool or a download of
+its own: a DuckDB extension is stamped with the version and platform of the build that will load it,
+and only that build knows both. **Where it lands is a setting**, `Index:ExtensionDirectory`, set in
+the image and absent everywhere else, where DuckDB's own folder under the user profile is the better
+answer because it is shared across checkouts. An extension directory that no deployment can name
+would have to be `$HOME/.duckdb`, which means the build stage and the runtime stage agreeing on a
+home directory by convention — the kind of coupling nothing in the file would have said out loud.
+
 ## Local development stays complete without Azure
 
 Every Azure service above is selected by the presence of its configuration, and its absence selects

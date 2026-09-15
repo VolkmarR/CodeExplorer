@@ -1,5 +1,24 @@
 using CodeExplorer;
 
+// The image build runs this to bake the DuckDB fts extension into the image (#14, ADR-0004), and it
+// exits without starting a server. A switch on the app rather than a tool of its own, because the
+// install has to run against the DuckDB build the server will load. Read before the builder so that
+// the argument never reaches command-line configuration, which rejects a switch carrying no value —
+// which is why the switch is answered here even when the directory is missing: falling through would
+// report a malformed build command as a configuration parse error naming neither.
+if (args is [FtsExtension.InstallArgument, ..])
+{
+    if (args is not [_, var extensionDirectory])
+    {
+        await Console.Error.WriteLineAsync(
+            $"Usage: {FtsExtension.InstallArgument} <directory>. One argument, the directory to install into.");
+        return 1;
+    }
+
+    FtsExtension.InstallTo(extensionDirectory);
+    return 0;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Traces and metrics when an OTLP endpoint is configured, and nothing at all when it is not
@@ -84,6 +103,8 @@ app.UseStaticFiles();
 app.MapFallbackToFile("index.html");
 
 app.Run();
+// Spelled out because the install switch above returns a code, which makes every exit an int.
+return 0;
 
 /// <summary>Marker so the tests can host the app through <c>WebApplicationFactory</c>.</summary>
 public partial class Program;
