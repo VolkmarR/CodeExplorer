@@ -241,6 +241,79 @@ public sealed class RefreshTests : IDisposable
         Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
     }
 
+    [Fact]
+    public async Task A_refresh_follows_a_default_branch_renamed_upstream()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+        // The clone's HEAD names the branch the fixture was on when it was made. Renaming it upstream
+        // takes that name away, and the fetch prunes it: before #31 HEAD was left naming nothing, the
+        // repository reported itself as empty, and no later refresh ever recovered it.
+        _host.RenameDefaultBranch("one", "trunk");
+
+        var summary = await _host.RefreshAsync("alpha");
+
+        Assert.Equal(2, summary.Files);
+        Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    [Fact]
+    public async Task A_clone_whose_head_names_no_branch_recovers_on_the_next_refresh()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        // A clone left in the broken state by a version without the fix. Recovering it is the refresh's
+        // job because the alternative is the operator editing HEAD inside the clone directory by hand.
+        TestHost.BreakHead(_host.ClonePath("alpha", "one"), "gone");
+
+        var summary = await _host.RefreshAsync("alpha");
+
+        Assert.Equal(1, summary.Files);
+        Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    [Fact]
+    public async Task A_remote_that_really_has_no_commits_is_still_reported_as_empty()
+    {
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "one", _host.CreateEmptyGitRepository("one"));
+
+        using (var response = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await _host.WaitForRefreshesAsync();
+
+        // Following the remote's HEAD must not turn an empty remote into a broken local copy: there is
+        // no default branch to resolve because the remote advertises none, and that is an answer.
+        var status = await _host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.NotNull(status.Error);
+        Assert.Contains("has no commits yet", status.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_default_branch_that_cannot_be_resolved_names_the_local_copy_and_the_way_out()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        // A remote that has branches but whose own HEAD names none of them: nothing can be followed,
+        // and the branch the clone was on is pruned, so its HEAD is left naming nothing either.
+        _host.RenameDefaultBranch("one", "trunk");
+        TestHost.BreakHead(_host.FixtureGitPath("one"), "main");
+
+        using (var response = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await _host.WaitForRefreshesAsync();
+
+        var status = await _host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.NotNull(status.Error);
+        // Not "has no commits yet": the remote is fine and the local copy is not, and the message says
+        // which one is wrong and what the operator can do about it.
+        Assert.DoesNotContain("has no commits yet", status.Error, StringComparison.Ordinal);
+        Assert.Contains("local copy", status.Error, StringComparison.Ordinal);
+        Assert.Contains(_host.ClonePath("alpha", "one"), status.Error, StringComparison.Ordinal);
+        // The old index is still serving, as it is for any other refresh that could read nothing.
+        Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
     private static Dictionary<string, Dictionary<string, string>> Fixture(string repository = "one") =>
         new() { [repository] = new Dictionary<string, string> { [OldFile] = "class A;\n" } };
 

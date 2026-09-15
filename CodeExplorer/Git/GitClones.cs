@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using LibGit2Sharp;
+using LibGit2Sharp.Handlers;
 using Microsoft.AspNetCore.DataProtection;
 using ModelContextProtocol;
+using GitReference = LibGit2Sharp.Reference;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer;
@@ -247,9 +249,8 @@ public sealed class GitClones(
     private void Fetch(ProjectRepository repository, string path, CancellationToken cancellationToken)
     {
         // Pruned, because the clone is a mirror of the remote and nothing here merges: a branch deleted
-        // upstream must go, or the index keeps serving a branch that no longer exists. If the pruned
-        // branch is the one HEAD points at — a renamed default branch — HEAD resolves to nothing and
-        // the refresh reports the repository as having no commits rather than indexing the stale tree.
+        // upstream must go, or the index keeps serving a branch that no longer exists. That takes the
+        // branch HEAD names with it when the default was renamed, which is why AlignHead runs after.
         var options = new FetchOptions { Prune = true };
         Configure(options, repository, cancellationToken);
 
@@ -273,8 +274,86 @@ public sealed class GitClones(
                 + "Ask the operator to check the URL and the stored credential for this repository, then try again.");
         }
 
+        AlignHead(clone, repository, cancellationToken);
+
         // HEAD has moved, so what a previous scan concluded about LFS is about the old tree.
         _lfsByPath.TryRemove(clone.Info.Path, out _);
+    }
+
+    /// <summary>
+    ///     Points the clone's HEAD at the branch the remote advertises as its own, so the mirror
+    ///     follows the remote's HEAD the way the refspec follows its branches. Without it a default
+    ///     branch renamed or deleted upstream leaves HEAD naming a branch the prune removed: the tree
+    ///     walk reads HEAD, so the repository reports itself as having no commits, and nothing else
+    ///     ever writes HEAD, so it stays that way for every later refresh (#31).
+    /// </summary>
+    private void AlignHead(Repository clone, ProjectRepository repository, CancellationToken cancellationToken)
+    {
+        if (AdvertisedReferences(repository, cancellationToken) is { } advertised)
+        {
+            // A remote with no branches is empty, and an empty repository is an answer rather than a
+            // local copy to complain about. Decided on the branches and not on the HEAD target, because
+            // protocol v2 advertises an unborn HEAD with a symref target: an empty remote can name a
+            // default branch that exists nowhere yet, and that must not read as a failure to resolve one.
+            if (!advertised.Any(r => r.CanonicalName.StartsWith("refs/heads/", StringComparison.Ordinal)))
+                return;
+
+            // The remote advertises HEAD as a symbolic reference naming the branch it defaults to.
+            string? branch = advertised.FirstOrDefault(r => r.CanonicalName == "HEAD")?.TargetIdentifier;
+
+            // The refspec just fetched every remote branch, so the target is here unless the remote's
+            // HEAD is detached, where TargetIdentifier is a commit id and names no reference.
+            if (branch is not null && clone.Refs[branch] is not null)
+            {
+                if (clone.Refs.Head.TargetIdentifier != branch) clone.Refs.UpdateTarget(clone.Refs.Head, branch);
+                return;
+            }
+        }
+
+        // Either the advertisement could not be read or it named nothing this clone has. A HEAD that
+        // still resolves keeps serving the branch it has and the next refresh tries again; one that
+        // resolves to nothing is a local copy the operator has to hear about, because the indexer
+        // would otherwise report the remote as empty when the remote is fine.
+        if (clone.Head.Tip is not null) return;
+        throw new McpException(
+            $"The local copy of repository '{repository.Slug}' has a HEAD naming "
+            + $"'{clone.Refs.Head.TargetIdentifier}', which is no branch it holds, and the default branch of "
+            + $"'{repository.Url}' could not be read to repair it. Ask the operator to retry the refresh, "
+            + $"or to delete the clone at '{clone.Info.Path}' so the next refresh makes a fresh one.");
+    }
+
+    /// <summary>
+    ///     What the remote advertises, or null when it could not be reached. Separate
+    ///     from the fetch because the refspec writes branches only: nothing in a fetch carries the
+    ///     remote's HEAD, and <c>refs/remotes/origin/HEAD</c> in the clone is written once at clone
+    ///     time and never updated, so it is stale exactly when this is needed.
+    /// </summary>
+    private List<GitReference>? AdvertisedReferences(ProjectRepository repository,
+        CancellationToken cancellationToken)
+    {
+        // Checked here and nowhere inside: ListRemoteReferences takes no FetchOptions, so there is no
+        // OnTransferProgress to hang a cancellation on the way Fetch does. The advertisement is one
+        // round-trip with no transfer behind it, so the window this leaves open is the short one.
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            var credentials = Credentials(repository);
+            return (credentials is null
+                ? Repository.ListRemoteReferences(repository.Url)
+                : Repository.ListRemoteReferences(repository.Url, credentials)).ToList();
+        }
+        catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Safe to swallow: the fetch above already succeeded, so the commits are here and a clone
+            // whose HEAD resolves keeps serving them. Only an unborn HEAD turns this into a failure,
+            // which the caller raises with the remediation in it.
+            if (logger.IsEnabled(LogLevel.Warning))
+                logger.LogWarning("Could not read the default branch of repository {Repository} of project "
+                                  + "{Project}; its local HEAD is left as it is", repository.Slug,
+                    repository.ProjectSlug);
+            return null;
+        }
     }
 
     /// <summary>
@@ -288,7 +367,16 @@ public sealed class GitClones(
         // mirrors use those.
         if (RepositoryUrl.Classify(repository.Url) == RepositoryUrlKind.Remote) options.Depth = 1;
         options.OnTransferProgress = _ => !cancellationToken.IsCancellationRequested;
-        if (repository.ProtectedCredential is not { } ciphertext) return;
+        options.CredentialsProvider = Credentials(repository);
+    }
+
+    /// <summary>
+    ///     The stored credential as libgit2 wants it, or null when the repository has none. This is the
+    ///     only place the plaintext exists, and it reaches nothing but libgit2 from here.
+    /// </summary>
+    private CredentialsHandler? Credentials(ProjectRepository repository)
+    {
+        if (repository.ProtectedCredential is not { } ciphertext) return null;
 
         string token;
         try
@@ -305,8 +393,7 @@ public sealed class GitClones(
         }
 
         // GitHub and Azure DevOps both accept a token as the password with any user name.
-        options.CredentialsProvider = (_, _, _) =>
-            new UsernamePasswordCredentials { Username = "token", Password = token };
+        return (_, _, _) => new UsernamePasswordCredentials { Username = "token", Password = token };
     }
 
     /// <summary>libgit2 writes pack files read-only, which a recursive delete refuses until cleared.</summary>
