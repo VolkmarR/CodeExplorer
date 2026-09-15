@@ -183,7 +183,7 @@ export const signOutAction = '/api/auth/signout'
 const http = ky.create({
   hooks: {
     afterResponse: [
-      (request, _options, response) => {
+      ({ request, response }) => {
         // The cookie expired while the page was open. The server refuses in prose rather than
         // redirecting, because a cross-origin 302 to the tenant would fail CORS and arrive here as a
         // network error — so the navigation that fixes it has to be made from this side.
