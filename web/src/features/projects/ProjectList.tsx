@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Pencil, Plus } from 'lucide-react'
+import { Plus, Settings } from 'lucide-react'
 import { treeSearch } from '@/features/files/browseParams'
 import { IndexStatus } from '@/features/projects/IndexStatus'
 import { Button } from '@/components/ui/button'
@@ -29,7 +29,9 @@ export function ProjectList() {
             A project is what an agent connects to, and what a search spans.
           </p>
         </div>
-        <Button render={<Link to="/projects/new" />} variant="outline">
+        {/* The one thing to do on this page that is not opening a project, so it gets the filled
+            button; the per-card Settings stay quiet beside it. */}
+        <Button render={<Link to="/projects/new" />}>
           <Plus />
           New project
         </Button>
@@ -44,9 +46,9 @@ export function ProjectList() {
           {projects.map((project) => (
             <li key={project.slug}>
               {/* The whole card is the browse target, so the title link is stretched over it with a
-                  pseudo-element. The edit button needs its own stacking context to stay clickable;
-                  nesting it inside the link would be invalid instead. */}
-              <Card className="relative transition-colors hover:bg-muted/40">
+                  pseudo-element. The settings button needs its own stacking context to stay
+                  clickable; nesting it inside the link would be invalid instead. */}
+              <Card size="sm" className="relative transition-colors hover:bg-muted/40">
                 <CardHeader className="flex flex-row items-baseline justify-between gap-4">
                   <CardTitle>
                     {/* Nothing to browse before the first build, so an unbuilt project leads to its
@@ -69,7 +71,7 @@ export function ProjectList() {
                         {project.name}
                       </Link>
                     )}
-                    <span className="ml-2 font-mono text-sm font-normal text-muted-foreground">
+                    <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">
                       {project.slug}
                     </span>
                   </CardTitle>
@@ -81,11 +83,11 @@ export function ProjectList() {
                     <Button
                       render={<Link to="/projects/$project" params={{ project: project.slug }} />}
                       variant="ghost"
-                      size="icon-sm"
+                      size="sm"
                       className="relative"
-                      aria-label={`Edit ${project.name}`}
                     >
-                      <Pencil />
+                      <Settings />
+                      Settings
                     </Button>
                   </div>
                 </CardHeader>

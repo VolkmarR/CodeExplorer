@@ -118,6 +118,11 @@ below replaced that, and the reasoning for each is recorded here rather than in 
   ticket's choice: **@base-ui/react 1.8** (the primitives), **class-variance-authority 0.7** (the
   variant tables), **clsx 2.1** and **tailwind-merge 3.4** (the `cn` helper), and **lucide-react
   0.552** (the icon set `components.json` selects).
+- **Fontsource 5.3** for the two typefaces the UI sets: **Geist** for text and **JetBrains Mono** for
+  paths and code, as `@fontsource-variable/geist` and `@fontsource-variable/jetbrains-mono`. Bundled
+  rather than linked from Google Fonts, because a plain `dotnet run` must be a complete offline
+  server (CODING_STANDARDS, Dependencies) and a font that fails to load falls back silently, so an
+  operator on an isolated network would see a different UI without an error saying why.
 - **React Compiler through `oxc-transform-react`** (`@vitejs/plugin-react`'s `compiler: true`),
   the Rust port, not the Babel plugin — Babel is the only thing this toolchain would otherwise have
   had to install. `@vitejs/plugin-react` calls its native compiler support experimental; a fatal

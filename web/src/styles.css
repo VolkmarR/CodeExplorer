@@ -1,4 +1,8 @@
 @import 'tailwindcss';
+/* Self-hosted through Fontsource (ADR-0004), so an offline operator server renders the same faces as
+   one on the internet. Variable builds: one file per family covers every weight used here. */
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/jetbrains-mono';
 
 /* The one stylesheet the project has: Tailwind's entry and the theme tokens shadcn components read.
    Everything else is a utility class on the element that needs it (CODING_STANDARDS, TypeScript). */
@@ -51,6 +55,10 @@
 }
 
 @theme inline {
+  /* Named here so `font-sans` and `font-mono` are these faces everywhere, with the platform stack
+     behind them for the moment before the files arrive. */
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, Consolas, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -74,6 +82,17 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* The header's loading bar: a third-width block crossing the full width and back to the start.
+   Defined here because a keyframe has no utility-class form; the element names it with `animate-[…]`. */
+@keyframes slide {
+  from {
+    translate: -100% 0;
+  }
+  to {
+    translate: 300% 0;
+  }
 }
 
 @layer base {

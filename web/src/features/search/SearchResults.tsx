@@ -1,10 +1,16 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
+import { MatchedLine } from '@/features/search/MatchedLine'
+import { matchPattern, matchRanges } from '@/features/search/matchRanges'
 import { searchQuery } from '@/features/search/queries'
 import type { SearchParameters } from '@/features/search/searchParams'
+import { languageFor } from '@/highlight/highlighter'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatCount } from '@/lib/format'
+
+/** One shared empty array for context lines, so a row without marks does not get a new prop each render. */
+const NO_MATCHES: never[] = []
 
 /**
  * A page of matches, each file linking through to its own content by qualified path — the repository
@@ -14,6 +20,7 @@ export function SearchResults({ project, search }: { project: string; search: Se
   const navigate = useNavigate()
   const { data: result } = useSuspenseQuery(searchQuery(project, search))
   const lastPage = Math.max(1, Math.ceil(result.totalFiles / result.pageSize))
+  const pattern = matchPattern(search)
 
   if (result.totalFiles === 0) {
     return (
@@ -31,47 +38,65 @@ export function SearchResults({ project, search }: { project: string; search: Se
     <div className="space-y-4">
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
         <Badge variant="secondary">{result.engine}</Badge>
-        {formatCount(result.totalFiles)} files, {formatCount(result.totalLines)} lines
+        {formatCount(result.totalFiles)} files · {formatCount(result.totalLines)} lines
       </p>
 
       <ul className="space-y-4">
-        {result.files.map((file) => (
-          <li key={file.qualifiedPath} className="overflow-hidden rounded-lg border bg-card">
-            <div className="flex items-baseline justify-between gap-4 border-b px-4 py-2">
-              <Link
-                to="/projects/$project/file"
-                params={{ project }}
-                search={{ path: file.qualifiedPath }}
-                className="font-mono text-sm hover:underline"
-              >
-                {file.qualifiedPath}
-              </Link>
-              <span className="shrink-0 text-xs text-muted-foreground">
-                {formatCount(file.matchCount)} {file.matchCount === 1 ? 'match' : 'matches'}
-                {file.matchesShown < file.matchCount ? `, showing ${file.matchesShown}` : ''}
-              </span>
-            </div>
-            <table className="w-full border-collapse font-mono text-xs">
-              <tbody>
-                {file.lines.map((line) => (
-                  <tr key={line.lineNumber} className={line.isMatch ? 'bg-primary/10' : undefined}>
-                    <td className="w-14 shrink-0 border-r px-2 py-0.5 text-right text-muted-foreground select-none">
-                      <Link
-                        to="/projects/$project/file"
-                        params={{ project }}
-                        search={{ line: line.lineNumber, path: file.qualifiedPath }}
-                        className="hover:underline"
-                      >
-                        {line.lineNumber}
-                      </Link>
-                    </td>
-                    <td className="overflow-x-auto px-3 py-0.5 whitespace-pre">{line.text}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </li>
-        ))}
+        {result.files.map((file) => {
+          // The directory is dimmed and the name is not: a page of results is scanned by file name,
+          // and the repository and folder are there to tell two of the same name apart.
+          const cut = file.qualifiedPath.lastIndexOf('/') + 1
+          const language = languageFor(file.qualifiedPath)
+          return (
+            <li key={file.qualifiedPath} className="overflow-hidden rounded-lg border bg-card">
+              <div className="flex items-baseline justify-between gap-4 border-b px-4 py-1.5">
+                <Link
+                  to="/projects/$project/file"
+                  params={{ project }}
+                  search={{ path: file.qualifiedPath }}
+                  className="font-mono text-sm hover:underline"
+                >
+                  <span className="text-muted-foreground">{file.qualifiedPath.slice(0, cut)}</span>
+                  {file.qualifiedPath.slice(cut)}
+                </Link>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {formatCount(file.matchCount)} {file.matchCount === 1 ? 'match' : 'matches'}
+                  {file.matchesShown < file.matchCount ? `, showing ${file.matchesShown}` : ''}
+                </span>
+              </div>
+              <table className="w-full border-collapse font-mono text-xs">
+                <tbody>
+                  {file.lines.map((line) => (
+                    <tr
+                      key={line.lineNumber}
+                      className={line.isMatch ? 'bg-primary/10' : undefined}
+                    >
+                      <td className="w-14 shrink-0 border-r px-2 py-0.5 text-right text-muted-foreground/70 select-none">
+                        <Link
+                          to="/projects/$project/file"
+                          params={{ project }}
+                          search={{ line: line.lineNumber, path: file.qualifiedPath }}
+                          className="hover:text-primary hover:underline"
+                        >
+                          {line.lineNumber}
+                        </Link>
+                      </td>
+                      <td className="overflow-x-auto px-3 py-0.5 whitespace-pre">
+                        <MatchedLine
+                          text={line.text}
+                          language={language}
+                          // Context lines carry no match by the server's word, so they are not
+                          // searched again: a context line can contain the query without counting.
+                          ranges={line.isMatch ? matchRanges(line.text, pattern) : NO_MATCHES}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </li>
+          )
+        })}
       </ul>
 
       {lastPage > 1 ? (
