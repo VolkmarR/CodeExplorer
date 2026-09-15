@@ -24,11 +24,18 @@ public enum SearchEngine
 ///     it: a swap detaches the catalog underneath, and the next statement on a connection that held
 ///     <c>USE</c> across it fails with <c>Catalog does not exist</c> (ADR-0003).
 /// </summary>
-public sealed class IndexLease(DuckDBConnection connection, Action release) : IDisposable
+public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded, Action release) : IDisposable
 {
     private int _released;
 
     public DuckDBConnection Connection { get; } = connection;
+
+    /// <summary>
+    ///     Whether this process can run <c>match_bm25</c> at all. One of the two truths behind a
+    ///     full-text search; the other, whether this file holds a BM25 index, is in its
+    ///     <c>index_info</c>, and <c>IndexReader.HasFullTextAsync</c> is where they meet.
+    /// </summary>
+    public bool FullTextLoaded { get; } = fullTextLoaded;
 
     public void Dispose()
     {
@@ -44,7 +51,8 @@ public sealed class IndexLease(DuckDBConnection connection, Action release) : ID
 ///     file, and the catalog name an appender targets. It is a second file next to the live one, so
 ///     the live index keeps answering queries until <see cref="ProjectIndexes.SwapShadowAsync" />.
 /// </summary>
-public sealed class ShadowIndex(DuckDBConnection connection, string catalog, string slug) : IDisposable
+public sealed class ShadowIndex(DuckDBConnection connection, string catalog, string slug, bool fullTextLoaded)
+    : IDisposable
 {
     public DuckDBConnection Connection { get; } = connection;
 
@@ -57,7 +65,35 @@ public sealed class ShadowIndex(DuckDBConnection connection, string catalog, str
     /// </summary>
     public string Slug { get; } = slug;
 
+    /// <summary>
+    ///     Ends a build once the tables are loaded: creates the BM25 index when this process has the
+    ///     extension, and records the build. The <c>index_info</c> row is written last, so a row means
+    ///     the build completed and describes what exists. There is deliberately no ART index on
+    ///     <c>lines(file_id)</c>: rows are appended in file order, so zone maps already prune a file's
+    ///     lines to one or two row groups, and an ART index would cost memory and slow the Parquet restore.
+    /// </summary>
+    /// <param name="singleRepository">How this project names its files (ADR-0006), recorded in the index.</param>
+    /// <param name="cancellationToken">Cancelling between the two statements leaves a shadow with no row, which is a shadow to discard.</param>
+    public async Task CompleteAsync(bool singleRepository, CancellationToken cancellationToken)
+    {
+        if (fullTextLoaded) await FtsExtension.CreateIndexAsync(Connection, cancellationToken);
+
+        using var command = Connection.CreateCommand();
+        command.CommandText =
+            $"INSERT INTO index_info VALUES ({ProjectIndexes.SchemaVersion}, now(), {(fullTextLoaded ? "true" : "false")}, {(singleRepository ? "true" : "false")})";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public void Dispose() => Connection.Dispose();
+}
+
+/// <summary>
+///     What a shadow index would need on disk against what is free. <see cref="Enough" /> is the
+///     answer; the two numbers are there so a refusal can name them.
+/// </summary>
+public readonly record struct DiskRoom(long Free, long Required)
+{
+    public bool Enough => Free >= Required;
 }
 
 /// <summary>
@@ -172,8 +208,8 @@ public sealed class ProjectIndexes : IDisposable
         // the copy the image build put there, so no search waits on a download that cannot happen.
         FtsExtension.UseDirectory(_anchor, configuration["Index:ExtensionDirectory"]);
 
-        var engine = configuration.GetValue("Index:SearchEngine", SearchEngine.Auto);
-        FtsAvailable = engine != SearchEngine.Substring && TryLoadFts(engine, logger);
+        FtsAvailable = FtsExtension.TryLoad(_anchor, configuration.GetValue("Index:SearchEngine", SearchEngine.Auto),
+            logger);
     }
 
     /// <summary>
@@ -192,21 +228,27 @@ public sealed class ProjectIndexes : IDisposable
 
     public bool HasIndex(string slug) => File.Exists(FilePath(slug));
 
-    /// <summary>Bytes the live index occupies, and zero when there is none: what a refresh has to find room for again.</summary>
-    public long LiveSizeBytes(string slug)
+    /// <summary>
+    ///     Whether a shadow index for the project fits on the volume holding the indexes, and the two
+    ///     numbers behind the answer. The shadow is a second copy of the whole project, so it needs room
+    ///     for one more of what the live index occupies, and <c>create_fts_index</c> needs working space
+    ///     on top; twice the live size is the judgement. A project with no index yet has nothing to scale
+    ///     from, so <paramref name="floor" /> stands in, and it is the least any refresh is granted.
+    ///     In the container the volume is the ephemeral disk every project, every clone and the shadow
+    ///     file share, with a ceiling nothing can raise (ADR-0003). It is found from the path root,
+    ///     which is the drive on Windows and the root mount on Linux — the container has one writable
+    ///     filesystem, so that is the same volume.
+    /// </summary>
+    /// <param name="slug">The project a refresh would rebuild.</param>
+    /// <param name="floor">The least free space a refresh is granted, set by the caller's configuration.</param>
+    public DiskRoom RoomForShadow(string slug, long floor)
     {
         // One FileInfo answers both questions; File.Exists followed by a second FileInfo stats twice.
         var file = new FileInfo(FilePath(slug));
-        return file.Exists ? file.Length : 0;
+        long live = file.Exists ? file.Length : 0;
+        long free = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(_directory))!).AvailableFreeSpace;
+        return new DiskRoom(free, Math.Max(floor, live * 2));
     }
-
-    /// <summary>
-    ///     Free bytes on the volume holding the indexes. In the container that is the ephemeral disk
-    ///     every project, every clone and the shadow file share, with a ceiling nothing can raise
-    ///     (ADR-0003). The volume is found from the path root, which is the drive on Windows and the
-    ///     root mount on Linux — the container has one writable filesystem, so that is the same volume.
-    /// </summary>
-    public long FreeBytes() => new DriveInfo(Path.GetPathRoot(Path.GetFullPath(_directory))!).AvailableFreeSpace;
 
     /// <summary>
     ///     A connection bound to the project with <c>USE</c>, attached first if the instance does not hold
@@ -253,7 +295,7 @@ public sealed class ProjectIndexes : IDisposable
             {
                 await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
                 await ExecuteAsync(connection, $"USE {Quote(slug)}", cancellationToken);
-                return new IndexLease(connection, gate.Leave);
+                return new IndexLease(connection, FtsAvailable, gate.Leave);
             }
             catch
             {
@@ -363,39 +405,13 @@ public sealed class ProjectIndexes : IDisposable
 
             await ExecuteAsync(connection, $"USE {Quote(catalog)}", cancellationToken);
             await ExecuteAsync(connection, Schema, cancellationToken);
-            return new ShadowIndex(connection, catalog, slug);
+            return new ShadowIndex(connection, catalog, slug, FtsAvailable);
         }
         catch
         {
             connection.Dispose();
             throw;
         }
-    }
-
-    /// <summary>
-    ///     Ends a build: creates the BM25 index once the tables are loaded, when the engine allows, and records the
-    ///     build. Returns whether a full-text index exists. There is deliberately no ART index on
-    ///     <c>lines(file_id)</c>: rows are appended in file order, so zone maps already prune a file's
-    ///     lines to one or two row groups, and an ART index would cost memory and slow the Parquet restore.
-    /// </summary>
-    public async Task<bool> CompleteBuildAsync(DuckDBConnection connection, bool singleRepository,
-        CancellationToken cancellationToken)
-    {
-        if (FtsAvailable)
-            // Tokens are lower-cased identifiers: letters, digits and underscore. No stemming and no stop
-            // words, because `Get`, `if` and `id` are exactly what an agent searches code for. Runs inside
-            // the attached database because match_bm25 only resolves its tables in the current one.
-            await ExecuteAsync(connection, """
-                                           PRAGMA create_fts_index('lines', 'line_id', 'content',
-                                               stemmer = 'none', stopwords = 'none', ignore = '[^a-z0-9_]+',
-                                               lower = 1, strip_accents = 0, overwrite = 1)
-                                           """, cancellationToken);
-
-        // Written last, so a row in index_info means the build completed and describes what exists.
-        await ExecuteAsync(connection,
-            $"INSERT INTO index_info VALUES ({SchemaVersion}, now(), {(FtsAvailable ? "true" : "false")}, {(singleRepository ? "true" : "false")})",
-            cancellationToken);
-        return FtsAvailable;
     }
 
     /// <summary>
@@ -581,32 +597,6 @@ public sealed class ProjectIndexes : IDisposable
                 cancellationToken);
             _attached.Add(catalog);
         }, cancellationToken);
-
-    private bool TryLoadFts(SearchEngine engine, ILogger logger)
-    {
-        try
-        {
-            // INSTALL downloads the extension on first use; #14 bakes it into the image so production
-            // never reaches out. Offline, it throws here rather than failing silently later.
-            using var command = _anchor.CreateCommand();
-            command.CommandText = "INSTALL fts; LOAD fts";
-            command.ExecuteNonQuery();
-            return true;
-        }
-        catch (DuckDBException ex) when (engine == SearchEngine.Auto)
-        {
-            // Safe to swallow: Auto asks for the best available engine, and substring scan is the
-            // documented offline fallback (ADR-0004). The log line is how an operator learns of the downgrade.
-            logger.LogWarning(ex, "The fts extension is not available; searches fall back to substring scan");
-            return false;
-        }
-        catch (DuckDBException ex)
-        {
-            throw new InvalidOperationException(
-                "Index:SearchEngine is Fts but the fts extension could not be installed or loaded. "
-                + "Connect to the network once, bake the extension into the image (#14), or set Substring.", ex);
-        }
-    }
 
     private async Task<DuckDBConnection> ConnectAsync(CancellationToken cancellationToken)
     {
