@@ -137,6 +137,20 @@ public sealed class IndexReader : IDisposable
     /// <summary>A connection already <c>USE</c>ing the project, for the searches that write their own SQL.</summary>
     public DuckDBConnection Connection => _lease.Connection;
 
+    /// <summary>
+    ///     Whether a full-text search can answer from this index: the file holds a BM25 index and this
+    ///     process has the extension to query it. Both are asked, because they come apart: an index
+    ///     built with full text survives a restart under <c>Index:SearchEngine=Substring</c>, and one
+    ///     built without it is not given one by loading the extension later. The decision is per index,
+    ///     not per process, and this is the one place it is made.
+    /// </summary>
+    public async Task<bool> HasFullTextAsync(CancellationToken cancellationToken)
+    {
+        if (!_lease.FullTextLoaded) return false;
+        using var command = Connection.Query("SELECT fts_indexed FROM index_info", []);
+        return await command.ExecuteScalarAsync(cancellationToken) is true;
+    }
+
     /// <summary>Releases the lease as well as the connection, which is what lets a swap proceed.</summary>
     public void Dispose() => _lease.Dispose();
 

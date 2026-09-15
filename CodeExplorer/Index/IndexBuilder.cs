@@ -18,7 +18,7 @@ public sealed record OpenedRepository(ProjectRepository Repository, LocalCopy Lo
 ///     (ADR-0003) — and nothing here knows what git library read them. Fetching the copies and deciding
 ///     what becomes of the result belong to a refresh and live in <c>Refresh/</c> (ADR-0005).
 /// </summary>
-public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes indexes)
+public sealed class IndexBuilder(IConfiguration configuration)
 {
     /// <summary>
     ///     Default for <c>Index:MaxFileBytes</c>. Text blobs above it are generated code, data dumps or
@@ -51,7 +51,7 @@ public sealed class IndexBuilder(IConfiguration configuration, ProjectIndexes in
         var (files, lines) = await Task.Run(
             () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, repositories, cancellationToken),
             cancellationToken);
-        await indexes.CompleteBuildAsync(shadow.Connection, singleRepository, cancellationToken);
+        await shadow.CompleteAsync(singleRepository, cancellationToken);
 
         recording.Built(files, lines);
         return new IndexSummary(repositories.Count, files, lines, []);
