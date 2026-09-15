@@ -1,0 +1,35 @@
+# Everything the build produces for itself, so a local `dotnet build` or `vp build` cannot leak a
+# host-shaped artifact into the image and cannot invalidate a layer by changing.
+**/bin
+**/obj
+**/node_modules
+**/dist
+CodeExplorer/wwwroot
+
+# Local state and tooling output: a developer's data directory holds clones, indexes and DuckDB spill
+# files, and none of it is small.
+data/
+**/*.duckdb
+**/*.duckdb.wal
+TestResults/
+.vite/
+.vp/
+**/*.tsbuildinfo
+**/.env
+**/.env.local
+**/.env.*.local
+
+# History, editors and the docs: the image build reads none of them, and .git alone is most of the
+# context a plain `docker build` would otherwise upload.
+.git
+.github
+.idea
+.vs
+docs/
+*.md
+
+# The test project. Nothing in the image runs it, and leaving it out keeps the restore to one project.
+CodeExplorer.Tests/
+
+Dockerfile
+.dockerignore
