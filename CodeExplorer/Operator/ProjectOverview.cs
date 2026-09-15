@@ -70,15 +70,13 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
         return summaries;
     }
 
-    /// <summary>Null when there is no such project, which the endpoint turns into a 404.</summary>
-    public async Task<ProjectDetail?> FindAsync(string slug, CancellationToken cancellationToken)
+    /// <summary>One project's page. The project is the route's, so there is no "none" to answer here.</summary>
+    public async Task<ProjectDetail> FindAsync(Project project, CancellationToken cancellationToken)
     {
-        if (await control.FindAsync(slug, cancellationToken) is not { } project) return null;
-
-        var configured = await control.ListRepositoriesAsync(slug, cancellationToken);
+        var configured = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         // One project's page restores that one project, which is the whole of what lazy attach asks:
         // a deliberate visit to a project pays for it, and the list above does not pay for all of them.
-        var (status, indexed) = await ReadIndexAsync(slug, true, cancellationToken);
+        var (status, indexed) = await ReadIndexAsync(project.Slug, true, cancellationToken);
         // Driven by the configured repositories, not the indexed ones: a repository removed since the
         // last build is gone from the page immediately, even though its files are still searchable.
         var repositories = configured
@@ -92,26 +90,27 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
 
     /// <summary>
     ///     Removes a project everywhere. The control database goes first, so nothing can start a clone
-    ///     or a build against a project that is on its way out. False when there was no such project.
+    ///     or a build against a project that is on its way out. A project already gone from the control
+    ///     database — two operators deleting at once — still has its index and copies removed, which is
+    ///     what the second one asked for too.
     /// </summary>
-    public async Task<bool> DeleteAsync(string slug, CancellationToken cancellationToken)
+    public async Task DeleteAsync(Project project, CancellationToken cancellationToken)
     {
-        if (!await control.DeleteProjectAsync(slug, cancellationToken)) return false;
-
-        await indexes.DiscardAsync(slug, cancellationToken);
-        await clones.RemoveAsync(slug, null, cancellationToken);
-        return true;
+        await control.DeleteProjectAsync(project.Slug, cancellationToken);
+        await indexes.DiscardAsync(project.Slug, cancellationToken);
+        await clones.RemoveAsync(project.Slug, null, cancellationToken);
     }
 
     /// <summary>
     ///     Removes one repository and its local copy. Its files stay searchable until the next build,
-    ///     which is why the project page reports the build time beside what the build found.
+    ///     which is why the project page reports the build time beside what the build found. False when
+    ///     the project has no such repository.
     /// </summary>
-    public async Task<bool> DeleteRepositoryAsync(string project, string slug, CancellationToken cancellationToken)
+    public async Task<bool> DeleteRepositoryAsync(Project project, string slug, CancellationToken cancellationToken)
     {
-        if (!await control.DeleteRepositoryAsync(project, slug, cancellationToken)) return false;
+        if (!await control.DeleteRepositoryAsync(project.Slug, slug, cancellationToken)) return false;
 
-        await clones.RemoveAsync(project, slug, cancellationToken);
+        await clones.RemoveAsync(project.Slug, slug, cancellationToken);
         return true;
     }
 

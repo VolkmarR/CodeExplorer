@@ -194,9 +194,12 @@ public sealed class TelemetryTests
     }
 
     [Fact]
-    public async Task A_search_of_an_unknown_project_still_carries_its_slug()
+    public async Task A_search_of_a_project_with_no_index_still_carries_its_slug()
     {
         using var host = await ProjectAsync(SearchEngine.Substring, "tele-known");
+        // Created and never refreshed: a slug that is no project at all is a 404 from the route
+        // (BoundProject) and never reaches a search, so it is not what this is about.
+        await host.CreateProjectAsync("tele-ghost");
         using var probe = new TelemetryProbe("tele-ghost");
 
         using var http = host.Factory.CreateClient();
