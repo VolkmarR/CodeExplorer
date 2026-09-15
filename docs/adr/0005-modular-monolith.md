@@ -73,3 +73,27 @@ The revisit above came due when #9 was built. Two things held and one moved.
   every module is handed. The Parquet itself, `DurableIndex`, is in `Index/` as the Shape says.
 - **The warm-up is in `Refresh/`**, as the Shape says, and not in `Operator/`: it is work a cron
   drives against an index, not something that serves the web UI.
+
+## Revisited for #35, on 2026-09-15
+
+The root had grown to nine files — telemetry, the durable store, the key ring, authentication,
+settings, the reader helpers, the qualified path, the project record and its route binding — and the
+review behind #35 added a tenth: the one module through which every reader opens a project's index.
+"What every module is handed" was a rule with no folder, so it read as a bucket of leftovers to a
+coding agent grepping for a place to look, and the boundary test had nothing to name.
+
+- **They live in `Infrastructure/` now.** One folder for code that no `CONTEXT.md` concept owns and
+  that more than one module is handed. `Program.cs` alone stays at the root, because it is the
+  composition root and not a module. `ToolReply` moved there too: its callers are in `Control/` as
+  well as `Search/`, so a `Search/` home had `Control/` crossing a seam for a pluraliser.
+- **The name is deliberately not a domain term.** Every other folder is; this one is the exception
+  that lets the rule stay strict. `Control/` does not belong in it, even though every module depends
+  on it: `Control/` is named after Project and Repository, holds endpoints and MCP tools, and is the
+  module ADR-0005's guarded arrow points away from. Being the root of the dependency graph is not the
+  same as being infrastructure.
+- **The folder is a real seam because the boundary test says so.** `Infrastructure/` references
+  nothing in `Search/`, `Refresh/` or `Operator/` — it may reach `Index/` and `Control/`, because
+  the route binding already reads the control database and the index reader opens an index — and
+  `Control/` and `Operator/` reference nothing in `Search/`. Without the assertions it is a bucket
+  with a better name.
+- The test project mirrors it: the tests of those files sit in `CodeExplorer.Tests/Infrastructure/`.
