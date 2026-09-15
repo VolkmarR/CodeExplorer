@@ -30,6 +30,18 @@ public sealed partial class ModuleBoundaryTests
         Assert.Empty(ReferencesFrom("Index", TypesDeclaredIn("Search")));
     }
 
+    [Theory]
+    [InlineData("Search")]
+    [InlineData("Refresh")]
+    [InlineData("Operator")]
+    public void Infrastructure_references_nothing_declared_in(string module)
+    {
+        // Infrastructure is what every module is handed (ADR-0005, revisited for #35). It may reach
+        // Index and Control — the route binding reads the control database, the index reader opens an
+        // index — but a tool, a refresh or a web-UI read is a caller of it, never a dependency.
+        Assert.Empty(ReferencesFrom("Infrastructure", TypesDeclaredIn(module)));
+    }
+
     /// <summary>The names of the types each <c>.cs</c> file under the module's folder declares.</summary>
     private static HashSet<string> TypesDeclaredIn(string module)
     {
@@ -55,6 +67,8 @@ public sealed partial class ModuleBoundaryTests
         return found;
     }
 
-    [GeneratedRegex(@"\b(?:class|record|struct|interface|enum)\s+([A-Za-z_]\w*)")]
+    // `record struct X` and `record class X` name X, not the second keyword: without the lookahead
+    // the first assertion over a module holding one of them reported every `struct` as a reference.
+    [GeneratedRegex(@"\b(?:class|record|struct|interface|enum)\s+(?!(?:class|struct)\b)([A-Za-z_]\w*)")]
     private static partial Regex DeclarationPattern { get; }
 }
