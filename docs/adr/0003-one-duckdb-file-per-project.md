@@ -76,3 +76,13 @@ workaround for `match_bm25` failing to resolve its internal tables in an attache
   connection fails on its next statement with `Binder Error: Catalog "<project>" does not exist!` —
   even for `SELECT current_database()`. A connection must therefore issue `USE` per checkout and
   never hold one across a swap.
+
+## Revisited for #37, on 2026-09-15
+
+The bare shallow clone is the refresh's and nobody else's. It was also what `list_tree` answered
+from, which made it a second source of truth beside the index and contradicted CONTEXT.md; that tool
+now reads the index like every other. The clone is opened in one place, `GitClones.OpenRefreshedAsync`,
+which decides empty and LFS once and hands the refresh a `LocalCopy` of plain records, so no
+LibGit2Sharp type leaves `Git/` and `ModuleBoundaryTests` keeps it that way. Nothing may depend on the
+clone existing between refreshes: it is temporary, and deleting it after a build is a decision this
+ADR leaves open, to be taken on the storage figures above rather than on convenience.

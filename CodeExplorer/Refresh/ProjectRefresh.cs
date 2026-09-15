@@ -1,4 +1,3 @@
-using LibGit2Sharp;
 using ModelContextProtocol;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
@@ -112,35 +111,18 @@ public sealed class ProjectRefresh(
         foreach (var repository in repositories)
         {
             report($"Fetching '{repository.Slug}' ({++fetched} of {repositories.Count})");
-            Repository? clone = null;
             try
             {
-                clone = await clones.OpenRefreshedAsync(repository, cancellationToken);
-                string? reason = !GitClones.HasCommits(clone)
-                    ? $"Repository '{repository.Slug}' has no commits yet."
-                    : clones.DeclaresLfs(clone)
-                        ? $"Repository '{repository.Slug}': {GitClones.LfsRefusal}"
-                        : null;
-                if (reason is null)
-                {
-                    opened.Add(new OpenedRepository(repository, clone));
-                    clone = null;
-                }
-                else
-                {
-                    skipped.Add(reason);
-                }
+                // Empty and LFS are decided behind the open (CloneOpen); a refusal holds nothing to dispose.
+                var open = await clones.OpenRefreshedAsync(repository, cancellationToken);
+                if (open is CloneOpen.Refused refused) skipped.Add(refused.Explanation);
+                else opened.Add(new OpenedRepository(repository, ((CloneOpen.Opened)open).Copy));
             }
             catch (McpException ex)
             {
                 // Safe to swallow: the reason is reported in the summary in place of the repository,
                 // and the other repositories still get indexed.
                 skipped.Add(ex.Message);
-            }
-            finally
-            {
-                // Still set when the clone was refused or the LFS scan threw; the list owns the rest.
-                clone?.Dispose();
             }
         }
 

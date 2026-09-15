@@ -150,8 +150,8 @@ public sealed class TestHost : IDisposable
 
     /// <summary>
     ///     An initialised repository with no commits: a remote that really is empty, as opposed to a
-    ///     clone whose HEAD lost the branch it named. The two look alike from <c>HasCommits</c> and
-    ///     must not be reported alike.
+    ///     clone whose HEAD lost the branch it named. The two look alike from HEAD's tip and must not
+    ///     be reported alike.
     /// </summary>
     public string CreateEmptyGitRepository(string name)
     {
