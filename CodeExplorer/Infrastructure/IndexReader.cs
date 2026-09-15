@@ -360,24 +360,62 @@ public sealed class IndexReader : IDisposable
     }
 
     /// <summary>
-    ///     One level of the project as a tree: the repositories at the root, or the immediate
-    ///     subdirectories and files of <paramref name="location" /> inside one of them. Directories are
-    ///     not rows in the index — <c>files.directory</c> holds each file's whole repository-relative
-    ///     directory — so a level is the distinct first segment below the prefix, aggregated over
-    ///     everything beneath it. Directories come first, each alphabetical, as a tree reads. Children
-    ///     are formatted through the same <see cref="ProjectPaths" /> that parsed the level, so a
-    ///     listing cannot be spelled differently from what it links to.
+    ///     The project as a tree, <paramref name="depth" /> levels deep: the repositories at the root,
+    ///     or the subdirectories and files of <paramref name="location" /> inside one of them. The list
+    ///     reads as <c>tree</c> prints: a directory is followed by its own entries before its siblings,
+    ///     directories before files at each level, each alphabetical. Directories are not rows in the
+    ///     index — <c>files.directory</c> holds each file's whole repository-relative directory — so a
+    ///     level is the distinct first segment below the prefix, aggregated over everything beneath it.
+    ///     Children are formatted through the same <see cref="ProjectPaths" /> that parsed the level, so
+    ///     a listing cannot be spelled differently from what it links to. Empty means the location is
+    ///     not a directory: git has no empty directories, so neither has the index.
     /// </summary>
     /// <param name="location">
     ///     Null asks for the repositories themselves, which is the root of a multi-repository project.
     ///     A single-repository project has no such level, and <see cref="ProjectPaths.Parse" /> never
     ///     hands back null for one. The repository slug is used as given; the caller resolves it.
     /// </param>
-    /// <param name="cancellationToken">Threaded through to both DuckDB commands.</param>
-    public async Task<IReadOnlyList<TreeItem>> TreeAsync(QualifiedPath? location, CancellationToken cancellationToken)
+    /// <param name="depth">How many levels to descend, at least 1. The web tree view asks for one.</param>
+    /// <param name="cancellationToken">Threaded through to every DuckDB command.</param>
+    public async Task<IReadOnlyList<TreeItem>> TreeAsync(QualifiedPath? location, int depth,
+        CancellationToken cancellationToken)
     {
-        if (location is null) return await RepositoryLevelAsync(cancellationToken);
+        var entries = new List<TreeItem>();
+        await CollectAsync(location, depth, entries, cancellationToken);
+        return entries;
+    }
 
+    /// <summary>
+    ///     One query per directory visited rather than one recursive query: a listing is bounded by
+    ///     what an agent can read, and DuckDB answers a level on a local file in well under a
+    ///     millisecond, so the simpler shape costs nothing anyone would measure.
+    /// </summary>
+    private async Task CollectAsync(QualifiedPath? location, int depth, List<TreeItem> entries,
+        CancellationToken cancellationToken)
+    {
+        var level = location is null
+            ? await RepositoryLevelAsync(cancellationToken)
+            : await DirectoryLevelAsync(location, cancellationToken);
+        foreach (var item in level)
+        {
+            entries.Add(item);
+            // A file has no Files count; a repository or directory does, and is what depth descends into.
+            if (depth <= 1 || item.Files is null) continue;
+            var below = location is null
+                ? new QualifiedPath(item.Name, "")
+                : location with
+                {
+                    PathInRepository = location.PathInRepository.Length == 0
+                        ? item.Name
+                        : location.PathInRepository + "/" + item.Name
+                };
+            await CollectAsync(below, depth - 1, entries, cancellationToken);
+        }
+    }
+
+    private async Task<IReadOnlyList<TreeItem>> DirectoryLevelAsync(QualifiedPath location,
+        CancellationToken cancellationToken)
+    {
         var paths = await PathsAsync(cancellationToken);
         string repositorySlug = location.RepositorySlug;
         string directory = location.PathInRepository;

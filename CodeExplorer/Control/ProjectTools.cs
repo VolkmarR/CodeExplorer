@@ -1,30 +1,24 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
-using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 namespace CodeExplorer;
 
 /// <summary>
 ///     The MCP tools about the project itself (ADR-0005, <c>Control/</c>): which one this endpoint
-///     serves, what repositories it has and how they were indexed, and their committed trees. They are
-///     the only tools allowed to read both the control database and the index, because "configured but
-///     not indexed yet" is a question neither side can answer alone.
+///     serves, what repositories it has and how they were indexed. They are the only tools allowed to
+///     read both the control database and the index, because "configured but not indexed yet" is a
+///     question neither side can answer alone. Nothing here opens a local copy: a tool answers from
+///     the index (CONTEXT.md), and <c>list_tree</c> lives with the other index readers in
+///     <c>Search/</c>.
 /// </summary>
 [McpServerToolType]
 internal sealed class ProjectTools(
     IHttpContextAccessor httpContextAccessor,
     ControlDatabase control,
-    GitClones clones,
     ProjectIndexes indexes)
 {
-    /// <summary>
-    ///     Enough to show a whole mid-sized tree in one call while keeping a runaway `depth` on a large
-    ///     monorepo from returning megabytes; the agent is told how to narrow down.
-    /// </summary>
-    private const int MaxEntries = 2000;
-
     [McpServerTool(Name = "which_project")]
     [Description(
         "Reports which project this MCP endpoint is bound to. The project comes from the URL you connected to, not from an argument; use it to confirm the server before searching.")]
@@ -76,97 +70,5 @@ internal sealed class ProjectTools(
                 $"  not indexed yet: added after the last refresh. The operator includes it with POST /api/projects/{project.Slug}/refresh.\n");
 
         return text.ToString();
-    }
-
-    [McpServerTool(Name = "list_tree")]
-    [Description(
-        "Lists directories and files of this project, like `tree -L depth`. Paths are qualified: the first segment is the repository slug, the rest is the path inside that repository (`main/src/Lib`). An empty path lists the repositories, and with depth 2 or more their top-level entries as well. Directories end with `/`. Entries come from the committed HEAD tree, so there is no working copy and no .gitignore filtering. The first call for a repository clones it, which can take a few seconds.")]
-    public async Task<string> ListTree(
-        [Description("Qualified path of the directory to list: `repo` or `repo/dir/sub`. Empty for the project root.")]
-        string path = "",
-        [Description("How many levels to descend, at least 1. Default 1 lists only direct children.")]
-        int depth = 1,
-        CancellationToken cancellationToken = default)
-    {
-        var project = BoundProject.Get(httpContextAccessor);
-        if (depth < 1)
-            return "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on.";
-
-        var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
-        if (repositories.Count == 0)
-            return
-                $"Project '{project.Slug}' has no repositories yet. Ask the operator to add one with POST /api/projects/{project.Slug}/repositories.";
-
-        // Null is the repository level, which a single-repository project does not have: there an empty
-        // path already means that repository's own top level (ADR-0006).
-        var paths = ProjectPaths.For(project, repositories);
-        if (paths.Parse(path) is not { } qualified)
-            return await ListRootAsync(project, repositories, depth, cancellationToken);
-
-        var repository = repositories.FirstOrDefault(r => r.Slug == qualified.RepositorySlug);
-        if (repository is null)
-            return
-                $"No repository '{qualified.RepositorySlug}' in project '{project.Slug}'. Repositories: {string.Join(", ", repositories.Select(r => r.Slug))}. "
-                + "The first path segment must be one of these.";
-
-        using var repo = await clones.OpenAsync(repository, cancellationToken);
-        if (!GitClones.HasCommits(repo))
-            return $"Repository '{repository.Slug}' has no commits yet, so there is nothing to list.";
-        if (clones.DeclaresLfs(repo)) return $"Repository '{repository.Slug}': {GitClones.LfsRefusal}";
-
-        var entries = GitClones.ListTree(repo, qualified.PathInRepository, depth);
-        if (entries is null)
-            return
-                $"'{qualified.PathInRepository}' is not a directory in repository '{repository.Slug}'. Call list_tree with a parent path to see what exists there.";
-
-        var text = new StringBuilder($"{paths.Format(qualified)}/ (depth {depth}, {entries.Count} entries)\n");
-        AppendEntries(text, "", entries);
-        return text.ToString();
-    }
-
-    /// <summary>
-    ///     The root lists every repository and, for depth 2 or more, their trees one level shallower. A
-    ///     repository that cannot be listed (LFS, clone failure) gets its reason inline so one bad
-    ///     repository does not hide the others.
-    /// </summary>
-    private async Task<string> ListRootAsync(
-        Project project, IReadOnlyList<ProjectRepository> repositories, int depth, CancellationToken cancellationToken)
-    {
-        var text = new StringBuilder($"{project.Slug} (depth {depth}, {repositories.Count} repositories)\n");
-        foreach (var repository in repositories)
-        {
-            text.Append(repository.Slug).Append("/\n");
-            if (depth == 1) continue;
-
-            try
-            {
-                using var repo = await clones.OpenAsync(repository, cancellationToken);
-                if (!GitClones.HasCommits(repo)) continue;
-                if (clones.DeclaresLfs(repo))
-                {
-                    text.Append("  ").Append(GitClones.LfsRefusal).Append('\n');
-                    continue;
-                }
-
-                AppendEntries(text, repository.Slug + "/", GitClones.ListTree(repo, "", depth - 1)!);
-            }
-            catch (McpException ex)
-            {
-                // Safe to swallow: the failure is reported in place of this repository's entries, and
-                // the other repositories still list. A direct call on the repository rethrows it.
-                text.Append("  ").Append(ex.Message).Append('\n');
-            }
-        }
-
-        return text.ToString();
-    }
-
-    private static void AppendEntries(StringBuilder text, string prefix, IReadOnlyList<TreeEntryInfo> entries)
-    {
-        foreach (var entry in entries.Take(MaxEntries))
-            text.Append(prefix).Append(entry.RelativePath).Append(entry.IsDirectory ? "/\n" : "\n");
-        if (entries.Count > MaxEntries)
-            text.Append(CultureInfo.InvariantCulture,
-                $"... {entries.Count - MaxEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
     }
 }

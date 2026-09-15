@@ -142,7 +142,7 @@ internal static class SearchEndpoints
             location = location with { RepositorySlug = repository.Slug };
         }
 
-        var entries = await index.TreeAsync(location, cancellationToken);
+        var entries = await index.TreeAsync(location, 1, cancellationToken);
         return Results.Ok(new TreeResponse(location is null ? "" : paths.Format(location), location is null,
             entries
                 .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
