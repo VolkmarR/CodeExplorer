@@ -6,8 +6,8 @@ namespace CodeExplorer.Tests;
 
 /// <summary>
 ///     The index-backed tools that are not searches (#6): <c>read_file</c>, <c>glob</c>,
-///     <c>list_extensions</c> and <c>repo_info</c>. None of them matches text, so the engine is pinned
-///     to Substring once rather than run twice.
+///     <c>list_tree</c>, <c>list_extensions</c> and <c>repo_info</c>. None of them matches text, so the
+///     engine is pinned to Substring once rather than run twice.
 /// </summary>
 public sealed class FileToolsTests : IDisposable
 {
@@ -199,6 +199,68 @@ public sealed class FileToolsTests : IDisposable
     }
 
     [Fact]
+    public async Task List_tree_answers_from_the_index_to_the_given_depth()
+    {
+        await using var client = await StartAsync();
+
+        string shallow = await ListTreeAsync(client, "one", 1);
+        Assert.Contains("one/ (depth 1, 3 entries)", shallow);
+        Assert.Contains("\nassets/\n", shallow);
+        Assert.Contains("\nsrc/\n", shallow);
+        Assert.Contains("\nREADME.md\n", shallow);
+        Assert.DoesNotContain("Orders.cs", shallow);
+
+        // Directories before files, each directory followed by its own entries, as `tree` prints.
+        string deep = await ListTreeAsync(client, "one", 2);
+        Assert.Contains("assets/\nassets/logo.bin  (not indexed: binary)\nsrc/\nsrc/Orders.cs\nsrc/Orders.g.cs\nREADME.md\n",
+            deep);
+
+        string root = await ListTreeAsync(client, "", 2);
+        Assert.Contains("alpha (depth 2, 2 repositories)", root);
+        Assert.Contains("one/\none/assets/\none/src/\none/README.md\ntwo/\ntwo/lib/\ntwo/Makefile\n", root);
+    }
+
+    [Fact]
+    public async Task List_tree_explains_an_unknown_repository_a_missing_directory_and_a_file()
+    {
+        await using var client = await StartAsync();
+
+        string noRepo = await ListTreeAsync(client, "nope", 1);
+        Assert.Contains("No repository 'nope' in project 'alpha'", noRepo);
+        Assert.Contains("one, two", noRepo);
+
+        string noPath = await ListTreeAsync(client, "one/missing/dir", 1);
+        Assert.Contains("'missing/dir' is not a directory in repository 'one'", noPath);
+
+        string file = await ListTreeAsync(client, "one/src/Orders.cs", 1);
+        Assert.Contains("is a file, not a directory", file);
+        Assert.Contains("read_file", file);
+
+        // The slug the index holds, whatever case the caller typed.
+        string cased = await ListTreeAsync(client, "ONE", 1);
+        Assert.Contains("one/ (depth 1", cased);
+
+        string depth = await ListTreeAsync(client, "one", 0);
+        Assert.Contains("depth must be at least 1", depth);
+    }
+
+    [Fact]
+    public async Task List_tree_of_a_single_repository_project_starts_inside_the_repository()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("solo", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["main"] = new() { ["src/Program.cs"] = "class P {}\n", ["README.md"] = "hello\n" }
+        }, true);
+        await using var client = await _host.ConnectAsync("solo");
+
+        string root = await ListTreeAsync(client, "", 2);
+        Assert.Contains("solo (depth 2, 3 entries)", root);
+        Assert.Contains("src/\nsrc/Program.cs\nREADME.md\n", root);
+        Assert.DoesNotContain("main/", root);
+    }
+
+    [Fact]
     public async Task Repo_info_reports_each_repository_its_commit_and_the_index_time()
     {
         _host = new TestHost(SearchEngine.Substring);
@@ -237,6 +299,7 @@ public sealed class FileToolsTests : IDisposable
                      ("read_file", new Dictionary<string, object?> { ["paths"] = Paths("one/a.cs") }),
                      ("glob", new Dictionary<string, object?> { ["glob"] = "*.cs" }),
                      ("list_extensions", new Dictionary<string, object?>()),
+                     ("list_tree", new Dictionary<string, object?>()),
                      ("repo_info", new Dictionary<string, object?>())
                  })
         {
@@ -255,6 +318,9 @@ public sealed class FileToolsTests : IDisposable
 
     private static Task<string> ReadAsync(McpClient client, params string[] paths) =>
         CallAsync(client, "read_file", new Dictionary<string, object?> { ["paths"] = paths });
+
+    private static Task<string> ListTreeAsync(McpClient client, string path, int depth) =>
+        CallAsync(client, "list_tree", new Dictionary<string, object?> { ["path"] = path, ["depth"] = depth });
 
     /// <summary>Routes an inline array argument through a parameter so CA1861 does not ask for a static field per call.</summary>
     private static string[] Paths(params string[] paths) => paths;
