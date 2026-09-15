@@ -192,7 +192,7 @@ public sealed class ReferenceTests : IDisposable
         string hidden = await FindAsync(client,
             new Dictionary<string, object?> { ["symbol"] = "OrderStatus", ["ext"] = "md" });
         Assert.StartsWith("Nothing in this project spells", hidden);
-        Assert.Contains("outside your repo/path/ext/exclude filters", hidden);
+        Assert.Contains("outside your filters", hidden);
 
         string nowhere = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Unicorn" });
         Assert.StartsWith("Nothing in this project spells", nowhere);

@@ -50,12 +50,13 @@ internal static class ToolReply
     ///     The one sentence every filtered tool ends a miss with. Written once because a filtered miss
     ///     and a clean negative read identically to an agent and mean opposite things, and a tool that
     ///     spelled the warning its own way would be the one an agent skims past.
+    ///     The filters are not named, because the tools do not share a set: grep spans every repository
+    ///     and has no repo filter, and a sentence naming one it lacks would be a false lead.
     /// </summary>
-    /// <param name="count">How many of <paramref name="unit" /> the filters hid.</param>
-    /// <param name="unit">What was hidden, singular: "file", "line".</param>
-    public static string HiddenByFilters(long count, string unit) =>
+    /// <param name="count">How many files the filters hid.</param>
+    public static string HiddenByFilters(long count) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"{count} {Plural(count, unit)} outside your repo/path/ext/exclude filters; the filters hid every one. Widen or drop them to see those.");
+            $"{count} {Plural(count, "file")} outside your filters; the filters hid every match. Widen or drop them to see those.");
 
     public static string Bytes(long size) => size switch
     {

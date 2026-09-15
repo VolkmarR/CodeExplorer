@@ -84,8 +84,8 @@ internal static class SearchEndpoints
                     PageSize: pageSize), ct) switch
             {
                 GrepResult result => Results.Ok(result),
-                GrepProblem problem => Results.BadRequest(new { error = problem.Explanation }),
-                // Unreachable while GrepOutcome has two cases, and a 500 rather than a cast that
+                SearchProblem problem => Results.BadRequest(new { error = problem.Explanation }),
+                // Unreachable while grep answers with two outcome cases, and a 500 rather than a cast that
                 // throws if a third is ever added.
                 _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
             });
