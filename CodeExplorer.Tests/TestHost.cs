@@ -145,12 +145,46 @@ public sealed class TestHost : IDisposable
     }
 
     /// <summary>Builds a non-bare repository with one commit holding the given files and returns its path.</summary>
-    public string CreateGitRepository(string name, Dictionary<string, string> files)
+    public string CreateGitRepository(string name, Dictionary<string, string> files) =>
+        Commit(CreateEmptyGitRepository(name), files);
+
+    /// <summary>
+    ///     An initialised repository with no commits: a remote that really is empty, as opposed to a
+    ///     clone whose HEAD lost the branch it named. The two look alike from <c>HasCommits</c> and
+    ///     must not be reported alike.
+    /// </summary>
+    public string CreateEmptyGitRepository(string name)
     {
         string path = Path.Combine(_root, "fixtures", name);
         Repository.Init(path);
-        return Commit(path, files);
+        return path;
     }
+
+    /// <summary>
+    ///     Renames the branch a fixture's HEAD is on, which is what a default branch renamed upstream
+    ///     looks like from here: the old name is gone, so the next fetch prunes it out of the clone
+    ///     that was made while HEAD still named it.
+    /// </summary>
+    public void RenameDefaultBranch(string name, string branch)
+    {
+        using var repo = new Repository(FixturePath(name));
+        repo.Branches.Rename(repo.Head, branch);
+    }
+
+    /// <summary>
+    ///     Points a repository's HEAD at a branch that does not exist: the state #31 left a clone in,
+    ///     and, on a fixture, a remote whose own default branch cannot be resolved. Written as a file
+    ///     because that is all HEAD is, and because libgit2 refuses such a symbolic reference.
+    /// </summary>
+    public static void BreakHead(string gitDirectory, string branch) =>
+        File.WriteAllText(Path.Combine(gitDirectory, "HEAD"), $"ref: refs/heads/{branch}\n");
+
+    /// <summary>The bare clone of one repository, for a test that has to look at it or break it.</summary>
+    public string ClonePath(string project, string repository) =>
+        Path.Combine(DataDirectory, "clones", project, repository + ".git");
+
+    /// <summary>The <c>.git</c> directory of a fixture, which is non-bare.</summary>
+    public string FixtureGitPath(string name) => Path.Combine(FixturePath(name), ".git");
 
     /// <summary>
     ///     Adds a commit to a fixture already created, which is what a push to the remote looks like
