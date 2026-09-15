@@ -99,7 +99,8 @@ public sealed class MatchListTests : IDisposable
         string hidden = await ListAsync(client,
             new Dictionary<string, object?> { ["query"] = "Status\\.(\\w+)", ["group"] = 1, ["ext"] = "csproj" });
         Assert.StartsWith("No matches", hidden);
-        Assert.Contains("outside your repo/path/ext/exclude filters", hidden);
+        Assert.Contains("does match in", hidden);
+        Assert.Contains("outside your filters", hidden);
 
         string nowhere = await ListAsync(client, new Dictionary<string, object?> { ["query"] = "Unicorn\\w+" });
         Assert.StartsWith("No matches", nowhere);

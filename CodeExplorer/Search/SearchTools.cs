@@ -69,7 +69,7 @@ internal sealed class SearchTools(
             filesOnly, maxLinesPerFile, page, pageSize);
 
         var outcome = await grep.SearchAsync(project.Slug, request, cancellationToken);
-        if (outcome is GrepProblem problem) return problem.Explanation;
+        if (outcome is SearchProblem problem) return problem.Explanation;
         var result = (GrepResult)outcome;
         return result.TotalFiles == 0 ? NoMatches(request, result) : Format(request, result);
     }
@@ -81,7 +81,7 @@ internal sealed class SearchTools(
         {
             case > 0:
                 text.Append(CultureInfo.InvariantCulture,
-                    $"The pattern does match in {result.FilesMatchingWithoutFilters} {ToolReply.Plural(result.FilesMatchingWithoutFilters.Value, "file")} outside your path/ext/exclude filters; the filters hid every match. Widen or drop them to see those.");
+                    $"The pattern does match in {ToolReply.HiddenByFilters(result.FilesMatchingWithoutFilters.Value)}");
                 break;
             case 0:
                 text.Append("Nothing matches anywhere in the project, with or without your filters. ");
@@ -210,7 +210,7 @@ internal sealed class SearchTools(
         var request = new ReferenceRequest(symbol, new FileFilter(repo, path, exclude, ext), maxFiles);
 
         var outcome = await references.FindAsync(project.Slug, request, cancellationToken);
-        if (outcome is ReferenceProblem problem) return problem.Explanation;
+        if (outcome is SearchProblem problem) return problem.Explanation;
         var result = (ReferenceResult)outcome;
         return result.TotalFiles == 0
             ? NoReferences(symbol.Trim(), result)
@@ -223,7 +223,7 @@ internal sealed class SearchTools(
         var text = new StringBuilder($"Nothing in this project spells \"{symbol}\". ");
         if (result.FilesMatchingWithoutFilters > 0)
             text.Append(CultureInfo.InvariantCulture,
-                $"It does appear in {ToolReply.HiddenByFilters(result.FilesMatchingWithoutFilters.Value, "file")}");
+                $"It does appear in {ToolReply.HiddenByFilters(result.FilesMatchingWithoutFilters.Value)}");
         else
             text.Append(
                 "The name is matched whole and case-sensitively, so check the spelling and the case, or search for the interface that declares it. grep with regex=true finds a partial name.");
@@ -369,7 +369,7 @@ internal sealed class SearchTools(
             wholeWord, limit);
 
         var outcome = await matches.ListAsync(project.Slug, request, cancellationToken);
-        if (outcome is MatchListProblem problem) return problem.Explanation;
+        if (outcome is SearchProblem problem) return problem.Explanation;
         var result = (MatchListResult)outcome;
         return result.TotalDistinct == 0
             ? NoValues(request, result)
@@ -379,9 +379,9 @@ internal sealed class SearchTools(
     private static string NoValues(MatchListRequest request, MatchListResult result)
     {
         var text = new StringBuilder($"No matches for \"{request.Query}\". ");
-        if (result.MatchesWithoutFilters > 0)
+        if (result.FilesMatchingWithoutFilters > 0)
             text.Append(CultureInfo.InvariantCulture,
-                $"The pattern does match {ToolReply.HiddenByFilters(result.MatchesWithoutFilters.Value, "line")}");
+                $"The pattern does match in {ToolReply.HiddenByFilters(result.FilesMatchingWithoutFilters.Value)}");
         else
             // Do not imply the group is at fault: the pattern may simply match nothing, and saying
             // otherwise sends the caller off fixing a parenthesis that was never wrong.
