@@ -159,7 +159,7 @@ public sealed class TelemetryTests
         using var host = await ProjectAsync(SearchEngine.Substring, slug);
         using var probe = new TelemetryProbe(slug);
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var response = await http.GetAsync($"/api/projects/{slug}/search?q=Widget(&regex=true", Ct);
         Assert.False(response.IsSuccessStatusCode);
 
@@ -181,7 +181,7 @@ public sealed class TelemetryTests
 
         // An agent that abandons a slow search is the real case; an already-cancelled token is the
         // same path, and it is the only way to make a search throw without a broken index.
-        var search = host.Factory.Services.GetRequiredService<GrepSearch>();
+        var search = host.Services.GetRequiredService<GrepSearch>();
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
@@ -202,7 +202,7 @@ public sealed class TelemetryTests
         await host.CreateProjectAsync("tele-ghost");
         using var probe = new TelemetryProbe("tele-ghost");
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var response = await http.GetAsync("/api/projects/tele-ghost/search?q=Widget", Ct);
         Assert.False(response.IsSuccessStatusCode);
 
@@ -296,7 +296,7 @@ public sealed class TelemetryTests
 
     private static async Task<GrepResult> SearchAsync(TestHost host, string url)
     {
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         var result = await http.GetFromJsonAsync<GrepResult>(url, Ct);
         Assert.NotNull(result);
         return result;

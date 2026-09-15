@@ -237,7 +237,7 @@ public sealed class AuthenticationTests
         // Signed in, because that is the case the method matters for: the request a hostile page can
         // forge is one the operator's own browser makes, carrying the operator's own cookie.
         using var http = host.CreateClient();
-        http.DefaultRequestHeaders.Add("Cookie", Tenant.Cookie(host.Factory.Services));
+        http.DefaultRequestHeaders.Add("Cookie", Tenant.Cookie(host.Services));
 
         // As a GET it would be reachable by anything that can put a URL on a page — an <img> on a
         // hostile site, a browser prefetching the header link, a scanner following it — and any of
@@ -302,7 +302,7 @@ public sealed class AuthenticationTests
     {
         using var host = new TestHost(SearchEngine.Substring, authenticated: true);
         await host.IndexedProjectAsync("closed", Repository);
-        string cookie = Tenant.Cookie(host.Factory.Services);
+        string cookie = Tenant.Cookie(host.Services);
 
         // Everything in memory is gone, which is what a scale to zero leaves. The cookie is ciphertext
         // under the Data Protection key ring (#13), so it reads afterwards only because the key ring
@@ -325,7 +325,7 @@ public sealed class AuthenticationTests
     public async Task The_browser_never_holds_a_token()
     {
         using var host = new TestHost(SearchEngine.Substring, authenticated: true);
-        string cookie = Tenant.Cookie(host.Factory.Services);
+        string cookie = Tenant.Cookie(host.Services);
 
         using var http = host.CreateClient();
         http.DefaultRequestHeaders.Add("Cookie", cookie);

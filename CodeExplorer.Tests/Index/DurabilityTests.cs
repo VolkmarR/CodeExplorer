@@ -152,7 +152,7 @@ public sealed class DurabilityTests : IDisposable
         host.DeleteIndexFile("alpha");
         host.Restart();
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         var projects = await http.GetFromJsonAsync<List<ProjectSummary>>("/api/projects", Ct);
 
         // The page shows the project and reports it as not built, which is what the disk says. Drawing
@@ -172,7 +172,7 @@ public sealed class DurabilityTests : IDisposable
         host.DeleteControlDatabase();
         host.Restart();
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         var detail = await http.GetFromJsonAsync<ProjectDetail>("/api/projects/alpha", Ct);
         Assert.NotNull(detail);
         Assert.Equal("one", Assert.Single(detail.Repositories).Slug);
@@ -195,7 +195,7 @@ public sealed class DurabilityTests : IDisposable
 
         // Restored, migrated, and stored again. Without the last step the store would still hold the
         // older shape, and every wake until someone happened to create a project would migrate afresh.
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         var detail = await http.GetFromJsonAsync<ProjectDetail>("/api/projects/legacy", Ct);
         Assert.NotNull(detail);
         Assert.False(detail.SingleRepository);
@@ -225,7 +225,7 @@ public sealed class DurabilityTests : IDisposable
         await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
         Assert.True(Directory.Exists(host.DurableIndexDirectory("alpha")));
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var response = await http.DeleteAsync("/api/projects/alpha", Ct);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
@@ -239,7 +239,7 @@ public sealed class DurabilityTests : IDisposable
         var host = Start(SearchEngine.Substring);
         await host.CreateProjectAsync("alpha");
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var response = await http.DeleteAsync("/api/projects/alpha", Ct);
 
         // There is no durable copy to forget, which is a state every project passes through.
@@ -308,7 +308,7 @@ public sealed class DurabilityTests : IDisposable
     /// </summary>
     private static async Task WritePreMigrationBackupAsync(TestHost host)
     {
-        string path = Path.Combine(host.DataDirectory, "legacy.duckdb");
+        string path = host.ScratchFile("legacy.duckdb");
         using (var connection = new DuckDBConnection($"Data Source={path}"))
         {
             await connection.OpenAsync(Ct);
@@ -335,7 +335,7 @@ public sealed class DurabilityTests : IDisposable
     /// </summary>
     private static async Task<bool> StoredControlIsMigratedAsync(TestHost host)
     {
-        string path = Path.Combine(host.DataDirectory, "stored.duckdb");
+        string path = host.ScratchFile("stored.duckdb");
         File.Copy(host.DurableControlBackup, path, true);
         using var connection = new DuckDBConnection($"Data Source={path}");
         await connection.OpenAsync(Ct);
@@ -359,7 +359,7 @@ public sealed class DurabilityTests : IDisposable
     {
         string path = Path.Combine(host.DurableIndexDirectory(slug), "index_info.parquet");
         using var connection =
-            new DuckDBConnection($"Data Source={Path.Combine(host.DataDirectory, "fixture.duckdb")}");
+            new DuckDBConnection($"Data Source={host.ScratchFile("fixture.duckdb")}");
         await connection.OpenAsync(Ct);
         using var command = connection.CreateCommand();
         command.CommandText =
@@ -370,7 +370,7 @@ public sealed class DurabilityTests : IDisposable
 
     private static async Task<ProjectDetail> DetailAsync(TestHost host, string slug)
     {
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         var detail = await http.GetFromJsonAsync<ProjectDetail>($"/api/projects/{slug}", Ct);
         Assert.NotNull(detail);
         return detail;

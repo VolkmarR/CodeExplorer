@@ -28,7 +28,7 @@ public sealed class WarmUpTests : IDisposable
         host.DeleteIndexFile("beta");
         host.Restart();
 
-        using var http = host.Factory.CreateClient();
+        using var http = host.CreateClient();
         using var response = await http.PostAsync("/api/warmup", null, Ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
