@@ -38,9 +38,10 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
     /// <param name="shadow">The index to write into, created by the caller and disposed by it.</param>
     /// <param name="repositories">The clones to read, in the order their repositories are to be numbered.</param>
     /// <param name="singleRepository">How this project names its files (ADR-0006), recorded in the index.</param>
+    /// <param name="report">How far the build has got, for the status an operator polls.</param>
     /// <param name="cancellationToken">Checked between files, which is the granularity of the walk.</param>
     public async Task<IndexSummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
-        bool singleRepository, CancellationToken cancellationToken)
+        bool singleRepository, Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
         // Every build is recorded here and nowhere else: a second caller gets the same span and the
         // same metrics by calling this, which is the only way to fill an index at all.
@@ -49,12 +50,13 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
         // The tree walk and the appender are synchronous git and DuckDB calls; a worker thread
         // keeps them off the request thread, and the token is checked between files.
         var (files, lines) = await Task.Run(
-            () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, repositories, cancellationToken),
+            () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, repositories, report,
+                cancellationToken),
             cancellationToken);
         // After the files, because attribution is joined onto them and a file row is what says which
         // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished
         // and an index that is live with no history would be one nothing ever goes back to fill in.
-        await history.FillAsync(shadow, repositories, cancellationToken);
+        await history.FillAsync(shadow, repositories, report, cancellationToken);
         await shadow.CompleteAsync(singleRepository, cancellationToken);
 
         recording.Built(files, lines);
@@ -63,7 +65,8 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
 
     private (long Files, long Lines) Ingest(
         DuckDBConnection connection, string catalog, bool singleRepository,
-        IReadOnlyList<OpenedRepository> repositories, CancellationToken cancellationToken)
+        IReadOnlyList<OpenedRepository> repositories, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
     {
         long fileId = 0, lineId = 0;
         // Appenders target the attached catalog explicitly; after USE they would resolve there too, but
@@ -84,10 +87,17 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
             int fileCount = 0;
             long lineCount = 0;
             // Sorted by path so a repository's files, and each file's lines, are contiguous: the zone
-            // maps then prune by repo_id and file_id without an index.
-            foreach (var entry in clone.Files().OrderBy(e => e.Path, StringComparer.Ordinal))
+            // maps then prune by repo_id and file_id without an index. Materialised anyway by the sort,
+            // so the count is free and the step can say how far through the tree it is.
+            var entries = clone.Files().OrderBy(e => e.Path, StringComparer.Ordinal).ToList();
+            foreach (var entry in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                // Every 200 files rather than every file: the status is polled, not streamed, so a
+                // finer grain would only cost dictionary writes nobody reads.
+                if (fileCount % RefreshProgress.ReportEvery == 0)
+                    report(new RefreshProgress(RefreshProgress.IngestStep, RefreshProgress.TotalStepCount,
+                        $"Reading '{repository.Slug}' into the shadow index", fileCount, entries.Count));
                 fileId++;
                 fileCount++;
                 string? skipReason = entry.IsBinary ? "binary" :
