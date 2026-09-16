@@ -291,6 +291,39 @@ public sealed class SearchEndpointTests
         Assert.Equal("src/Widget.cs", Assert.Single(source.Entries).QualifiedPath);
     }
 
+    /// <summary>
+    ///     The change log the history page draws: paged over the project, scoped to one repository, and
+    ///     each commit's files reachable with the qualified path the file view opens — which is the whole
+    ///     point of listing them, and the one thing a path alone could not give a two-repository project.
+    /// </summary>
+    [Fact]
+    public async Task The_change_log_pages_the_commits_and_links_the_files_each_one_touched()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        // One commit per fixture repository. A page of one still says there are two.
+        var page = await GetAsync<CommitListResponse>(host, "/api/projects/alpha/commits?pageSize=1");
+        Assert.Equal(2, page.Total);
+        Assert.Single(page.Commits);
+
+        var scoped = await GetAsync<CommitListResponse>(host, "/api/projects/alpha/commits?repository=one");
+        Assert.Equal(1, scoped.Total);
+        var commit = Assert.Single(scoped.Commits);
+        Assert.Equal("one", commit.RepositorySlug);
+        Assert.Equal(2, commit.FilesChanged);
+        // The root commit adds every line of both files: 1 in the doc, 4 in the source.
+        Assert.Equal(5, commit.Added);
+        Assert.Equal(0, commit.Deleted);
+
+        var files = await GetAsync<CommitFilesResponse>(host, $"/api/projects/alpha/commits/{commit.Sha}/files");
+        Assert.Equal(["one/docs/Widget.md", "one/src/Widget.cs"], files.Files.Select(f => f.QualifiedPath));
+        Assert.All(files.Files, f => Assert.Equal("added", f.ChangeKind));
+
+        using var http = host.CreateClient();
+        using var missing = await http.GetAsync("/api/projects/alpha/commits/0000000000000000000000000000000000000000/files", Ct);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
     private static async Task<T> GetAsync<T>(TestHost host, string url)
     {
         using var http = host.CreateClient();

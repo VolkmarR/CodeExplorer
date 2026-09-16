@@ -24,9 +24,11 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation()
   const view = pathname.endsWith('/search')
     ? 'search'
-    : pathname.endsWith('/files') || pathname.endsWith('/file')
-      ? 'files'
-      : 'settings'
+    : pathname.endsWith('/history')
+      ? 'history'
+      : pathname.endsWith('/files') || pathname.endsWith('/file')
+        ? 'files'
+        : 'settings'
 
   // Code and search results are wide; the project list and settings are prose and forms. The reading
   // views drop the column so a long line of code is not folded at 1152px on a wide screen.
@@ -67,6 +69,14 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
                   className={cn(NAV_LINK, view === 'search' && NAV_LINK_ACTIVE)}
                 >
                   Search
+                </Link>
+                <Link
+                  to="/projects/$project/history"
+                  params={{ project }}
+                  search={{ page: 1 }}
+                  className={cn(NAV_LINK, view === 'history' && NAV_LINK_ACTIVE)}
+                >
+                  History
                 </Link>
                 <Link
                   to="/projects/$project"

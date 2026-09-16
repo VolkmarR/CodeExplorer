@@ -64,6 +64,29 @@ public sealed record RecordedChange(
 /// <summary>The commit a run of lines is attributed to, or null for lines the build could not attribute.</summary>
 public sealed record AttributedBy(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
 
+/// <summary>
+///     One commit as the change log lists it: a <see cref="RecordedChange" /> with its message body and
+///     what it did to the tree, summed from <c>commit_files</c>. The sums are the commit's own added and
+///     removed lines, so a reformat and a one-line fix read differently at a glance.
+/// </summary>
+public sealed record LoggedCommit(
+    string Sha,
+    string RepositorySlug,
+    string AuthorName,
+    string AuthorEmail,
+    DateTimeOffset AuthoredAt,
+    string Subject,
+    string Body,
+    int FilesChanged,
+    int Added,
+    int Deleted);
+
+/// <summary>
+///     One path a commit touched. <see cref="QualifiedPath" /> is set when the path is still at HEAD,
+///     so a view can link to the file; null for a path the commit deleted or a later one renamed.
+/// </summary>
+public sealed record CommitFile(string Path, string ChangeKind, int Added, int Deleted, string? QualifiedPath);
+
 /// <summary>A run of consecutive lines sharing one attribution (CONTEXT.md, Attribution).</summary>
 public sealed record AttributedLines(int StartLine, int EndLine, AttributedBy? By);
 
@@ -471,6 +494,77 @@ public sealed class IndexReader : IDisposable
                     reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal(prefix + "_at")),
                     reader.Text(prefix + "_subject"));
     }
+
+    /// <summary>How many commits are recorded, for a repository or for the whole project, so a page can say how many there are.</summary>
+    public async Task<long> CommitCountAsync(string? repositorySlug, CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = CommitScope(repositorySlug);
+        using var command = Connection.Query($"SELECT count(*) FROM commits {scope}", parameters);
+        return (long)(await command.ExecuteScalarAsync(cancellationToken) ?? 0L);
+    }
+
+    /// <summary>
+    ///     A page of the change log, newest first, with each commit's body and the sums of what it did.
+    ///     Ordered by <c>commit_id</c> for the reason <see cref="CommitsAsync" /> gives. The sums are cast
+    ///     because DuckDB widens <c>sum</c> of an INTEGER to HUGEINT, which the driver hands back as a
+    ///     BigInteger.
+    /// </summary>
+    public async Task<IReadOnlyList<LoggedCommit>> ChangeLogAsync(string? repositorySlug, int limit, int skip,
+        CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = CommitScope(repositorySlug);
+        using var command = Connection.Query($"""
+                                              SELECT c.sha, c.repo_slug, c.author_name, c.author_email, c.authored_at,
+                                                     c.subject, c.body,
+                                                     count(cf.path)::INTEGER AS files_changed,
+                                                     coalesce(sum(cf.added), 0)::INTEGER AS added,
+                                                     coalesce(sum(cf.deleted), 0)::INTEGER AS deleted
+                                              FROM commits c LEFT JOIN commit_files cf USING (commit_id)
+                                              {scope}
+                                              GROUP BY c.commit_id, c.sha, c.repo_slug, c.author_name, c.author_email,
+                                                       c.authored_at, c.subject, c.body
+                                              ORDER BY c.commit_id DESC
+                                              LIMIT {limit} OFFSET {skip}
+                                              """, parameters);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var commits = new List<LoggedCommit>();
+        while (await reader.ReadAsync(cancellationToken))
+            commits.Add(new LoggedCommit(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
+                reader.Text("author_email"), reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
+                reader.Text("subject"), reader.Text("body"), reader.Int32("files_changed"), reader.Int32("added"),
+                reader.Int32("deleted")));
+        return commits;
+    }
+
+    /// <summary>
+    ///     The paths one commit touched, with the qualified path of each that is still at HEAD. Matched
+    ///     by full SHA: the caller got it from a listing and has no reason to abbreviate it. Empty for a
+    ///     SHA the index does not hold, which the caller tells from a commit that touched nothing by
+    ///     asking the listing — a root commit with files is the ordinary case, one with none is not.
+    /// </summary>
+    public async Task<IReadOnlyList<CommitFile>> CommitFilesAsync(string sha, CancellationToken cancellationToken)
+    {
+        using var command = Connection.Query("""
+                                             SELECT cf.path, cf.change_kind, cf.added, cf.deleted, f.qualified_path
+                                             FROM commits c JOIN commit_files cf USING (commit_id)
+                                             LEFT JOIN repositories r ON r.slug = c.repo_slug
+                                             LEFT JOIN files f ON f.repo_id = r.repo_id AND f.path = cf.path
+                                             WHERE c.sha = $sha
+                                             ORDER BY cf.path
+                                             """, [new DuckDBParameter("sha", sha)]);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var files = new List<CommitFile>();
+        while (await reader.ReadAsync(cancellationToken))
+            files.Add(new CommitFile(reader.Text("path"), reader.Text("change_kind"), reader.Int32("added"),
+                reader.Int32("deleted"), reader.IsNull("qualified_path") ? null : reader.Text("qualified_path")));
+        return files;
+    }
+
+    /// <summary>The WHERE clause and its parameter for one repository's commits, or neither for the project's.</summary>
+    private static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug) =>
+        repositorySlug is null
+            ? ("", [])
+            : ("WHERE repo_slug = $r", [new DuckDBParameter("r", repositorySlug)]);
 
     private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
         CancellationToken cancellationToken)
