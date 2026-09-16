@@ -15,6 +15,19 @@ export function fileQuery(project: string, path: string) {
   })
 }
 
+/**
+ * A file's attribution, fetched beside its content rather than with it: the runs are the size of the
+ * file, and the code should be on screen before they are. Fresh for as long as the content is, and
+ * for the same reason.
+ */
+export function blameQuery(project: string, path: string) {
+  return queryOptions({
+    queryFn: () => api.blame(project, path),
+    queryKey: [...projectKey(project), 'blame', path],
+    staleTime: Infinity,
+  })
+}
+
 /** One level of the tree. Keyed by the level, so walking back up is already in the cache. */
 export function treeQuery(project: string, path: string) {
   return queryOptions({
