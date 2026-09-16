@@ -34,6 +34,30 @@ internal sealed record BlameRunResponse(int StartLine, int EndLine, FileCommitRe
 /// </summary>
 internal sealed record BlameResponse(string QualifiedPath, IReadOnlyList<BlameRunResponse> Runs);
 
+/// <summary>One commit of the change log, with the message body and what it did to the tree in sums.</summary>
+internal sealed record CommitResponse(
+    string Sha,
+    string RepositorySlug,
+    string AuthorName,
+    string AuthorEmail,
+    DateTimeOffset AuthoredAt,
+    string Subject,
+    string Body,
+    int FilesChanged,
+    int Added,
+    int Deleted);
+
+/// <summary>
+///     A page of the change log. <see cref="Total" /> counts every commit in scope, so the page can say
+///     how many there are; zero is a project or repository without history, not an error.
+/// </summary>
+internal sealed record CommitListResponse(long Total, int Page, int PageSize, IReadOnlyList<CommitResponse> Commits);
+
+/// <summary>One path a commit touched; <see cref="QualifiedPath" /> links to the file when it is still at HEAD.</summary>
+internal sealed record CommitFileResponse(string Path, string ChangeKind, int Added, int Deleted, string? QualifiedPath);
+
+internal sealed record CommitFilesResponse(string Sha, IReadOnlyList<CommitFileResponse> Files);
+
 /// <summary>One file in a listing. The index's internal file id is deliberately not in it.</summary>
 internal sealed record FileListEntry(
     string QualifiedPath,
@@ -129,6 +153,57 @@ internal static class SearchEndpoints
         project.MapGet("/file/blame",
             async (Project project, string path, ProjectIndexes indexes, CancellationToken ct) =>
                 await BlameAsync(indexes, project.Slug, path, ct));
+
+        // The change log, paged. The files a commit touched are their own route, like blame is: a
+        // page of fifty commits touching a few hundred paths each would be mostly paths nobody opens.
+        project.MapGet("/commits",
+            async (Project project, ProjectIndexes indexes, CancellationToken ct, string? repository = null,
+                    int page = 1, int pageSize = DefaultCommitPage) =>
+                await CommitsAsync(indexes, project.Slug, repository, page, pageSize, ct));
+
+        project.MapGet("/commits/{sha}/files",
+            async (Project project, string sha, ProjectIndexes indexes, CancellationToken ct) =>
+                await CommitFilesAsync(indexes, project.Slug, sha, ct));
+    }
+
+    /// <summary>Commits per page of the change log when the caller does not say. A screen and a bit.</summary>
+    private const int DefaultCommitPage = 50;
+
+    /// <summary>The most commits one page may hold. The same ceiling <c>git_log</c> has.</summary>
+    private const int MaxCommitPage = 200;
+
+    private static async Task<IResult> CommitsAsync(ProjectIndexes indexes, string project, string? repository,
+        int page, int pageSize, CancellationToken cancellationToken)
+    {
+        var open = await IndexReader.OpenAsync(indexes, project, repository, cancellationToken);
+        if (open is IndexOpen.Refused refused) return Refuse(refused);
+        using var index = ((IndexOpen.Opened)open).Reader;
+
+        pageSize = Math.Clamp(pageSize, 1, MaxCommitPage);
+        page = Math.Max(1, page);
+        string? scope = index.Repository?.Slug;
+        long total = await index.CommitCountAsync(scope, cancellationToken);
+        var commits = await index.ChangeLogAsync(scope, pageSize, (page - 1) * pageSize, cancellationToken);
+        return Results.Ok(new CommitListResponse(total, page, pageSize,
+            commits.Select(c => new CommitResponse(c.Sha, c.RepositorySlug, c.AuthorName, c.AuthorEmail,
+                c.AuthoredAt, c.Subject, c.Body, c.FilesChanged, c.Added, c.Deleted)).ToList()));
+    }
+
+    private static async Task<IResult> CommitFilesAsync(ProjectIndexes indexes, string project, string sha,
+        CancellationToken cancellationToken)
+    {
+        var open = await IndexReader.OpenAsync(indexes, project, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return Refuse(refused);
+        using var index = ((IndexOpen.Opened)open).Reader;
+
+        var files = await index.CommitFilesAsync(sha, cancellationToken);
+        // No files means no such commit, in practice: every commit the walk records touched something,
+        // the root included. Said as a 404 rather than an empty list the page would draw as "nothing".
+        if (files.Count == 0)
+            return Results.NotFound(new { error = $"No commit '{sha}' in the history of project '{project}'." });
+        return Results.Ok(new CommitFilesResponse(sha,
+            files.Select(f => new CommitFileResponse(f.Path, f.ChangeKind, f.Added, f.Deleted, f.QualifiedPath))
+                .ToList()));
     }
 
     private static async Task<IResult> ListAsync(

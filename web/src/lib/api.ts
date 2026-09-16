@@ -210,6 +210,38 @@ export interface Blame {
   runs: BlameRun[]
 }
 
+/** One commit of the change log: who, when, what it said, and what it did to the tree in sums. */
+export interface CommitEntry extends CommitRef {
+  repositorySlug: string
+  authorEmail: string
+  body: string
+  filesChanged: number
+  added: number
+  deleted: number
+}
+
+/** A page of the change log. `total` is zero for a project or repository without history. */
+export interface CommitList {
+  total: number
+  page: number
+  pageSize: number
+  commits: CommitEntry[]
+}
+
+/** One path a commit touched. `qualifiedPath` links to the file while it is still at HEAD. */
+export interface CommitFile {
+  path: string
+  changeKind: string
+  added: number
+  deleted: number
+  qualifiedPath: string | null
+}
+
+export interface CommitFiles {
+  sha: string
+  files: CommitFile[]
+}
+
 /**
  * A failed request reaches the UI as ky's own `HTTPError`, re-exported under the name the components
  * use. `beforeError` below has already replaced its message with the server's prose, so a component
@@ -306,6 +338,15 @@ export const api = {
 
   blame: (project: string, path: string) =>
     http.get(`projects/${project}/file/blame`, { searchParams: { path } }).json<Blame>(),
+
+  commits: (project: string, page: number, repository?: string) => {
+    const searchParams: Record<string, string> = { page: String(page) }
+    if (repository) searchParams.repository = repository
+    return http.get(`projects/${project}/commits`, { searchParams }).json<CommitList>()
+  },
+
+  commitFiles: (project: string, sha: string) =>
+    http.get(`projects/${project}/commits/${sha}/files`).json<CommitFiles>(),
 
   refresh: (project: string) => http.post(`projects/${project}/refresh`).json<RefreshStatus>(),
 
