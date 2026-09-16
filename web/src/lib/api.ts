@@ -33,6 +33,18 @@ export interface ProjectSummary {
   index: ProjectIndexStatus
 }
 
+/**
+ * One commit as the operator UI names it: enough to recognise it and to say who and when, never the
+ * body. The same four fields whether it is a repository's newest, a file's first or last, or the
+ * one a run of lines attributes to.
+ */
+export interface CommitRef {
+  sha: string
+  authorName: string
+  authoredAt: string
+  subject: string
+}
+
 export interface RepositoryDetail {
   slug: string
   url: string
@@ -40,6 +52,9 @@ export interface RepositoryDetail {
   headCommit: string | null
   fileCount: number | null
   lineCount: number | null
+  /** How many commits the index holds for it. Zero with a `headCommit` means history never arrived. */
+  commits: number
+  newestCommit: CommitRef | null
 }
 
 export interface ProjectDetail {
@@ -64,6 +79,19 @@ export type RefreshState = 'NeverRun' | 'Queued' | 'Running' | 'Succeeded' | 'Fa
  * Where a refresh stands. It is in-memory on the server, so a replica that scaled to zero comes back
  * saying `NeverRun` even for a project with an index; when that index was built is on the project.
  */
+/**
+ * How far a running refresh has got. `step` of `totalSteps` is always there; `done` and `total`
+ * only for the steps that can count their work, and `total` alone may be null for a step that knows
+ * how far it has got but not how far it is going — the commit walk.
+ */
+export interface RefreshProgress {
+  step: number
+  totalSteps: number
+  phase: string
+  done: number | null
+  total: number | null
+}
+
 export interface RefreshStatus {
   project: string
   state: RefreshState
@@ -72,6 +100,8 @@ export interface RefreshStatus {
   finishedAt: string | null
   summary: IndexSummary | null
   error: string | null
+  /** Set while the refresh runs; null before it starts and after it ends. */
+  progress: RefreshProgress | null
 }
 
 export interface GrepLine {
@@ -156,6 +186,28 @@ export interface FileContent {
   sizeBytes: number
   skipReason: string | null
   content: string
+  /**
+   * The commits this file was first and last changed by. Both null where the repository has no
+   * history in the index, which is a different answer from a file nobody changed and is shown as one.
+   */
+  firstCommit: CommitRef | null
+  lastCommit: CommitRef | null
+}
+
+/**
+ * One run of consecutive lines last changed by the same commit. `by` is null for lines the history
+ * could not attribute — a file a merge brought in from a branch the walk did not follow, say.
+ */
+export interface BlameRun {
+  startLine: number
+  endLine: number
+  by: CommitRef | null
+}
+
+/** A file's attribution as runs. A file without history answers with no runs, not with an error. */
+export interface Blame {
+  qualifiedPath: string
+  runs: BlameRun[]
 }
 
 /**
@@ -251,6 +303,9 @@ export const api = {
 
   file: (project: string, path: string) =>
     http.get(`projects/${project}/file`, { searchParams: { path } }).json<FileContent>(),
+
+  blame: (project: string, path: string) =>
+    http.get(`projects/${project}/file/blame`, { searchParams: { path } }).json<Blame>(),
 
   refresh: (project: string) => http.post(`projects/${project}/refresh`).json<RefreshStatus>(),
 
