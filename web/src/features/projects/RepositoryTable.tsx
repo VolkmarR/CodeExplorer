@@ -3,7 +3,8 @@ import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import type { ProjectDetail } from '@/lib/api'
 import { api } from '@/lib/api'
-import { formatCount, formatTime } from '@/lib/format'
+import { formatCount, formatTime, shortSha } from '@/lib/format'
+import { CommitLine } from '@/components/CommitLine'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { NewRepositoryForm } from '@/features/projects/NewRepositoryForm'
@@ -104,10 +105,33 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
                       {repository.hasCredential ? 'set' : 'not set'}
                     </Badge>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {/* Seven characters is what git itself abbreviates to, and what an operator
-                        compares against a commit list. */}
-                    {repository.headCommit ? repository.headCommit.slice(0, 7) : NOT_INDEXED}
+                  <TableCell className="text-xs">
+                    {/* The commit the index was built from, and under it the history the index holds
+                        for the repository: how many commits, and who made the newest and when. One
+                        column, because the newest commit is this commit. A repository that was indexed
+                        but has no commits is one whose history never arrived, and it must not read
+                        like one nobody has changed. */}
+                    {repository.headCommit === null ? (
+                      <span className="font-mono">{NOT_INDEXED}</span>
+                    ) : (
+                      <span className="flex flex-col gap-0.5">
+                        <span className="font-mono">{shortSha(repository.headCommit)}</span>
+                        {repository.newestCommit === null ? (
+                          <span className="text-muted-foreground">no history</span>
+                        ) : (
+                          <span className="flex flex-wrap items-baseline gap-x-2 whitespace-nowrap">
+                            <span className="text-muted-foreground tabular-nums">
+                              {formatCount(repository.commits)} commits
+                            </span>
+                            <CommitLine
+                              commit={repository.newestCommit}
+                              subject={false}
+                              sha={false}
+                            />
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {repository.headCommit ? formatTime(project.index.builtAt) : NOT_INDEXED}
