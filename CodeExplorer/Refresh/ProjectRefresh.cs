@@ -24,7 +24,11 @@ public sealed class ProjectRefresh(
     /// </summary>
     public const string IngestPhase = "Reading the repositories into the shadow index";
 
+    public const string HistoryPhase = "Importing history and attributing lines";
+
     public const string SwapPhase = "Swapping the new index in";
+
+    private const int TotalSteps = RefreshProgress.TotalStepCount;
 
     /// <summary>
     ///     Writing the durable copy, which happens before the swap: a store that cannot be reached is a
@@ -39,7 +43,7 @@ public sealed class ProjectRefresh(
     ///     so a status read straight after a phase change sees it.
     /// </param>
     /// <param name="cancellationToken">Threaded through the fetch, the ingest and the swap.</param>
-    public async Task<IndexSummary> RunAsync(Project project, Action<string> report,
+    public async Task<IndexSummary> RunAsync(Project project, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
@@ -59,13 +63,14 @@ public sealed class ProjectRefresh(
             IndexSummary summary;
             try
             {
-                report(IngestPhase);
+                report(new RefreshProgress(RefreshProgress.IngestStep, TotalSteps, IngestPhase));
                 // Scoped so the shadow connection is closed before the swap: the file cannot be moved
                 // over the live one while the instance still holds it open.
                 using (var shadow = await indexes.CreateShadowAsync(project.Slug, cancellationToken))
                 {
-                    summary = await builder.FillAsync(shadow, opened, project.SingleRepository, cancellationToken);
-                    report(StorePhase);
+                    summary = await builder.FillAsync(shadow, opened, project.SingleRepository, report,
+                        cancellationToken);
+                    report(new RefreshProgress(RefreshProgress.StoreStep, TotalSteps, StorePhase));
                     // Exported from the shadow rather than from the live index after the swap, which is
                     // what the tables about to be swapped in are. Doing it here means the export needs
                     // no second attach of the live catalog — one that would quietly re-bind a connection
@@ -74,7 +79,7 @@ public sealed class ProjectRefresh(
                     await durable.StoreAsync(shadow.Connection, project.Slug, cancellationToken);
                 }
 
-                report(SwapPhase);
+                report(new RefreshProgress(RefreshProgress.SwapStep, TotalSteps, SwapPhase));
                 await indexes.SwapShadowAsync(project.Slug, cancellationToken);
             }
             catch
@@ -102,7 +107,7 @@ public sealed class ProjectRefresh(
     ///     be, is named in the skipped list instead of failing the project.
     /// </summary>
     private async Task<(List<OpenedRepository> Opened, List<string> Skipped)> FetchAsync(
-        IReadOnlyList<ProjectRepository> repositories, Action<string> report,
+        IReadOnlyList<ProjectRepository> repositories, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
         var opened = new List<OpenedRepository>();
@@ -110,7 +115,10 @@ public sealed class ProjectRefresh(
         int fetched = 0;
         foreach (var repository in repositories)
         {
-            report($"Fetching '{repository.Slug}' ({++fetched} of {repositories.Count})");
+            // Reported before the fetch, and counted as done after: an operator watching wants to know
+            // which repository is being transferred now, not which one finished last.
+            report(new RefreshProgress(RefreshProgress.FetchStep, TotalSteps, $"Fetching '{repository.Slug}'", fetched++,
+                repositories.Count));
             try
             {
                 // Empty and LFS are decided behind the open (CloneOpen); a refusal holds nothing to dispose.

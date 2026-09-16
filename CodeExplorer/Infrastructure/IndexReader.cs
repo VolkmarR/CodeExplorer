@@ -17,7 +17,19 @@ public sealed record IndexedFile(
     string? SkipReason);
 
 /// <summary>A row of <c>repositories</c>: what the last build read and where it stood.</summary>
-public sealed record IndexedRepository(string Slug, string Url, string HeadCommit, int FileCount, long LineCount);
+/// <summary>
+///     One repository as the last build left it. <paramref name="Commits" /> is how much history was
+///     imported for it and <paramref name="NewestCommit" /> the last one recorded; zero and null mean
+///     none was, which is a different thing from a repository nobody has changed.
+/// </summary>
+public sealed record IndexedRepository(
+    string Slug,
+    string Url,
+    string HeadCommit,
+    int FileCount,
+    long LineCount,
+    long Commits = 0,
+    AttributedBy? NewestCommit = null);
 
 /// <summary>
 ///     What an index holds, for the readers that describe a project rather than read from it:
@@ -54,6 +66,12 @@ public sealed record AttributedBy(string Sha, string AuthorName, DateTimeOffset 
 
 /// <summary>A run of consecutive lines sharing one attribution (CONTEXT.md, Attribution).</summary>
 public sealed record AttributedLines(int StartLine, int EndLine, AttributedBy? By);
+
+/// <summary>
+///     What a file's own history amounts to: the commit it was first changed by within the imported
+///     history, and the one it was last changed by. Both null where none was imported.
+/// </summary>
+public sealed record FileCommits(AttributedBy? First, AttributedBy? Last);
 
 /// <summary>
 ///     One row of a directory listing. A directory carries what lies beneath it — <see cref="Files" />
@@ -413,27 +431,45 @@ public sealed class IndexReader : IDisposable
     /// </summary>
     public async Task<string> FileSpanAsync(long fileId, CancellationToken cancellationToken)
     {
+        var span = await FileCommitsAsync(fileId, cancellationToken);
+        if (span.Last is null) return "  history: none recorded for this file\n";
+
+        // Named "since"/"last changed" rather than "created"/"author": history begins where the file was
+        // last renamed, so the first commit recorded for a path is often a move and not its origin.
+        return string.Create(CultureInfo.InvariantCulture,
+            $"  history: since {Short(span.First)}; last changed {Short(span.Last)}\n");
+
+        static string Short(AttributedBy? by) => by is null
+            ? "unknown"
+            : string.Create(CultureInfo.InvariantCulture, $"{by.Sha[..8]} {by.AuthoredAt:yyyy-MM-dd} {by.AuthorName}");
+    }
+
+    /// <summary>
+    ///     The commits a file was first and last changed by, both null where no history was imported for
+    ///     it. One query for both, because they are two columns of the same row.
+    /// </summary>
+    public async Task<FileCommits> FileCommitsAsync(long fileId, CancellationToken cancellationToken)
+    {
         using var command = Connection.Query("""
                                              SELECT first.sha AS first_sha, first.author_name AS first_author,
-                                                    first.authored_at AS first_at,
+                                                    first.authored_at AS first_at, first.subject AS first_subject,
                                                     last.sha AS last_sha, last.author_name AS last_author,
-                                                    last.authored_at AS last_at
+                                                    last.authored_at AS last_at, last.subject AS last_subject
                                              FROM files f
                                              LEFT JOIN commits first ON first.commit_id = f.first_commit
                                              LEFT JOIN commits last ON last.commit_id = f.last_commit
                                              WHERE f.file_id = $f
                                              """, [new DuckDBParameter("f", fileId)]);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken) || reader.IsNull("last_sha"))
-            return "  history: none recorded for this file\n";
+        if (!await reader.ReadAsync(cancellationToken)) return new FileCommits(null, null);
+        return new FileCommits(Read(reader, "first"), Read(reader, "last"));
 
-        string first = string.Create(CultureInfo.InvariantCulture,
-            $"{reader.Text("first_sha")[..8]} {reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("first_at")):yyyy-MM-dd} {reader.Text("first_author")}");
-        string last = string.Create(CultureInfo.InvariantCulture,
-            $"{reader.Text("last_sha")[..8]} {reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("last_at")):yyyy-MM-dd} {reader.Text("last_author")}");
-        // Named "since"/"last changed" rather than "created"/"author": history begins where the file was
-        // last renamed, so the first commit recorded for a path is often a move and not its origin.
-        return $"  history: since {first}; last changed {last}\n";
+        static AttributedBy? Read(System.Data.Common.DbDataReader reader, string prefix) =>
+            reader.IsNull(prefix + "_sha")
+                ? null
+                : new AttributedBy(reader.Text(prefix + "_sha"), reader.Text(prefix + "_author"),
+                    reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal(prefix + "_at")),
+                    reader.Text(prefix + "_subject"));
     }
 
     private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
@@ -730,11 +766,34 @@ public sealed class IndexReader : IDisposable
     private static async Task<IReadOnlyList<IndexedRepository>> ReadRepositoriesAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
     {
+        // The history each repository has, joined on the slug rather than the id, because that is what
+        // commits records (ADR-0007). A repository with no commits keeps a null newest commit and a zero
+        // count, which the page draws as "no history" rather than as a repository that never changed.
         using var command = connection.Query(
-            "SELECT slug, url, head_commit, file_count, line_count FROM repositories ORDER BY repo_id", []);
+            """
+            SELECT r.slug, r.url, r.head_commit, r.file_count, r.line_count,
+                   coalesce(h.commits, 0) AS commits, h.sha, h.author_name, h.authored_at, h.subject
+            FROM repositories r
+            LEFT JOIN (SELECT repo_slug, count(*) AS commits,
+                              argMax(sha, commit_id) AS sha, argMax(author_name, commit_id) AS author_name,
+                              argMax(authored_at, commit_id) AS authored_at, argMax(subject, commit_id) AS subject
+                       FROM commits GROUP BY repo_slug) h ON h.repo_slug = r.slug
+            ORDER BY r.repo_id
+            """, []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var result = new List<IndexedRepository>();
-        while (await reader.ReadAsync(cancellationToken)) result.Add(ReadRepository(reader));
+        // The history columns are read only here. The other caller, LoadShapeAsync, is the path every
+        // tool takes to learn the repository names, and it has no use for a join onto commits.
+        while (await reader.ReadAsync(cancellationToken))
+            result.Add(ReadRepository(reader) with
+            {
+                Commits = reader.Int64("commits"),
+                NewestCommit = reader.IsNull("sha")
+                    ? null
+                    : new AttributedBy(reader.Text("sha"), reader.Text("author_name"),
+                        reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
+                        reader.Text("subject"))
+            });
         return result;
     }
 

@@ -11,7 +11,28 @@ internal sealed record FileContentResponse(
     int LineCount,
     long SizeBytes,
     string? SkipReason,
-    string Content);
+    string Content,
+    FileCommitResponse? FirstCommit,
+    FileCommitResponse? LastCommit);
+
+/// <summary>
+///     The commit a file was first or last changed by, as the file view names it. Both are null where
+///     no history was imported, which the view says rather than drawing an empty field: "no history"
+///     and "never changed" are opposite claims (CONTEXT.md, History).
+/// </summary>
+internal sealed record FileCommitResponse(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
+
+/// <summary>
+///     One run of consecutive lines sharing an attribution, for the blame gutter.
+///     <paramref name="By" /> is null for a run the build could not attribute.
+/// </summary>
+internal sealed record BlameRunResponse(int StartLine, int EndLine, FileCommitResponse? By);
+
+/// <summary>
+///     A file's blame. Its own response and its own request, because it is the one history read whose
+///     size is the file's rather than a row's, and the file view draws the code without waiting for it.
+/// </summary>
+internal sealed record BlameResponse(string QualifiedPath, IReadOnlyList<BlameRunResponse> Runs);
 
 /// <summary>One file in a listing. The index's internal file id is deliberately not in it.</summary>
 internal sealed record FileListEntry(
@@ -102,6 +123,12 @@ internal static class SearchEndpoints
         project.MapGet("/file",
             async (Project project, string path, ProjectIndexes indexes, CancellationToken ct) =>
                 await ReadAsync(indexes, project.Slug, path, ct));
+
+        // Its own route rather than a flag on /file: the runs are the size of the file, and the view
+        // renders the code without them and fills the gutter in when they arrive.
+        project.MapGet("/file/blame",
+            async (Project project, string path, ProjectIndexes indexes, CancellationToken ct) =>
+                await BlameAsync(indexes, project.Slug, path, ct));
     }
 
     private static async Task<IResult> ListAsync(
@@ -167,9 +194,35 @@ internal static class SearchEndpoints
         var lines = file.SkipReason is null
             ? await index.LinesAsync(file.FileId, 1, MaxLinesPerFileView, cancellationToken)
             : [];
+        // Carried on the file read and not fetched separately: they are columns on the row that read
+        // already has in hand, so a second request would be one for data this one was holding.
+        var span = await index.FileCommitsAsync(file.FileId, cancellationToken);
         return Results.Ok(new FileContentResponse(file.QualifiedPath, file.RepositorySlug, file.LineCount,
-            file.SizeBytes, file.SkipReason, string.Join('\n', lines)));
+            file.SizeBytes, file.SkipReason, string.Join('\n', lines), Commit(span.First), Commit(span.Last)));
     }
+
+    /// <summary>
+    ///     A file's attribution as runs. A file with no history answers with no runs rather than a
+    ///     failure: the gutter simply does not draw, and the header line is what says why.
+    /// </summary>
+    private static async Task<IResult> BlameAsync(
+        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken)
+    {
+        var open = await IndexReader.OpenAsync(indexes, project, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return Refuse(refused);
+        using var index = ((IndexOpen.Opened)open).Reader;
+
+        if (await index.FindFileAsync(path, cancellationToken) is not { } file)
+            return Results.NotFound(new { error = $"No file '{path}' in project '{project}'." });
+        if (file.SkipReason is not null) return Results.Ok(new BlameResponse(file.QualifiedPath, []));
+
+        var runs = await index.BlameAsync(file.FileId, 1, MaxLinesPerFileView, cancellationToken);
+        return Results.Ok(new BlameResponse(file.QualifiedPath,
+            runs.Select(r => new BlameRunResponse(r.StartLine, r.EndLine, Commit(r.By))).ToList()));
+    }
+
+    private static FileCommitResponse? Commit(AttributedBy? by) =>
+        by is null ? null : new FileCommitResponse(by.Sha, by.AuthorName, by.AuthoredAt, by.Subject);
 
     /// <summary>
     ///     No index is a 404 — the view renders it as the starting state a new project is in — and an
