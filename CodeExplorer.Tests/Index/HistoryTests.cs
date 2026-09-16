@@ -1,3 +1,4 @@
+using LibGit2Sharp;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -121,9 +122,9 @@ public sealed class HistoryTests : IDisposable
     }
 
     /// <summary>
-    ///     Attribution is keyed by blob hash, so a file that only moved keeps it without the walk doing
-    ///     any rename detection. The file-level history begins at the move, which is the half of
-    ///     rename-following ADR-0007 deliberately does not pay for.
+    ///     The replay carries a renamed file's lines to its new path, so a file that only moved keeps
+    ///     its attribution. The file-level history still begins at the move: <c>commit_files</c> names
+    ///     paths, and following renames there is the half ADR-0007 does not pay for.
     /// </summary>
     [Fact]
     public async Task A_moved_file_keeps_the_attribution_of_its_content()
@@ -131,8 +132,8 @@ public sealed class HistoryTests : IDisposable
         await IndexTwoCommitProjectAsync();
         string fixture = _host.FixturePath("one");
         File.Delete(Path.Combine(fixture, "src", "Check.cs"));
-        using (var repository = new LibGit2Sharp.Repository(fixture))
-            LibGit2Sharp.Commands.Remove(repository, "src/Check.cs");
+        using (var repository = new Repository(fixture))
+            Commands.Remove(repository, "src/Check.cs");
         _host.CommitToGitRepositoryAs("one",
             new Dictionary<string, string> { ["src/Domain/Check.cs"] = "first\nsecond-changed\nthird\n" },
             "Move the validator", "Linus", "linus@example.invalid", 2);
@@ -151,6 +152,118 @@ public sealed class HistoryTests : IDisposable
             "src/Domain/Check.cs:2 Tighten the check",
             "src/Domain/Check.cs:3 Add the validator"
         ], attributed);
+    }
+
+    /// <summary>
+    ///     A pure insertion is the one hunk shape whose header names the line before it rather than the
+    ///     line it starts at (<c>@@ -0,0 +1 @@</c> for the top of a file). Read as every other hunk is,
+    ///     it lands one line early and every file a commit created attributes to nothing — which is
+    ///     exactly what the spike behind this code did first. The lines below the insertion must keep
+    ///     their commits, shifted down.
+    /// </summary>
+    [Fact]
+    public async Task Lines_inserted_at_the_top_of_a_file_shift_the_rest_down_without_re_attributing_them()
+    {
+        await IndexTwoCommitProjectAsync();
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "header\nfirst\nsecond-changed\nthird\n" },
+            "Add a header", "Linus", "linus@example.invalid", 2);
+        await _host.RefreshAsync("alpha");
+
+        var attributed = await _host.ScalarsAsync("alpha",
+            "SELECT c.subject FROM lines l JOIN commits c USING (commit_id) ORDER BY l.line_number");
+        Assert.Equal(["Add a header", "Add the validator", "Tighten the check", "Add the validator"], attributed);
+    }
+
+    /// <summary>
+    ///     A merge is one commit and its side branch is not walked (ADR-0007), so a line the merge
+    ///     brought in attributes to the merge itself: the first-parent diff of a merge is everything the
+    ///     branch did. Blame would have named the branch commit, which the index does not hold.
+    /// </summary>
+    [Fact]
+    public async Task A_line_merged_in_from_a_branch_attributes_to_the_merge_commit()
+    {
+        await IndexTwoCommitProjectAsync();
+        string fixture = _host.FixturePath("one");
+        using (var repository = new Repository(fixture))
+        {
+            var trunk = repository.Head;
+            Commands.Checkout(repository, repository.CreateBranch("feature"));
+            File.WriteAllText(Path.Combine(fixture, "src", "Extra.cs"), "extra\n");
+            Commands.Stage(repository, "src/Extra.cs");
+            var branchAuthor = new Signature("Linus", "linus@example.invalid",
+                DateTimeOffset.UnixEpoch.AddMinutes(2));
+            repository.Commit("Work on the branch", branchAuthor, branchAuthor);
+            Commands.Checkout(repository, trunk);
+            var merger = new Signature("Grace", "grace@example.invalid", DateTimeOffset.UnixEpoch.AddMinutes(3));
+            repository.Merge(repository.Branches["feature"], merger,
+                new MergeOptions { FastForwardStrategy = FastForwardStrategy.NoFastForward });
+        }
+
+        await _host.RefreshAsync("alpha");
+
+        // Three commits and not four: the branch commit is not on the first-parent line.
+        Assert.Equal(["3"], await _host.ScalarsAsync("alpha", "SELECT count(*)::VARCHAR FROM commits"));
+        var attributed = await _host.ScalarsAsync("alpha",
+            """
+            SELECT c.subject FROM lines l JOIN files f USING (file_id) JOIN commits c USING (commit_id)
+            WHERE f.path = 'src/Extra.cs'
+            """);
+        Assert.StartsWith("Merge branch 'feature'", Assert.Single(attributed), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The replay counts lines the way the file walk splits them — on LF, dropping a CR before it
+    ///     (<c>IndexBuilder.SplitLines</c>) — because a patch's hunk positions and <c>lines.line_number</c>
+    ///     have to mean the same line. A CRLF file is where the two rules would first disagree.
+    /// </summary>
+    [Fact]
+    public async Task A_file_with_windows_line_endings_attributes_line_for_line()
+    {
+        string source = _host.CreateEmptyGitRepository("crlf");
+        _host.CommitToGitRepositoryAs("crlf",
+            new Dictionary<string, string> { ["Check.cs"] = "first\r\nsecond\r\nthird\r\n" },
+            "Add the validator", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs("crlf",
+            new Dictionary<string, string> { ["Check.cs"] = "first\r\nsecond-changed\r\nthird\r\n" },
+            "Tighten the check", "Grace", "grace@example.invalid", 1);
+        await _host.CreateProjectAsync("beta");
+        await _host.AddRepositoryAsync("beta", "crlf", source);
+        await _host.RefreshAsync("beta");
+
+        var attributed = await _host.ScalarsAsync("beta",
+            "SELECT c.subject FROM lines l JOIN commits c USING (commit_id) ORDER BY l.line_number");
+        Assert.Equal(["Add the validator", "Tighten the check", "Add the validator"], attributed);
+    }
+
+    /// <summary>
+    ///     A history rewritten under the watermark — a force push that drops the recorded commits — walks
+    ///     back to a root, and the carried-over attribution describes a tree no commit in that walk
+    ///     descends from. The replay starts from nothing rather than applying the new commits onto it,
+    ///     so every line attributes to a commit of the new history.
+    /// </summary>
+    [Fact]
+    public async Task A_rewritten_history_attributes_from_its_new_root_and_not_onto_the_old_lines()
+    {
+        await IndexTwoCommitProjectAsync();
+        string fixture = _host.FixturePath("one");
+        using (var repository = new Repository(fixture))
+        {
+            // The same tree as HEAD, as a commit with no parent: the content did not change, the
+            // history under it did. That is the case where replaying onto the old state would look
+            // right by accident, since the edits of the new root are the whole file.
+            var author = new Signature("Rewriter", "rewriter@example.invalid",
+                DateTimeOffset.UnixEpoch.AddMinutes(5));
+            var root = repository.ObjectDatabase.CreateCommit(author, author, "Start over",
+                repository.Head.Tip.Tree, [], false);
+            repository.Refs.UpdateTarget(repository.Head.CanonicalName, root.Sha);
+        }
+
+        await _host.RefreshAsync("alpha");
+
+        var attributed = await _host.ScalarsAsync("alpha",
+            "SELECT DISTINCT c.subject FROM lines l JOIN commits c USING (commit_id)");
+        Assert.Equal(["Start over"], attributed);
     }
 
     /// <summary>
