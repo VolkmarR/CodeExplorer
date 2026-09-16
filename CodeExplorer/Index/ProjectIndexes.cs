@@ -107,7 +107,7 @@ public sealed class ProjectIndexes : IDisposable
     ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
 
     /// <summary>
     ///     The tables a new shadow inherits from the live index instead of rebuilding. They are the
@@ -162,10 +162,6 @@ public sealed class ProjectIndexes : IDisposable
                                       size_bytes     BIGINT NOT NULL,
                                       line_count     INTEGER NOT NULL,
                                       skip_reason    VARCHAR,
-                                      -- Git's hash of the content, and what attribution is keyed by: a
-                                      -- file_id is assigned by the walk and does not survive a rebuild
-                                      -- (ADR-0007). Null for nothing — every committed file has one.
-                                      blob_sha       VARCHAR NOT NULL,
                                       -- The commits this file was first and last changed by, from the
                                       -- walk rather than from a blame, so they cost nothing beyond it.
                                       -- Null where history was not imported for the repository, which
@@ -213,10 +209,13 @@ public sealed class ProjectIndexes : IDisposable
                                       added       INTEGER NOT NULL,
                                       deleted     INTEGER NOT NULL);
                                   CREATE TABLE attribution (
-                                      -- Keyed by content, not by file: an unchanged blob has identical
-                                      -- attribution and is carried into the next shadow untouched, and
-                                      -- a file that only moved keeps it (ADR-0007).
-                                      blob_sha   VARCHAR NOT NULL,
+                                      -- The attribution of every text file at the newest recorded
+                                      -- commit, as runs. It is the state the next build replays new
+                                      -- commits onto, which is why it is carried over and why it is
+                                      -- keyed by slug and path rather than file_id: a file_id is a
+                                      -- position in the walk and does not survive a rebuild (ADR-0007).
+                                      repo_slug  VARCHAR NOT NULL,
+                                      path       VARCHAR NOT NULL,
                                       start_line INTEGER NOT NULL,
                                       end_line   INTEGER NOT NULL,
                                       commit_id  INTEGER NOT NULL);

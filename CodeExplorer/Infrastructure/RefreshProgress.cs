@@ -9,9 +9,10 @@ namespace CodeExplorer;
 ///     known before anything starts.
 ///     <see cref="Done" /> and <see cref="Total" /> are filled only by the steps that can count what
 ///     they are doing: fetching knows how many repositories there are, reading knows how many files the
-///     tree holds, and attributing knows how many blobs it has to blame. Storing, swapping and the
-///     commit walk cannot — a walk's length is not known until it ends — and they are null there rather
-///     than estimated, because a bar moving at a rate nobody measured is worse than no bar.
+///     tree holds, and attributing knows how many commits it has to replay. Storing and swapping
+///     cannot, and the commit walk knows only how far it has got — a walk's length is not known until
+///     it ends — so those carry a null total rather than an estimated one, because a bar moving at a
+///     rate nobody measured is worse than no bar.
 ///     There is deliberately no overall percentage. The steps are wildly unequal, a first history
 ///     import dwarfing everything else, so one figure weighted as though they were equal would race to
 ///     most of the way and then sit still — the progress bar people have learned not to believe.

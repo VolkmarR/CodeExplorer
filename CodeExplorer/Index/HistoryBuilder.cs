@@ -10,29 +10,32 @@ public sealed record HistorySummary(int Commits, long AttributedFiles);
 ///     touched, and the attribution of every line at HEAD. It runs inside the ordinary build, before the
 ///     swap, so a project is never live with code at one commit and history at another — and so nothing
 ///     here ever writes to an index that is answering queries.
-///     What it does not do is walk the whole history every time. <see cref="ProjectIndexes" /> has
-///     already copied the live index's history into the shadow, so this appends what is new and blames
-///     only the blobs that have no attribution yet, which for a refresh of an unchanged repository is
-///     nothing at all (ADR-0007).
+///     Attribution is not blamed, it is replayed. Each commit's edits are applied, oldest first, to a
+///     per-file array of "which commit wrote this line"; after the last commit the arrays are the
+///     attribution at HEAD. One pass over the patches the walk renders anyway, in place of a blame per
+///     file that walked the same history once for every file (ADR-0007).
+///     <see cref="ProjectIndexes" /> has already copied the live index's history into the shadow, so a
+///     refresh appends the new commits and replays only those onto the attribution it was handed, which
+///     for an unchanged repository is nothing at all.
 /// </summary>
 public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
 {
     /// <summary>
     ///     Appends every repository's new commits and attributes the files at HEAD. The caller has
-    ///     already written <c>files</c> and <c>lines</c>, which this needs: attribution is joined onto
-    ///     them by blob hash, and a file row is what says which blobs are at HEAD at all.
+    ///     already written <c>files</c> and <c>lines</c>, which this needs: attribution is written onto
+    ///     them by path, and a file row is what says which paths are at HEAD at all.
     /// </summary>
     /// <param name="shadow">The shadow being built, its connection already bound to it.</param>
     /// <param name="repositories">The same opened copies the file walk read, in the same order.</param>
     /// <param name="report">How far the pass has got, for the status an operator polls.</param>
-    /// <param name="cancellationToken">Checked per commit and per blamed file, which is where the time goes.</param>
+    /// <param name="cancellationToken">Checked per commit, which is where the time goes.</param>
     public async Task<HistorySummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
         Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.HistoryBuild(shadow.Slug);
 
-        // The walk, the diffs and the blames are synchronous git calls, like the file walk: a worker
-        // thread keeps them off the request thread and the token is checked inside.
+        // The walk and the diffs are synchronous git calls, like the file walk: a worker thread keeps
+        // them off the request thread and the token is checked inside.
         var summary = await Task.Run(
             () => Fill(shadow.Connection, shadow.Catalog, repositories, report, cancellationToken),
             cancellationToken);
@@ -50,22 +53,20 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         CancellationToken cancellationToken)
     {
         // A repository the operator removed since the last build left its commits in the carried-over
-        // history. They are pruned before anything is appended, so the table holds exactly the
+        // history. They are pruned before anything is appended, so the tables hold exactly the
         // repositories this build read — and so a slug reused for a different remote cannot inherit
-        // the old one's commits.
+        // the old one's commits or, worse, replay its own commits onto the old one's attribution.
         Prune(connection, repositories, cancellationToken);
 
         int appended = 0;
+        long attributed = 0;
         foreach (var (repository, copy) in repositories)
         {
-            // No count: how many commits a walk will yield is not known until it has yielded them, so
-            // this step names the repository and leaves the figures null rather than inventing them.
-            report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
-                $"Reading the history of '{repository.Slug}'"));
-            appended += AppendCommits(connection, catalog, repository.Slug, copy, cancellationToken);
+            var fresh = AppendCommits(connection, catalog, repository.Slug, copy, report, cancellationToken);
+            appended += fresh.Count;
+            attributed += Replay(connection, catalog, repository.Slug, fresh, report, cancellationToken);
         }
 
-        long attributed = Attribute(connection, catalog, repositories, report, cancellationToken);
         report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
             "Writing attribution onto the lines"));
         Materialise(connection, cancellationToken);
@@ -79,12 +80,11 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         // An empty list is a project whose every repository failed to open, which the refresh refuses
         // before it gets here; guarding anyway, because `IN ()` is a syntax error and not an empty set.
         string kept = slugs.Length == 0 ? "false" : $"repo_slug IN ({slugs})";
-        // commit_files and attribution hang off commit_id, so they follow whatever commits keeps. The
-        // delete is written as a subquery rather than a join because DuckDB's DELETE takes no USING.
+        // commit_files hangs off commit_id, so it follows whatever commits keeps. The delete is written
+        // as a subquery rather than a join because DuckDB's DELETE takes no USING.
         Execute(connection, $"DELETE FROM commit_files WHERE commit_id NOT IN (SELECT commit_id FROM commits WHERE {kept})",
             cancellationToken);
-        Execute(connection, $"DELETE FROM attribution WHERE commit_id NOT IN (SELECT commit_id FROM commits WHERE {kept})",
-            cancellationToken);
+        Execute(connection, $"DELETE FROM attribution WHERE NOT ({kept})", cancellationToken);
         Execute(connection, $"DELETE FROM commits WHERE NOT ({kept})", cancellationToken);
     }
 
@@ -94,15 +94,28 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     renumbered (ADR-0007), so writing oldest first is what makes a higher id mean a later commit,
     ///     on a first build and on every increment alike. The walk hands them over newest first, so they
     ///     are buffered and reversed — which is also the memory ceiling of this class, one record per
-    ///     new commit, paid once because a later refresh stops at the watermark.
+    ///     new commit with its edits, paid once because a later refresh stops at the watermark.
+    ///     Returns the new commits with the ids they were given, oldest first, for the replay.
     /// </summary>
-    private static int AppendCommits(DuckDBConnection connection, string catalog, string slug, LocalCopy copy,
+    private static List<(int Id, RecordedCommit Commit)> AppendCommits(DuckDBConnection connection,
+        string catalog, string slug, LocalCopy copy, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
         var known = Strings(connection, $"SELECT sha FROM commits WHERE repo_slug = {Literal(slug)}",
             cancellationToken);
-        var fresh = copy.History(known, cancellationToken).ToList();
-        if (fresh.Count == 0) return 0;
+        var fresh = new List<RecordedCommit>();
+        foreach (var commit in copy.History(known, cancellationToken))
+        {
+            // The walk is where a first import spends its minutes, and how long it is cannot be known
+            // before it ends, so the count runs without a total rather than against an invented one.
+            if (fresh.Count % RefreshProgress.ReportEvery == 0)
+                report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+                    $"Reading the history of '{slug}'", fresh.Count));
+            fresh.Add(commit);
+        }
+
+        var numbered = new List<(int, RecordedCommit)>(fresh.Count);
+        if (fresh.Count == 0) return numbered;
         fresh.Reverse();
 
         int nextId = Scalar(connection, "SELECT coalesce(max(commit_id), 0) FROM commits", cancellationToken) + 1;
@@ -115,6 +128,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int id = nextId++;
+                numbered.Add((id, commit));
                 commits.CreateRow().AppendValue(id).AppendValue(slug).AppendValue(commit.Sha)
                     .AppendValue(commit.AuthorName).AppendValue(commit.AuthorEmail)
                     .AppendValue(commit.AuthoredAt).AppendValue(commit.Subject).AppendValue(commit.Body)
@@ -125,85 +139,137 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             }
         }
 
-        return fresh.Count;
+        return numbered;
     }
 
     /// <summary>
-    ///     Blames every file at HEAD whose blob has no attribution yet. Keying by blob hash is what makes
-    ///     this cheap on a refresh: an unchanged file has the same content and therefore the same
-    ///     attribution, which was carried over, so it is not blamed again — and a file that only moved
-    ///     keeps its ranges without any rename detection (ADR-0007).
-    ///     A file with a <c>skip_reason</c> has no lines to attribute and is not blamed; a blame that
-    ///     fails is recorded as no attribution rather than as a failed build, because one unreadable file
-    ///     must not cost a project its index.
+    ///     Replays the new commits' edits onto the repository's attribution and writes the result back.
+    ///     The carried-over <c>attribution</c> rows are the state as of the last recorded commit, so a
+    ///     refresh loads them and applies only what is new. When the oldest new commit has no parent the
+    ///     walk went back to a root — a first build, or a history rewritten under the watermark — and the
+    ///     state starts empty instead, because whatever was carried over describes a tree no commit in
+    ///     this walk descends from.
+    ///     A file whose edits do not fit the lines the state has for it is dropped rather than guessed
+    ///     at, and stays unattributed until a rebuild; one file the replay cannot follow must not cost a
+    ///     project its history. Returns how many files hold attribution afterwards.
     /// </summary>
-    private static long Attribute(DuckDBConnection connection, string catalog,
-        IReadOnlyList<OpenedRepository> repositories, Action<RefreshProgress> report,
+    private static long Replay(DuckDBConnection connection, string catalog, string slug,
+        List<(int Id, RecordedCommit Commit)> fresh, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
-        // The commit a SHA belongs to, for turning a blame's SHA into the id the tables use. Read once:
-        // a blame answers in SHAs and every range needs the lookup.
-        var ids = new Dictionary<string, int>(StringComparer.Ordinal);
-        using (var command = connection.CreateCommand())
+        if (fresh.Count == 0)
+            return Scalar(connection,
+                $"SELECT count(DISTINCT path) FROM attribution WHERE repo_slug = {Literal(slug)}", cancellationToken);
+
+        var state = fresh[0].Commit.ParentSha is null
+            ? new Dictionary<string, List<int>>(StringComparer.Ordinal)
+            : LoadState(connection, slug, cancellationToken);
+
+        int done = 0;
+        foreach (var (id, commit) in fresh)
         {
-            command.CommandText = "SELECT sha, commit_id FROM commits";
-            using var reader = command.ExecuteReader();
-            while (reader.Read()) ids[reader.GetString(0)] = reader.GetInt32(1);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (done++ % RefreshProgress.ReportEvery == 0)
+                report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+                    $"Attributing the lines of '{slug}'", done, fresh.Count));
+            foreach (var change in commit.Files) Apply(state, change, id);
         }
 
-        long blamed = 0;
+        Execute(connection, $"DELETE FROM attribution WHERE repo_slug = {Literal(slug)}", cancellationToken);
         using var appender = connection.CreateAppender(catalog, "main", "attribution");
-        int repoId = 0;
-        foreach (var (_, copy) in repositories)
+        foreach (var (path, lines) in state)
         {
-            repoId++;
-            // Only the blobs this repository has at HEAD, only those still unattributed, and each blob
-            // once however many paths hold it — two identical files share one set of ranges.
-            var pending = Pairs(connection,
-                $"""
-                 SELECT min(path), blob_sha FROM files
-                 WHERE repo_id = {repoId} AND skip_reason IS NULL
-                   AND blob_sha NOT IN (SELECT blob_sha FROM attribution)
-                 GROUP BY blob_sha
-                 """, cancellationToken);
-
-            int done = 0;
-            foreach ((string path, string sha) in pending)
+            // Runs, not lines: attribution is run-structured by construction, and the table is read
+            // back the same way. A zero is a line no commit in the walk wrote — a carried-over gap —
+            // and is left out rather than written as a commit that does not exist.
+            int start = 0;
+            for (int end = 1; end <= lines.Count; end++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                // The one long step whose size is known before it starts: every blob still to blame was
-                // counted by the query above. On a first import this is where the minutes go, so this is
-                // the figure an operator is actually watching.
-                if (done++ % RefreshProgress.ReportEvery == 0)
-                    report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
-                        $"Attributing the lines of '{repositories[repoId - 1].Repository.Slug}'", done,
-                        pending.Count));
-                IReadOnlyList<AttributedRange> ranges;
-                try
-                {
-                    ranges = copy.Attribution(path);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // Safe to swallow: blame is the one part of a build that can fail on a single file
-                    // — libgit2 refuses some histories it cannot follow — and the answer for that file
-                    // is a null commit_id, which already means "not attributed" everywhere it is read.
-                    continue;
-                }
-
-                foreach (var range in ranges)
-                    if (ids.TryGetValue(range.Sha, out int id))
-                        appender.CreateRow().AppendValue(sha).AppendValue(range.StartLine)
-                            .AppendValue(range.EndLine).AppendValue(id).EndRow();
-                // A SHA the walk never recorded is a commit off the first-parent line — a merge brought
-                // the line in from a side branch. It attributes to nothing rather than to the merge,
-                // which would name a commit that did not write the line.
-
-                blamed++;
+                if (end < lines.Count && lines[end] == lines[start]) continue;
+                if (lines[start] != 0)
+                    appender.CreateRow().AppendValue(slug).AppendValue(path).AppendValue(start + 1)
+                        .AppendValue(end).AppendValue(lines[start]).EndRow();
+                start = end;
             }
         }
 
-        return blamed;
+        return state.Count;
+    }
+
+    /// <summary>
+    ///     One path of one commit onto the state. A deletion forgets the path; a rename moves its lines
+    ///     to the new path first; a binary file has no lines to hold. Then the edits, applied in one
+    ///     forward pass: the lines an edit removes are dropped, the lines it adds are this commit's, and
+    ///     everything between edits is copied as it was.
+    /// </summary>
+    private static void Apply(Dictionary<string, List<int>> state, ChangedPath change, int commitId)
+    {
+        switch (change.ChangeKind)
+        {
+            case "deleted":
+                state.Remove(change.Path);
+                return;
+            case "renamed":
+                if (state.Remove(change.OldPath, out var moved)) state[change.Path] = moved;
+                break;
+            case "copied":
+                if (state.TryGetValue(change.OldPath, out var source)) state[change.Path] = [..source];
+                break;
+        }
+
+        if (change.IsBinary)
+        {
+            state.Remove(change.Path);
+            return;
+        }
+
+        if (change.Edits.Count == 0) return;
+        var old = state.GetValueOrDefault(change.Path) ?? [];
+        var replayed = new List<int>(Math.Max(0, old.Count + change.Added - change.Deleted));
+        int position = 0;
+        foreach (var edit in change.Edits)
+        {
+            if (edit.OldLine < position || edit.OldLine + edit.Deleted > old.Count)
+            {
+                // The edit names lines the state does not have: the carried-over attribution and this
+                // commit disagree about what the file looked like. Dropped, per the class summary.
+                state.Remove(change.Path);
+                return;
+            }
+
+            while (position < edit.OldLine) replayed.Add(old[position++]);
+            position += edit.Deleted;
+            for (int added = 0; added < edit.Added; added++) replayed.Add(commitId);
+        }
+
+        while (position < old.Count) replayed.Add(old[position++]);
+        state[change.Path] = replayed;
+    }
+
+    /// <summary>
+    ///     The carried-over attribution of one repository, expanded from runs to one entry per line.
+    ///     A gap between runs — lines a build could not attribute — comes back as zeros, which no
+    ///     commit_id is, so the replay carries the gap along and the writer leaves it out again.
+    /// </summary>
+    private static Dictionary<string, List<int>> LoadState(DuckDBConnection connection, string slug,
+        CancellationToken cancellationToken)
+    {
+        var state = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            $"SELECT path, start_line, end_line, commit_id FROM attribution WHERE repo_slug = {Literal(slug)} ORDER BY path, start_line";
+        cancellationToken.ThrowIfCancellationRequested();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            string path = reader.GetString(0);
+            int start = reader.GetInt32(1), end = reader.GetInt32(2), commitId = reader.GetInt32(3);
+            if (!state.TryGetValue(path, out var lines)) state[path] = lines = [];
+            while (lines.Count < start - 1) lines.Add(0);
+            for (int line = start; line <= end; line++) lines.Add(commitId);
+        }
+
+        return state;
     }
 
     /// <summary>
@@ -218,8 +284,9 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         Execute(connection,
             """
             UPDATE lines SET commit_id = a.commit_id
-            FROM files f, attribution a
-            WHERE lines.file_id = f.file_id AND a.blob_sha = f.blob_sha
+            FROM files f, repositories r, attribution a
+            WHERE lines.file_id = f.file_id AND r.repo_id = f.repo_id
+              AND a.repo_slug = r.slug AND a.path = f.path
               AND lines.line_number BETWEEN a.start_line AND a.end_line
             """, cancellationToken);
 
@@ -262,18 +329,6 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         using var reader = command.ExecuteReader();
         while (reader.Read()) values.Add(reader.GetString(0));
         return values;
-    }
-
-    private static List<(string First, string Second)> Pairs(DuckDBConnection connection, string sql,
-        CancellationToken cancellationToken)
-    {
-        var rows = new List<(string, string)>();
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        cancellationToken.ThrowIfCancellationRequested();
-        using var reader = command.ExecuteReader();
-        while (reader.Read()) rows.Add((reader.GetString(0), reader.GetString(1)));
-        return rows;
     }
 
     /// <summary>
