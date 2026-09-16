@@ -62,11 +62,15 @@ internal sealed class SearchTools(
         int page = 1,
         [Description("Files per page, 1-100. Default 20.")]
         int pageSize = 20,
+        [Description("""
+                     Annotate each returned line with the commit that last changed it: date, author and subject. Use it when the question is who to ask about a hit, not only where it is. It is who touched the line LAST — a reformat counts — so it never proves who introduced something. Off by default because it makes every line of the reply longer.
+                     """)]
+        bool withHistory = false,
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
         var request = new GrepRequest(query, regex, caseSensitive, path, exclude, ext, multiline, wholeWord, context,
-            filesOnly, maxLinesPerFile, page, pageSize);
+            filesOnly, maxLinesPerFile, page, pageSize, withHistory);
 
         var outcome = await grep.SearchAsync(project.Slug, request, cancellationToken);
         if (outcome is SearchProblem problem) return problem.Explanation;
@@ -162,7 +166,14 @@ internal sealed class SearchTools(
                 text.Append(pad).Append("  ...\n");
             // ':' marks a match and '-' a context line, the way grep does it.
             text.Append(line.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
-                .Append(line.IsMatch ? ':' : '-').Append(' ').Append(ToolReply.Clip(line.Text)).Append('\n');
+                .Append(line.IsMatch ? ':' : '-').Append(' ').Append(ToolReply.Clip(line.Text));
+            // The attribution goes after the code and not before it, so the code still starts at a fixed
+            // column and a reply with history reads like one without.
+            if (line.By is { } by)
+                text.Append(string.Create(CultureInfo.InvariantCulture,
+                    $"    [{by.AuthoredAt:yyyy-MM-dd} {by.AuthorName}]"));
+            else if (request.WithHistory) text.Append("    [not attributed]");
+            text.Append('\n');
             previous = line.LineNumber;
         }
 

@@ -38,6 +38,24 @@ comment, a string or an import. Determined from the text alone, never from langu
 reference is strong evidence and not proof.
 _Avoid_: Usage, call site, occurrence
 
+**Commit**:
+One recorded change on a repository's default branch, identified by its SHA and carrying the author
+who wrote it. Merges count as one commit and their side branches are not walked (ADR-0007), so a
+pull request reads as a single change.
+_Avoid_: Revision, changeset, changelist
+
+**History**:
+The commits a project has imported for a repository, which is never guaranteed to be complete: a
+repository may have none at all, and a file's history begins where it was last renamed. An agent
+told nothing is told that, rather than being given an empty answer.
+_Avoid_: Log, git history, timeline, audit trail
+
+**Attribution**:
+The commit a line or a file was last changed by. Evidence of who touched something last and not of
+who wrote the logic — a reformat is an attribution — so it answers "who worked on this" and never
+"when was this introduced".
+_Avoid_: Blame, ownership, authorship
+
 **Qualified Path**:
 How every file in a project is named: its repository, then its path within that repository. A
 project is therefore one flat namespace, and two repositories may each contain `src/index.ts`

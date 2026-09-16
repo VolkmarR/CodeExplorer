@@ -103,8 +103,10 @@ Two kinds of failure, two mechanisms. Never mix them.
 - A stored credential is `IDataProtector` ciphertext in the control database. It is write-only in
   the UI and the API (readable only as set or not set), and it never appears in a log, a span or an
   error message.
-- Clones are shallow and bare. Read the file list from the HEAD tree and content from blobs; there
-  is no working copy to walk, and therefore no `.gitignore` handling.
+- Clones are bare and carry full history (ADR-0007; they were shallow until it). Read the file list
+  from the HEAD tree and content from blobs; there is no working copy to walk, and therefore no
+  `.gitignore` handling. A clone is kept between refreshes and is the largest thing on the ephemeral
+  disk, so anything that adds to what a refresh transfers is sized by the free-space gate first.
 - Refuse a repository that declares `filter=lfs`. libgit2 has no LFS support and would index
   pointer files as though they were source — a silent wrong answer, not an error.
 

@@ -59,6 +59,7 @@ public sealed class RefreshService(
     ControlDatabase control,
     ProjectRefresh refresh,
     ProjectIndexes indexes,
+    GitClones clones,
     IConfiguration configuration,
     IHostApplicationLifetime lifetime,
     ILogger<RefreshService> logger)
@@ -71,6 +72,16 @@ public sealed class RefreshService(
     ///     leaves room for the other projects.
     /// </summary>
     private const long DefaultMinimumFreeBytes = 512L * 1024 * 1024;
+
+    /// <summary>
+    ///     What a fetch into an existing clone is assumed to add, as a fraction of what that clone
+    ///     already occupies. A fetch transfers a delta and then repacks, and a repack can hold the old
+    ///     and the new pack at once — a quarter is the judgement, and it is a guess rather than a
+    ///     measurement because the real figure depends on how much was committed since the last
+    ///     refresh. A project whose clones are missing entirely gets the floor instead, which is the
+    ///     one case where this system genuinely cannot know the size before downloading it (ADR-0007).
+    /// </summary>
+    private const int CloneGrowthDivisor = 4;
 
     private readonly long _minimumFreeBytes =
         configuration.GetValue("Refresh:MinimumFreeBytes", DefaultMinimumFreeBytes);
@@ -182,12 +193,16 @@ public sealed class RefreshService(
     /// </summary>
     private RefreshRefusal? InsufficientDisk(string slug)
     {
-        var room = indexes.RoomForShadow(slug, _minimumFreeBytes);
+        var index = indexes.RoomForShadow(slug, _minimumFreeBytes);
+        // The clones are part of what a refresh needs room for since ADR-0007 made them full: they are
+        // fetched into before anything is built, so a check that sized only the shadow index would pass
+        // and then fill the disk during the transfer, which is the failure this gate exists to prevent.
+        var room = index with { Required = index.Required + clones.Footprint(slug) / CloneGrowthDivisor };
         return room.Enough
             ? null
             : new RefreshRefusal(
                 $"A refresh of project '{slug}' needs about {Mib(room.Required)} free where the indexes live, and only {Mib(room.Free)} is left. "
-                + "That disk holds every project's index, the shadow index a refresh builds beside it, and the local copies, and it cannot be enlarged (ADR-0003). "
+                + "That disk holds every project's index, the shadow index a refresh builds beside it, and the local copies — which hold full git history since ADR-0007 — and it cannot be enlarged (ADR-0003). "
                 + "Delete a project that is no longer needed, then refresh again.",
                 // 507 rather than another 409: a cron reading only the status line still learns that
                 // this is about storage and not about another rebuild holding the slot.

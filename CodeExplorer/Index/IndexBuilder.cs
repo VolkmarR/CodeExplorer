@@ -18,7 +18,7 @@ public sealed record OpenedRepository(ProjectRepository Repository, LocalCopy Lo
 ///     (ADR-0003) — and nothing here knows what git library read them. Fetching the copies and deciding
 ///     what becomes of the result belong to a refresh and live in <c>Refresh/</c> (ADR-0005).
 /// </summary>
-public sealed class IndexBuilder(IConfiguration configuration)
+public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder history)
 {
     /// <summary>
     ///     Default for <c>Index:MaxFileBytes</c>. Text blobs above it are generated code, data dumps or
@@ -51,6 +51,10 @@ public sealed class IndexBuilder(IConfiguration configuration)
         var (files, lines) = await Task.Run(
             () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, repositories, cancellationToken),
             cancellationToken);
+        // After the files, because attribution is joined onto them and a file row is what says which
+        // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished
+        // and an index that is live with no history would be one nothing ever goes back to fill in.
+        await history.FillAsync(shadow, repositories, cancellationToken);
         await shadow.CompleteAsync(singleRepository, cancellationToken);
 
         recording.Built(files, lines);
@@ -91,6 +95,10 @@ public sealed class IndexBuilder(IConfiguration configuration)
                 var text = skipReason is null ? SplitLines(entry.Text()) : [];
                 for (int i = 0; i < text.Count; i++)
                     lines.CreateRow().AppendValue(++lineId).AppendValue(fileId).AppendValue(i + 1).AppendValue(text[i])
+                        // Attribution is filled by the history pass, which runs after this one and after
+                        // the swap (ADR-0007): a project is searchable before it has any history, and
+                        // a null here is "not attributed yet" rather than "nobody touched this line".
+                        .AppendNullValue()
                         .EndRow();
                 lineCount += text.Count;
 
@@ -106,8 +114,11 @@ public sealed class IndexBuilder(IConfiguration configuration)
                     .AppendValue(slash < 0 ? "" : entry.Path[..slash]).AppendValue(name)
                     .AppendValue(Path.GetExtension(name).TrimStart('.').ToLowerInvariant())
                     .AppendValue(entry.Size).AppendValue(text.Count);
-                if (skipReason is null) row.AppendNullValue().EndRow();
-                else row.AppendValue(skipReason).EndRow();
+                row = skipReason is null ? row.AppendNullValue() : row.AppendValue(skipReason);
+                // The blob hash is written even for a skipped file: it is what a later build asks
+                // "is this the same content?" with, and a binary file is as unchanged as any other.
+                // The two commit columns are the history pass's, like lines.commit_id above.
+                row.AppendValue(entry.Sha).AppendNullValue().AppendNullValue().EndRow();
             }
 
             repos.CreateRow().AppendValue(repoId).AppendValue(repository.Slug).AppendValue(repository.Url)

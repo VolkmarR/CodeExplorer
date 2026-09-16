@@ -38,7 +38,8 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     The tables of a project index, in the order a restore may insert them. There is no foreign
     ///     key between them, so the order is for readability rather than for the engine.
     /// </summary>
-    private static readonly string[] Tables = ["index_info", "repositories", "files", "lines"];
+    private static readonly string[] Tables =
+        ["index_info", "repositories", "files", "lines", "commits", "commit_files", "attribution"];
 
     /// <summary>
     ///     Where <c>COPY TO</c> writes and a fetch lands: on the volume ADR-0003 budgets, next to the
