@@ -10,12 +10,15 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 namespace CodeExplorer;
 
 /// <summary>
-///     Keeps the local copy of every repository (CONTEXT.md): a shallow bare clone under
+///     Keeps the local copy of every repository (CONTEXT.md): a full bare clone under
 ///     <c>{DataDirectory}/clones/{project}/{repository}.git</c>, made on the first refresh and
 ///     brought up to date on every later one. The refresh is its only reader, and reads it through
 ///     the <see cref="LocalCopy" /> this hands out; the copy is temporary and nothing may depend on
 ///     its being there. Files are read from the HEAD tree, so there is no working copy and nothing to
 ///     walk on disk (ADR-0003).
+///     Full and no longer shallow since ADR-0007: history is what the index is built to answer from,
+///     and a clone kept between refreshes is what stops every refresh re-downloading it. That makes
+///     the clones the largest thing on the ephemeral disk, which <see cref="Footprint" /> is here for.
 /// </summary>
 public sealed class GitClones(
     IConfiguration configuration,
@@ -40,8 +43,8 @@ public sealed class GitClones(
     private readonly IDataProtector _protector = dataProtection.CreateProtector(ControlDatabase.CredentialPurpose);
 
     /// <summary>
-    ///     Opens the repository with its local copy brought up to date: a shallow fetch when it is
-    ///     already cloned, and the clone itself when it is not, which is already current. This is the
+    ///     Opens the repository with its local copy brought up to date: a fetch when it is already
+    ///     cloned, and the clone itself when it is not, which is already current. This is the
     ///     first half of a refresh (CONTEXT.md), and the only way a local copy is ever read; a tool
     ///     call answers from the index, because an agent must not make the server talk to a remote.
     ///     Throws <see cref="McpException" /> when the transfer fails; the message names the repository
@@ -96,6 +99,33 @@ public sealed class GitClones(
         {
             clone.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    ///     What a project's local copies occupy right now, in bytes, and zero for a project that has
+    ///     none yet. The free-space gate sizes a refresh against it (ADR-0007): a clone that exists
+    ///     grows by a fetch, and one that does not exist yet is about to download an entire object
+    ///     store, and those are different amounts of room to insist on.
+    ///     Walked rather than remembered, because a clone is deleted and repacked behind this class's
+    ///     back and a cached figure would be wrong in the direction that fills the disk.
+    /// </summary>
+    public long Footprint(string projectSlug)
+    {
+        var directory = new DirectoryInfo(Path.Combine(_cloneRoot, projectSlug));
+        if (!directory.Exists) return 0;
+        try
+        {
+            return directory.EnumerateFiles("*", SearchOption.AllDirectories).Sum(file => file.Length);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Safe to swallow: a clone being written or removed while this walks is the normal case,
+            // and the gate only needs a figure to reason with. Zero reads as "nothing to reserve for",
+            // which is the same answer as for a project not cloned yet — the floor then stands in.
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug(ex, "Could not size the local copies of project {Project}", projectSlug);
+            return 0;
         }
     }
 
@@ -290,15 +320,16 @@ public sealed class GitClones(
     }
 
     /// <summary>
-    ///     The transfer settings a clone and a fetch share: shallow where the transport allows it,
-    ///     cancellable, and carrying the stored credential to libgit2 and nowhere else.
+    ///     The transfer settings a clone and a fetch share: cancellable, and carrying the stored
+    ///     credential to libgit2 and nowhere else.
+    ///     No <c>Depth</c>. It was 1 until ADR-0007, and dropping it is what makes history exist on disk
+    ///     to be indexed at all — libgit2 implements no partial clone, so there is no way to take the
+    ///     commits and trees without the blobs. A clone is therefore its repository's whole object
+    ///     store, and the free-space gate in <c>RefreshService</c> is what stands between that and the
+    ///     ephemeral disk.
     /// </summary>
     private void Configure(FetchOptions options, ProjectRepository repository, CancellationToken cancellationToken)
     {
-        // ADR-0003: the local transport rejects shallow clones and fetches ("shallow fetch is not
-        // supported by the local transport"), so a path or file URL transfers in full. Only tests and
-        // mirrors use those.
-        if (RepositoryUrl.Classify(repository.Url) == RepositoryUrlKind.Remote) options.Depth = 1;
         options.OnTransferProgress = _ => !cancellationToken.IsCancellationRequested;
         options.CredentialsProvider = Credentials(repository);
     }

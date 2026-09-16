@@ -39,6 +39,7 @@ builder.Services.AddSingleton<ControlDatabase>();
 builder.Services.AddSingleton<GitClones>();
 builder.Services.AddSingleton<DurableIndex>();
 builder.Services.AddSingleton<ProjectIndexes>();
+builder.Services.AddSingleton<HistoryBuilder>();
 builder.Services.AddSingleton<IndexBuilder>();
 builder.Services.AddSingleton<ProjectRefresh>();
 builder.Services.AddSingleton<RefreshService>();
@@ -55,7 +56,8 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddMcpServer().WithHttpTransport()
     .WithTools<ProjectTools>()
     .WithTools<SearchTools>()
-    .WithTools<FileTools>();
+    .WithTools<FileTools>()
+    .WithTools<HistoryTools>();
 
 var app = builder.Build();
 

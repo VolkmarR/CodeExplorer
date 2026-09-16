@@ -107,7 +107,13 @@ public sealed class ProjectIndexes : IDisposable
     ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
+
+    /// <summary>
+    ///     The tables a new shadow inherits from the live index instead of rebuilding. They are the
+    ///     append-only ones (ADR-0007); everything else is a function of the clone and is written afresh.
+    /// </summary>
+    private static readonly string[] HistoryTables = ["commits", "commit_files", "attribution"];
 
     /// <summary>
     ///     Default for <c>Index:DrainSeconds</c>: how long a swap waits for in-flight queries before
@@ -125,6 +131,9 @@ public sealed class ProjectIndexes : IDisposable
     ///     a <c>skip_reason</c>, so a tree listing shows it and a search can say why it was excluded.
     ///     <c>lines</c> carries one row per text line; a file's content is reassembled from them rather
     ///     than stored twice, which halves the file next to the proof of concept's layout.
+    ///     The last three tables are the history ADR-0007 put in the same file as the code, so one
+    ///     attach, one durable copy and one delete cover both and neither can be at a different commit
+    ///     than the other.
     /// </summary>
     private const string Schema = """
                                   CREATE TABLE index_info (
@@ -152,12 +161,65 @@ public sealed class ProjectIndexes : IDisposable
                                       extension      VARCHAR NOT NULL,
                                       size_bytes     BIGINT NOT NULL,
                                       line_count     INTEGER NOT NULL,
-                                      skip_reason    VARCHAR);
+                                      skip_reason    VARCHAR,
+                                      -- Git's hash of the content, and what attribution is keyed by: a
+                                      -- file_id is assigned by the walk and does not survive a rebuild
+                                      -- (ADR-0007). Null for nothing — every committed file has one.
+                                      blob_sha       VARCHAR NOT NULL,
+                                      -- The commits this file was first and last changed by, from the
+                                      -- walk rather than from a blame, so they cost nothing beyond it.
+                                      -- Null where history was not imported for the repository, which
+                                      -- is a different answer from "never changed" and must stay so.
+                                      first_commit   INTEGER,
+                                      last_commit    INTEGER);
                                   CREATE TABLE lines (
                                       line_id     BIGINT PRIMARY KEY,
                                       file_id     BIGINT NOT NULL,
                                       line_number INTEGER NOT NULL,
-                                      content     VARCHAR NOT NULL);
+                                      content     VARCHAR NOT NULL,
+                                      -- Attribution materialised per line so the read path never joins,
+                                      -- the same reasoning files.qualified_path follows (ADR-0003). A
+                                      -- column and not a table: blame is runs of one value on a table
+                                      -- already sorted by file, which RLE leaves almost nothing of,
+                                      -- where a table would repeat file_id and line_number per line.
+                                      commit_id   INTEGER);
+                                  CREATE TABLE commits (
+                                      -- Allocated once and never renumbered. lines is rebuilt from the
+                                      -- clone on every refresh while this table is carried over, so a
+                                      -- walk that re-sequenced these would silently repoint every
+                                      -- carried-over row at a different commit (ADR-0007).
+                                      commit_id    INTEGER PRIMARY KEY,
+                                      -- The repository's slug and not its repo_id, for the same reason:
+                                      -- a repo_id is the position of the repository in the build's list
+                                      -- and moves when one is added or removed, which would repoint
+                                      -- every carried-over commit at a different repository. A slug is
+                                      -- stable by definition (CONTEXT.md, Repository Slug).
+                                      repo_slug    VARCHAR NOT NULL,
+                                      sha          VARCHAR NOT NULL,
+                                      -- The author and never the committer: a rebase makes the two
+                                      -- disagree, and the author is who wrote the code.
+                                      author_name  VARCHAR NOT NULL,
+                                      author_email VARCHAR NOT NULL,
+                                      authored_at  TIMESTAMPTZ NOT NULL,
+                                      subject      VARCHAR NOT NULL,
+                                      body         VARCHAR NOT NULL);
+                                  CREATE TABLE commit_files (
+                                      commit_id   INTEGER NOT NULL,
+                                      -- Repository-relative, like files.path, and deliberately not a
+                                      -- file_id: a commit names paths that no longer exist at HEAD and
+                                      -- therefore have no row in files at all.
+                                      path        VARCHAR NOT NULL,
+                                      change_kind VARCHAR NOT NULL,
+                                      added       INTEGER NOT NULL,
+                                      deleted     INTEGER NOT NULL);
+                                  CREATE TABLE attribution (
+                                      -- Keyed by content, not by file: an unchanged blob has identical
+                                      -- attribution and is carried into the next shadow untouched, and
+                                      -- a file that only moved keeps it (ADR-0007).
+                                      blob_sha   VARCHAR NOT NULL,
+                                      start_line INTEGER NOT NULL,
+                                      end_line   INTEGER NOT NULL,
+                                      commit_id  INTEGER NOT NULL);
                                   """;
 
     // Attached databases and loaded extensions belong to the instance, and DuckDB.NET disposes the
@@ -405,12 +467,41 @@ public sealed class ProjectIndexes : IDisposable
 
             await ExecuteAsync(connection, $"USE {Quote(catalog)}", cancellationToken);
             await ExecuteAsync(connection, Schema, cancellationToken);
+            await CarryHistoryAsync(connection, slug, cancellationToken);
             return new ShadowIndex(connection, catalog, slug, FtsAvailable);
         }
         catch
         {
             connection.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    ///     Copies the live index's history into the fresh shadow, so a build appends to it rather than
+    ///     walking every commit again (ADR-0007). History is append-only, which is what makes this sound:
+    ///     a commit already recorded cannot change, so carrying it over is not a cache that can go stale.
+    ///     Done here rather than by the caller, so that "a shadow starts out knowing what the live index
+    ///     knew" is a property of creating one and not of a caller remembering to ask. The build prunes
+    ///     what no longer belongs — a repository since removed — because only it knows what was read.
+    ///     Nothing to carry is the ordinary case for a first build, and for a live file an older schema
+    ///     wrote: the tables are checked for rather than the failure caught, so a real error still throws.
+    /// </summary>
+    private async Task CarryHistoryAsync(DuckDBConnection connection, string slug,
+        CancellationToken cancellationToken)
+    {
+        if (!HasIndex(slug)) return;
+        await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
+
+        foreach (string table in HistoryTables)
+        {
+            using var exists = connection.CreateCommand();
+            exists.CommandText =
+                $"SELECT count(*) FROM duckdb_tables() WHERE database_name = '{slug.Replace("'", "''")}' "
+                + $"AND schema_name = 'main' AND table_name = '{table}'";
+            if (await exists.ExecuteScalarAsync(cancellationToken) is not > 0L) continue;
+            await ExecuteAsync(connection,
+                $"INSERT INTO {table} SELECT * FROM {Quote(slug)}.main.{table}", cancellationToken);
         }
     }
 

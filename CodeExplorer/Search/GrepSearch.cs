@@ -18,7 +18,8 @@ public sealed record GrepRequest(
     bool FilesOnly = false,
     int MaxLinesPerFile = 20,
     int Page = 1,
-    int PageSize = 20)
+    int PageSize = 20,
+    bool WithHistory = false)
 {
     /// <summary>
     ///     The three filters as the shape every index search shares. Grep spans every repository in
@@ -30,7 +31,12 @@ public sealed record GrepRequest(
 }
 
 /// <summary><see cref="IsMatch" /> is false for a line returned only as context around a match.</summary>
-public sealed record GrepLine(int LineNumber, string Text, bool IsMatch);
+/// <summary>
+///     One line of an answer. <see cref="By" /> is filled only when the caller asked for history and the
+///     build attributed the line; it says who last changed it, never who wrote it (CONTEXT.md,
+///     Attribution).
+/// </summary>
+public sealed record GrepLine(int LineNumber, string Text, bool IsMatch, AttributedBy? By = null);
 
 /// <summary>
 ///     One file's share of the answer. <see cref="MatchesShown" /> is how many of the
@@ -218,16 +224,17 @@ public sealed class GrepSearch(ProjectIndexes indexes)
                        FROM hits h JOIN page_files p USING (file_id))
                    WHERE rn <= {bounds.MaxLinesPerFile}),
                shown AS (
-                   SELECT l.file_id, l.line_number, l.content, bool_or(k.line_number = l.line_number) AS is_match
+                   SELECT l.file_id, l.line_number, l.content{(request.WithHistory ? ", l.commit_id" : "")},
+                          bool_or(k.line_number = l.line_number) AS is_match
                    FROM kept k
                    JOIN lines l ON l.file_id = k.file_id
                                AND l.line_number BETWEEN k.line_number - {bounds.Context} AND k.line_number + {bounds.Context}
                    GROUP BY ALL),
                page_lines AS (
-                   SELECT p.qualified_path, p.n, s.line_number, s.content, s.is_match
-                   FROM page_files p JOIN shown s USING (file_id))
+                   SELECT p.qualified_path, p.n, s.line_number, s.content, s.is_match{History(request)}
+                   FROM page_files p JOIN shown s USING (file_id){HistoryJoin(request)})
                SELECT t.total_files, t.total_lines, p.qualified_path, p.n AS match_count,
-                      p.line_number, p.content, p.is_match
+                      p.line_number, p.content, p.is_match{Columns(request)}
                FROM totals t LEFT JOIN page_lines p ON true
                ORDER BY p.n DESC, p.qualified_path, p.line_number
                """;
@@ -258,7 +265,15 @@ public sealed class GrepSearch(ProjectIndexes indexes)
 
                 if (!reader.IsNull("line_number"))
                     current.Add(new GrepLine(reader.Int32("line_number"), reader.Text("content"),
-                        reader.Flag("is_match")));
+                        reader.Flag("is_match"),
+                        // Only asked for when the caller wanted history, and null for a line the build
+                        // could not attribute — which is every line of a project indexed before there
+                        // was any history to attribute from.
+                        request.WithHistory && !reader.IsNull("author_name")
+                            ? new AttributedBy(reader.Text("sha"), reader.Text("author_name"),
+                                reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
+                                reader.Text("subject"))
+                            : null));
             }
 
             if (currentPath is not null) files.Add(File(currentPath, currentCount, current));
@@ -278,6 +293,25 @@ public sealed class GrepSearch(ProjectIndexes indexes)
             return new GrepFile(path, count, lines.Count(l => l.IsMatch), lines);
         }
     }
+
+    /// <summary>
+    ///     The attribution columns, added to a grep only when the caller asked for history. Left out
+    ///     otherwise rather than selected and ignored: this is the widest query in the codebase and it
+    ///     runs on every search, so the default pays nothing for a feature it is not using.
+    /// </summary>
+    private static string History(GrepRequest request) =>
+        request.WithHistory ? ", c.sha, c.author_name, c.authored_at, c.subject" : "";
+
+    /// <summary>
+    ///     A LEFT JOIN and not an inner one: a line the build could not attribute still has to come back
+    ///     as a line. An inner join would silently drop it from the search results, which would make
+    ///     asking for history change which code a grep finds.
+    /// </summary>
+    private static string HistoryJoin(GrepRequest request) =>
+        request.WithHistory ? " LEFT JOIN commits c ON c.commit_id = s.commit_id" : "";
+
+    private static string Columns(GrepRequest request) =>
+        request.WithHistory ? ", p.sha, p.author_name, p.authored_at, p.subject" : "";
 
     /// <summary>
     ///     Whole-file regex, reassembled in the engine because the index stores text only as lines (#4).

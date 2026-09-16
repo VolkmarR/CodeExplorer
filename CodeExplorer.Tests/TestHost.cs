@@ -228,7 +228,19 @@ public sealed class TestHost : IDisposable
     public string CommitToGitRepository(string name, Dictionary<string, string> files) =>
         Commit(Path.Combine(_root, "fixtures", name), files);
 
-    private static string Commit(string path, Dictionary<string, string> files)
+    /// <summary>
+    ///     A commit with an author and a message of its own, for a history test: the default fixture
+    ///     author and subject are the same on every commit, which is exactly what a test asserting who
+    ///     wrote what cannot use. The date advances with <paramref name="minute" /> so that two commits
+    ///     are orderable, which at the shared epoch they are not.
+    /// </summary>
+    public string CommitToGitRepositoryAs(string name, Dictionary<string, string> files, string subject,
+        string authorName, string authorEmail, int minute) =>
+        Commit(Path.Combine(_root, "fixtures", name), files, subject,
+            new Signature(authorName, authorEmail, DateTimeOffset.UnixEpoch.AddMinutes(minute)));
+
+    private static string Commit(string path, Dictionary<string, string> files, string subject = "fixture",
+        Signature? author = null)
     {
         using var repo = new Repository(path);
         foreach ((string relative, string content) in files)
@@ -239,8 +251,8 @@ public sealed class TestHost : IDisposable
             Commands.Stage(repo, relative);
         }
 
-        var author = new Signature("Test", "test@example.invalid", DateTimeOffset.UnixEpoch);
-        repo.Commit("fixture", author, author);
+        author ??= new Signature("Test", "test@example.invalid", DateTimeOffset.UnixEpoch);
+        repo.Commit(subject, author, author);
         return path;
     }
 
@@ -326,6 +338,18 @@ public sealed class TestHost : IDisposable
     {
         using var lease = await OpenIndexAsync(slug);
         return await ScalarsAsync(lease, sql);
+    }
+
+    /// <summary>
+    ///     Runs a statement against a project's index, for a test that has to put the index into a state
+    ///     a build would not produce — an index with no history, as every index built before ADR-0007 is.
+    /// </summary>
+    public async Task ExecuteAsync(string slug, string sql)
+    {
+        using var lease = await OpenIndexAsync(slug);
+        using var command = lease.Connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(Ct);
     }
 
     /// <summary>The same, against a lease already held: a test proving what a swap does to one in flight.</summary>

@@ -52,6 +52,10 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         int startLine = 1,
         [Description("Lines to return per entry without its own range, 1-2000. Default 400.")]
         int maxLines = DefaultLinesPerRead,
+        [Description("""
+                     Add a line per file naming the commits it was first and last changed by. Cheap — one line per file, not per line of code — and the quickest way to find out who to ask about a file. Use blame for the same question about a single line.
+                     """)]
+        bool withHistory = false,
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
@@ -78,14 +82,15 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             // Whatever the entries before this one left unused is handed on, so four small windows
             // and one large one read in full where an equal split would truncate the large one.
             int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (targets.Count - i);
-            await AppendReadAsync(text, index, targets[i], allowance, cancellationToken);
+            await AppendReadAsync(text, index, targets[i], allowance, withHistory, cancellationToken);
         }
 
         return text.ToString();
     }
 
     private static async Task AppendReadAsync(
-        StringBuilder text, IndexReader index, ReadTarget target, int allowance, CancellationToken cancellationToken)
+        StringBuilder text, IndexReader index, ReadTarget target, int allowance, bool withHistory,
+        CancellationToken cancellationToken)
     {
         var paths = await index.PathsAsync(cancellationToken);
         var qualified = paths.Parse(target.Path);
@@ -141,7 +146,9 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         int end = Math.Min(file.LineCount, target.End);
         if (target.Start > 1 || end < file.LineCount)
             text.Append(CultureInfo.InvariantCulture, $" (lines {target.Start}-{end} of {file.LineCount})");
-        text.Append("\n\n");
+        text.Append('\n');
+        if (withHistory) text.Append(await index.FileSpanAsync(file.FileId, cancellationToken));
+        text.Append('\n');
 
         var lines = await index.LinesAsync(file.FileId, target.Start, end, cancellationToken);
         int width = end.ToString(CultureInfo.InvariantCulture).Length;
