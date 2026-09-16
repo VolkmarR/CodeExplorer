@@ -105,9 +105,9 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
                 var text = skipReason is null ? SplitLines(entry.Text()) : [];
                 for (int i = 0; i < text.Count; i++)
                     lines.CreateRow().AppendValue(++lineId).AppendValue(fileId).AppendValue(i + 1).AppendValue(text[i])
-                        // Attribution is filled by the history pass, which runs after this one and after
-                        // the swap (ADR-0007): a project is searchable before it has any history, and
-                        // a null here is "not attributed yet" rather than "nobody touched this line".
+                        // Attribution is filled by the history pass, which runs after this one and before
+                        // the swap (ADR-0007). A null that survives it is a line the history could not
+                        // attribute, which is a different answer from "nobody touched this line".
                         .AppendNullValue()
                         .EndRow();
                 lineCount += text.Count;
@@ -125,10 +125,8 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
                     .AppendValue(Path.GetExtension(name).TrimStart('.').ToLowerInvariant())
                     .AppendValue(entry.Size).AppendValue(text.Count);
                 row = skipReason is null ? row.AppendNullValue() : row.AppendValue(skipReason);
-                // The blob hash is written even for a skipped file: it is what a later build asks
-                // "is this the same content?" with, and a binary file is as unchanged as any other.
                 // The two commit columns are the history pass's, like lines.commit_id above.
-                row.AppendValue(entry.Sha).AppendNullValue().AppendNullValue().EndRow();
+                row.AppendNullValue().AppendNullValue().EndRow();
             }
 
             repos.CreateRow().AppendValue(repoId).AppendValue(repository.Slug).AppendValue(repository.Url)

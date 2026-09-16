@@ -43,14 +43,6 @@ public sealed class CommittedFile
     /// <summary>Repository-relative, with forward slashes, as git stores it.</summary>
     public string Path { get; }
 
-    /// <summary>
-    ///     The blob's object id: git's hash of this content and of nothing else. It is what attribution
-    ///     is keyed by (ADR-0007), because it is the one identifier that survives a rebuild — a file's
-    ///     id is assigned by the walk and shifts whenever anything sorting before it is added — and
-    ///     because two files with the same content, or one file that only moved, share it.
-    /// </summary>
-    public string Sha => _blob.Sha;
-
     public long Size => _blob.Size;
 
     /// <summary>libgit2's call, made the way git makes it: a NUL in the first bytes.</summary>
@@ -60,32 +52,48 @@ public sealed class CommittedFile
     public string Text() => _blob.GetContentText();
 }
 
-/// <summary>One path a commit touched, with how it changed and by how many lines.</summary>
+/// <summary>
+///     One path a commit touched: how it changed, by how many lines, and where — the edits are what the
+///     build replays onto the previous attribution to get this commit's (ADR-0007).
+/// </summary>
 /// <param name="Path">Repository-relative, as git stores it. A path a commit deleted is still named here.</param>
+/// <param name="OldPath">Where the content was before, when the commit moved it; otherwise the same as <paramref name="Path" />.</param>
 /// <param name="ChangeKind">git's own word for it, lowercased: added, modified, deleted, renamed.</param>
 /// <param name="Added">Lines the commit added to this path.</param>
 /// <param name="Deleted">Lines the commit removed from it.</param>
-public sealed record ChangedPath(string Path, string ChangeKind, int Added, int Deleted);
+/// <param name="IsBinary">Git could not diff it as text, so there are no edits and the file has no lines to attribute.</param>
+/// <param name="Edits">The commit's edits to this path, in ascending position. Empty for a pure move.</param>
+public sealed record ChangedPath(
+    string Path,
+    string OldPath,
+    string ChangeKind,
+    int Added,
+    int Deleted,
+    bool IsBinary,
+    IReadOnlyList<LineEdit> Edits);
 
 /// <summary>
 ///     One commit of a repository's history (CONTEXT.md), as plain records: the author, never the
 ///     committer (ADR-0007), and every path it touched. No LibGit2Sharp type is in it, so a build
 ///     reads history the same way it reads files.
 /// </summary>
+/// <param name="Sha">The commit's own id.</param>
+/// <param name="ParentSha">The first parent, which the edits are against; null for a root commit, whose edits add every file.</param>
+/// <param name="AuthorName">Who wrote it, as the author line says.</param>
+/// <param name="AuthorEmail">The author's address, as the author line says.</param>
+/// <param name="AuthoredAt">When the author made it — the committer's date is not recorded.</param>
+/// <param name="Subject">The first line of the message, as git shows it.</param>
+/// <param name="Body">The rest of the message, trimmed; empty rather than null when there is none.</param>
+/// <param name="Files">Every path the commit touched, with its edits.</param>
 public sealed record RecordedCommit(
     string Sha,
+    string? ParentSha,
     string AuthorName,
     string AuthorEmail,
     DateTimeOffset AuthoredAt,
     string Subject,
     string Body,
     IReadOnlyList<ChangedPath> Files);
-
-/// <summary>
-///     A run of consecutive lines attributed to one commit (CONTEXT.md, Attribution). Line numbers are
-///     1-based and inclusive, matching <c>lines.line_number</c>, so a range needs no adjusting to join.
-/// </summary>
-public sealed record AttributedRange(int StartLine, int EndLine, string Sha);
 
 /// <summary>
 ///     A repository's local copy (CONTEXT.md) as the one reader it has, the refresh, sees it: the commit
@@ -138,40 +146,25 @@ public sealed class LocalCopy : IDisposable
     }
 
     /// <summary>
-    ///     Which commit each line of a file at HEAD was last changed by, as runs. Throws nothing for an
-    ///     ordinary file; a caller that blames a path not at HEAD is asking about a file this copy does
-    ///     not have, which is a bug rather than an answer.
-    /// </summary>
-    public IReadOnlyList<AttributedRange> Attribution(string path)
-    {
-        var ranges = new List<AttributedRange>();
-        foreach (var hunk in _repository.Blame(path))
-        {
-            // FinalStartLineNumber is 0-based: libgit2 reports 1-based and LibGit2Sharp subtracts one
-            // on the way out, which its own documentation does not say. AttributionBaseTests pins it,
-            // because the whole feature is off by one line in every file if this is wrong and nothing
-            // about the result looks broken.
-            int start = hunk.FinalStartLineNumber + 1;
-            ranges.Add(new AttributedRange(start, start + hunk.LineCount - 1, hunk.FinalCommit.Sha));
-        }
-
-        return ranges;
-    }
-
-    /// <summary>
     ///     One commit with the paths it touched, diffed against its first parent — or against nothing
     ///     for the root commit, which adds every file it holds.
-    ///     A <c>Patch</c> and not a <c>TreeChanges</c>: the added and deleted line counts are the point,
-    ///     and only a patch computes them. That is the expensive part of a history walk and is paid once
-    ///     per commit, because a later refresh stops at the commits already recorded.
+    ///     A <c>Patch</c> and not a <c>TreeChanges</c>: the line counts and the edits are the point, and
+    ///     only a patch computes them. It is the expensive part of a history walk — measured at 7 ms a
+    ///     commit over the whole of a 4,300-commit repository — and is paid once per commit, because a
+    ///     later refresh stops at the commits already recorded. Attribution rides on the same patch: the
+    ///     edits are read out of the text libgit2 already rendered, which is what made replacing a blame
+    ///     per file with a replay per commit two hundred times cheaper (ADR-0007).
+    ///     Renames are detected with libgit2's defaults, so a moved file's edits are recorded against
+    ///     its new path with the old one beside it, and the replay carries the attribution across.
     /// </summary>
     private RecordedCommit Describe(Commit commit)
     {
         var parent = commit.Parents.FirstOrDefault();
         var files = new List<ChangedPath>();
         foreach (var change in _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree))
-            files.Add(new ChangedPath(change.Path, change.Status.ToString().ToLowerInvariant(),
-                change.LinesAdded, change.LinesDeleted));
+            files.Add(new ChangedPath(change.Path, change.OldPath, change.Status.ToString().ToLowerInvariant(),
+                change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
+                change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
 
         // MessageShort is the subject git itself would show; the body is what is left, and an empty
         // string rather than null because the column is NOT NULL and "no body" is not a missing value.
@@ -180,8 +173,8 @@ public sealed class LocalCopy : IDisposable
         string body = message.StartsWith(subject, StringComparison.Ordinal)
             ? message[subject.Length..].Trim()
             : message.Trim();
-        return new RecordedCommit(commit.Sha, commit.Author.Name, commit.Author.Email, commit.Author.When,
-            subject, body, files);
+        return new RecordedCommit(commit.Sha, parent?.Sha, commit.Author.Name, commit.Author.Email,
+            commit.Author.When, subject, body, files);
     }
 
     public void Dispose() => _repository.Dispose();
