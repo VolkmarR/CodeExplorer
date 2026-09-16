@@ -24,16 +24,17 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     /// </summary>
     /// <param name="shadow">The shadow being built, its connection already bound to it.</param>
     /// <param name="repositories">The same opened copies the file walk read, in the same order.</param>
+    /// <param name="report">How far the pass has got, for the status an operator polls.</param>
     /// <param name="cancellationToken">Checked per commit and per blamed file, which is where the time goes.</param>
     public async Task<HistorySummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
-        CancellationToken cancellationToken)
+        Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.HistoryBuild(shadow.Slug);
 
         // The walk, the diffs and the blames are synchronous git calls, like the file walk: a worker
         // thread keeps them off the request thread and the token is checked inside.
         var summary = await Task.Run(
-            () => Fill(shadow.Connection, shadow.Catalog, repositories, cancellationToken),
+            () => Fill(shadow.Connection, shadow.Catalog, repositories, report, cancellationToken),
             cancellationToken);
 
         recording.Built(summary.Commits, summary.AttributedFiles);
@@ -45,7 +46,8 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     }
 
     private static HistorySummary Fill(DuckDBConnection connection, string catalog,
-        IReadOnlyList<OpenedRepository> repositories, CancellationToken cancellationToken)
+        IReadOnlyList<OpenedRepository> repositories, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
     {
         // A repository the operator removed since the last build left its commits in the carried-over
         // history. They are pruned before anything is appended, so the table holds exactly the
@@ -55,9 +57,17 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
 
         int appended = 0;
         foreach (var (repository, copy) in repositories)
+        {
+            // No count: how many commits a walk will yield is not known until it has yielded them, so
+            // this step names the repository and leaves the figures null rather than inventing them.
+            report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+                $"Reading the history of '{repository.Slug}'"));
             appended += AppendCommits(connection, catalog, repository.Slug, copy, cancellationToken);
+        }
 
-        long attributed = Attribute(connection, catalog, repositories, cancellationToken);
+        long attributed = Attribute(connection, catalog, repositories, report, cancellationToken);
+        report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+            "Writing attribution onto the lines"));
         Materialise(connection, cancellationToken);
         return new HistorySummary(appended, attributed);
     }
@@ -128,7 +138,8 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     must not cost a project its index.
     /// </summary>
     private static long Attribute(DuckDBConnection connection, string catalog,
-        IReadOnlyList<OpenedRepository> repositories, CancellationToken cancellationToken)
+        IReadOnlyList<OpenedRepository> repositories, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
     {
         // The commit a SHA belongs to, for turning a blame's SHA into the id the tables use. Read once:
         // a blame answers in SHAs and every range needs the lookup.
@@ -156,9 +167,17 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
                  GROUP BY blob_sha
                  """, cancellationToken);
 
+            int done = 0;
             foreach ((string path, string sha) in pending)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                // The one long step whose size is known before it starts: every blob still to blame was
+                // counted by the query above. On a first import this is where the minutes go, so this is
+                // the figure an operator is actually watching.
+                if (done++ % RefreshProgress.ReportEvery == 0)
+                    report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+                        $"Attributing the lines of '{repositories[repoId - 1].Repository.Slug}'", done,
+                        pending.Count));
                 IReadOnlyList<AttributedRange> ranges;
                 try
                 {

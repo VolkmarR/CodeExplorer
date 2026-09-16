@@ -36,7 +36,8 @@ public sealed record RefreshStatus(
     DateTimeOffset? StartedAt,
     DateTimeOffset? FinishedAt,
     IndexSummary? Summary,
-    string? Error);
+    string? Error,
+    RefreshProgress? Progress = null);
 
 /// <summary>
 ///     Why a refresh was not taken on: the prose saying what to do instead, and the status code that
@@ -145,8 +146,13 @@ public sealed class RefreshService(
         // Set when the refresh was queued, which is what an operator watching a queue wants to see.
         var started = _statuses[project.Slug].StartedAt;
 
-        void Report(string phase) =>
-            _statuses[project.Slug] = Status(project.Slug) with { State = RefreshState.Running, Phase = phase };
+        // The phase text stays the status's own field as well as the progress's, so a caller that only
+        // reads `phase` — the cron, an older client — keeps working unchanged.
+        void Report(RefreshProgress progress) =>
+            _statuses[project.Slug] = Status(project.Slug) with
+            {
+                State = RefreshState.Running, Phase = progress.Phase, Progress = progress
+            };
 
         void Fail(string error) =>
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Failed, "Failed", started,
@@ -170,7 +176,7 @@ public sealed class RefreshService(
                 return;
             }
 
-            Report("Starting");
+            Report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount, "Starting"));
             var summary = await refresh.RunAsync(project, Report, cancellationToken);
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Succeeded, "Done", started,
                 DateTimeOffset.UtcNow, summary, null);

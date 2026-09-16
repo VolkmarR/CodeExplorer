@@ -28,7 +28,16 @@ public sealed record RepositoryDetail(
     bool HasCredential,
     string? HeadCommit,
     int? FileCount,
-    long? LineCount);
+    long? LineCount,
+    long Commits = 0,
+    RepositoryCommit? NewestCommit = null);
+
+/// <summary>
+///     The newest commit imported for a repository, as the project page names it. Null where no history
+///     was imported — which the page says in those words, because an operator seeing nothing would
+///     otherwise read it as a repository nobody has touched.
+/// </summary>
+public sealed record RepositoryCommit(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
 
 /// <summary>A project as its own page shows it.</summary>
 public sealed record ProjectDetail(
@@ -82,7 +91,10 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
         var repositories = configured
             .Select(r => indexed.GetValueOrDefault(r.Slug) is { } built
                 ? new RepositoryDetail(r.Slug, r.Url, r.HasCredential, built.HeadCommit, built.FileCount,
-                    built.LineCount)
+                    built.LineCount, built.Commits,
+                    built.NewestCommit is { } newest
+                        ? new RepositoryCommit(newest.Sha, newest.AuthorName, newest.AuthoredAt, newest.Subject)
+                        : null)
                 : new RepositoryDetail(r.Slug, r.Url, r.HasCredential, null, null, null))
             .ToList();
         return new ProjectDetail(project.Slug, project.Name, project.SingleRepository, status, repositories);
