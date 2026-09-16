@@ -31,6 +31,7 @@ public static class Telemetry
     public const string OutcomeTag = "codeexplorer.outcome";
     public const string FilesTag = "codeexplorer.files";
     public const string LinesTag = "codeexplorer.lines";
+    public const string CommitsTag = "codeexplorer.commits";
 
     /// <summary>Which way the durable copy moved: <see cref="StoreOperation" /> or <see cref="FetchOperation" />.</summary>
     public const string DurableTag = "codeexplorer.index.durable.operation";
@@ -41,6 +42,9 @@ public static class Telemetry
     public const string IndexDuration = "codeexplorer.index.build.duration";
     public const string IndexFiles = "codeexplorer.index.files";
     public const string IndexLines = "codeexplorer.index.lines";
+    public const string HistoryDuration = "codeexplorer.index.history.duration";
+    public const string HistoryCommits = "codeexplorer.index.history.commits";
+    public const string HistoryFiles = "codeexplorer.index.history.files";
     public const string DurableDuration = "codeexplorer.index.durable.duration";
 
     // Span names are prefixed like the metric names, though only metrics and tags are held to it by
@@ -48,6 +52,14 @@ public static class Telemetry
     // does not say whose.
     public const string SearchSpan = "codeexplorer.search";
     public const string IndexSpan = "codeexplorer.index.build";
+
+    /// <summary>
+    ///     Separate from <see cref="IndexSpan" /> although both are one build: reading files and walking
+    ///     history have different costs and different causes, and a build that got slow says nothing
+    ///     about which of the two did. A first history walk is minutes where the file walk is seconds.
+    /// </summary>
+    public const string HistorySpan = "codeexplorer.index.history";
+
     public const string DurableSpan = "codeexplorer.index.durable";
 
     /// <summary>A search that reached an engine and got an answer, empty or not.</summary>
@@ -107,6 +119,15 @@ public static class Telemetry
     private static readonly Histogram<long> IndexLineCount =
         Meter.CreateHistogram<long>(IndexLines, "{line}", "Lines read into an index by one build.");
 
+    private static readonly Histogram<double> HistorySeconds =
+        Meter.CreateHistogram<double>(HistoryDuration, "s", "How long a history pass of a build took.");
+
+    private static readonly Histogram<long> HistoryCommitCount =
+        Meter.CreateHistogram<long>(HistoryCommits, "{commit}", "Commits appended by one history pass.");
+
+    private static readonly Histogram<long> HistoryFileCount =
+        Meter.CreateHistogram<long>(HistoryFiles, "{file}", "Files blamed by one history pass.");
+
     private static readonly Histogram<double> DurableSeconds =
         Meter.CreateHistogram<double>(DurableDuration, "s",
             "How long a project's durable copy took to store or to fetch.");
@@ -159,6 +180,9 @@ public static class Telemetry
 
     /// <summary>The chokepoint for one index build, called from <c>IndexBuilder</c> and nowhere else.</summary>
     public static IndexBuildRecording IndexBuild(string slug) => new(slug);
+
+    /// <summary>The chokepoint for the history pass of one build, called from <c>HistoryBuilder</c> and nowhere else.</summary>
+    public static HistoryBuildRecording HistoryBuild(string slug) => new(slug);
 
     /// <summary>
     ///     The chokepoint for one move of a project's durable copy, called from <c>DurableIndex</c> and
@@ -273,6 +297,36 @@ public static class Telemetry
             IndexLineCount.Record(lines, _operation.Tags);
             _operation.Tag(FilesTag, files);
             _operation.Tag(LinesTag, lines);
+        }
+    }
+
+    /// <summary>
+    ///     The history pass of one build. Appending nothing and blaming nothing is the ordinary outcome
+    ///     of refreshing a repository that did not change, and is recorded as a build rather than as an
+    ///     absence: the useful question of this metric is how often a pass is the cheap kind.
+    /// </summary>
+    public sealed class HistoryBuildRecording : IDisposable
+    {
+        private readonly Operation _operation;
+        private string _outcome = FailedOutcome;
+
+        internal HistoryBuildRecording(string slug) => _operation = new Operation(HistorySpan, slug);
+
+        public void Dispose()
+        {
+            var tags = _operation.Tags;
+            tags.Add(OutcomeTag, _outcome);
+            HistorySeconds.Record(_operation.Seconds, tags);
+            _operation.Finish(_outcome);
+        }
+
+        public void Built(long commits, long files)
+        {
+            _outcome = BuiltOutcome;
+            HistoryCommitCount.Record(commits, _operation.Tags);
+            HistoryFileCount.Record(files, _operation.Tags);
+            _operation.Tag(CommitsTag, commits);
+            _operation.Tag(FilesTag, files);
         }
     }
 

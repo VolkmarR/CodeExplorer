@@ -43,6 +43,14 @@ public sealed class CommittedFile
     /// <summary>Repository-relative, with forward slashes, as git stores it.</summary>
     public string Path { get; }
 
+    /// <summary>
+    ///     The blob's object id: git's hash of this content and of nothing else. It is what attribution
+    ///     is keyed by (ADR-0007), because it is the one identifier that survives a rebuild — a file's
+    ///     id is assigned by the walk and shifts whenever anything sorting before it is added — and
+    ///     because two files with the same content, or one file that only moved, share it.
+    /// </summary>
+    public string Sha => _blob.Sha;
+
     public long Size => _blob.Size;
 
     /// <summary>libgit2's call, made the way git makes it: a NUL in the first bytes.</summary>
@@ -51,6 +59,33 @@ public sealed class CommittedFile
     /// <summary>The whole content decoded as text. Call it once; there is no cache behind it.</summary>
     public string Text() => _blob.GetContentText();
 }
+
+/// <summary>One path a commit touched, with how it changed and by how many lines.</summary>
+/// <param name="Path">Repository-relative, as git stores it. A path a commit deleted is still named here.</param>
+/// <param name="ChangeKind">git's own word for it, lowercased: added, modified, deleted, renamed.</param>
+/// <param name="Added">Lines the commit added to this path.</param>
+/// <param name="Deleted">Lines the commit removed from it.</param>
+public sealed record ChangedPath(string Path, string ChangeKind, int Added, int Deleted);
+
+/// <summary>
+///     One commit of a repository's history (CONTEXT.md), as plain records: the author, never the
+///     committer (ADR-0007), and every path it touched. No LibGit2Sharp type is in it, so a build
+///     reads history the same way it reads files.
+/// </summary>
+public sealed record RecordedCommit(
+    string Sha,
+    string AuthorName,
+    string AuthorEmail,
+    DateTimeOffset AuthoredAt,
+    string Subject,
+    string Body,
+    IReadOnlyList<ChangedPath> Files);
+
+/// <summary>
+///     A run of consecutive lines attributed to one commit (CONTEXT.md, Attribution). Line numbers are
+///     1-based and inclusive, matching <c>lines.line_number</c>, so a range needs no adjusting to join.
+/// </summary>
+public sealed record AttributedRange(int StartLine, int EndLine, string Sha);
 
 /// <summary>
 ///     A repository's local copy (CONTEXT.md) as the one reader it has, the refresh, sees it: the commit
@@ -74,6 +109,80 @@ public sealed class LocalCopy : IDisposable
 
     /// <summary>Every file at HEAD, in tree order: a directory's entries together, as git lists them.</summary>
     public IEnumerable<CommittedFile> Files() => Files(_repository.Head.Tip.Tree, "");
+
+    /// <summary>
+    ///     The commits of this repository's history, newest first, stopping at the first one in
+    ///     <paramref name="known" /> — which is how a refresh walks only what it has not recorded yet.
+    ///     First-parent only and on HEAD alone (ADR-0007): a merge is one commit and its side branch is
+    ///     not walked, so a pull request reads as a single change, and nothing outside the default
+    ///     branch is recorded for files the index does not hold either.
+    ///     Stopping at the first known commit is sound only because the walk is first-parent: that makes
+    ///     it a line and not a graph, so everything past a recorded commit is recorded too.
+    /// </summary>
+    /// <param name="known">Commit SHAs already recorded for this repository.</param>
+    /// <param name="cancellationToken">Checked per commit, which is where the diff cost is.</param>
+    public IEnumerable<RecordedCommit> History(IReadOnlySet<string> known, CancellationToken cancellationToken)
+    {
+        var filter = new CommitFilter
+        {
+            IncludeReachableFrom = _repository.Head.Tip,
+            FirstParentOnly = true,
+            SortBy = CommitSortStrategies.Topological
+        };
+        foreach (var commit in _repository.Commits.QueryBy(filter))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (known.Contains(commit.Sha)) yield break;
+            yield return Describe(commit);
+        }
+    }
+
+    /// <summary>
+    ///     Which commit each line of a file at HEAD was last changed by, as runs. Throws nothing for an
+    ///     ordinary file; a caller that blames a path not at HEAD is asking about a file this copy does
+    ///     not have, which is a bug rather than an answer.
+    /// </summary>
+    public IReadOnlyList<AttributedRange> Attribution(string path)
+    {
+        var ranges = new List<AttributedRange>();
+        foreach (var hunk in _repository.Blame(path))
+        {
+            // FinalStartLineNumber is 0-based: libgit2 reports 1-based and LibGit2Sharp subtracts one
+            // on the way out, which its own documentation does not say. AttributionBaseTests pins it,
+            // because the whole feature is off by one line in every file if this is wrong and nothing
+            // about the result looks broken.
+            int start = hunk.FinalStartLineNumber + 1;
+            ranges.Add(new AttributedRange(start, start + hunk.LineCount - 1, hunk.FinalCommit.Sha));
+        }
+
+        return ranges;
+    }
+
+    /// <summary>
+    ///     One commit with the paths it touched, diffed against its first parent — or against nothing
+    ///     for the root commit, which adds every file it holds.
+    ///     A <c>Patch</c> and not a <c>TreeChanges</c>: the added and deleted line counts are the point,
+    ///     and only a patch computes them. That is the expensive part of a history walk and is paid once
+    ///     per commit, because a later refresh stops at the commits already recorded.
+    /// </summary>
+    private RecordedCommit Describe(Commit commit)
+    {
+        var parent = commit.Parents.FirstOrDefault();
+        var files = new List<ChangedPath>();
+        foreach (var change in _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree))
+            files.Add(new ChangedPath(change.Path, change.Status.ToString().ToLowerInvariant(),
+                change.LinesAdded, change.LinesDeleted));
+
+        // MessageShort is the subject git itself would show; the body is what is left, and an empty
+        // string rather than null because the column is NOT NULL and "no body" is not a missing value.
+        string message = commit.Message;
+        string subject = commit.MessageShort;
+        string body = message.StartsWith(subject, StringComparison.Ordinal)
+            ? message[subject.Length..].Trim()
+            : message.Trim();
+        return new RecordedCommit(commit.Sha, commit.Author.Name, commit.Author.Email, commit.Author.When,
+            subject, body, files);
+    }
 
     public void Dispose() => _repository.Dispose();
 

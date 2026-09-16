@@ -28,7 +28,13 @@ public sealed class DurabilityTests : IDisposable
         var host = Start(SearchEngine.Substring);
         await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
 
-        Assert.Equal(["files.parquet", "index_info.parquet", "lines.parquet", "repositories.parquet"],
+        // Spelled out rather than derived from the table list, so adding a table to the index without
+        // adding it to the durable copy fails here instead of on the next scale to zero. The three
+        // history tables are as much of the index as the code ones are (ADR-0007).
+        Assert.Equal([
+                "attribution.parquet", "commit_files.parquet", "commits.parquet", "files.parquet",
+                "index_info.parquet", "lines.parquet", "repositories.parquet"
+            ],
             Directory.EnumerateFiles(host.DurableIndexDirectory("alpha")).Select(Path.GetFileName).Order());
     }
 

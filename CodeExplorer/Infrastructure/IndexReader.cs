@@ -40,6 +40,21 @@ public sealed record IndexStatus(
 /// <summary><see cref="Skipped" /> of the <see cref="Files" /> have no lines; <see cref="Lines" /> covers the rest.</summary>
 public sealed record ExtensionCount(string Extension, int Files, long Lines, int Skipped);
 
+/// <summary>One commit as a tool reports it: enough to name it and to say who and when, and no body.</summary>
+public sealed record RecordedChange(
+    string Sha,
+    string RepositorySlug,
+    string AuthorName,
+    string AuthorEmail,
+    DateTimeOffset AuthoredAt,
+    string Subject);
+
+/// <summary>The commit a run of lines is attributed to, or null for lines the build could not attribute.</summary>
+public sealed record AttributedBy(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
+
+/// <summary>A run of consecutive lines sharing one attribution (CONTEXT.md, Attribution).</summary>
+public sealed record AttributedLines(int StartLine, int EndLine, AttributedBy? By);
+
 /// <summary>
 ///     One row of a directory listing. A directory carries what lies beneath it — <see cref="Files" />
 ///     counts every file at any depth, not just its immediate children — and a file carries its own
@@ -293,6 +308,144 @@ public sealed class IndexReader : IDisposable
                                               """, [new DuckDBParameter("p", qualifiedPath)]);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadFile(reader) : null;
+    }
+
+    /// <summary>
+    ///     Whether this index holds any history at all. An index built before ADR-0007, or one whose
+    ///     every repository failed to walk, has the tables and nothing in them — and "no commits
+    ///     recorded" must never be answered as "this file was never changed", which reads as a fact.
+    /// </summary>
+    public async Task<bool> HasHistoryAsync(CancellationToken cancellationToken)
+    {
+        using var command = Connection.Query("SELECT count(*) > 0 FROM commits", []);
+        return await command.ExecuteScalarAsync(cancellationToken) is true;
+    }
+
+    /// <summary>
+    ///     The commits of a repository, newest first — or of every repository when none is named. A page
+    ///     of history, ordered by <c>commit_id</c> because it ascends with history by construction while
+    ///     an author date does not (ADR-0007).
+    /// </summary>
+    public async Task<IReadOnlyList<RecordedChange>> CommitsAsync(string? repositorySlug, int limit, int skip,
+        CancellationToken cancellationToken)
+    {
+        var parameters = new List<DuckDBParameter>();
+        string scope = "";
+        if (repositorySlug is not null)
+        {
+            scope = "WHERE repo_slug = $r";
+            parameters.Add(new DuckDBParameter("r", repositorySlug));
+        }
+
+        using var command = Connection.Query($"""
+                                              SELECT sha, repo_slug, author_name, author_email, authored_at, subject
+                                              FROM commits {scope}
+                                              ORDER BY commit_id DESC
+                                              LIMIT {limit} OFFSET {skip}
+                                              """, parameters);
+        return await ChangesAsync(command, cancellationToken);
+    }
+
+    /// <summary>
+    ///     The commits that touched one path of one repository, newest first. Matched on the path as the
+    ///     commit recorded it, so history stops where the file was last renamed — which is the half of
+    ///     rename-following ADR-0007 does not pay for, and which the tool says out loud.
+    /// </summary>
+    public async Task<IReadOnlyList<RecordedChange>> FileHistoryAsync(string repositorySlug, string path, int limit,
+        CancellationToken cancellationToken)
+    {
+        using var command = Connection.Query($"""
+                                              SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
+                                                     c.authored_at, c.subject
+                                              FROM commit_files cf JOIN commits c USING (commit_id)
+                                              WHERE c.repo_slug = $r AND cf.path = $p
+                                              ORDER BY c.commit_id DESC
+                                              LIMIT {limit}
+                                              """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path)]);
+        return await ChangesAsync(command, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Who last changed each line of a file, as runs rather than as one row per line: consecutive
+    ///     lines sharing a commit are one entry, which is how blame reads and a fraction of the output.
+    /// </summary>
+    public async Task<IReadOnlyList<AttributedLines>> BlameAsync(long fileId, int first, int last,
+        CancellationToken cancellationToken)
+    {
+        // The runs are rebuilt from lines rather than read from attribution, because attribution is
+        // keyed by blob and holds the ranges of the whole file: a window of it would have to be clipped
+        // here anyway, and a line the build could not attribute is absent there but present here.
+        // Gaps and islands: within one commit, consecutive line numbers have a constant difference from
+        // their position in that commit's lines, so that difference is the run. The window function is
+        // computed in a subquery because it is evaluated after grouping and cannot appear in GROUP BY.
+        // Lines with no commit fall in one NULL partition, which islands correctly for the same reason.
+        using var command = Connection.Query("""
+                                             SELECT min(line_number) AS start_line, max(line_number) AS end_line,
+                                                    sha, author_name, authored_at, subject
+                                             FROM (SELECT l.line_number, c.sha, c.author_name, c.authored_at,
+                                                          c.subject,
+                                                          l.line_number - row_number() OVER (
+                                                              PARTITION BY c.sha ORDER BY l.line_number) AS run
+                                                   FROM lines l LEFT JOIN commits c USING (commit_id)
+                                                   WHERE l.file_id = $f AND l.line_number BETWEEN $a AND $b)
+                                             GROUP BY sha, author_name, authored_at, subject, run
+                                             ORDER BY start_line
+                                             """,
+            [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var runs = new List<AttributedLines>();
+        while (await reader.ReadAsync(cancellationToken))
+            runs.Add(new AttributedLines(
+                reader.GetInt32(reader.GetOrdinal("start_line")), reader.GetInt32(reader.GetOrdinal("end_line")),
+                await reader.IsDBNullAsync(reader.GetOrdinal("sha"), cancellationToken)
+                    ? null
+                    : new AttributedBy(reader.Text("sha"), reader.Text("author_name"),
+                        reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
+                        reader.Text("subject"))));
+        return runs;
+    }
+
+    /// <summary>
+    ///     One line saying which commits a file was first and last changed by, ready to print, or a
+    ///     sentence saying there is none. A file whose history is absent and one that was never changed
+    ///     must not read alike, so neither is an empty string.
+    /// </summary>
+    public async Task<string> FileSpanAsync(long fileId, CancellationToken cancellationToken)
+    {
+        using var command = Connection.Query("""
+                                             SELECT first.sha AS first_sha, first.author_name AS first_author,
+                                                    first.authored_at AS first_at,
+                                                    last.sha AS last_sha, last.author_name AS last_author,
+                                                    last.authored_at AS last_at
+                                             FROM files f
+                                             LEFT JOIN commits first ON first.commit_id = f.first_commit
+                                             LEFT JOIN commits last ON last.commit_id = f.last_commit
+                                             WHERE f.file_id = $f
+                                             """, [new DuckDBParameter("f", fileId)]);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken) || reader.IsNull("last_sha"))
+            return "  history: none recorded for this file\n";
+
+        string first = string.Create(CultureInfo.InvariantCulture,
+            $"{reader.Text("first_sha")[..8]} {reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("first_at")):yyyy-MM-dd} {reader.Text("first_author")}");
+        string last = string.Create(CultureInfo.InvariantCulture,
+            $"{reader.Text("last_sha")[..8]} {reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("last_at")):yyyy-MM-dd} {reader.Text("last_author")}");
+        // Named "since"/"last changed" rather than "created"/"author": history begins where the file was
+        // last renamed, so the first commit recorded for a path is often a move and not its origin.
+        return $"  history: since {first}; last changed {last}\n";
+    }
+
+    private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
+        CancellationToken cancellationToken)
+    {
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var changes = new List<RecordedChange>();
+        while (await reader.ReadAsync(cancellationToken))
+            changes.Add(new RecordedChange(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
+                reader.Text("author_email"),
+                reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")), reader.Text("subject")));
+        return changes;
     }
 
     /// <summary>Files anywhere in the project with this leaf name, for a "did you mean" after a miss.</summary>
