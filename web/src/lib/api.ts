@@ -243,6 +243,34 @@ export interface CommitFiles {
 }
 
 /**
+ * One file of the churn ranking. `qualifiedPath` is always set — a window ranks paths a later commit
+ * removed, and those are named too — and `atHead` says whether there is still a file there to open.
+ */
+export interface HotFile {
+  qualifiedPath: string
+  repositorySlug: string
+  atHead: boolean
+  commits: number
+  added: number
+  deleted: number
+}
+
+/**
+ * The most-changed files of the span the change log's page covers. `since` and `until` are null
+ * together when the page holds no commit, which is a project without imported history.
+ */
+export interface HotFiles {
+  since: string | null
+  until: string | null
+  files: HotFile[]
+  /**
+   * The repositories the ranking cannot speak for, so half a project's churn is not read as all of
+   * it. Empty where the question does not arise: one repository, or a view narrowed to one.
+   */
+  withoutHistory: string[]
+}
+
+/**
  * A failed request reaches the UI as ky's own `HTTPError`, re-exported under the name the components
  * use. `beforeError` below has already replaced its message with the server's prose, so a component
  * renders `error.message` and says nothing of its own.
@@ -343,6 +371,14 @@ export const api = {
     const searchParams: Record<string, string> = { page: String(page) }
     if (repository) searchParams.repository = repository
     return http.get(`projects/${project}/commits`, { searchParams }).json<CommitList>()
+  },
+
+  // The same page arguments the commit list is asked with, and no dates: the server derives the
+  // window from that page, so the panel cannot end up describing a different set of commits.
+  hotFiles: (project: string, page: number, repository?: string) => {
+    const searchParams: Record<string, string> = { page: String(page) }
+    if (repository) searchParams.repository = repository
+    return http.get(`projects/${project}/hot-files`, { searchParams }).json<HotFiles>()
   },
 
   commitFiles: (project: string, sha: string) =>

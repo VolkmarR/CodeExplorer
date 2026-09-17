@@ -239,6 +239,21 @@ public sealed class TestHost : IDisposable
         Commit(Path.Combine(_root, "fixtures", name), files, subject,
             new Signature(authorName, authorEmail, DateTimeOffset.UnixEpoch.AddMinutes(minute)));
 
+    /// <summary>
+    ///     A commit that deletes paths rather than writing them, for a history test about a file that
+    ///     the recorded window changed and HEAD no longer holds. The two cases cannot be one call: a
+    ///     deletion is an absent key, and an absent key is indistinguishable from a file the commit
+    ///     simply did not touch.
+    /// </summary>
+    public void RemoveInGitRepositoryAs(string name, IEnumerable<string> paths, string subject, string authorName,
+        string authorEmail, int minute)
+    {
+        using var repo = new Repository(FixturePath(name));
+        foreach (string relative in paths) Commands.Remove(repo, relative);
+        var author = new Signature(authorName, authorEmail, DateTimeOffset.UnixEpoch.AddMinutes(minute));
+        repo.Commit(subject, author, author);
+    }
+
     private static string Commit(string path, Dictionary<string, string> files, string subject = "fixture",
         Signature? author = null)
     {

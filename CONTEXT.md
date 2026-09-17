@@ -56,6 +56,21 @@ who wrote the logic — a reformat is an attribution — so it answers "who work
 "when was this introduced".
 _Avoid_: Blame, ownership, authorship
 
+**Churn**:
+How much a file moved over a span of history: the commits that touched it and the lines those added
+and removed. It measures where work happened and not where the logic changed — a reformat is churn,
+the same way it is an attribution — so it answers "what is this project busy with" and never "what
+is unstable". A path that churned and is no longer at HEAD is churn that happened.
+_Avoid_: Hotness, activity, volatility, code age
+
+**Window**:
+The span of history a question is asked over, anchored to the newest commit imported rather than to
+the clock. An index is built by a refresh and may be behind its remotes, so "the last thirty days"
+counted from today would answer for a stale index with an empty result — which reads as "nothing
+changed", the one thing history must never say by accident. Counted back from the newest recorded
+commit it answers with the last thirty days there were, and says which dates those are.
+_Avoid_: Range, period, since, time frame
+
 **Qualified Path**:
 How every file in a project is named: its repository, then its path within that repository. A
 project is therefore one flat namespace, and two repositories may each contain `src/index.ts`

@@ -1,7 +1,8 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { CommitList } from '@/features/history/CommitList'
-import { commitsQuery } from '@/features/history/queries'
+import { HotFiles } from '@/features/history/HotFiles'
+import { commitsQuery, hotFilesQuery } from '@/features/history/queries'
 import { projectQuery } from '@/features/projects/queries'
 import { RepositorySelect } from '@/features/projects/RepositorySelect'
 import { Label } from '@/components/ui/label'
@@ -21,6 +22,7 @@ export function HistoryPage() {
   const navigate = useNavigate()
   const { data: detail } = useSuspenseQuery(projectQuery(project))
   const { data: log } = useSuspenseQuery(commitsQuery(project, search))
+  const { data: ranking } = useSuspenseQuery(hotFilesQuery(project, search))
 
   // One repository needs no filter; the choice is offered only where there is one to make.
   const filterable = detail.repositories.length > 1
@@ -63,12 +65,15 @@ export function HistoryPage() {
           empty, its repositories&apos; history could not be walked.
         </p>
       ) : (
-        <CommitList
-          project={project}
-          log={log}
-          search={search}
-          showRepository={filterable && search.repository === undefined}
-        />
+        <>
+          <HotFiles project={project} ranking={ranking} />
+          <CommitList
+            project={project}
+            log={log}
+            search={search}
+            showRepository={filterable && search.repository === undefined}
+          />
+        </>
       )}
     </div>
   )

@@ -58,6 +58,33 @@ internal sealed record CommitFileResponse(string Path, string ChangeKind, int Ad
 
 internal sealed record CommitFilesResponse(string Sha, IReadOnlyList<CommitFileResponse> Files);
 
+/// <summary>
+///     One file of the churn ranking. <see cref="QualifiedPath" /> is how the project names the path
+///     (ADR-0006) and is always set, because a window ranks paths that are no longer at HEAD and those
+///     have to be named too; <see cref="AtHead" /> is what says whether there is a file there to open.
+/// </summary>
+internal sealed record HotFileResponse(
+    string QualifiedPath,
+    string RepositorySlug,
+    bool AtHead,
+    int Commits,
+    long Added,
+    long Deleted);
+
+/// <summary>
+///     The churn ranking for the span a page of the change log covers. <see cref="Since" /> and
+///     <see cref="Until" /> are null together when the page holds no commit, which is a project or a
+///     repository without imported history rather than an error.
+///     <see cref="WithoutHistory" /> names the repositories the ranking cannot speak for, so that a
+///     ranking covering half a project is not read as covering all of it (CONTEXT.md, History). Empty
+///     where the question does not arise: a project of one repository, or a scoped request.
+/// </summary>
+internal sealed record HotFilesResponse(
+    DateTimeOffset? Since,
+    DateTimeOffset? Until,
+    IReadOnlyList<HotFileResponse> Files,
+    IReadOnlyList<string> WithoutHistory);
+
 /// <summary>One file in a listing. The index's internal file id is deliberately not in it.</summary>
 internal sealed record FileListEntry(
     string QualifiedPath,
@@ -161,6 +188,14 @@ internal static class SearchEndpoints
                     int page = 1, int pageSize = DefaultCommitPage) =>
                 await CommitsAsync(indexes, project.Slug, repository, page, pageSize, ct));
 
+        // The churn ranking for the window the change log's page is showing. It takes the page
+        // arguments rather than dates so that a caller asking both routes the same thing gets a
+        // ranking and a list describing the same commits; only the page decides the window.
+        project.MapGet("/hot-files",
+            async (Project project, ProjectIndexes indexes, CancellationToken ct, string? repository = null,
+                    int page = 1, int pageSize = DefaultCommitPage) =>
+                await HotFilesAsync(indexes, project.Slug, repository, page, pageSize, ct));
+
         project.MapGet("/commits/{sha}/files",
             async (Project project, string sha, ProjectIndexes indexes, CancellationToken ct) =>
                 await CommitFilesAsync(indexes, project.Slug, sha, ct));
@@ -187,6 +222,48 @@ internal static class SearchEndpoints
         return Results.Ok(new CommitListResponse(total, page, pageSize,
             commits.Select(c => new CommitResponse(c.Sha, c.RepositorySlug, c.AuthorName, c.AuthorEmail,
                 c.AuthoredAt, c.Subject, c.Body, c.FilesChanged, c.Added, c.Deleted)).ToList()));
+    }
+
+    /// <summary>
+    ///     Files in one churn panel. A panel beside a page of commits and not a page of its own, so it
+    ///     is as long as a reader glances at rather than as long as the ranking goes. Fixed rather than
+    ///     a parameter: nothing on the page offers to change it, and an unused knob on a route is one
+    ///     nothing proves the behaviour of.
+    /// </summary>
+    private const int HotFilesShown = 10;
+
+    /// <summary>
+    ///     The most-changed files of the span one page of the change log covers. A page with no
+    ///     commits answers with an empty ranking and no dates rather than a failure: that is a project
+    ///     whose history has not been imported, which the page already says in its own words.
+    /// </summary>
+    private static async Task<IResult> HotFilesAsync(ProjectIndexes indexes, string project, string? repository,
+        int page, int pageSize, CancellationToken cancellationToken)
+    {
+        var open = await IndexReader.OpenAsync(indexes, project, repository, cancellationToken);
+        if (open is IndexOpen.Refused refused) return Refuse(refused);
+        using var index = ((IndexOpen.Opened)open).Reader;
+
+        pageSize = Math.Clamp(pageSize, 1, MaxCommitPage);
+        page = Math.Max(1, page);
+        string? scope = index.Repository?.Slug;
+        // Which repositories the ranking cannot speak for, read whether or not there is a ranking: the
+        // empty panel is where a reader is most likely to conclude that nothing changed. A scoped
+        // request raises no such question, and neither does a project of one repository.
+        var counts = scope is null
+            ? await index.CommitCountsAsync(cancellationToken)
+            : [];
+        var withoutHistory = counts.Count < 2
+            ? []
+            : counts.Where(c => c.Commits == 0).Select(c => c.Slug).ToList();
+
+        var window = await index.CommitPageWindowAsync(scope, pageSize, (page - 1) * pageSize, cancellationToken);
+        if (window is null) return Results.Ok(new HotFilesResponse(null, null, [], withoutHistory));
+
+        var ranked = await index.ChurnAsync(window, scope, null, HotFilesShown, cancellationToken);
+        return Results.Ok(new HotFilesResponse(window.Since, window.Until,
+            ranked.Select(f => new HotFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits, f.Added,
+                f.Deleted)).ToList(), withoutHistory));
     }
 
     private static async Task<IResult> CommitFilesAsync(ProjectIndexes indexes, string project, string sha,

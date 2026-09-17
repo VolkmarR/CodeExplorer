@@ -133,8 +133,192 @@ public sealed class HistoryToolsTests : IDisposable
         Assert.Contains("Grace", reply, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     The ranking itself: most commits first, with the lines each file gained and lost. Written
+    ///     against a fixture whose busiest file is not its largest, so a ranking that fell back to size
+    ///     or to path order would fail rather than happen to agree.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_ranks_the_files_the_window_changed_most()
+    {
+        await using var client = await ChurnAsync();
+        string reply = await TestHost.CallAsync(client, "hot_files", []);
+
+        Assert.Contains("most-changed", reply, StringComparison.Ordinal);
+        // Three commits touched Hot.cs, two Cold.cs, one Note.md, and the order must be that.
+        Assert.True(reply.IndexOf("one/src/Hot.cs", StringComparison.Ordinal)
+                    < reply.IndexOf("one/src/Cold.cs", StringComparison.Ordinal));
+        Assert.True(reply.IndexOf("one/src/Cold.cs", StringComparison.Ordinal)
+                    < reply.IndexOf("one/docs/Note.md", StringComparison.Ordinal));
+        Assert.Contains("3 commits", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The window is measured back from the newest recorded commit and not from today, which is the
+    ///     decision the next two tickets inherit: an index built a month ago must still answer "the last
+    ///     week" with the last week it holds, rather than with nothing.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_measures_the_window_back_from_the_newest_recorded_commit()
+    {
+        await using var client = await ChurnAsync();
+
+        // The fixture's newest commits are ten days after its first. A day-wide window reaches the
+        // recent ones and not the old one, although every one of them is decades before today.
+        string recent = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 1 });
+        Assert.Contains("one/src/Hot.cs", recent, StringComparison.Ordinal);
+        Assert.DoesNotContain("one/old/Ancient.cs", recent, StringComparison.Ordinal);
+
+        string wide = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30 });
+        Assert.Contains("one/old/Ancient.cs", wide, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Hot_files_scopes_to_a_directory_and_to_a_repository()
+    {
+        await using var client = await ChurnAsync();
+
+        string scoped = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["directory"] = "one/src" });
+        Assert.Contains("one/src/Hot.cs", scoped, StringComparison.Ordinal);
+        Assert.DoesNotContain("Note.md", scoped, StringComparison.Ordinal);
+
+        // A bare slug is the whole repository, which is the same answer with the docs back in it.
+        string repository = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["directory"] = "one" });
+        Assert.Contains("repository 'one'", repository, StringComparison.Ordinal);
+        Assert.Contains("one/docs/Note.md", repository, StringComparison.Ordinal);
+
+        string unknown = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["directory"] = "nowhere/src" });
+        Assert.Contains("No repository 'nowhere'", unknown, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A path the window changed and HEAD no longer holds is ranked and marked. Leaving it out
+    ///     would understate the churn of the area it was in; leaving it unmarked would send an agent to
+    ///     read a file that is not there.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_marks_a_path_that_is_no_longer_at_head()
+    {
+        await using var client = await ChurnAsync();
+        string reply = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30 });
+
+        Assert.Contains("one/src/Gone.cs  (no longer at HEAD)", reply, StringComparison.Ordinal);
+        Assert.Contains("one/src/Hot.cs\n", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     Two repositories, one of which was never walked. The ranking cannot show what it has not got,
+    ///     so it has to say which repositories it is speaking for — otherwise it reads as the project's
+    ///     whole story (CONTEXT.md, History).
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_says_which_repositories_have_history_and_which_have_none()
+    {
+        await BuildChurnProjectAsync("gamma", withSecondRepository: true);
+        // What a repository whose walk found nothing leaves behind: files in the index, no commits.
+        await _host.ExecuteAsync("gamma", "DELETE FROM commits WHERE repo_slug = 'two'");
+
+        await using var client = await _host.ConnectAsync("gamma");
+        string reply = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30 });
+
+        Assert.Contains("History was imported for one and for none of two", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("two/src/Other.cs", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A single-repository project names its files without a slug (ADR-0006), and a ranking that
+    ///     spelled one in would hand back paths every other tool refuses.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_names_paths_the_way_a_single_repository_project_does()
+    {
+        await _host.IndexedProjectAsync("solo", new Dictionary<string, Dictionary<string, string>>
+            { ["only"] = new() { ["src/Widget.cs"] = "class Widget { }\n" } }, true);
+
+        await using var client = await _host.ConnectAsync("solo");
+        string reply = await TestHost.CallAsync(client, "hot_files", []);
+
+        Assert.Contains(" src/Widget.cs\n", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("only/src/Widget.cs", reply, StringComparison.Ordinal);
+
+        // And it takes a directory in the same spelling, with no slug to strip off first.
+        string scoped = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["directory"] = "src" });
+        Assert.Contains(" src/Widget.cs\n", scoped, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Hot_files_on_a_project_without_history_says_so_rather_than_ranking_nothing()
+    {
+        await _host.IndexedProjectAsync("delta",
+            new Dictionary<string, Dictionary<string, string>>
+            {
+                ["only"] = new() { ["a.cs"] = "class A;\n" }
+            });
+        await _host.ExecuteAsync("delta", "DELETE FROM commits");
+
+        await using var client = await _host.ConnectAsync("delta");
+        string reply = await TestHost.CallAsync(client, "hot_files", []);
+
+        Assert.Contains("holds no history", reply, StringComparison.Ordinal);
+        Assert.Contains("Ask the operator to refresh", reply, StringComparison.Ordinal);
+    }
+
     /// <summary>Routes an inline array argument through a parameter so CA1861 does not ask for a static field per call.</summary>
     private static string[] Paths(params string[] paths) => paths;
+
+    /// <summary>
+    ///     A repository with something to rank: one old commit, then four ten days later that touch
+    ///     three files unequally, then one that deletes a fourth. Every date is decades before today, so
+    ///     a window measured from the clock rather than from the history would rank nothing at all.
+    /// </summary>
+    private async Task<McpClient> ChurnAsync()
+    {
+        await BuildChurnProjectAsync("churn", false);
+        return await _host.ConnectAsync("churn");
+    }
+
+    /// <inheritdoc cref="ChurnAsync" />
+    private async Task BuildChurnProjectAsync(string project, bool withSecondRepository)
+    {
+        const int tenDays = 10 * 24 * 60;
+        string source = _host.CreateEmptyGitRepository(project + "-one");
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string> { ["old/Ancient.cs"] = "one\n" },
+            "Import the old code", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string>
+            {
+                ["docs/Note.md"] = "note\n",
+                ["src/Cold.cs"] = "cold\n",
+                ["src/Gone.cs"] = "gone\n",
+                ["src/Hot.cs"] = "a\nb\nc\n"
+            },
+            "Add the module", "Ada", "ada@example.invalid", tenDays);
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string> { ["src/Hot.cs"] = "a\nb2\nc\n" },
+            "Fix the check", "Grace", "grace@example.invalid", tenDays + 1);
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string> { ["src/Hot.cs"] = "a\nb3\nc\n", ["src/Cold.cs"] = "cold2\n" },
+            "Tighten it again", "Grace", "grace@example.invalid", tenDays + 2);
+        _host.RemoveInGitRepositoryAs(project + "-one", ["src/Gone.cs"], "Drop the dead file", "Grace",
+            "grace@example.invalid", tenDays + 3);
+
+        await _host.CreateProjectAsync(project);
+        await _host.AddRepositoryAsync(project, "one", source);
+        if (withSecondRepository)
+            await _host.AddRepositoryAsync(project, "two",
+                _host.CreateGitRepository(project + "-two", new Dictionary<string, string>
+                    { ["src/Other.cs"] = "other\n" }));
+        await _host.RefreshAsync(project);
+    }
 
     private async Task<McpClient> StartAsync()
     {

@@ -87,6 +87,20 @@ public sealed record LoggedCommit(
 /// </summary>
 public sealed record CommitFile(string Path, string ChangeKind, int Added, int Deleted, string? QualifiedPath);
 
+/// <summary>
+///     One file of a churn ranking: how many commits of the window touched it and what they did to
+///     it. <see cref="QualifiedPath" /> is how the project names that path (ADR-0006) and is always
+///     set, because a window ranks paths a later commit deleted or renamed away and those have to be
+///     named too; <see cref="AtHead" /> is what says whether there is still a file there to read.
+/// </summary>
+public sealed record ChurnedFile(
+    string QualifiedPath,
+    string RepositorySlug,
+    bool AtHead,
+    int Commits,
+    long Added,
+    long Deleted);
+
 /// <summary>A run of consecutive lines sharing one attribution (CONTEXT.md, Attribution).</summary>
 public sealed record AttributedLines(int StartLine, int EndLine, AttributedBy? By);
 
@@ -557,6 +571,159 @@ public sealed class IndexReader : IDisposable
         while (await reader.ReadAsync(cancellationToken))
             files.Add(new CommitFile(reader.Text("path"), reader.Text("change_kind"), reader.Int32("added"),
                 reader.Int32("deleted"), reader.IsNull("qualified_path") ? null : reader.Text("qualified_path")));
+        return files;
+    }
+
+    /// <summary>
+    ///     How many commits are recorded for each repository of the project, in build order. For an
+    ///     answer that has to say which repositories it can speak for: a ranking over the project
+    ///     silently omits a repository whose walk found nothing, and that reads as a complete picture.
+    ///     Its own query rather than <see cref="RepositoriesAsync" />'s rows, whose <c>Commits</c> is
+    ///     filled only on the <see cref="StatusAsync" /> path and is zero on this one.
+    /// </summary>
+    public async Task<IReadOnlyList<(string Slug, long Commits)>> CommitCountsAsync(
+        CancellationToken cancellationToken)
+    {
+        // Left-joined on the slug, not the id, because that is what commits records (ADR-0007), and
+        // left so that a repository with no history is a zero rather than a missing row.
+        using var command = Connection.Query("""
+                                             SELECT r.slug, count(c.commit_id)::BIGINT AS commits
+                                             FROM repositories r LEFT JOIN commits c ON c.repo_slug = r.slug
+                                             GROUP BY r.repo_id, r.slug
+                                             ORDER BY r.repo_id
+                                             """, []);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var counts = new List<(string, long)>();
+        while (await reader.ReadAsync(cancellationToken)) counts.Add((reader.Text("slug"), reader.Int64("commits")));
+        return counts;
+    }
+
+    /// <summary>
+    ///     The window reaching <paramref name="days" /> back from the newest commit recorded in scope,
+    ///     or null when the scope holds no commit at all — a repository whose history could not be
+    ///     walked, which is not the same as one nobody changed and must not be answered as one.
+    /// </summary>
+    public async Task<HistoryWindow?> WindowAsync(int days, string? repositorySlug,
+        CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = CommitScope(repositorySlug);
+        // epoch() for the reason StatusAsync gives: seconds as a double are the one representation of
+        // a TIMESTAMPTZ that does not depend on whether ICU is loaded to decide the session time zone.
+        using var command = Connection.Query($"SELECT epoch(max(authored_at)) AS newest FROM commits {scope}",
+            parameters);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken) || reader.IsNull("newest")) return null;
+        return HistoryWindow.Ending(DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("newest")), days);
+    }
+
+    /// <summary>
+    ///     The span one page of the change log covers, so a ranking can be shown for the window the
+    ///     page is already displaying. Null when the page holds no commit.
+    ///     The page is taken by the same ordering <see cref="ChangeLogAsync" /> pages with, and its
+    ///     dates with min and max rather than from its ends: an author date does not ascend with
+    ///     history (ADR-0007), so the newest commit on a page is not always the latest authored one.
+    /// </summary>
+    public async Task<HistoryWindow?> CommitPageWindowAsync(string? repositorySlug, int limit, int skip,
+        CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = CommitScope(repositorySlug);
+        using var command = Connection.Query($"""
+                                              SELECT epoch(min(authored_at)) AS oldest,
+                                                     epoch(max(authored_at)) AS newest
+                                              FROM (SELECT authored_at FROM commits {scope}
+                                                    ORDER BY commit_id DESC
+                                                    LIMIT {limit} OFFSET {skip})
+                                              """, parameters);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken) || reader.IsNull("newest")) return null;
+        return new HistoryWindow(DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("oldest")),
+            DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("newest")));
+    }
+
+    /// <summary>
+    ///     The files a window's commits touched, most commits first: the first read of the commit
+    ///     tables that is about more than one file's history.
+    ///     The paths come back spelled the way the project spells them, rather than each caller
+    ///     formatting the pair itself — the rule is ADR-0006's and the reader is what holds the
+    ///     <see cref="ProjectPaths" /> that knows it.
+    /// </summary>
+    /// <param name="window">The span to count over, inclusive at both ends.</param>
+    /// <param name="repositorySlug">One repository, or null for every one in the project.</param>
+    /// <param name="directoryInRepository">
+    ///     A directory inside that repository to count under, or null for all of it. Meaningless
+    ///     without <paramref name="repositorySlug" />, because a directory of one repository is not a
+    ///     directory of another; callers resolve both from the one qualified path they were given.
+    /// </param>
+    /// <param name="limit">How many files to return.</param>
+    /// <param name="cancellationToken">Threaded through to the command.</param>
+    public async Task<IReadOnlyList<ChurnedFile>> ChurnAsync(HistoryWindow window, string? repositorySlug,
+        string? directoryInRepository, int limit, CancellationToken cancellationToken)
+    {
+        // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
+        // WindowAsync reads it that way: it keeps the comparison off the session time zone, and it
+        // keeps a DateTimeOffset out of the driver's parameter mapping entirely.
+        var parameters = new List<DuckDBParameter>
+        {
+            new("since", window.Since.ToUnixTimeSeconds()),
+            new("until", window.Until.ToUnixTimeSeconds())
+        };
+        var conditions = new List<string> { "epoch(c.authored_at) BETWEEN $since AND $until" };
+        if (repositorySlug is not null)
+        {
+            conditions.Add("c.repo_slug = $r");
+            parameters.Add(new DuckDBParameter("r", repositorySlug));
+        }
+
+        if (!string.IsNullOrEmpty(directoryInRepository))
+        {
+            // GLOB and not LIKE: it is this project's one glob dialect (ADR-0004, CODING_STANDARDS),
+            // and `*` crosses `/` in it, so a single pattern covers every depth beneath the directory.
+            conditions.Add("cf.path GLOB $d");
+            parameters.Add(new DuckDBParameter("d", directoryInRepository.TrimEnd('/') + "/*"));
+        }
+
+        using var command = Connection.Query($"""
+                                              SELECT c.repo_slug, cf.path,
+                                                     count(*)::INTEGER AS commits,
+                                                     -- Cast for the reason ChangeLogAsync casts: DuckDB
+                                                     -- widens sum of an INTEGER to HUGEINT, which the
+                                                     -- driver hands back as a BigInteger.
+                                                     sum(cf.added)::BIGINT AS added,
+                                                     sum(cf.deleted)::BIGINT AS deleted,
+                                                     -- A build writes at most one files row per
+                                                     -- repository and path, so any_value picks the only
+                                                     -- one there is; null says the path is no longer at
+                                                     -- HEAD. It is an aggregate because the column is
+                                                     -- not in the GROUP BY and cannot be: two commits
+                                                     -- touching the same path must stay one row.
+                                                     any_value(f.qualified_path) AS qualified_path
+                                              FROM commit_files cf
+                                              JOIN commits c USING (commit_id)
+                                              LEFT JOIN repositories r ON r.slug = c.repo_slug
+                                              LEFT JOIN files f ON f.repo_id = r.repo_id AND f.path = cf.path
+                                              WHERE {string.Join(" AND ", conditions)}
+                                              GROUP BY c.repo_slug, cf.path
+                                              -- Spelled out rather than ordered by the aliases above:
+                                              -- DuckDB resolves a bare name in ORDER BY against the
+                                              -- input columns first, so `added` binds to
+                                              -- commit_files.added and the statement fails to bind.
+                                              ORDER BY count(*) DESC, sum(cf.added) + sum(cf.deleted) DESC, cf.path
+                                              LIMIT {limit}
+                                              """, parameters);
+        var paths = await PathsAsync(cancellationToken);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var files = new List<ChurnedFile>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            string slug = reader.Text("repo_slug");
+            // Spelled from the repository and the path rather than taken from the joined files row,
+            // which is null exactly for the paths that are no longer at HEAD — those are ranked and
+            // must still be named.
+            files.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug,
+                !reader.IsNull("qualified_path"), reader.Int32("commits"), reader.Int64("added"),
+                reader.Int64("deleted")));
+        }
+
         return files;
     }
 
