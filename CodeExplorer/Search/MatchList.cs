@@ -26,7 +26,7 @@ public sealed record DistinctMatch(string Value, long Count, int Files);
 
 /// <summary>
 ///     The distinct values, most frequent first; the answer when the listing was not a
-///     <see cref="SearchProblem" />. <see cref="TotalDistinct" /> counts every value and
+///     <see cref="Problem" />. <see cref="TotalDistinct" /> counts every value and
 ///     <see cref="Matches" /> the first <c>limit</c> of them, so a caller can say what it is not
 ///     showing. <see cref="FilesMatchingWithoutFilters" /> is filled only when nothing matched under
 ///     filters: "this pattern matches nothing" and "your filters hid every value" read identically
@@ -37,7 +37,7 @@ public sealed record MatchListResult(
     long TotalMatches,
     int TotalFiles,
     IReadOnlyList<DistinctMatch> Matches,
-    int? FilesMatchingWithoutFilters) : SearchOutcome;
+    int? FilesMatchingWithoutFilters) : Outcome;
 
 /// <summary>
 ///     The distinct values a pattern matches across a project — the indexed equivalent of
@@ -74,7 +74,7 @@ public sealed class MatchList(ProjectIndexes indexes)
     ///     is recorded. It is the only public method for the same reason grep has one: a second entry
     ///     point has nothing else to call.
     /// </summary>
-    public async Task<SearchOutcome> ListAsync(string slug, MatchListRequest request,
+    public async Task<Outcome> ListAsync(string slug, MatchListRequest request,
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
@@ -84,18 +84,18 @@ public sealed class MatchList(ProjectIndexes indexes)
         return outcome;
     }
 
-    private async Task<SearchOutcome> RunAsync(string slug, MatchListRequest request,
+    private async Task<Outcome> RunAsync(string slug, MatchListRequest request,
         CancellationToken cancellationToken)
     {
         string query = request.Query.Trim();
         if (query.Length == 0)
-            return new SearchProblem(
+            return new Problem(
                 "The pattern is empty. Pass an RE2 pattern with parentheses around the part you want, "
                 + "such as \"PackageReference Include=\\\"([^\\\"]+)\\\"\" with group=1.");
-        if (Re2.Unsupported(query) is { } unsupported) return new SearchProblem(unsupported);
+        if (Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
 
         if (request.Group is < 0 or > MaxGroup)
-            return new SearchProblem(
+            return new Problem(
                 $"group={request.Group} is out of range; it must be 0 for the whole match or 1-{MaxGroup} for a capture group.");
 
         // Checked here rather than left to the engine: DuckDB reports a missing group as an invalid
@@ -103,7 +103,7 @@ public sealed class MatchList(ProjectIndexes indexes)
         // that was never wrong.
         int groups = Re2.CaptureGroups(query);
         if (request.Group > groups)
-            return new SearchProblem(
+            return new Problem(
                 $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
                 + "Put parentheses around the part that varies, or use group=0 for the whole match.");
 
@@ -111,7 +111,7 @@ public sealed class MatchList(ProjectIndexes indexes)
         if (request.WholeWord) query = $@"\b(?:{query})\b";
 
         var open = await IndexReader.OpenAsync(indexes, slug, request.Filter.Repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new SearchProblem(refused.Explanation);
+        if (open is IndexOpen.Refused refused) return new Problem(refused.Explanation, refused.Kind);
         using var index = ((IndexOpen.Opened)open).Reader;
         var connection = index.Connection;
 
@@ -186,7 +186,7 @@ public sealed class MatchList(ProjectIndexes indexes)
         {
             // The pattern is the only caller text a parser sees here; anything else DuckDB raises is
             // infrastructure and propagates.
-            return new SearchProblem(Re2.Rejected(ex));
+            return new Problem(Re2.Rejected(ex));
         }
     }
 

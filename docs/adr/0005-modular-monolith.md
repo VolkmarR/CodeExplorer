@@ -97,3 +97,15 @@ coding agent grepping for a place to look, and the boundary test had nothing to 
   `Control/` and `Operator/` reference nothing in `Search/`. Without the assertions it is a bucket
   with a better name.
 - The test project mirrors it: the tests of those files sit in `CodeExplorer.Tests/Infrastructure/`.
+
+## Revisited on 2026-09-18: the outcome type joins `Infrastructure/`
+
+`SearchOutcome` and `SearchProblem` were declared in `Search/`, so the index reader could hand a
+caller a refusal only as a string — its own doc apologised for it — and `Control/` and `Operator/`,
+which refuse in the same words when an index is missing, could not name the type at all. Every module
+that opens an index refuses the same way, which is the definition of "what more than one module is
+handed": the pair now lives in `Infrastructure/Outcome.cs` as `Outcome` and `Problem`, the names no
+longer claiming a search is the only thing that has one. `Problem` carries a `ProblemKind`, because
+HTTP answers a missing index with a 404 the browse view draws as "nothing to browse yet" and every
+other problem with a 400, and that is the one fact about a problem a renderer needs beyond its prose.
+The result records stay in `Search/` and derive from `Outcome`; the boundary test is unchanged.

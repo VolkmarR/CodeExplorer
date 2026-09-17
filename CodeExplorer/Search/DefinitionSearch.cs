@@ -40,7 +40,7 @@ public sealed record DefinitionResult(
     int TotalSites,
     bool Separated,
     int FilesNamingIt,
-    int? FilesNamingItWithoutFilters) : SearchOutcome;
+    int? FilesNamingItWithoutFilters) : Outcome;
 
 /// <summary>
 ///     Where a symbol is declared (#54), answered in one call instead of a reference search read past
@@ -79,7 +79,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
     ///     Every definition search goes through here, which is what makes this the one place such a
     ///     search is recorded.
     /// </summary>
-    public async Task<SearchOutcome> FindAsync(string slug, DefinitionRequest request,
+    public async Task<Outcome> FindAsync(string slug, DefinitionRequest request,
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
@@ -91,14 +91,14 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
         return outcome;
     }
 
-    private async Task<SearchOutcome> RunAsync(string slug, DefinitionRequest request,
+    private async Task<Outcome> RunAsync(string slug, DefinitionRequest request,
         CancellationToken cancellationToken)
     {
         string symbol = request.Symbol.Trim();
-        if (SearchQuery.Unusable(symbol, "find_definition") is { } unusable) return new SearchProblem(unusable);
+        if (SearchQuery.Unusable(symbol, "find_definition") is { } unusable) return new Problem(unusable);
 
         var open = await IndexReader.OpenAsync(indexes, slug, request.Filter.Repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new SearchProblem(refused.Explanation);
+        if (open is IndexOpen.Refused refused) return new Problem(refused.Explanation, refused.Kind);
         using var index = ((IndexOpen.Opened)open).Reader;
         var connection = index.Connection;
 
