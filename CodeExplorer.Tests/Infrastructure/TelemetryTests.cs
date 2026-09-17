@@ -148,7 +148,7 @@ public sealed class TelemetryTests
     /// </summary>
     [Theory]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "DefinitionSearch.cs", "FileQueries.cs",
-        "GrepSearch.cs", "ImportGraph.cs", "MatchList.cs", "ReferenceSearch.cs")]
+        "GrepSearch.cs", "HistoryQueries.cs", "ImportGraph.cs", "MatchList.cs", "ReferenceSearch.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.IndexBuild)}(", "IndexBuilder.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.DurableCopy)}(", "DurableIndex.cs")]
     public void Only_the_recording_services_start_a_recording(string call, params string[] files) =>
