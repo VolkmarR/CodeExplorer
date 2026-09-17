@@ -26,3 +26,17 @@ export function formatDate(value: string): string {
 export function shortSha(sha: string): string {
   return sha.slice(0, 7)
 }
+
+/**
+ * The last segment of a qualified path. Three views name a file by its own name and dim the
+ * directory before it — search results, the file page's title, the file rail — and each of them
+ * used to cut the string itself.
+ */
+export function fileName(qualifiedPath: string): string {
+  return qualifiedPath.slice(qualifiedPath.lastIndexOf('/') + 1)
+}
+
+/** Where that last segment starts, for the callers that dim everything before it. */
+export function directoryOf(qualifiedPath: string): string {
+  return qualifiedPath.slice(0, qualifiedPath.lastIndexOf('/') + 1)
+}

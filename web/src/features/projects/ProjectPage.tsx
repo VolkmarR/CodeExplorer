@@ -1,26 +1,36 @@
 import { useEffect } from 'react'
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
-import { useNavigate, useParams } from '@tanstack/react-router'
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router'
+import { RefreshCw } from 'lucide-react'
+import type { ProjectDetail } from '@/lib/api'
 import { api } from '@/lib/api'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorPanel } from '@/components/ErrorPanel'
+import { PageCard } from '@/components/PageCard'
 import { IndexStatus } from '@/features/projects/IndexStatus'
 import { ProjectOverview } from '@/features/projects/ProjectOverview'
+import { projectSearch } from '@/features/projects/projectParams'
 import { RefreshProgress } from '@/features/refresh/RefreshProgress'
 import { RepositoryTable } from '@/features/projects/RepositoryTable'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
 import { invalidateProject, projectQuery, projectsQuery } from '@/features/projects/queries'
 import { refreshStatusQuery } from '@/features/refresh/queries'
+import { useRefreshProject } from '@/features/refresh/useRefreshProject'
 
 /**
- * One project: what its index holds, the repositories it is built from, and the operator actions on
- * both. A refresh fetches every repository and rebuilds beside the live index, so the button hands
- * the work off and the page follows it by polling; searches keep answering the whole time.
+ * One project, in two halves the sidebar lists as two items: what its index holds, and how the
+ * project is configured. They are one route because the server answers both from one row, and the
+ * tab is a search param so each half is a link of its own (`projectParams.ts`).
+ *
+ * A refresh fetches every repository and rebuilds beside the live index, so the button hands the
+ * work off and the page follows it by polling; searches keep answering the whole time.
  */
 export function ProjectPage() {
   const { project: slug } = useParams({ from: '/projects/$project/' })
+  const { tab } = useSearch({ from: '/projects/$project/' })
   const { data: project } = useSuspenseQuery(projectQuery(slug))
   const { data: status } = useSuspenseQuery(refreshStatusQuery(slug))
   const queryClient = useQueryClient()
@@ -28,12 +38,7 @@ export function ProjectPage() {
 
   const running = status.state === 'Queued' || status.state === 'Running'
 
-  const refresh = useMutation({
-    mutationFn: () => api.refresh(slug),
-    // The status the POST answers with is the first poll, so the progress line appears without
-    // waiting a second for the interval to come round.
-    onSuccess: (started) => queryClient.setQueryData(refreshStatusQuery(slug).queryKey, started),
-  })
+  const refresh = useRefreshProject(slug)
 
   // The index only changes when a refresh finishes, and the status is the only thing that says so.
   // Keyed on the state alone: a second refresh passes through Queued and Running on its way back to
@@ -54,42 +59,99 @@ export function ProjectPage() {
   })
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">{project.slug}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <IndexStatus status={project.index} />
-            {project.singleRepository ? (
-              <Badge variant="outline" className="text-muted-foreground">
-                single repository
-              </Badge>
-            ) : null}
-          </div>
+    <PageCard
+      title={project.name}
+      hint={<span className="font-mono">{project.slug}</span>}
+      badges={
+        <div className="flex flex-wrap items-center gap-2">
+          <IndexStatus status={project.index} />
+          {project.singleRepository ? (
+            <Badge variant="outline" className="text-muted-foreground">
+              single repository
+            </Badge>
+          ) : null}
         </div>
-        {/* "Refresh" as CONTEXT.md defines it, and for a project that has never been built too: the
-            first one clones rather than fetches, but it is the same action and a second name for it
-            would only suggest there are two. The label says what is happening rather than what was
-            asked for, because the work outlives the click and a page reopened mid-refresh must read
-            the same. It stands alone up here: it is the one action on this page done more than once,
-            and deleting the project sits at the bottom where a slip of the hand does not reach it. */}
+      }
+      actions={
+        // "Refresh" as CONTEXT.md defines it, and for a project that has never been built too: the
+        // first one clones rather than fetches, but it is the same action and a second name for it
+        // would only suggest there are two. The label says what is happening rather than what was
+        // asked for, because the work outlives the click and a page reopened mid-refresh must read
+        // the same.
         <Button onClick={() => refresh.mutate()} disabled={running || refresh.isPending}>
+          <RefreshCw />
           {running ? 'Refreshing…' : 'Refresh'}
         </Button>
+      }
+      tabs={
+        <Tabs value={tab}>
+          <TabsList>
+            <TabsTrigger
+              value="overview"
+              render={
+                <Link
+                  to="/projects/$project"
+                  params={{ project: slug }}
+                  search={projectSearch('overview')}
+                >
+                  Overview
+                </Link>
+              }
+            />
+            <TabsTrigger
+              value="settings"
+              render={
+                <Link
+                  to="/projects/$project"
+                  params={{ project: slug }}
+                  search={projectSearch('settings')}
+                >
+                  Settings
+                </Link>
+              }
+            />
+          </TabsList>
+        </Tabs>
+      }
+    >
+      <div className="space-y-6">
+        {/* A refusal — another refresh running, or too little disk — is the server's prose and
+            belongs in the panel that shows it verbatim. What a refresh then does is the status's to
+            report, on both tabs: it is the one thing happening to this project either way. */}
+        {refresh.error ? <ErrorPanel error={refresh.error} /> : null}
+        <RefreshProgress status={status} />
+
+        {tab === 'overview' ? (
+          <ProjectOverview project={slug} />
+        ) : (
+          <SettingsTab
+            project={project}
+            removing={remove.isPending}
+            error={remove.error}
+            onRemove={() => remove.mutate()}
+          />
+        )}
       </div>
+    </PageCard>
+  )
+}
 
-      {/* A refusal — another refresh running, or too little disk — is the server's prose and belongs
-          in the panel that shows it verbatim. What a refresh then does is the status's to report. */}
-      {refresh.error ? <ErrorPanel error={refresh.error} /> : null}
-      {remove.error ? <ErrorPanel error={remove.error} /> : null}
-      <RefreshProgress status={status} />
-
+/** How the project is configured: which repositories it is built from, and how to unmake it. */
+function SettingsTab({
+  project,
+  removing,
+  error,
+  onRemove,
+}: {
+  project: ProjectDetail
+  removing: boolean
+  error: Error | null
+  onRemove: () => void
+}) {
+  return (
+    <div className="space-y-6">
+      {error ? <ErrorPanel error={error} /> : null}
       <RepositoryTable project={project} />
-
-      {/* Below the repositories, because it is what those repositories turned out to hold: a reader
-          arrives knowing which remotes this project is, and then learns what is in them. */}
-      <ProjectOverview project={slug} />
 
       <section
         aria-labelledby="danger-title"
@@ -117,8 +179,8 @@ export function ProjectPage() {
             </>
           }
           action="Delete project"
-          disabled={remove.isPending}
-          onConfirm={() => remove.mutate()}
+          disabled={removing}
+          onConfirm={onRemove}
         />
       </section>
     </div>

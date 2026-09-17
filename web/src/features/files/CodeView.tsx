@@ -4,6 +4,7 @@ import { Link } from '@tanstack/react-router'
 import { useCallback, useMemo } from 'react'
 import { highlighter, languageFor } from '@/highlight/highlighter'
 import type { BlameRun } from '@/lib/api'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { formatDate, shortSha } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -73,7 +74,10 @@ export function CodeView({
   const gutter = blame !== undefined
 
   return (
-    <div className="overflow-x-auto rounded-lg border bg-card">
+    // The pane scrolls rather than the page, so the rail beside it and the card's own header stay
+    // where they are while a long file is read. The height is what is left under the top bar and
+    // the card head; a pane shorter than the viewport still only takes the room it needs.
+    <ScrollArea className="max-h-[calc(100dvh-16rem)] rounded-lg border bg-card">
       <table className="w-full border-collapse font-mono text-xs">
         <tbody>
           {lines.map(({ children, number }) => {
@@ -149,7 +153,7 @@ export function CodeView({
           })}
         </tbody>
       </table>
-    </div>
+    </ScrollArea>
   )
 }
 

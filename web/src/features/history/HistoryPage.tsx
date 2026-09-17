@@ -1,11 +1,14 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { CommitList } from '@/features/history/CommitList'
+import { newestImportedAt } from '@/features/history/historyWindow'
 import { commitsQuery } from '@/features/history/queries'
 import { projectQuery } from '@/features/projects/queries'
 import { RepositorySelect } from '@/features/projects/RepositorySelect'
+import { PageCard } from '@/components/PageCard'
+import { WindowNote } from '@/components/WindowNote'
 import { Label } from '@/components/ui/label'
-import { formatCount } from '@/lib/format'
+import { formatCount, formatDate } from '@/lib/format'
 
 /**
  * A project's change log: the commits of every repository's default branch, newest first, a page at
@@ -24,52 +27,71 @@ export function HistoryPage() {
 
   // One repository needs no filter; the choice is offered only where there is one to make.
   const filterable = detail.repositories.length > 1
+  const scoped = search.repository
+    ? detail.repositories.filter((r) => r.slug === search.repository)
+    : detail.repositories
+  const newest = newestImportedAt(scoped)
+  // The page's own span, oldest to newest, which is what the rows below actually cover.
+  const page = log.commits.at(-1)?.authoredAt
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <p className="text-sm text-muted-foreground">
-          {log.total === 0
-            ? 'No history is recorded yet.'
-            : `${formatCount(log.total)} ${log.total === 1 ? 'commit' : 'commits'} on the default branch, newest first.`}
-        </p>
-        {filterable ? (
-          <div className="flex items-center gap-2">
-            <Label htmlFor="history-repository" className="text-muted-foreground">
-              Repository
-            </Label>
-            <div className="w-56">
-              <RepositorySelect
-                id="history-repository"
-                repositories={detail.repositories}
-                value={search.repository ?? ''}
-                onChange={(repository) =>
-                  // Back to the first page: page 7 of one repository is not page 7 of another.
-                  void navigate({
-                    params: { project },
-                    search: { page: 1, repository: repository === '' ? undefined : repository },
-                    to: '/projects/$project/history',
-                  })
-                }
-              />
-            </div>
-          </div>
-        ) : null}
-      </div>
+    <>
+      {newest ? (
+        <WindowNote>
+          History is counted from the newest commit imported — <b>{formatDate(newest)}</b> — and not
+          from today.
+          {page
+            ? ` This page covers ${formatDate(page)} to ${formatDate(log.commits[0].authoredAt)}.`
+            : ''}
+        </WindowNote>
+      ) : null}
 
-      {log.total === 0 ? (
-        <p className="rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground">
-          History is imported by a refresh. If the project has been refreshed and this is still
-          empty, its repositories&apos; history could not be walked.
-        </p>
-      ) : (
-        <CommitList
-          project={project}
-          log={log}
-          search={search}
-          showRepository={filterable && search.repository === undefined}
-        />
-      )}
-    </div>
+      <PageCard
+        title="History"
+        hint={
+          log.total === 0
+            ? 'no history is recorded yet'
+            : `${formatCount(log.total)} ${log.total === 1 ? 'commit' : 'commits'} on the default branch, newest first`
+        }
+        actions={
+          filterable ? (
+            <div className="flex items-center gap-2">
+              <Label htmlFor="history-repository" className="text-xs text-muted-foreground">
+                Repository
+              </Label>
+              <div className="w-48">
+                <RepositorySelect
+                  id="history-repository"
+                  repositories={detail.repositories}
+                  value={search.repository ?? ''}
+                  onChange={(repository) =>
+                    // Back to the first page: page 7 of one repository is not page 7 of another.
+                    void navigate({
+                      params: { project },
+                      search: { page: 1, repository: repository === '' ? undefined : repository },
+                      to: '/projects/$project/history',
+                    })
+                  }
+                />
+              </div>
+            </div>
+          ) : null
+        }
+      >
+        {log.total === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            History is imported by a refresh. If the project has been refreshed and this is still
+            empty, its repositories&apos; history could not be walked.
+          </p>
+        ) : (
+          <CommitList
+            project={project}
+            log={log}
+            search={search}
+            showRepository={filterable && search.repository === undefined}
+          />
+        )}
+      </PageCard>
+    </>
   )
 }

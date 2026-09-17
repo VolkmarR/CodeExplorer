@@ -1,6 +1,7 @@
-import type { RefreshProgress as Progress, RefreshStatus } from '@/lib/api'
+import type { RefreshProgress as Step, RefreshStatus } from '@/lib/api'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { RefreshSummary } from '@/features/refresh/RefreshSummary'
+import { Progress, ProgressValue } from '@/components/ui/progress'
 import { formatCount } from '@/lib/format'
 
 /**
@@ -52,26 +53,25 @@ export function RefreshProgress({ status }: { status: RefreshStatus }) {
  * not how far it is going. Deliberately per step and never overall: the steps are wildly unequal,
  * and one bar weighted as though they were not would race to most of the way and then sit still.
  */
-function StepProgress({ progress }: { progress: Progress }) {
+function StepProgress({ progress }: { progress: Step }) {
   if (progress.done === null) return null
   if (progress.total === null || progress.total === 0)
     return (
       <p className="mt-1 text-muted-foreground tabular-nums">{formatCount(progress.done)} so far</p>
     )
 
-  const percent = Math.min(100, Math.round((progress.done / progress.total) * 100))
   return (
-    <div className="mt-2 flex items-center gap-3">
-      {/* The native element: it is a progress bar, so it says so to assistive technology without a
-          role, and the browser draws it. The pseudo-elements are what style it in each engine. */}
-      <progress
-        value={progress.done}
-        max={progress.total}
-        className="h-1.5 flex-1 appearance-none overflow-hidden rounded-full bg-muted [&::-moz-progress-bar]:bg-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary"
-      />
-      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-        {formatCount(progress.done)} / {formatCount(progress.total)} · {percent}%
-      </span>
-    </div>
+    // Was a native `<progress>` styled through three engines' pseudo-elements. The shadcn one
+    // (ADR-0004) reads the same to assistive technology, draws the same in every engine, and puts
+    // the percentage in `ProgressValue` rather than in a number this component computes.
+    <Progress value={progress.done} max={progress.total} className="mt-2 items-center">
+      <ProgressValue className="order-last shrink-0 text-xs">
+        {(formatted) => (
+          <>
+            {formatCount(progress.done ?? 0)} / {formatCount(progress.total ?? 0)} · {formatted}
+          </>
+        )}
+      </ProgressValue>
+    </Progress>
   )
 }

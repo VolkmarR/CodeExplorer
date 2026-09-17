@@ -1,10 +1,27 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CodeExplorer</title>
+    <!--
+      The theme has to be on the document before the first paint, or a reader who chose dark gets a
+      white flash on every load while the bundle parses. So it is set here, inline and blocking,
+      rather than in an effect. The key and the values are src/lib/theme.ts's; this is the second
+      reader of them, which is why that module's shape is asserted in tests.
+    -->
+    <script>
+      try {
+        var stored = localStorage.getItem('codeexplorer.theme')
+        var dark =
+          stored === 'dark' ||
+          (stored !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
+        if (dark) document.documentElement.classList.add('dark')
+      } catch (error) {
+        // Storage blocked, or no matchMedia. The light theme is a complete page; nothing to do.
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
