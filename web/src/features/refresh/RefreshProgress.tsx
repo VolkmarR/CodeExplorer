@@ -1,6 +1,7 @@
 import type { RefreshProgress as Step, RefreshStatus } from '@/lib/api'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { RefreshSummary } from '@/features/refresh/RefreshSummary'
+import { isRefreshRunning } from '@/features/refresh/queries'
 import { Progress, ProgressValue } from '@/components/ui/progress'
 import { formatCount } from '@/lib/format'
 
@@ -13,7 +14,7 @@ import { formatCount } from '@/lib/format'
 export function RefreshProgress({ status }: { status: RefreshStatus }) {
   if (status.state === 'NeverRun') return null
 
-  if (status.state === 'Queued' || status.state === 'Running') {
+  if (isRefreshRunning(status)) {
     const progress = status.progress
     return (
       <div className="rounded-lg border bg-card px-4 py-3 text-sm">

@@ -23,6 +23,24 @@ import { Button } from '@/components/ui/button'
  * `open` and `onOpenChange` instead and gets no trigger. Either the button is ours, or the open
  * state is — never neither.
  */
+interface ConfirmProps {
+  title: string
+  description: React.ReactNode
+  /** The verb on the confirm button, e.g. "Delete project". */
+  action: string
+  disabled?: boolean
+  onConfirm: () => void
+}
+
+/**
+ * A union and not three optional props, so the compiler holds the rule the prose above states: a
+ * caller either hands over a trigger for us to render, or owns the open state — and cannot do
+ * neither, which would be a dialog nothing can open.
+ */
+type ConfirmDialogProps =
+  | (ConfirmProps & { trigger: React.ReactNode; open?: never; onOpenChange?: never })
+  | (ConfirmProps & { trigger?: never; open: boolean; onOpenChange: (open: boolean) => void })
+
 export function ConfirmDialog({
   trigger,
   title,
@@ -32,17 +50,7 @@ export function ConfirmDialog({
   open,
   onOpenChange,
   onConfirm,
-}: {
-  trigger?: React.ReactNode
-  title: string
-  description: React.ReactNode
-  /** The verb on the confirm button, e.g. "Delete project". */
-  action: string
-  disabled?: boolean
-  open?: boolean
-  onOpenChange?: (open: boolean) => void
-  onConfirm: () => void
-}) {
+}: ConfirmDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       {trigger === undefined ? null : (

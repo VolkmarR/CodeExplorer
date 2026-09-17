@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router'
+import { fileSearch } from '@/features/files/fileParams'
 
 /**
  * A path that opens the file when there is still a file there, and is named and struck through when
@@ -30,7 +31,7 @@ export function FilePathLink({
     <Link
       to="/projects/$project/file"
       params={{ project }}
-      search={{ path: qualifiedPath }}
+      search={fileSearch(qualifiedPath)}
       className="truncate hover:text-primary hover:underline"
     >
       {label ?? qualifiedPath}

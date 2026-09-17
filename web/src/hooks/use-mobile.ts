@@ -1,7 +1,16 @@
 import * as React from 'react'
 
 const MOBILE_BREAKPOINT = 768
-const QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px)`
+
+/**
+ * One `MediaQueryList`, lazily made and kept. `getSnapshot` runs on every render and on every store
+ * check, and each `matchMedia` call allocates another object.
+ */
+let query: MediaQueryList | undefined
+function mobileQuery() {
+  query ??= globalThis.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
+  return query
+}
 
 /**
  * Whether the sidebar should be a sheet rather than a column.
@@ -11,13 +20,13 @@ const QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px)`
  * external source — the media query is one — and it reads on the first render instead.
  */
 function subscribe(onChange: () => void) {
-  const query = globalThis.matchMedia(QUERY)
-  query.addEventListener('change', onChange)
-  return () => query.removeEventListener('change', onChange)
+  const media = mobileQuery()
+  media.addEventListener('change', onChange)
+  return () => media.removeEventListener('change', onChange)
 }
 
 function getSnapshot() {
-  return globalThis.matchMedia(QUERY).matches
+  return mobileQuery().matches
 }
 
 export function useIsMobile() {

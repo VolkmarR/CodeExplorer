@@ -40,3 +40,18 @@ export function fileName(qualifiedPath: string): string {
 export function directoryOf(qualifiedPath: string): string {
   return qualifiedPath.slice(0, qualifiedPath.lastIndexOf('/') + 1)
 }
+
+/**
+ * A file name split at its extension. The rule is the part worth having in one place: a dotfile
+ * such as `.gitignore` has no extension, and neither does `Dockerfile`, which the whole name names
+ * — so a leading dot starts a stem and never an extension. Two callers ask the same question for
+ * different reasons, the highlighter to pick a language and the file rail to guess what a file
+ * probably declares, and they must not answer it differently.
+ */
+export function splitFileName(qualifiedPath: string): { stem: string; extension: string } {
+  const name = fileName(qualifiedPath)
+  const dot = name.lastIndexOf('.')
+  return dot > 0
+    ? { extension: name.slice(dot + 1), stem: name.slice(0, dot) }
+    : { extension: '', stem: name }
+}
