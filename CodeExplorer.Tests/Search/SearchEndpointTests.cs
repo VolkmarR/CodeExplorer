@@ -324,6 +324,42 @@ public sealed class SearchEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
     }
 
+    /// <summary>
+    ///     The churn panel beside the change log. It ranks over the window the page it is showing
+    ///     covers, so it is asked for with the same page arguments and never with dates of its own —
+    ///     a panel and a list that disagreed about which commits they were describing would be worse
+    ///     than no panel.
+    /// </summary>
+    [Fact]
+    public async Task The_hot_files_panel_ranks_over_the_window_the_change_log_page_covers()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        var all = await GetAsync<HotFilesResponse>(host, "/api/projects/alpha/hot-files");
+        Assert.NotNull(all.Since);
+        // Both root commits, so all three files of the fixture are ranked and each is still at HEAD.
+        Assert.Equal(["one/docs/Widget.md", "one/src/Widget.cs", "two/src/Widget.cs"],
+            all.Files.Select(f => f.QualifiedPath).Order());
+        Assert.All(all.Files, f => Assert.Equal(1, f.Commits));
+
+        // Scoped to one repository, the panel covers only that repository's page of commits.
+        var scoped = await GetAsync<HotFilesResponse>(host, "/api/projects/alpha/hot-files?repository=two");
+        Assert.Equal("two/src/Widget.cs", Assert.Single(scoped.Files).QualifiedPath);
+
+        // A page past the end covers no commits, which is no dates and no ranking rather than an error.
+        var past = await GetAsync<HotFilesResponse>(host, "/api/projects/alpha/hot-files?page=9");
+        Assert.Null(past.Since);
+        Assert.Empty(past.Files);
+
+        // Both fixture repositories were walked, so there is nothing to caveat. A repository the walk
+        // found nothing in has to be named, or half a project's churn reads as all of it.
+        Assert.Empty(all.WithoutHistory);
+        await host.ExecuteAsync("alpha", "DELETE FROM commits WHERE repo_slug = 'two'");
+        var partial = await GetAsync<HotFilesResponse>(host, "/api/projects/alpha/hot-files");
+        Assert.Equal("two", Assert.Single(partial.WithoutHistory));
+        Assert.DoesNotContain(partial.Files, f => f.RepositorySlug == "two");
+    }
+
     private static async Task<T> GetAsync<T>(TestHost host, string url)
     {
         using var http = host.CreateClient();
