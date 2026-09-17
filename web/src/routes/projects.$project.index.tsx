@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { RouteError } from '@/components/RouteError'
 import { ProjectPage } from '@/features/projects/ProjectPage'
-import { projectQuery } from '@/features/projects/queries'
+import { projectOverviewQuery, projectQuery } from '@/features/projects/queries'
 import { refreshStatusQuery } from '@/features/refresh/queries'
 
 export const Route = createFileRoute('/projects/$project/')({
@@ -13,5 +13,6 @@ export const Route = createFileRoute('/projects/$project/')({
     Promise.all([
       context.queryClient.ensureQueryData(projectQuery(params.project)),
       context.queryClient.ensureQueryData(refreshStatusQuery(params.project)),
+      context.queryClient.ensureQueryData(projectOverviewQuery(params.project)),
     ]),
 })

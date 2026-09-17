@@ -13,6 +13,19 @@ export function projectQuery(slug: string) {
 }
 
 /**
+ * What the build computed about the project as a whole. Its own query rather than a field on the one
+ * above, because it is the read on this page that restores a durable copy — the header and the
+ * repository table must not wait behind it — and because it goes stale on exactly the same event,
+ * so it sits under the project's key and `invalidateProject` already covers it.
+ */
+export function projectOverviewQuery(slug: string) {
+  return queryOptions({
+    queryFn: () => api.projectOverview(slug),
+    queryKey: [...projectKey(slug), 'overview'],
+  })
+}
+
+/**
  * Everything one change to a project makes stale. The project's own key covers its page and the
  * searches and file reads keyed under it; the list is a separate key carrying the same index status
  * and repository count, so it has to go too or it keeps showing the state from before the change.

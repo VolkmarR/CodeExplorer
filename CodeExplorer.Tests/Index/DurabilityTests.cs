@@ -33,7 +33,7 @@ public sealed class DurabilityTests : IDisposable
         // history tables are as much of the index as the code ones are (ADR-0007).
         Assert.Equal([
                 "attribution.parquet", "commit_files.parquet", "commits.parquet", "files.parquet",
-                "index_info.parquet", "lines.parquet", "repositories.parquet"
+                "index_info.parquet", "lines.parquet", "project_overview.parquet", "repositories.parquet"
             ],
             Directory.EnumerateFiles(host.DurableIndexDirectory("alpha")).Select(Path.GetFileName).Order());
     }

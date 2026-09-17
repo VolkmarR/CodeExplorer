@@ -18,7 +18,7 @@ public sealed record OpenedRepository(ProjectRepository Repository, LocalCopy Lo
 ///     (ADR-0003) — and nothing here knows what git library read them. Fetching the copies and deciding
 ///     what becomes of the result belong to a refresh and live in <c>Refresh/</c> (ADR-0005).
 /// </summary>
-public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder history)
+public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder history, OverviewBuilder overview)
 {
     /// <summary>
     ///     Default for <c>Index:MaxFileBytes</c>. Text blobs above it are generated code, data dumps or
@@ -57,6 +57,10 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
         // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished
         // and an index that is live with no history would be one nothing ever goes back to fill in.
         await history.FillAsync(shadow, repositories, report, cancellationToken);
+        // After the history, because the overview ranks it, and before CompleteAsync for the same
+        // reason the history runs before it: an index that went live without an overview is one
+        // nothing would ever go back and fill in.
+        await overview.FillAsync(shadow, singleRepository, cancellationToken);
         await shadow.CompleteAsync(singleRepository, cancellationToken);
 
         recording.Built(files, lines);
