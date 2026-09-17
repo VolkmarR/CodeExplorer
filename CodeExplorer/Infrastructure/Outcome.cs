@@ -13,13 +13,21 @@ public abstract record Outcome;
 
 /// <summary>
 ///     Why a problem is one, for the caller that has to map it onto something other than prose. HTTP
-///     answers a missing index with a 404 the browse view draws as "nothing to browse yet", and every
-///     other problem with a 400; an MCP tool hands over the explanation and never looks.
+///     answers a missing index with a 404 the browse view draws as "nothing to browse yet", a file or
+///     commit that is not there with a 404 too, and everything else with a 400; an MCP tool hands over
+///     the explanation and never looks.
 /// </summary>
 public enum ProblemKind
 {
-    /// <summary>The request named something the index does not have, or was malformed.</summary>
+    /// <summary>The request was malformed, or named a repository or directory the index does not have.</summary>
     Invalid,
+
+    /// <summary>
+    ///     The request named a file or a commit that is not in the index. Told apart from
+    ///     <see cref="Invalid" /> because a link to it is a page that is not there, not a request that
+    ///     was wrong.
+    /// </summary>
+    Missing,
 
     /// <summary>The project has no index to read from: never built, or still building the first one.</summary>
     NoIndex

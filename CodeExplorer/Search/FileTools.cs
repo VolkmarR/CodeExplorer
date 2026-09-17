@@ -8,11 +8,13 @@ namespace CodeExplorer;
 
 /// <summary>
 ///     The index-backed MCP tools that are not searches (ADR-0005, <c>Search/</c>): reading a file,
-///     finding files by name shape, and counting extensions. Every answer comes from the project
-///     index alone; what the control database knows about the project is <c>repo_info</c>'s business.
+///     finding files by name shape, and counting extensions. Each is a rendering of a
+///     <see cref="FileQueries" /> answer, the way <see cref="SearchTools" /> renders the searches: the
+///     tool parses what an agent typed and words what came back, and the decisions in between are the
+///     query module's, shared with the operator's pages.
 /// </summary>
 [McpServerToolType]
-internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor, ProjectIndexes indexes)
+internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor, FileQueries files)
 {
     /// <summary>
     ///     A whole large class in one read. Higher would let a single default read spend the reply
@@ -56,7 +58,6 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        if (paths.Length == 0) return "No paths given. Pass at least one qualified path such as `repo/src/File.cs`.";
 
         startLine = Math.Max(1, startLine);
         maxLines = Math.Clamp(maxLines, 1, MaxLinesPerRead);
@@ -68,33 +69,30 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             targets.Add(parsed);
         }
 
-        return await IndexReader.OverIndexAsync(indexes, project.Slug, null, async (index, token) =>
-        {
-            var text = new StringBuilder();
-            for (int i = 0; i < targets.Count; i++)
-            {
-                if (text.Length > 0) text.Append('\n');
-                // Whatever the entries before this one left unused is handed on, so four small windows
-                // and one large one read in full where an equal split would truncate the large one.
-                int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (targets.Count - i);
-                await AppendReadAsync(text, index, targets[i], allowance, withHistory, token);
-            }
+        var outcome = await files.ReadAsync(project.Slug,
+            new ReadRequest(targets.Select(t => new FileWindow(t.Path, t.Start, t.End)).ToList(), withHistory, true),
+            cancellationToken);
+        if (outcome is Problem problem) return problem.Explanation;
 
-            return text.ToString();
-        }, problem => problem.Explanation, cancellationToken);
+        var reads = ((ReadResult)outcome).Files;
+        var text = new StringBuilder();
+        for (int i = 0; i < reads.Count; i++)
+        {
+            if (text.Length > 0) text.Append('\n');
+            // Whatever the entries before this one left unused is handed on, so four small windows
+            // and one large one read in full where an equal split would truncate the large one.
+            int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (reads.Count - i);
+            Append(text, reads[i], targets[i].ExplicitRange, allowance);
+        }
+
+        return text.ToString();
     }
 
-    private static async Task AppendReadAsync(
-        StringBuilder text, IndexReader index, ReadTarget target, int allowance, bool withHistory,
-        CancellationToken cancellationToken)
+    private static void Append(StringBuilder text, FileRead read, bool explicitRange, int allowance)
     {
-        // The path rule and the refusal sentences are the reader's, so an agent that got the path wrong
-        // is told the same thing here as by imports or file_history. Several entries share this one
-        // open, which is why this is LocateAsync and not OverFileAsync.
-        var (file, problem) = await index.LocateAsync(target.Path, true, cancellationToken);
-        if (file is null)
+        if (read.File is not { } file)
         {
-            text.Append(problem!.Explanation).Append('\n');
+            text.Append(read.Problem!.Explanation).Append('\n');
             return;
         }
 
@@ -105,44 +103,63 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             return;
         }
 
+        int start = read.Window.Start;
         text.Append(CultureInfo.InvariantCulture,
             $"{file.QualifiedPath}  -  {file.LineCount} {ToolReply.Plural(file.LineCount, "line")}, {ToolReply.Bytes(file.SizeBytes)}");
-        if (target.Start > file.LineCount)
+        if (start > file.LineCount)
         {
             text.Append(CultureInfo.InvariantCulture,
-                $"\n  (only {file.LineCount} {ToolReply.Plural(file.LineCount, "line")}; startLine {target.Start} is past the end)\n");
+                $"\n  (only {file.LineCount} {ToolReply.Plural(file.LineCount, "line")}; startLine {start} is past the end)\n");
             return;
         }
 
-        int end = Math.Min(file.LineCount, target.End);
-        if (target.Start > 1 || end < file.LineCount)
-            text.Append(CultureInfo.InvariantCulture, $" (lines {target.Start}-{end} of {file.LineCount})");
+        int end = read.Window.End;
+        if (start > 1 || end < file.LineCount)
+            text.Append(CultureInfo.InvariantCulture, $" (lines {start}-{end} of {file.LineCount})");
         text.Append('\n');
-        if (withHistory) text.Append(await index.FileSpanAsync(file.FileId, cancellationToken));
+        if (read.History is { } history) text.Append(History(history));
         text.Append('\n');
 
-        var lines = await index.LinesAsync(file.FileId, target.Start, end, cancellationToken);
         int width = end.ToString(CultureInfo.InvariantCulture).Length;
         int budget = text.Length + allowance;
         int last = end;
-        for (int i = 0; i < lines.Count; i++)
+        for (int i = 0; i < read.Lines.Count; i++)
         {
             if (text.Length >= budget)
             {
-                last = target.Start + i - 1;
+                last = start + i - 1;
                 text.Append(CultureInfo.InvariantCulture,
                     $"  ... {end - last} more {ToolReply.Plural(end - last, "line")} in this window omitted: the reply is capped at {ToolReply.MaxOutputChars / 1024} KB shared by every entry.\n");
                 break;
             }
 
-            text.Append((target.Start + i).ToString(CultureInfo.InvariantCulture).PadLeft(width)).Append("  ")
-                .Append(ToolReply.Clip(lines[i])).Append('\n');
+            text.Append((start + i).ToString(CultureInfo.InvariantCulture).PadLeft(width)).Append("  ")
+                .Append(ToolReply.Clip(read.Lines[i])).Append('\n');
         }
 
         // An explicit range is what the caller asked for; only a default window or a cap stopped short of
         // what they wanted, and then the next call is spelled out.
-        if (last < file.LineCount && (!target.ExplicitRange || last < end))
+        if (last < file.LineCount && (!explicitRange || last < end))
             text.Append(CultureInfo.InvariantCulture, $"Continue with \"{file.QualifiedPath}:{last + 1}\".\n");
+    }
+
+    /// <summary>
+    ///     One line saying which commits a file was first and last changed by, or that there is none. A
+    ///     file whose history is absent and one that was never changed must not read alike, so neither
+    ///     is an empty line.
+    /// </summary>
+    private static string History(FileCommits span)
+    {
+        if (span.Last is null) return "  history: none recorded for this file\n";
+
+        // Named "since"/"last changed" rather than "created"/"author": history begins where the file was
+        // last renamed, so the first commit recorded for a path is often a move and not its origin.
+        return string.Create(CultureInfo.InvariantCulture,
+            $"  history: since {Short(span.First)}; last changed {Short(span.Last)}\n");
+
+        static string Short(AttributedBy? by) => by is null
+            ? "unknown"
+            : string.Create(CultureInfo.InvariantCulture, $"{by.Sha[..8]} {by.AuthoredAt:yyyy-MM-dd} {by.AuthorName}");
     }
 
     [McpServerTool(Name = "glob", ReadOnly = true, Idempotent = true, Title = "Find files by path pattern")]
@@ -165,44 +182,34 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        string pattern = glob.Trim().Replace('\\', '/');
-        if (MalformedGlob(pattern) is { } malformed) return malformed;
+        var outcome = await files.GlobAsync(project.Slug, new GlobRequest(glob, repo, limit), cancellationToken);
+        if (outcome is Problem problem) return problem.Explanation;
 
-        return await IndexReader.OverIndexAsync(indexes, project.Slug, repo,
-            (index, token) => ReadGlobAsync(index, project, pattern, limit, token),
-            problem => problem.Explanation, cancellationToken);
-    }
-
-    private static async Task<string> ReadGlobAsync(IndexReader index, Project project, string pattern, int limit,
-        CancellationToken cancellationToken)
-    {
-        var repository = index.Repository;
-        var result = await index.GlobAsync(pattern, limit, cancellationToken);
-        if (result.Total == 0)
+        var listing = (GlobListing)outcome;
+        string pattern = listing.Glob;
+        var repository = listing.Repository;
+        if (listing.Total == 0)
         {
             if (repository is null)
-            {
-                var repositories = await index.RepositoriesAsync(cancellationToken);
                 return
-                    $"No indexed file matches \"{pattern}\" in project '{project.Slug}' ({repositories.Sum(r => r.FileCount)} files in repositories {string.Join(", ", repositories.Select(r => r.Slug))}). "
+                    $"No indexed file matches \"{pattern}\" in project '{project.Slug}' ({listing.Repositories.Sum(r => r.FileCount)} files in repositories {string.Join(", ", listing.Repositories.Select(r => r.Slug))}). "
                     + "Remember `*` crosses directories, so a bare \"*Commands.cs\" is usually the right shape, and the first path segment is the repository slug.";
-            }
 
             return $"No indexed file matches \"{pattern}\" in repository '{repository.Slug}'. "
-                   + (result.MatchesInOtherRepositories > 0
-                       ? $"{result.MatchesInOtherRepositories} {ToolReply.Plural(result.MatchesInOtherRepositories.Value, "file")} match in the other repositories of project '{project.Slug}'; drop `repo` to see them."
+                   + (listing.MatchesInOtherRepositories > 0
+                       ? $"{listing.MatchesInOtherRepositories} {ToolReply.Plural(listing.MatchesInOtherRepositories.Value, "file")} match in the other repositories of project '{project.Slug}'; drop `repo` to see them."
                        : $"Nothing matches in the other repositories of project '{project.Slug}' either; try a wider glob.");
         }
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{result.Total} {ToolReply.Plural(result.Total, "file")} matching \"{pattern}\"");
+            $"{listing.Total} {ToolReply.Plural(listing.Total, "file")} matching \"{pattern}\"");
         if (repository is not null) text.Append(CultureInfo.InvariantCulture, $" in repository '{repository.Slug}'");
-        if (result.Total > result.Files.Count)
+        if (listing.Total > listing.Files.Count)
             text.Append(CultureInfo.InvariantCulture,
-                $"; showing the first {result.Files.Count} by path (raise limit or narrow the glob)");
+                $"; showing the first {listing.Files.Count} by path (raise limit or narrow the glob)");
         text.Append(":\n");
-        foreach (var file in result.Files)
+        foreach (var file in listing.Files)
         {
             text.Append(CultureInfo.InvariantCulture, $"{file.LineCount,6}L  {file.QualifiedPath}");
             if (file.SkipReason is not null)
@@ -229,56 +236,29 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        if (depth < 1)
-            return "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on.";
+        var outcome = await files.TreeAsync(project.Slug, new TreeRequest(path, depth), cancellationToken);
+        if (outcome is Problem problem) return problem.Explanation;
 
-        return await IndexReader.OverDirectoryAsync(indexes, project.Slug, path,
-            (index, directory, token) => ReadTreeAsync(index, project, directory, depth, token),
-            problem => problem.Explanation, cancellationToken);
-    }
-
-    private static async Task<string> ReadTreeAsync(IndexReader index, Project project, IndexedDirectory directory,
-        int depth, CancellationToken cancellationToken)
-    {
-        // Null is the repository level, which a single-repository project does not have: there the
-        // project level is that repository's own top level (ADR-0006).
-        var paths = await index.PathsAsync(cancellationToken);
-        var location = directory.Repository is null
-            ? paths.SingleRepository ? new QualifiedPath(paths.RepositorySlug, "") : null
-            : new QualifiedPath(directory.Repository.Slug, directory.PathInRepository);
-        string listed = directory.QualifiedPath;
-
-        var entries = await index.TreeAsync(location, depth, cancellationToken);
-        if (entries.Count == 0)
-        {
-            if (location is null || location.PathInRepository.Length == 0)
-                return
-                    $"{(listed.Length == 0 ? $"Project '{project.Slug}'" : $"Repository '{listed}'")} has no indexed files. Call repo_info to see what the index holds.";
-            if (await index.FindFileAsync(listed, cancellationToken) is not null)
-                return $"'{listed}' is a file, not a directory, in project '{project.Slug}'. Use read_file to read it.";
+        var listing = (TreeListing)outcome;
+        string listed = listing.Directory.QualifiedPath;
+        if (listing.Entries.Count == 0)
             return
-                $"'{location.PathInRepository}' is not a directory in repository '{location.RepositorySlug}'. Call list_tree with a parent path to see what exists there.";
-        }
+                $"{(listed.Length == 0 ? $"Project '{project.Slug}'" : $"Repository '{listed}'")} has no indexed files. Call repo_info to see what the index holds.";
 
         var text = new StringBuilder();
-        if (location is null)
-        {
-            var repositories = await index.RepositoriesAsync(cancellationToken);
+        if (listing.RepositoryLevel)
             text.Append(CultureInfo.InvariantCulture,
-                $"{project.Slug} (depth {depth}, {repositories.Count} {ToolReply.Plural(repositories.Count, "repository", "repositories")})\n");
-        }
+                $"{project.Slug} (depth {depth}, {listing.Repositories} {ToolReply.Plural(listing.Repositories, "repository", "repositories")})\n");
         else
-        {
             // A single-repository project's root formats as the empty path (ADR-0006); it is headed by
             // the project, which is what the caller asked for.
             text.Append(CultureInfo.InvariantCulture,
-                $"{(listed.Length == 0 ? project.Slug : listed + "/")} (depth {depth}, {entries.Count} entries)\n");
-        }
+                $"{(listed.Length == 0 ? project.Slug : listed + "/")} (depth {depth}, {listing.Entries.Count} entries)\n");
 
         // Entries are printed relative to what was listed, as `tree` does; at the repository level the
         // qualified path already starts with the slug and nothing is stripped.
         int skip = listed.Length == 0 ? 0 : listed.Length + 1;
-        foreach (var entry in entries.Take(MaxTreeEntries))
+        foreach (var entry in listing.Entries.Take(MaxTreeEntries))
         {
             text.Append(entry.QualifiedPath, skip, entry.QualifiedPath.Length - skip);
             if (entry.Files is not null) text.Append('/');
@@ -287,9 +267,9 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             text.Append('\n');
         }
 
-        if (entries.Count > MaxTreeEntries)
+        if (listing.Entries.Count > MaxTreeEntries)
             text.Append(CultureInfo.InvariantCulture,
-                $"... {entries.Count - MaxTreeEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
+                $"... {listing.Entries.Count - MaxTreeEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
         return text.ToString();
     }
 
@@ -303,17 +283,12 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
+        var outcome = await files.ExtensionsAsync(project.Slug, new ExtensionsRequest(repo), cancellationToken);
+        if (outcome is Problem problem) return problem.Explanation;
 
-        return await IndexReader.OverIndexAsync(indexes, project.Slug, repo,
-            (index, token) => ReadExtensionsAsync(index, project, token),
-            problem => problem.Explanation, cancellationToken);
-    }
-
-    private static async Task<string> ReadExtensionsAsync(IndexReader index, Project project,
-        CancellationToken cancellationToken)
-    {
-        var repository = index.Repository;
-        var extensions = await index.ExtensionsAsync(cancellationToken);
+        var listing = (ExtensionListing)outcome;
+        var repository = listing.Repository;
+        var extensions = listing.Extensions;
         if (extensions.Count == 0)
             return repository is null
                 ? $"Project '{project.Slug}' has no files in its index. Its repositories may be empty; repo_info shows what was indexed."
@@ -343,28 +318,6 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         }
     }
 
-    /// <summary>
-    ///     Glob shapes the SQL operator accepts and matches nothing with. Malformed input must never look
-    ///     like a real negative: an empty answer is something the caller acts on.
-    /// </summary>
-    private static string? MalformedGlob(string glob)
-    {
-        if (glob.Length == 0)
-            return "The glob is empty. Pass a pattern such as \"*.cs\" or \"main/src/**/*Handler.cs\".";
-        if (glob.Contains('{') || glob.Contains('}'))
-            return $"Brace expansion is not supported, so \"{glob}\" matches nothing. Use one call per alternative, "
-                   + "or widen the glob (\"**/*.cs\" then read the list) and filter the result yourself.";
-        if (glob.EndsWith('/'))
-            return $"A trailing slash matches nothing: \"{glob}\" is a directory, not a file pattern. "
-                   + $"Use \"{glob}**\" for everything under it, or list_tree to see the layout.";
-        // A '[' opens a character class; without its ']' the operator matches nothing and says so to no one.
-        if (glob.Count(c => c == '[') != glob.Count(c => c == ']'))
-            return
-                $"\"{glob}\" has an unbalanced [ ]: a [ opens a character class such as [0-9] and matches nothing without its ]. "
-                + "Close it, or write the character you meant.";
-        return null;
-    }
-
     // "file.cs:1:60" would otherwise parse as the file "file.cs:1" read from line 60, a real-looking
     // "no indexed file" answer to a typo; it is caught before the range is read.
     [GeneratedRegex(@"^(?<path>.+?):(?<a>\d+):(?<b>\d+)$")]
@@ -375,7 +328,8 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
 
     /// <summary>
     ///     Result of one <c>read_file</c> entry's parse: the path and the inclusive window, or the <see cref="Problem" />
-    ///     with it.
+    ///     with it. The range grammar is this tool's — an agent writes <c>path:120-180</c> — and stays
+    ///     out of the query module, which is asked for a window and not for a string.
     /// </summary>
     private sealed record ReadTarget(string Path, int Start, int End, bool ExplicitRange, string? Problem = null)
     {

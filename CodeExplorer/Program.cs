@@ -46,6 +46,7 @@ builder.Services.AddSingleton<IndexBuilder>();
 builder.Services.AddSingleton<ProjectRefresh>();
 builder.Services.AddSingleton<RefreshService>();
 builder.Services.AddSingleton<GrepSearch>();
+builder.Services.AddSingleton<FileQueries>();
 builder.Services.AddSingleton<ReferenceSearch>();
 builder.Services.AddSingleton<DefinitionSearch>();
 builder.Services.AddSingleton<ImportGraph>();
