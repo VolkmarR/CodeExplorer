@@ -11,11 +11,15 @@ namespace CodeExplorer.Tests;
 public sealed class LanguageAnalyzerTests
 {
     /// <summary>What a language calls the appearance of <paramref name="symbol" /> on this line.</summary>
-    private static ReferenceKind Kind(string extension, string line, string symbol)
+    private static ReferenceKind Kind(string extension, string line, string symbol) =>
+        Kind(Languages.Default.For(extension), line, symbol);
+
+    /// <summary>The first appearance of the symbol on the line, as this analyser places it.</summary>
+    private static ReferenceKind Kind(ILanguageAnalyzer analyzer, string line, string symbol)
     {
-        int at = SymbolText.IndexOf(line, symbol);
-        Assert.True(at >= 0, $"\"{symbol}\" is not on \"{line}\"");
-        return Languages.Default.For(extension).Occurrence(line, at, symbol.Length).Value;
+        var placed = analyzer.Occurrences(line, symbol);
+        Assert.NotEmpty(placed);
+        return placed[0].Value;
     }
 
     [Theory]
@@ -145,20 +149,21 @@ public sealed class LanguageAnalyzerTests
     public void A_long_line_is_scanned_once_and_not_once_per_question()
     {
         // A minified bundle is one line of several million characters, and files up to
-        // Index:MaxFileBytes are indexed. Re-walking the prefix per comment opener made a single
-        // find_references on such a file take minutes inside one tool call.
-        string line = string.Concat(Enumerable.Repeat("var x = \"http://a\"; advance(1); ", 3000));
+        // Index:MaxFileBytes are indexed. Asked one appearance at a time, classifying such a line
+        // re-walked it per appearance and re-ran the declaration regex over it per appearance, which
+        // turned a single find_references into minutes inside one tool call. This line is 640 KB with
+        // 20,000 appearances on it: linear in the line it stays well under the bound, quadratic in it
+        // nothing does.
+        string line = string.Concat(Enumerable.Repeat("var x = \"http://a\"; advance(1); ", 20_000));
         var analyzer = Languages.Default.For("ts");
 
         var started = System.Diagnostics.Stopwatch.StartNew();
-        int calls = SymbolText.Occurrences(line, "advance")
-            .Count(at => analyzer.Occurrence(line, at, "advance".Length).Value == ReferenceKind.Call);
+        int calls = analyzer.Occurrences(line, "advance").Count(k => k.Value == ReferenceKind.Call);
         started.Stop();
 
-        Assert.Equal(3000, calls);
-        // Generous against a loaded CI box, and still nearly two orders of magnitude under the 36
-        // seconds this took when the prefix was copied and re-walked per occurrence.
-        Assert.True(started.Elapsed < TimeSpan.FromSeconds(1),
+        Assert.Equal(20_000, calls);
+        // Generous against a loaded CI box: the measured time is a small fraction of this.
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(2),
             $"classifying one long line took {started.Elapsed}");
     }
 
@@ -190,10 +195,10 @@ public sealed class LanguageAnalyzerTests
 
         var analyzer = registry.For("wib");
         Assert.Equal("Wibble", analyzer.Language);
-        Assert.Equal(ReferenceKind.Comment, Placed(analyzer, "%% OrderStatus", "OrderStatus"));
-        Assert.Equal(ReferenceKind.StringLiteral, Placed(analyzer, "log |OrderStatus|", "OrderStatus"));
-        Assert.Equal(ReferenceKind.Write, Placed(analyzer, "OrderStatus <- 1", "OrderStatus"));
-        Assert.Equal(ReferenceKind.MemberAccess, Placed(analyzer, "order->OrderStatus", "OrderStatus"));
+        Assert.Equal(ReferenceKind.Comment, Kind(analyzer, "%% OrderStatus", "OrderStatus"));
+        Assert.Equal(ReferenceKind.StringLiteral, Kind(analyzer, "log |OrderStatus|", "OrderStatus"));
+        Assert.Equal(ReferenceKind.Write, Kind(analyzer, "OrderStatus <- 1", "OrderStatus"));
+        Assert.Equal(ReferenceKind.MemberAccess, Kind(analyzer, "order->OrderStatus", "OrderStatus"));
         // The languages already registered are untouched, and so is the registry this was built from.
         Assert.Equal("C#", registry.For("cs").Language);
         Assert.Null(Languages.Default.For("wib").Language);
@@ -207,13 +212,13 @@ public sealed class LanguageAnalyzerTests
         var analyzer = registry.For("cs");
         // The caller asks the same questions of the same interface and gets a parsed answer.
         Assert.Equal("C# (parsed)", analyzer.Language);
-        Assert.Equal(Evidence.Parsed, analyzer.Occurrence("Status = next;", 0, 6).Evidence);
-        Assert.Equal(ReferenceKind.Definition, analyzer.Occurrence("Status = next;", 0, 6).Value);
+        Assert.Equal(Evidence.Parsed, analyzer.Occurrences("Status = next;", "Status")[0].Evidence);
+        Assert.Equal(ReferenceKind.Definition, Kind(analyzer, "Status = next;", "Status"));
         // The text analyser is still there for everything the stub did not claim — including `.csx`,
         // which the C# profile claims and the stub does not.
         Assert.Equal("X#", registry.For("prg").Language);
         Assert.Equal("C#", registry.For("csx").Language);
-        Assert.Equal(Evidence.Text, registry.For("prg").Occurrence("oOrder:Status := 1", 7, 6).Evidence);
+        Assert.Equal(Evidence.Text, registry.For("prg").Occurrences("oOrder:Status := 1", "Status")[0].Evidence);
     }
 
     [Fact]
@@ -235,12 +240,11 @@ public sealed class LanguageAnalyzerTests
     public void Every_answer_says_how_it_was_reached()
     {
         var analyzer = Languages.Default.For("cs");
-        Assert.Equal(Evidence.Text, analyzer.Evidence);
         Assert.Equal(Evidence.Text, analyzer.StateAt("// x", 3).Evidence);
         Assert.Equal(Evidence.Text, analyzer.Declares("public class Order").Evidence);
         Assert.Equal(Evidence.Text, analyzer.ImportOn("using System;").Evidence);
         Assert.Equal(Evidence.Text, analyzer.IsGenerated("src/Order.g.cs").Evidence);
-        Assert.Equal(Evidence.Text, analyzer.Occurrence("Order x;", 0, 5).Evidence);
+        Assert.Equal(Evidence.Text, analyzer.Occurrences("Order x;", "Order")[0].Evidence);
     }
 
     [Fact]
@@ -293,8 +297,6 @@ public sealed class LanguageAnalyzerTests
         Assert.Equal((Languages.NoExtension, false), Languages.Name(""));
     }
 
-    private static ReferenceKind Placed(ILanguageAnalyzer analyzer, string line, string symbol) =>
-        analyzer.Occurrence(line, SymbolText.IndexOf(line, symbol), symbol.Length).Value;
 
     /// <summary>
     ///     What a Roslyn- or tree-sitter-backed analyser would be, as far as the seam is concerned: the
@@ -306,9 +308,8 @@ public sealed class LanguageAnalyzerTests
     {
         public string Language => "C# (parsed)";
         public IReadOnlyList<string> Extensions => ["cs"];
-        public Evidence Evidence => Evidence.Parsed;
         public bool SeparatesDeclarationFromImplementation => false;
-        public string DeclarationCandidatePattern => ".";
+        public CandidateLines DeclarationCandidates => CandidateLines.All;
 
         public Answer<Lexical> StateAt(string line, int index) => new(Lexical.Code, Evidence.Parsed);
 
@@ -319,7 +320,7 @@ public sealed class LanguageAnalyzerTests
 
         public Answer<bool> IsGenerated(string qualifiedPath) => new(false, Evidence.Parsed);
 
-        public Answer<ReferenceKind> Occurrence(string line, int index, int length) =>
-            new(ReferenceKind.Definition, Evidence.Parsed);
+        public IReadOnlyList<Answer<ReferenceKind>> Occurrences(string line, string symbol) =>
+            [new Answer<ReferenceKind>(ReferenceKind.Definition, Evidence.Parsed)];
     }
 }

@@ -42,7 +42,18 @@ public static class Languages
 
     private static readonly StringDelimiter CBlockComment = new("/*", "*/", StringEscape.None);
     private static readonly StringDelimiter DoubleQuoted = new("\"", "\"", StringEscape.Backslash);
+    private static readonly StringDelimiter SingleQuotedEscaped = new("'", "'", StringEscape.Backslash);
+
+    /// <summary>The xBase and SQL family's quote, where doubling it stands for the character itself.</summary>
     private static readonly StringDelimiter SingleQuoted = new("'", "'", StringEscape.Doubled);
+
+    /// <summary>Quotes that escape nothing: the first closer ends the literal, whatever precedes it.</summary>
+    private static readonly StringDelimiter RawDouble = new("\"", "\"", StringEscape.None);
+
+    private static readonly StringDelimiter RawSingle = new("'", "'", StringEscape.None);
+
+    /// <summary>The C family builds an object with a word in front of the type.</summary>
+    private static readonly string[] New = ["new"];
 
     /// <summary>
     ///     What answers for an extension no profile claims. It is today's behaviour exactly, kept that
@@ -61,6 +72,7 @@ public static class Languages
         MemberAccessOperators = ["."],
         TypePrefixOperators = [":", "<", ","],
         ImportPrefixes = ["using ", "import ", "namespace ", "#include", "from ", "package ", "require("],
+        InstantiationKeywords = New,
         DeclarationModifiers = CFamilyModifiers,
         DeclarationKeywords = ["class", "interface", "struct", "record", "enum"]
     };
@@ -82,7 +94,7 @@ public static class Languages
             LineStartComments = ["*"],
             BlockComments = [CBlockComment],
             // The VO dialect has no backslash escape: a path in a literal is a path, not an escape.
-            Strings = [new StringDelimiter("\"", "\"", StringEscape.None), new StringDelimiter("'", "'", StringEscape.None)],
+            Strings = [RawDouble, RawSingle],
             AssignmentOperators = [":="],
             MemberAccessOperators = [":", "."],
             TypePrefixOperators = ["<", ","],
@@ -113,6 +125,7 @@ public static class Languages
             TypePrefixOperators = [":", "<", ","],
             // `#` opens no comment here, so `#if` and `#region` no longer read as prose.
             ImportPrefixes = ["using ", "global using ", "namespace "],
+            InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
             DeclarationKeywords = ["class", "interface", "struct", "record", "enum"],
             GeneratedPathPatterns = ["*.g.cs", "*.designer.cs", "*.generated.cs"]
@@ -129,11 +142,12 @@ public static class Languages
             // string mention — losing real calls, which is worse than the unplaced reference an
             // unknown form costs. Interpolated literals are #53's, along with the rest of the
             // multi-line string state.
-            Strings = [DoubleQuoted, new StringDelimiter("'", "'", StringEscape.Backslash)],
+            Strings = [DoubleQuoted, SingleQuotedEscaped],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", "<", ","],
             ImportPrefixes = ["import "],
+            InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
             DeclarationKeywords = ["class", "interface", "enum", "type"]
         },
@@ -143,11 +157,12 @@ public static class Languages
             LineStartComments = ["*"],
             BlockComments = [CBlockComment],
             // No backtick, for the reason the TypeScript profile above gives.
-            Strings = [DoubleQuoted, new StringDelimiter("'", "'", StringEscape.Backslash)],
+            Strings = [DoubleQuoted, SingleQuotedEscaped],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = ["<", ","],
             ImportPrefixes = ["import ", "require("],
+            InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
             DeclarationKeywords = ["class"]
         },
@@ -178,7 +193,7 @@ public static class Languages
         new LanguageProfile("HTML", ["html", "htm"])
         {
             BlockComments = [new StringDelimiter("<!--", "-->", StringEscape.None)],
-            Strings = [new StringDelimiter("\"", "\"", StringEscape.None), new StringDelimiter("'", "'", StringEscape.None)],
+            Strings = [RawDouble, RawSingle],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             CaseInsensitiveKeywords = true
@@ -187,7 +202,7 @@ public static class Languages
         {
             // `/* */` is the only comment form CSS has; `//` is not one, whatever a preprocessor does.
             BlockComments = [CBlockComment],
-            Strings = [DoubleQuoted, new StringDelimiter("'", "'", StringEscape.Backslash)],
+            Strings = [DoubleQuoted, SingleQuotedEscaped],
             // A declaration here is `property: value`, which is the nearest thing CSS has to a write.
             AssignmentOperators = [":"],
             ImportPrefixes = ["@import"],
@@ -203,7 +218,6 @@ public static class Languages
             Strings = [SingleQuoted],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
-            ImportPrefixes = [],
             DeclarationModifiers = SqlModifiers,
             DeclarationNamesFollowKeyword = true,
             CaseInsensitiveKeywords = true
@@ -215,7 +229,6 @@ public static class Languages
             Strings = [SingleQuoted],
             AssignmentOperators = [":="],
             MemberAccessOperators = ["."],
-            ImportPrefixes = [],
             DeclarationModifiers = [.. SqlModifiers, "package", "body", "cursor", "exception"],
             DeclarationNamesFollowKeyword = true,
             CaseInsensitiveKeywords = true,
@@ -223,8 +236,7 @@ public static class Languages
         }
     ];
 
-    /// <summary>What answers for an extension no profile covers.</summary>
-    public static ILanguageAnalyzer Fallback { get; } = new TextAnalyzer(FallbackProfile);
+    private static ILanguageAnalyzer Fallback { get; } = new TextAnalyzer(FallbackProfile);
 
     /// <summary>The set every caller resolves against unless it was handed another.</summary>
     public static LanguageRegistry Default { get; } =

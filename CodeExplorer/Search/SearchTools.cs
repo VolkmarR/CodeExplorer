@@ -309,9 +309,12 @@ internal sealed class SearchTools(
         // What the footer may claim is decided by how the answers were reached and not by what was
         // true when it was written (ADR-0008): once a parser-backed analyser is registered for a
         // language, a reply that still called itself textual would be understating what it knows.
-        text.Append(result.References.All(r => r.Evidence == Evidence.Text)
-            ? "\nClassification is textual — line shape, no compiler. An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n"
-            : "\nClassification is parsed where the language has a parser here and textual elsewhere — line shape, no compiler. An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n");
+        // Only the lead clause varies; the caveat after it is true either way and is stored once.
+        string how = result.References.All(r => r.Evidence == Evidence.Text)
+            ? "Classification is textual"
+            : "Classification is parsed where the language has a parser here and textual elsewhere";
+        text.Append(CultureInfo.InvariantCulture,
+            $"\n{how} — line shape, no compiler. An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n");
         return text.ToString();
 
         void Section(string title, ReferenceKind kind)
