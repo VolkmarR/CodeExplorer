@@ -34,7 +34,7 @@ public sealed record ImportsResult(
     bool HasImports,
     string? Module,
     bool Capped,
-    IReadOnlyList<ImportedFrom> Imports) : SearchOutcome;
+    IReadOnlyList<ImportedFrom> Imports) : Outcome;
 
 /// <summary>One file that imports the file asked about, and the line that does it.</summary>
 public sealed record Dependent(string QualifiedPath, string Name, int LineNumber);
@@ -51,7 +51,7 @@ public sealed record DependentsResult(
     int ShareTheModule,
     int Unplaced,
     bool Capped,
-    IReadOnlyList<Dependent> Dependents) : SearchOutcome;
+    IReadOnlyList<Dependent> Dependents) : Outcome;
 
 /// <summary>
 ///     The two directions of the import graph the build recorded (#55): what a file imports, and what
@@ -76,7 +76,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
     /// </summary>
     public const int MaxEdges = 500;
 
-    public async Task<SearchOutcome> ImportsAsync(string slug, string path, CancellationToken cancellationToken)
+    public async Task<Outcome> ImportsAsync(string slug, string path, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
         var outcome = await ReadImportsAsync(slug, path, cancellationToken);
@@ -85,7 +85,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
         return outcome;
     }
 
-    public async Task<SearchOutcome> DependentsAsync(string slug, string path, CancellationToken cancellationToken)
+    public async Task<Outcome> DependentsAsync(string slug, string path, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
         var outcome = await ReadDependentsAsync(slug, path, cancellationToken);
@@ -95,7 +95,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
         return outcome;
     }
 
-    private Task<SearchOutcome> ReadImportsAsync(string slug, string path, CancellationToken cancellationToken) =>
+    private Task<Outcome> ReadImportsAsync(string slug, string path, CancellationToken cancellationToken) =>
         OverFileAsync(slug, path, async (index, file, token) =>
         {
             string extension = Languages.ExtensionOf(file.QualifiedPath);
@@ -125,7 +125,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
                 capped, edges);
         }, cancellationToken);
 
-    private Task<SearchOutcome> ReadDependentsAsync(string slug, string path,
+    private Task<Outcome> ReadDependentsAsync(string slug, string path,
         CancellationToken cancellationToken) =>
         OverFileAsync(slug, path, async (index, file, token) =>
         {
@@ -181,17 +181,17 @@ public sealed class ImportGraph(ProjectIndexes indexes)
     ///     directions begin this way, and a second copy of it is a second place for the
     ///     open/refuse/dispose contract to be got wrong.
     /// </summary>
-    private async Task<SearchOutcome> OverFileAsync(string slug, string path,
-        Func<IndexReader, IndexedFile, CancellationToken, Task<SearchOutcome>> read,
+    private async Task<Outcome> OverFileAsync(string slug, string path,
+        Func<IndexReader, IndexedFile, CancellationToken, Task<Outcome>> read,
         CancellationToken cancellationToken)
     {
         var open = await IndexReader.OpenAsync(indexes, slug, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new SearchProblem(refused.Explanation);
+        if (open is IndexOpen.Refused refused) return new Problem(refused.Explanation, refused.Kind);
         using var index = ((IndexOpen.Opened)open).Reader;
 
         var (file, explanation) = await index.LocateAsync(path, true, cancellationToken);
         return file is null
-            ? new SearchProblem(explanation!)
+            ? new Problem(explanation!)
             : await read(index, file, cancellationToken);
     }
 

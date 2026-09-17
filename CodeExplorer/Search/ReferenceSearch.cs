@@ -31,7 +31,7 @@ public sealed record Reference(
     Evidence Evidence);
 
 /// <summary>
-///     Everything read, already classified; the answer when the search was not a <see cref="SearchProblem" />. <see cref="TotalFiles" /> and <see cref="TotalLines" />
+///     Everything read, already classified; the answer when the search was not a <see cref="Problem" />. <see cref="TotalFiles" /> and <see cref="TotalLines" />
 ///     are project-wide under the filters, while <see cref="References" /> covers only the
 ///     <see cref="FilesExamined" /> files that were read, so a caller can say what it is not showing.
 ///     <see cref="FilesMatchingWithoutFilters" /> is filled whenever the request carried filters: a
@@ -48,7 +48,7 @@ public sealed record ReferenceResult(
     int FilesExamined,
     long TotalLines,
     IReadOnlyList<Reference> References,
-    int? FilesMatchingWithoutFilters) : SearchOutcome
+    int? FilesMatchingWithoutFilters) : Outcome
 {
     /// <summary>The references that are code: everything but a comment, a string literal or an import.</summary>
     public int CodeReferences => References.Count - Noise;
@@ -112,7 +112,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     ///     search is recorded. It is the only public method for the same reason grep has one: a second
     ///     entry point has nothing else to call.
     /// </summary>
-    public async Task<SearchOutcome> FindAsync(string slug, ReferenceRequest request,
+    public async Task<Outcome> FindAsync(string slug, ReferenceRequest request,
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
@@ -122,14 +122,14 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         return outcome;
     }
 
-    private async Task<SearchOutcome> RunAsync(string slug, ReferenceRequest request,
+    private async Task<Outcome> RunAsync(string slug, ReferenceRequest request,
         CancellationToken cancellationToken)
     {
         string symbol = request.Symbol.Trim();
-        if (SearchQuery.Unusable(symbol, "find_references") is { } unusable) return new SearchProblem(unusable);
+        if (SearchQuery.Unusable(symbol, "find_references") is { } unusable) return new Problem(unusable);
 
         var open = await IndexReader.OpenAsync(indexes, slug, request.Filter.Repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new SearchProblem(refused.Explanation);
+        if (open is IndexOpen.Refused refused) return new Problem(refused.Explanation, refused.Kind);
         using var index = ((IndexOpen.Opened)open).Reader;
         var connection = index.Connection;
 

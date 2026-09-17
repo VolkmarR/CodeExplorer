@@ -431,7 +431,7 @@ internal static class SearchEndpoints
     ///     the prose is the whole of what it shows. Written once because three routes answer with the
     ///     same outcome type, and three copies of the mapping would agree only until one was edited.
     /// </summary>
-    private static IResult Answer(SearchOutcome outcome) => outcome switch
+    private static IResult Answer(Outcome outcome) => outcome switch
     {
         GrepResult result => Results.Ok(result),
         ImportsResult result => Results.Ok(new FileImportsResponse(result.QualifiedPath, result.LanguageName,
@@ -444,7 +444,10 @@ internal static class SearchEndpoints
             result.Dependents
                 .Select(d => new DependentResponse(d.QualifiedPath, d.Name, d.LineNumber))
                 .ToList())),
-        SearchProblem problem => Results.BadRequest(new { error = problem.Explanation }),
+        // No index is a 404 the browse view renders as the starting state a new project is in; every
+        // other problem is a 400, because the project is there and the request asked it something wrong.
+        Problem { Kind: ProblemKind.NoIndex } problem => Results.NotFound(new { error = problem.Explanation }),
+        Problem problem => Results.BadRequest(new { error = problem.Explanation }),
         // Unreachable while these are the outcomes grep and the graph answer with, and a 500 rather
         // than a cast that throws if another is ever added.
         _ => Results.StatusCode(StatusCodes.Status500InternalServerError)

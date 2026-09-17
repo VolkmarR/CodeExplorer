@@ -74,7 +74,7 @@ internal sealed class SearchTools(
             filesOnly, maxLinesPerFile, page, pageSize, withHistory);
 
         var outcome = await grep.SearchAsync(project.Slug, request, cancellationToken);
-        if (outcome is SearchProblem problem) return problem.Explanation;
+        if (outcome is Problem problem) return problem.Explanation;
         var result = (GrepResult)outcome;
         return result.TotalFiles == 0 ? NoMatches(request, result) : Format(request, result);
     }
@@ -222,7 +222,7 @@ internal sealed class SearchTools(
         var request = new ReferenceRequest(symbol, new FileFilter(repo, path, exclude, ext), maxFiles);
 
         var outcome = await references.FindAsync(project.Slug, request, cancellationToken);
-        if (outcome is SearchProblem problem) return problem.Explanation;
+        if (outcome is Problem problem) return problem.Explanation;
         var result = (ReferenceResult)outcome;
         return result.TotalFiles == 0
             ? NoReferences(symbol.Trim(), result)
@@ -362,7 +362,7 @@ internal sealed class SearchTools(
         var request = new DefinitionRequest(symbol, new FileFilter(repo, path, exclude, ext));
 
         var outcome = await definitions.FindAsync(project.Slug, request, cancellationToken);
-        if (outcome is SearchProblem problem) return problem.Explanation;
+        if (outcome is Problem problem) return problem.Explanation;
         var result = (DefinitionResult)outcome;
         return result.Sites.Count == 0
             ? NoDefinition(symbol.Trim(), result)
@@ -516,7 +516,7 @@ internal sealed class SearchTools(
             wholeWord, limit);
 
         var outcome = await matches.ListAsync(project.Slug, request, cancellationToken);
-        if (outcome is SearchProblem problem) return problem.Explanation;
+        if (outcome is Problem problem) return problem.Explanation;
         var result = (MatchListResult)outcome;
         return result.TotalDistinct == 0
             ? NoValues(request, result)
