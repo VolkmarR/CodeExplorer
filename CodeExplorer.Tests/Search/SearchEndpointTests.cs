@@ -137,7 +137,9 @@ public sealed class SearchEndpointTests
         using var search = await http.GetAsync("/api/projects/alpha/search?q=Widget", Ct);
         using var files = await http.GetAsync("/api/projects/alpha/files", Ct);
 
-        Assert.Equal(HttpStatusCode.BadRequest, search.StatusCode);
+        // Both routes answer the missing index the same way: the view renders a 404 as the starting
+        // state a new project is in, and a search page is no less in that state than a browse page.
+        Assert.Equal(HttpStatusCode.NotFound, search.StatusCode);
         Assert.Contains("alpha", await search.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
         Assert.Equal(HttpStatusCode.NotFound, files.StatusCode);
         Assert.Contains("alpha", await files.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);

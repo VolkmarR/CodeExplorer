@@ -183,14 +183,17 @@ public abstract record IndexOpen
     /// <summary>The caller disposes the reader after one unit of work and never keeps it (ADR-0003).</summary>
     public sealed record Opened(IndexReader Reader) : IndexOpen;
 
-    /// <summary>The two ways an open is declined, with the prose to hand the caller.</summary>
-    public abstract record Refused(string Explanation) : IndexOpen;
+    /// <summary>
+    ///     The two ways an open is declined, with the prose to hand the caller and the
+    ///     <see cref="ProblemKind" /> a caller answering with an <see cref="Outcome" /> gives it.
+    /// </summary>
+    public abstract record Refused(string Explanation, ProblemKind Kind) : IndexOpen;
 
     /// <summary>Never built, or a refresh is still building the first one.</summary>
-    public sealed record NoIndex(string Explanation) : Refused(Explanation);
+    public sealed record NoIndex(string Explanation) : Refused(Explanation, ProblemKind.NoIndex);
 
     /// <summary>The <c>repo</c> argument names no repository in this index.</summary>
-    public sealed record UnknownRepository(string Explanation) : Refused(Explanation);
+    public sealed record UnknownRepository(string Explanation) : Refused(Explanation, ProblemKind.Invalid);
 }
 
 /// <summary>

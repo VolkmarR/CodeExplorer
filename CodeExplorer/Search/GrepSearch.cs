@@ -46,7 +46,7 @@ public sealed record GrepLine(int LineNumber, string Text, bool IsMatch, Attribu
 public sealed record GrepFile(string QualifiedPath, int MatchCount, int MatchesShown, IReadOnlyList<GrepLine> Lines);
 
 /// <summary>
-///     A page of matches; the answer when the search was not a <see cref="SearchProblem" />.
+///     A page of matches; the answer when the search was not a <see cref="Problem" />.
 ///     <see cref="Engine" /> names what answered, because full-text and substring
 ///     scan rank differently. <see cref="FilesMatchingWithoutFilters" /> is filled only when nothing
 ///     matched under path, extension or exclude filters: it tells "no matches" from "matches existed
@@ -59,7 +59,7 @@ public sealed record GrepResult(
     int Page,
     int PageSize,
     IReadOnlyList<GrepFile> Files,
-    int? FilesMatchingWithoutFilters) : SearchOutcome;
+    int? FilesMatchingWithoutFilters) : Outcome;
 
 /// <summary>
 ///     Text and regular-expression search over a project's <c>lines</c>. All matching runs inside
@@ -102,7 +102,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
     ///     next — which is what makes this the one place a search is recorded. A new entry point cannot
     ///     report a different set of attributes, because it does not record at all.
     /// </summary>
-    public async Task<SearchOutcome> SearchAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
+    public async Task<Outcome> SearchAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
         var outcome = await RunAsync(slug, request, cancellationToken);
@@ -111,18 +111,18 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         return outcome;
     }
 
-    private async Task<SearchOutcome> RunAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
+    private async Task<Outcome> RunAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
     {
         string query = request.Query.Trim();
         if (query.Length == 0)
-            return new SearchProblem("The query is empty. Pass the text or RE2 pattern to search for.");
+            return new Problem("The query is empty. Pass the text or RE2 pattern to search for.");
 
         bool regex = request.Regex || request.Multiline;
-        if (regex && Re2.Unsupported(query) is { } unsupported) return new SearchProblem(unsupported);
+        if (regex && Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
         if (regex && request.WholeWord) query = $@"\b(?:{query})\b";
 
         var open = await IndexReader.OpenAsync(indexes, slug, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new SearchProblem(refused.Explanation);
+        if (open is IndexOpen.Refused refused) return new Problem(refused.Explanation, refused.Kind);
         using var index = ((IndexOpen.Opened)open).Reader;
         var connection = index.Connection;
 
@@ -137,11 +137,11 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         {
             // Only regex mode hands user text to a parser; anything else DuckDB raises here is
             // infrastructure and propagates.
-            return new SearchProblem(Re2.Rejected(ex));
+            return new Problem(Re2.Rejected(ex));
         }
     }
 
-    private static async Task<SearchOutcome> SearchLinesAsync(
+    private static async Task<Outcome> SearchLinesAsync(
         IndexReader index, GrepRequest request, string query, bool regex, Bounds bounds,
         CancellationToken cancellationToken)
     {
@@ -319,7 +319,7 @@ public sealed class GrepSearch(ProjectIndexes indexes)
     ///     candidate is <c>string_agg</c>-ed in line order and matched with the <c>s</c> flag so <c>.</c>
     ///     crosses newlines. Two passes: counts without content, then content only for the page shown.
     /// </summary>
-    private static async Task<SearchOutcome> SearchMultilineAsync(
+    private static async Task<Outcome> SearchMultilineAsync(
         DuckDBConnection connection, GrepRequest request, string query, Bounds bounds,
         CancellationToken cancellationToken)
     {
