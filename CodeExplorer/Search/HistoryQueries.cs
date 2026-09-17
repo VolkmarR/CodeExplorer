@@ -1,0 +1,698 @@
+using DuckDB.NET.Data;
+
+namespace CodeExplorer;
+
+/// <summary>One commit as a tool reports it: enough to name it and to say who and when, and no body.</summary>
+public sealed record RecordedChange(
+    string Sha,
+    string RepositorySlug,
+    string AuthorName,
+    string AuthorEmail,
+    DateTimeOffset AuthoredAt,
+    string Subject);
+
+/// <summary>
+///     One commit as the change log lists it: a <see cref="RecordedChange" /> with its message body and
+///     what it did to the tree, summed from <c>commit_files</c>. The sums are the commit's own added and
+///     removed lines, so a reformat and a one-line fix read differently at a glance.
+/// </summary>
+public sealed record LoggedCommit(
+    string Sha,
+    string RepositorySlug,
+    string AuthorName,
+    string AuthorEmail,
+    DateTimeOffset AuthoredAt,
+    string Subject,
+    string Body,
+    int FilesChanged,
+    int Added,
+    int Deleted);
+
+/// <summary>
+///     One path a commit touched. <see cref="QualifiedPath" /> is set when the path is still at HEAD,
+///     so a view can link to the file; null for a path the commit deleted or a later one renamed.
+/// </summary>
+public sealed record CommitFile(string Path, string ChangeKind, int Added, int Deleted, string? QualifiedPath);
+
+/// <summary>
+///     One file that kept changing alongside another: how many of the anchor's commits also touched
+///     it. <see cref="QualifiedPath" /> is how the project names it (ADR-0006) and is set even for a
+///     path HEAD no longer holds, which <see cref="AtHead" /> is what says — coupling that happened
+///     is still coupling, and an agent sent to read a file that is gone has been told something false.
+/// </summary>
+public sealed record CoChangedFile(string QualifiedPath, bool AtHead, int SharedCommits);
+
+/// <summary>
+///     What one file's coupling amounts to over a window, and what the answer had to leave out to say
+///     it. <see cref="Paired" /> is the commits the ranking is drawn from and <see cref="Commits" />
+///     every commit that touched the file, so the difference is the mass commits the ceiling excluded
+///     — a number the reply says out loud, because a ranking drawn from a third of a file's history
+///     without saying so is the one that misleads.
+/// </summary>
+/// <param name="Commits">Commits of the window that touched the anchor file, ceiling or no ceiling.</param>
+/// <param name="Paired">How many of those were small enough to pair.</param>
+/// <param name="Files">The co-changed files, most shared commits first.</param>
+public sealed record CoChanges(int Commits, int Paired, IReadOnlyList<CoChangedFile> Files)
+{
+    /// <summary>The commits the ceiling kept out of the pairing.</summary>
+    public int Excluded => Commits - Paired;
+}
+
+/// <summary>Everything a page of the log asks for. A null repository covers every one in the project.</summary>
+public sealed record LogRequest(string? Repository, int Limit, int Page);
+
+/// <summary>
+///     A page of commits, newest first. <see cref="HasHistory" /> is the project's and not the page's:
+///     an empty page of a project that has history means the page is past the end, and an empty page of
+///     one that has none means nothing was ever imported — opposite claims, and the reason the flag is
+///     carried rather than inferred from the count (CONTEXT.md, History). <see cref="Limit" /> and
+///     <see cref="Page" /> are what the read actually used, after clamping, so a reply can say where it
+///     stood without clamping a second time.
+/// </summary>
+public sealed record LogAnswer(
+    bool HasHistory,
+    IndexedRepository? Repository,
+    int Page,
+    int Limit,
+    IReadOnlyList<RecordedChange> Commits) : Outcome;
+
+/// <summary>Everything a page of the change log asks for.</summary>
+public sealed record ChangeLogRequest(string? Repository, int Page, int PageSize);
+
+/// <summary>
+///     A page of the change log with the body and sums of each commit, and <see cref="Total" /> so the
+///     page can say how many there are. Zero is a project or repository without history rather than an
+///     error, which the page draws as its own starting state.
+/// </summary>
+public sealed record ChangeLogAnswer(
+    long Total,
+    int Page,
+    int PageSize,
+    IReadOnlyList<LoggedCommit> Commits) : Outcome;
+
+/// <summary>Everything one file's history asks for.</summary>
+public sealed record FileHistoryRequest(string Path, int Limit);
+
+/// <summary>
+///     The commits that changed one file, newest first. Empty with <see cref="HasHistory" /> set is a
+///     file whose history is older than what was imported or that reached its path by a rename; empty
+///     without it is a project that has no history to look in.
+/// </summary>
+public sealed record FileHistoryAnswer(
+    IndexedFile File,
+    bool HasHistory,
+    IReadOnlyList<RecordedChange> Commits) : Outcome;
+
+/// <summary>
+///     Everything a blame asks for. <see cref="EndLine" /> null — or anything below 1 — is the end of
+///     the file, which the module bounds rather than the caller.
+/// </summary>
+public sealed record BlameRequest(string Path, int StartLine, int? EndLine);
+
+/// <summary>
+///     Who last changed each line of a window of a file. <see cref="First" /> and <see cref="Last" />
+///     are the window that was read, after clamping, with <see cref="Last" /> null for the end of the
+///     file, so a reply naming an empty answer's bounds names the ones it looked at. Empty runs is a
+///     file the build kept without lines as much as it is a window past the end, which
+///     <see cref="IndexedFile.SkipReason" /> tells apart.
+/// </summary>
+public sealed record BlameAnswer(
+    IndexedFile File,
+    bool HasHistory,
+    int First,
+    int? Last,
+    IReadOnlyList<AttributedLines> Runs) : Outcome;
+
+/// <summary>
+///     Everything a churn ranking asks for. <see cref="Directory" /> is a qualified path, a bare
+///     repository slug, or null for the whole project — one field, because a repository is a directory
+///     and both callers hand over whichever of the two their surface spells.
+/// </summary>
+public sealed record ChurnRequest(string? Directory, int Days, int Limit);
+
+/// <summary>
+///     The most-changed files of a window, and everything needed to say what the ranking does not
+///     cover. The four ways it can come back empty are kept apart rather than collapsed, because each
+///     is a different sentence and an agent shown the wrong one learns a wrong fact (CONTEXT.md,
+///     History): <see cref="HasHistory" /> false is a project nothing was imported for,
+///     <see cref="Window" /> null is a scope with no commit at all, an empty <see cref="Files" /> is a
+///     window in which nothing changed, and <see cref="Coverage" /> names the repositories the ranking
+///     could not speak for whichever of those it is.
+///     <see cref="ScopeSpelled" /> is what the answer calls the scope, so a ranking and a miss name it
+///     the same way.
+/// </summary>
+public sealed record ChurnAnswer(
+    string ScopeSpelled,
+    string? RepositorySlug,
+    bool HasHistory,
+    HistoryWindow? Window,
+    IReadOnlyList<ChurnedFile> Files,
+    HistoryCoverage Coverage) : Outcome;
+
+/// <summary>Everything a co-change ranking asks for.</summary>
+public sealed record CoChangeRequest(string Path, int Days, int Limit);
+
+/// <summary>
+///     What one file changed alongside over a window. <see cref="MaxCommitPaths" /> is the ceiling the
+///     pairing ran under, carried so that the reply explaining what was excluded quotes the number that
+///     was actually used rather than reading the configuration a second time.
+/// </summary>
+public sealed record CoChangeAnswer(
+    IndexedFile File,
+    bool HasHistory,
+    HistoryWindow? Window,
+    CoChanges Coupling,
+    int MaxCommitPaths) : Outcome;
+
+/// <summary>Everything the paths of one commit ask for. The SHA is full: a listing is where it came from.</summary>
+public sealed record CommitFilesRequest(string Sha);
+
+/// <summary>The paths one commit touched, in path order.</summary>
+public sealed record CommitFilesAnswer(string Sha, IReadOnlyList<CommitFile> Files) : Outcome;
+
+/// <summary>
+///     The index-backed answers drawn from a project's history (CONTEXT.md): what changed, what changed
+///     one file, who last changed each line, what keeps changing, and what keeps changing with what.
+///     One module behind the MCP tools and the operator's pages alike, so the decisions inside — when a
+///     project counts as having no history, how far a window reaches, which commits are too wide to
+///     pair, what a scope is called — are taken once and both surfaces answer the same way; only the
+///     rendering differs. Every answer is an <see cref="Outcome" />: a semantic failure is an answer,
+///     never an exception (CODING_STANDARDS).
+///     The SQL is private here rather than on <see cref="IndexReader" /> because each statement has one
+///     caller, which is this module: a reader member per question is an interface as wide as the
+///     implementation, and it was the shape that let two surfaces read the same tables in two orders.
+///     What stays on the reader is what more than one module asks — a file's first and last commit,
+///     which the file read carries, and the coverage rule, which the overview needs too.
+/// </summary>
+public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration configuration)
+{
+    /// <summary>Named on the search telemetry, so a dashboard can tell a history read apart from a scan.</summary>
+    public const string Engine = "history";
+
+    /// <summary>
+    ///     The most commits one read may return, whoever asks. Both surfaces had settled on the same
+    ///     number from opposite directions — a page of the change log and a tool reply are both read
+    ///     top-down — so it is one ceiling here rather than two that can drift.
+    /// </summary>
+    public const int MaxCommits = 200;
+
+    /// <summary>
+    ///     The most files either ranking may return. A hundred is already more than anybody reads off a
+    ///     ranking, and past it the reply cap or the page's own scroll is what would bite.
+    /// </summary>
+    public const int MaxRankedFiles = 100;
+
+    /// <summary>
+    ///     The most lines one blame may cover. The index refuses files over <c>Index:MaxFileBytes</c>
+    ///     (4 MiB by default), which bounds this well below it; a caller that protects an agent's
+    ///     context caps the runs it prints, and this one protects the server.
+    /// </summary>
+    public const int MaxLinesPerFile = 100_000;
+
+    /// <summary>
+    ///     Default for <c>History:MaxCommitPaths</c>, the most paths a commit may touch and still be
+    ///     paired. A reformat, a vendor drop or an initial import couples every path it touched to
+    ///     every other, and those pairs are one commit rather than evidence about any file in it.
+    ///     Two hundred is the judgement: high enough that a feature landing across a module still
+    ///     counts as coupling, low enough that nothing a person wrote by hand in one sitting reaches
+    ///     it. It is a setting and not a constant because what counts as a mass commit differs between
+    ///     a repository of two hundred files and one of eighty thousand.
+    /// </summary>
+    private const int DefaultMaxCommitPaths = 200;
+
+    private readonly int _maxCommitPaths = configuration.GetValue("History:MaxCommitPaths", DefaultMaxCommitPaths);
+
+    /// <summary>
+    ///     A page of commits, newest first, scoped to one repository or covering every one. Whether the
+    ///     project has history at all is read first and carried, because "no commit on this page" and
+    ///     "no history was imported" are answered with opposite sentences.
+    /// </summary>
+    public async Task<Outcome> LogAsync(string slug, LogRequest request, CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
+        {
+            bool hasHistory = await HasHistoryAsync(index, token);
+            int limit = Math.Clamp(request.Limit, 1, MaxCommits);
+            int page = Math.Max(1, request.Page);
+            var commits = hasHistory
+                ? await CommitsAsync(index, index.Repository?.Slug, limit, (page - 1) * limit, token)
+                : [];
+            return new LogAnswer(hasHistory, index.Repository, page, limit, commits);
+        }, cancellationToken);
+        Record(recording, outcome, o => o is LogAnswer answer ? answer.Commits.Count : 0);
+        return outcome;
+    }
+
+    /// <summary>
+    ///     A page of the change log: the same commits with each one's body and the sums of what it did,
+    ///     and the total in scope so a page can say how many there are.
+    /// </summary>
+    public async Task<Outcome> ChangeLogAsync(string slug, ChangeLogRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
+        {
+            int pageSize = Math.Clamp(request.PageSize, 1, MaxCommits);
+            int page = Math.Max(1, request.Page);
+            string? scope = index.Repository?.Slug;
+            long total = await CommitCountAsync(index, scope, token);
+            var commits = await LoggedAsync(index, scope, pageSize, (page - 1) * pageSize, token);
+            return new ChangeLogAnswer(total, page, pageSize, commits);
+        }, cancellationToken);
+        Record(recording, outcome, o => o is ChangeLogAnswer answer ? answer.Commits.Count : 0);
+        return outcome;
+    }
+
+    /// <summary>
+    ///     The commits that touched one path, newest first. The path is resolved before the history is
+    ///     asked about, so an agent that got the path wrong is told so rather than told about history.
+    /// </summary>
+    public async Task<Outcome> FileHistoryAsync(string slug, FileHistoryRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverFileAsync(indexes, slug, request.Path, false,
+            async (index, file, token) =>
+            {
+                bool hasHistory = await HasHistoryAsync(index, token);
+                var commits = hasHistory
+                    ? await FileCommitsAsync(index, file.RepositorySlug, file.PathInRepository,
+                        Math.Clamp(request.Limit, 1, MaxCommits), token)
+                    : [];
+                return new FileHistoryAnswer(file, hasHistory, commits);
+            }, cancellationToken);
+        Record(recording, outcome, o => o is FileHistoryAnswer answer ? answer.Commits.Count : 0);
+        return outcome;
+    }
+
+    /// <summary>
+    ///     Who last changed each line of a window of one file, as runs. A file the build kept without
+    ///     lines answers with no runs rather than a refusal: it is in the index, and only the
+    ///     attribution has nothing to fill.
+    /// </summary>
+    public async Task<Outcome> BlameAsync(string slug, BlameRequest request, CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverFileAsync(indexes, slug, request.Path, false,
+            async (index, file, token) =>
+            {
+                bool hasHistory = await HasHistoryAsync(index, token);
+                int first = Math.Max(1, request.StartLine);
+                // Anything below 1 is the end of the file, which is the caller saying "all of it" in the
+                // two spellings its surface allows: an omitted argument and a zero.
+                int? last = request.EndLine is null or < 1 ? null : request.EndLine;
+                IReadOnlyList<AttributedLines> runs = file.SkipReason is null
+                    ? await RunsAsync(index, file.FileId, first, Math.Min(last ?? MaxLinesPerFile, MaxLinesPerFile),
+                        token)
+                    : [];
+                return new BlameAnswer(file, hasHistory, first, last, runs);
+            }, cancellationToken);
+        Record(recording, outcome, o => o is BlameAnswer answer ? answer.Runs.Count : 0);
+        return outcome;
+    }
+
+    /// <summary>
+    ///     The files a window's commits touched, most commits first, within a scope the caller names
+    ///     with a qualified path.
+    ///     The order of the decisions is the answer's meaning: whether the project has history at all,
+    ///     then what the scope is, then whether that scope holds a commit, then which repositories the
+    ///     ranking cannot speak for, and only then the ranking. Each step's answer is carried rather
+    ///     than turned into an empty ranking, because an empty ranking is a claim — that nothing changed
+    ///     — and three of the four steps above would be making it falsely.
+    /// </summary>
+    public async Task<Outcome> ChurnAsync(string slug, ChurnRequest request, CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverDirectoryAsync(indexes, slug, request.Directory,
+            async (index, directory, token) =>
+            {
+                bool hasHistory = await HasHistoryAsync(index, token);
+                var (repositorySlug, directoryInRepository, spelled) = Scope(index, directory);
+
+                var window = hasHistory
+                    ? await IndexQueries.WindowAsync(index.Connection, request.Days, repositorySlug, token)
+                    : null;
+                // Read whether or not there is a ranking, and before the answer branches: a reader shown
+                // nothing is the one most likely to conclude that nothing changed.
+                var coverage = await index.HistoryCoverageAsync(repositorySlug, token);
+                IReadOnlyList<ChurnedFile> ranked = window is null
+                    ? []
+                    : await IndexQueries.RankAsync(index.Connection, await index.PathsAsync(token), window,
+                        repositorySlug, directoryInRepository, Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
+                return new ChurnAnswer(spelled, repositorySlug, hasHistory, window, ranked, coverage);
+            }, cancellationToken);
+        Record(recording, outcome, o => o is ChurnAnswer answer ? answer.Files.Count : 0);
+        return outcome;
+    }
+
+    /// <summary>
+    ///     The files a window's commits changed alongside one file, most shared commits first. Scoped to
+    ///     the anchor's own repository, because that is the only one whose commits could have carried it
+    ///     — and so the window is that repository's newest commit, not another's.
+    /// </summary>
+    public async Task<Outcome> CoChangedAsync(string slug, CoChangeRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverFileAsync(indexes, slug, request.Path, false,
+            async (index, file, token) =>
+            {
+                bool hasHistory = await HasHistoryAsync(index, token);
+                var window = hasHistory
+                    ? await IndexQueries.WindowAsync(index.Connection, request.Days, file.RepositorySlug, token)
+                    : null;
+                var coupling = window is null
+                    ? new CoChanges(0, 0, [])
+                    : await PairAsync(index, window, file.RepositorySlug, file.PathInRepository, _maxCommitPaths,
+                        Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
+                return new CoChangeAnswer(file, hasHistory, window, coupling, _maxCommitPaths);
+            }, cancellationToken);
+        Record(recording, outcome, o => o is CoChangeAnswer answer ? answer.Coupling.Files.Count : 0);
+        return outcome;
+    }
+
+    /// <summary>
+    ///     The paths one commit touched. A SHA the index does not hold is a miss and not an empty
+    ///     answer: every commit the walk records touched something, the root included, so nothing to
+    ///     list means nothing to list it for.
+    /// </summary>
+    public async Task<Outcome> CommitFilesAsync(string slug, CommitFilesRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null, async (index, token) =>
+        {
+            var files = await PathsOfAsync(index, request.Sha, token);
+            return files.Count == 0
+                ? new Problem($"No commit '{request.Sha}' in the history of project '{slug}'.", ProblemKind.Missing)
+                : (Outcome)new CommitFilesAnswer(request.Sha, files);
+        }, cancellationToken);
+        Record(recording, outcome, o => o is CommitFilesAnswer answer ? answer.Files.Count : 0);
+        return outcome;
+    }
+
+    /// <summary>
+    ///     Records the read the way every search here records it: how many rows the caller got, or that
+    ///     the question was refused. One helper because seven members would otherwise spell the same
+    ///     three lines out, and one of them would eventually forget the refusal.
+    /// </summary>
+    private static void Record(Telemetry.SearchRecording recording, Outcome outcome, Func<Outcome, int> rows)
+    {
+        if (outcome is Problem) recording.Problem();
+        else recording.Matched(Engine, rows(outcome), 0);
+    }
+
+    /// <summary>
+    ///     What a <c>directory</c> narrows to: a repository, a directory inside it, or neither for the
+    ///     whole project — with what the answer calls it, so the ranking and the misses name it the same
+    ///     way. A path that names no directory is refused before this, by the open itself.
+    /// </summary>
+    private static (string? RepositorySlug, string? DirectoryInRepository, string Spelled) Scope(
+        IndexReader index, IndexedDirectory directory)
+    {
+        string project = $"project '{index.ProjectSlug}'";
+        if (directory.Repository is null) return (null, null, project);
+
+        // Null rather than an empty path: the repository's own root is the whole repository, which the
+        // ranking scopes with the slug alone and names as such.
+        string? directoryInRepository = directory.PathInRepository.Length == 0 ? null : directory.PathInRepository;
+        return (directory.Repository.Slug, directoryInRepository,
+            directoryInRepository is null
+                ? $"repository '{directory.Repository.Slug}' of {project}"
+                : $"'{directory.QualifiedPath}' in {project}");
+    }
+
+    /// <summary>
+    ///     Whether this index holds any history at all. An index built before ADR-0007, or one whose
+    ///     every repository failed to walk, has the tables and nothing in them — and "no commits
+    ///     recorded" must never be answered as "this file was never changed", which reads as a fact.
+    /// </summary>
+    private static async Task<bool> HasHistoryAsync(IndexReader index, CancellationToken cancellationToken)
+    {
+        using var command = index.Connection.Query("SELECT count(*) > 0 FROM commits", []);
+        return await command.ExecuteScalarAsync(cancellationToken) is true;
+    }
+
+    /// <summary>
+    ///     The commits of a repository, newest first — or of every repository when none is named. A page
+    ///     of history, ordered by <c>commit_id</c> because it ascends with history by construction while
+    ///     an author date does not (ADR-0007).
+    /// </summary>
+    private static async Task<IReadOnlyList<RecordedChange>> CommitsAsync(IndexReader index, string? repositorySlug,
+        int limit, int skip, CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
+        using var command = index.Connection.Query($"""
+                                                    SELECT sha, repo_slug, author_name, author_email, authored_at,
+                                                           subject
+                                                    FROM commits {scope}
+                                                    ORDER BY commit_id DESC
+                                                    LIMIT {limit} OFFSET {skip}
+                                                    """, parameters);
+        return await ChangesAsync(command, cancellationToken);
+    }
+
+    /// <summary>
+    ///     The commits that touched one path of one repository, newest first. Matched on the path as the
+    ///     commit recorded it, so history stops where the file was last renamed — which is the half of
+    ///     rename-following ADR-0007 does not pay for, and which the reply says out loud.
+    /// </summary>
+    private static async Task<IReadOnlyList<RecordedChange>> FileCommitsAsync(IndexReader index,
+        string repositorySlug, string path, int limit, CancellationToken cancellationToken)
+    {
+        using var command = index.Connection.Query($"""
+                                                    SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
+                                                           c.authored_at, c.subject
+                                                    FROM commit_files cf JOIN commits c USING (commit_id)
+                                                    WHERE c.repo_slug = $r AND cf.path = $p
+                                                    ORDER BY c.commit_id DESC
+                                                    LIMIT {limit}
+                                                    """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path)]);
+        return await ChangesAsync(command, cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
+        CancellationToken cancellationToken)
+    {
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var changes = new List<RecordedChange>();
+        while (await reader.ReadAsync(cancellationToken))
+            changes.Add(new RecordedChange(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
+                reader.Text("author_email"),
+                reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")), reader.Text("subject")));
+        return changes;
+    }
+
+    /// <summary>How many commits are recorded in scope, so a page can say how many there are.</summary>
+    private static async Task<long> CommitCountAsync(IndexReader index, string? repositorySlug,
+        CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
+        using var command = index.Connection.Query($"SELECT count(*) FROM commits {scope}", parameters);
+        return (long)(await command.ExecuteScalarAsync(cancellationToken) ?? 0L);
+    }
+
+    /// <summary>
+    ///     A page of the change log, newest first, with each commit's body and the sums of what it did.
+    ///     Ordered by <c>commit_id</c> for the reason <see cref="CommitsAsync" /> gives. The sums are cast
+    ///     because DuckDB widens <c>sum</c> of an INTEGER to HUGEINT, which the driver hands back as a
+    ///     BigInteger.
+    /// </summary>
+    private static async Task<IReadOnlyList<LoggedCommit>> LoggedAsync(IndexReader index, string? repositorySlug,
+        int limit, int skip, CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
+        using var command = index.Connection.Query($"""
+                                                    SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
+                                                           c.authored_at, c.subject, c.body,
+                                                           count(cf.path)::INTEGER AS files_changed,
+                                                           coalesce(sum(cf.added), 0)::INTEGER AS added,
+                                                           coalesce(sum(cf.deleted), 0)::INTEGER AS deleted
+                                                    FROM commits c LEFT JOIN commit_files cf USING (commit_id)
+                                                    {scope}
+                                                    GROUP BY c.commit_id, c.sha, c.repo_slug, c.author_name,
+                                                             c.author_email, c.authored_at, c.subject, c.body
+                                                    ORDER BY c.commit_id DESC
+                                                    LIMIT {limit} OFFSET {skip}
+                                                    """, parameters);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var commits = new List<LoggedCommit>();
+        while (await reader.ReadAsync(cancellationToken))
+            commits.Add(new LoggedCommit(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
+                reader.Text("author_email"), reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
+                reader.Text("subject"), reader.Text("body"), reader.Int32("files_changed"), reader.Int32("added"),
+                reader.Int32("deleted")));
+        return commits;
+    }
+
+    /// <summary>
+    ///     Who last changed each line of a file, as runs rather than as one row per line: consecutive
+    ///     lines sharing a commit are one entry, which is how blame reads and a fraction of the output.
+    /// </summary>
+    private static async Task<IReadOnlyList<AttributedLines>> RunsAsync(IndexReader index, long fileId, int first,
+        int last, CancellationToken cancellationToken)
+    {
+        // The runs are rebuilt from lines rather than read from attribution, because attribution is
+        // keyed by blob and holds the ranges of the whole file: a window of it would have to be clipped
+        // here anyway, and a line the build could not attribute is absent there but present here.
+        // Gaps and islands: within one commit, consecutive line numbers have a constant difference from
+        // their position in that commit's lines, so that difference is the run. The window function is
+        // computed in a subquery because it is evaluated after grouping and cannot appear in GROUP BY.
+        // Lines with no commit fall in one NULL partition, which islands correctly for the same reason.
+        using var command = index.Connection.Query("""
+                                                   SELECT min(line_number) AS start_line,
+                                                          max(line_number) AS end_line,
+                                                          sha, author_name, authored_at, subject
+                                                   FROM (SELECT l.line_number, c.sha, c.author_name, c.authored_at,
+                                                                c.subject,
+                                                                l.line_number - row_number() OVER (
+                                                                    PARTITION BY c.sha ORDER BY l.line_number) AS run
+                                                         FROM lines l LEFT JOIN commits c USING (commit_id)
+                                                         WHERE l.file_id = $f AND l.line_number BETWEEN $a AND $b)
+                                                   GROUP BY sha, author_name, authored_at, subject, run
+                                                   ORDER BY start_line
+                                                   """,
+            [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var runs = new List<AttributedLines>();
+        while (await reader.ReadAsync(cancellationToken))
+            runs.Add(new AttributedLines(
+                reader.GetInt32(reader.GetOrdinal("start_line")), reader.GetInt32(reader.GetOrdinal("end_line")),
+                await reader.IsDBNullAsync(reader.GetOrdinal("sha"), cancellationToken)
+                    ? null
+                    : new AttributedBy(reader.Text("sha"), reader.Text("author_name"),
+                        reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
+                        reader.Text("subject"))));
+        return runs;
+    }
+
+    /// <summary>
+    ///     The paths one commit touched, with the qualified path of each that is still at HEAD. Matched
+    ///     by full SHA: the caller got it from a listing and has no reason to abbreviate it.
+    /// </summary>
+    private static async Task<IReadOnlyList<CommitFile>> PathsOfAsync(IndexReader index, string sha,
+        CancellationToken cancellationToken)
+    {
+        using var command = index.Connection.Query("""
+                                                   SELECT cf.path, cf.change_kind, cf.added, cf.deleted,
+                                                          f.qualified_path
+                                                   FROM commits c JOIN commit_files cf USING (commit_id)
+                                                   LEFT JOIN repositories r ON r.slug = c.repo_slug
+                                                   LEFT JOIN files f ON f.repo_id = r.repo_id AND f.path = cf.path
+                                                   WHERE c.sha = $sha
+                                                   ORDER BY cf.path
+                                                   """, [new DuckDBParameter("sha", sha)]);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var files = new List<CommitFile>();
+        while (await reader.ReadAsync(cancellationToken))
+            files.Add(new CommitFile(reader.Text("path"), reader.Text("change_kind"), reader.Int32("added"),
+                reader.Int32("deleted"), reader.IsNull("qualified_path") ? null : reader.Text("qualified_path")));
+        return files;
+    }
+
+    /// <summary>
+    ///     The files a window's commits changed alongside one file, most shared commits first. The
+    ///     coupling the code itself does not show — a constant and the three places that read it, two
+    ///     files that have simply always moved together.
+    ///     Pairing is anchored rather than a self-join of <c>commit_files</c> against itself. A
+    ///     self-join is the obvious reading of "which files change together" and it is quadratic in
+    ///     every commit of the window at once: one vendor drop of five thousand paths is twenty-five
+    ///     million pairs on its own, computed to answer a question about one file. Anchored, the
+    ///     pairing is the anchor's own commits times what each of them touched, and reading them costs
+    ///     two passes over <c>commit_files</c> rather than a pass per commit in the window.
+    ///     The ceiling is still needed for what it was needed for: one mass commit that happens to
+    ///     touch the anchor pairs it with every path in the repository at once, and those pairs are not
+    ///     coupling, they are one commit. Excluding them is the reply's to explain, which is why the
+    ///     count of what was excluded comes back rather than being quietly dropped.
+    ///     Here rather than in <see cref="IndexQueries" />: that class is for the reads a build makes
+    ///     too, and no build pairs anything.
+    /// </summary>
+    private static async Task<CoChanges> PairAsync(IndexReader index, HistoryWindow window, string repositorySlug,
+        string pathInRepository, int maxCommitPaths, int limit, CancellationToken cancellationToken)
+    {
+        // Epoch seconds rather than timestamp parameters, for the reason IndexQueries compares them
+        // that way: it keeps the comparison off the session time zone and a DateTimeOffset out of the
+        // driver's parameter mapping.
+        var parameters = new List<DuckDBParameter>
+        {
+            new("since", window.Since.ToUnixTimeSeconds()),
+            new("until", window.Until.ToUnixTimeSeconds()),
+            new("r", repositorySlug),
+            new("p", pathInRepository),
+            new("c", maxCommitPaths)
+        };
+
+        using var command = index.Connection.Query($"""
+                                                    -- The anchor's own commits first, and everything after
+                                                    -- reads only those. Narrowing here rather than later is
+                                                    -- what keeps the work proportional to one file's history
+                                                    -- instead of to the whole window's.
+                                                    WITH anchor AS (
+                                                        SELECT cf.commit_id
+                                                        FROM commit_files cf
+                                                        JOIN commits c USING (commit_id)
+                                                        WHERE c.repo_slug = $r
+                                                          AND epoch(c.authored_at) BETWEEN $since AND $until
+                                                          AND cf.path = $p),
+                                                    -- Every path those commits touched. The window and the
+                                                    -- repository are not repeated: a commit_id from anchor
+                                                    -- already satisfies both. MATERIALIZED because two CTEs
+                                                    -- below read this one, and inlined it would be a second
+                                                    -- scan of commit_files to produce the same rows.
+                                                    touched AS MATERIALIZED (
+                                                        SELECT cf.commit_id, cf.path
+                                                        FROM commit_files cf JOIN anchor USING (commit_id)),
+                                                    sized AS (
+                                                        SELECT commit_id,
+                                                               count(*) <= $c AS paired
+                                                        FROM touched GROUP BY commit_id),
+                                                    -- One row per commit that touched the anchor, so this
+                                                    -- counts commits and not paths.
+                                                    counts AS (
+                                                        SELECT count(*)::INTEGER AS commits,
+                                                               count(*) FILTER (WHERE paired)::INTEGER AS paired
+                                                        FROM sized),
+                                                    ranked AS (
+                                                        SELECT t.path, count(*)::INTEGER AS shared
+                                                        FROM touched t JOIN sized s USING (commit_id)
+                                                        WHERE s.paired AND t.path <> $p
+                                                        GROUP BY t.path
+                                                        -- Spelled out rather than ordered by the alias, for
+                                                        -- the reason IndexQueries spells its ORDER BY out.
+                                                        ORDER BY count(*) DESC, t.path
+                                                        -- Inlined and not parameterised: it is an int the
+                                                        -- module has already clamped to a range, so there is
+                                                        -- nothing to escape, and the churn ranking inlines
+                                                        -- its own the same way.
+                                                        LIMIT {limit})
+                                                    -- LEFT JOIN ON TRUE so the counts survive an empty
+                                                    -- ranking: a file that moves alone still has to say how
+                                                    -- many commits it was looked at over. The cross join
+                                                    -- does not carry ranked's order, so the outer ORDER BY
+                                                    -- is what makes the ranking a ranking.
+                                                    SELECT counts.commits, counts.paired, ranked.path,
+                                                           ranked.shared,
+                                                           {IndexQueries.AtHeadExists("$r")} AS at_head
+                                                    FROM counts LEFT JOIN ranked ON TRUE
+                                                    ORDER BY ranked.shared DESC, ranked.path
+                                                    """, parameters);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var paths = await index.PathsAsync(cancellationToken);
+        var files = new List<CoChangedFile>();
+        int commits = 0, paired = 0;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            commits = reader.Int32("commits");
+            paired = reader.Int32("paired");
+            // Null where the join found no co-changed file at all, which is one row and not none.
+            if (reader.IsNull("path")) continue;
+            files.Add(new CoChangedFile(paths.Format(repositorySlug, reader.Text("path")), reader.Flag("at_head"),
+                reader.Int32("shared")));
+        }
+
+        return new CoChanges(commits, paired, files);
+    }
+}
