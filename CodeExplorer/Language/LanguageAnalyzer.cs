@@ -156,6 +156,74 @@ public enum ReferenceKind
 public readonly record struct Answer<T>(T Value, Evidence Evidence);
 
 /// <summary>
+///     What kind of name an import names, which is the whole of what decides how it can be resolved
+///     to a file. A namespace does not map to a path the same way in any two languages, and a
+///     relative path does not map to a namespace at all; telling them apart is what lets one
+///     resolver serve every language without inventing a rule for any of them.
+/// </summary>
+public enum ImportShape
+{
+    /// <summary>
+    ///     A namespace, unit or package name: C#'s <c>using System.Text</c>, Delphi's
+    ///     <c>uses Customers</c>. It resolves against what a file declares itself to be, never
+    ///     against where the file sits.
+    /// </summary>
+    Module,
+
+    /// <summary>
+    ///     A file, named the way the importing file reaches it: <c>./orders</c>, <c>../lib/a.css</c>,
+    ///     <c>Common.vh</c>. It resolves against the importing file's own directory.
+    /// </summary>
+    Path
+}
+
+/// <summary>
+///     How short a path this language lets an import write. TypeScript's <c>./orders</c> may name
+///     <c>orders.ts</c> or <c>orders/index.ts</c>; CSS's <c>@import "theme"</c> names
+///     <c>theme</c> and nothing else.
+///     It is here and not in the resolver because it is a language fact (ADR-0008): a resolver that
+///     tried every extension for every language answered a <c>&lt;script src="a"&gt;</c> with
+///     <c>a.html</c>, which is Node's rule applied to markup that does not have it.
+/// </summary>
+/// <param name="Extensions">
+///     What may be appended to a name that has none, in the order the language would try them.
+///     Empty where a path always names its own extension, which is every language here but two.
+/// </param>
+/// <param name="DirectoryIndex">
+///     The file a directory stands for — <c>index</c> — or null where naming a directory names
+///     nothing.
+/// </param>
+public sealed record ImportPathRules(IReadOnlyList<string> Extensions, string? DirectoryIndex)
+{
+    /// <summary>A path names the file it spells, which is what most languages mean.</summary>
+    public static ImportPathRules AsWritten { get; } = new([], null);
+}
+
+/// <summary>
+///     One name a line imports, as the line wrote it. The name is kept verbatim because an edge that
+///     cannot be resolved is still an answer — the raw name tells a reader what the file asked for,
+///     where a dropped edge tells them the file asked for nothing.
+/// </summary>
+public sealed record ImportedName(string Name, ImportShape Shape);
+
+/// <summary>
+///     What one line says about the files around it: the names it imports, and the name it declares
+///     this file to be. Both, because a line is rarely both and the two travel together — a C# file's
+///     <c>namespace</c> is what another file's <c>using</c> resolves against, and reading the one
+///     without the other leaves the reverse direction unanswerable.
+/// </summary>
+/// <param name="Imports">Names this line imports, in the order written. Empty where it imports none.</param>
+/// <param name="Declares">
+///     What this line declares the file to be — C#'s <c>namespace</c>, Delphi's <c>unit</c> — or null
+///     where it declares nothing.
+/// </param>
+public sealed record ImportsOnLine(IReadOnlyList<ImportedName> Imports, string? Declares)
+{
+    /// <summary>The line said nothing about imports, which is what almost every line says.</summary>
+    public static ImportsOnLine Nothing { get; } = new([], null);
+}
+
+/// <summary>
 ///     What one line declares. Either name may be null — a member declaration names no type and a
 ///     type declaration no member — and a line that reads as both fills both.
 ///     <see cref="Role" /> is null where the analyser cannot tell which side of the split the line
@@ -230,8 +298,33 @@ public interface ILanguageAnalyzer
     /// </summary>
     Answer<Declared?> Declares(FilePosition position, string line);
 
-    /// <summary>What this line imports, as written, or null when it is not an import line.</summary>
-    Answer<string?> ImportOn(string line);
+    /// <summary>
+    ///     Whether this language has an import concept at all. False for the SQL family, which names
+    ///     no file it depends on — and which must therefore be told apart from a file that imports
+    ///     nothing, because an empty answer reads as "this depends on nothing" and would be the wrong
+    ///     one for every stored procedure in the project.
+    /// </summary>
+    bool HasImports { get; }
+
+    /// <summary>
+    ///     How short a path an import in this language may be written, for the resolver that has to
+    ///     turn one into a file. <see cref="ImportPathRules.AsWritten" /> where a path names exactly
+    ///     the file it spells.
+    /// </summary>
+    ImportPathRules ImportPaths { get; }
+
+    /// <summary>
+    ///     What this line says about the files around it: what it imports, and what it declares this
+    ///     file to be. <see cref="ImportsOnLine.Nothing" /> for the lines that say neither, which is
+    ///     nearly all of them.
+    ///     The position is here for the same two reasons <see cref="Declares" /> takes one, and a
+    ///     third: a commented-out <c>using</c> imports nothing, and Delphi's <c>uses</c> clause runs
+    ///     as many lines as it likes until its <c>;</c> — so the name on the second line of one is an
+    ///     import only because of what the line above it left open. A caller that has not walked the
+    ///     file to here passes <see cref="FilePosition.Unknown" /> and is answered from this line
+    ///     alone.
+    /// </summary>
+    Answer<ImportsOnLine> ImportsOn(FilePosition position, string line);
 
     /// <summary>Whether a file at this qualified path is generated rather than hand-written.</summary>
     Answer<bool> IsGenerated(string qualifiedPath);

@@ -18,7 +18,8 @@ public sealed record OpenedRepository(ProjectRepository Repository, LocalCopy Lo
 ///     (ADR-0003) — and nothing here knows what git library read them. Fetching the copies and deciding
 ///     what becomes of the result belong to a refresh and live in <c>Refresh/</c> (ADR-0005).
 /// </summary>
-public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder history, OverviewBuilder overview)
+public sealed class IndexBuilder(
+    IConfiguration configuration, HistoryBuilder history, OverviewBuilder overview, ImportBuilder imports)
 {
     /// <summary>
     ///     Default for <c>Index:MaxFileBytes</c>. Text blobs above it are generated code, data dumps or
@@ -53,6 +54,10 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
             () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, repositories, report,
                 cancellationToken),
             cancellationToken);
+        // After the whole walk and not inside it: a name resolves against every other file in the
+        // project, and resolving as the files arrive would answer the first repository's edges
+        // against half a project.
+        await imports.ResolveAsync(shadow, cancellationToken);
         // After the files, because attribution is joined onto them and a file row is what says which
         // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished
         // and an index that is live with no history would be one nothing ever goes back to fill in.
@@ -72,13 +77,14 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
         IReadOnlyList<OpenedRepository> repositories, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
-        long fileId = 0, lineId = 0;
+        long fileId = 0, lineId = 0, importId = 0;
         // Appenders target the attached catalog explicitly; after USE they would resolve there too, but
         // naming it keeps the write independent of connection state. It is the shadow's catalog, which
         // is not the project slug — writing to the live one is exactly the mistake to make impossible.
         using var files = connection.CreateAppender(catalog, "main", "files");
         using var lines = connection.CreateAppender(catalog, "main", "lines");
         using var repos = connection.CreateAppender(catalog, "main", "repositories");
+        using var imported = connection.CreateAppender(catalog, "main", "imports");
 
         int repoId = 0;
         foreach (var (repository, clone) in repositories)
@@ -118,6 +124,26 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
 
                 int slash = entry.Path.LastIndexOf('/');
                 string name = entry.Path[(slash + 1)..];
+                // Derived once and used twice: it decides which analyser reads the file below and it
+                // is what the `files` row stores, and two derivations of one rule can only ever
+                // disagree by accident.
+                string extension = Languages.ExtensionOf(name);
+
+                // The second reading of the same lines, and the only one the build does: what this
+                // file depends on, in the words it used. It costs a walk of the file's lines for the
+                // languages whose profile declares import forms and nothing at all for the rest,
+                // which is what keeps it inside the budget ADR-0003 sets.
+                var found = imports.Read(Languages.Default.For(extension), text);
+                foreach (var edge in found.Edges)
+                    imported.CreateRow().AppendValue(++importId).AppendValue(fileId)
+                        .AppendValue(edge.LineNumber).AppendValue(edge.Name)
+                        .AppendValue(ImportBuilder.Column(edge.Shape))
+                        // target_file and unresolved are the resolution pass's, which runs once the
+                        // whole project is in the shadow; a row that still holds two nulls is one it
+                        // never reached.
+                        .AppendNullValue().AppendNullValue()
+                        .AppendValue(ImportBuilder.Column(edge.Evidence)).EndRow();
+
                 var row = files.CreateRow()
                     .AppendValue(fileId).AppendValue(repoId)
                     // The stored qualified path is what every read path answers with, so the shape is
@@ -126,11 +152,12 @@ public sealed class IndexBuilder(IConfiguration configuration, HistoryBuilder hi
                     .AppendValue(entry.Path)
                     .AppendValue(paths.Format(repository.Slug, entry.Path))
                     .AppendValue(slash < 0 ? "" : entry.Path[..slash]).AppendValue(name)
-                    .AppendValue(Path.GetExtension(name).TrimStart('.').ToLowerInvariant())
+                    .AppendValue(extension)
                     .AppendValue(entry.Size).AppendValue(text.Count);
                 row = skipReason is null ? row.AppendNullValue() : row.AppendValue(skipReason);
                 // The two commit columns are the history pass's, like lines.commit_id above.
-                row.AppendNullValue().AppendNullValue().EndRow();
+                row = row.AppendNullValue().AppendNullValue();
+                (found.Module is null ? row.AppendNullValue() : row.AppendValue(found.Module)).EndRow();
             }
 
             repos.CreateRow().AppendValue(repoId).AppendValue(repository.Slug).AppendValue(repository.Url)

@@ -67,7 +67,6 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     // which on a minified bundle, where the whole file is one line, is most of the time spent.
     private readonly string[] _declarationModifiers;
     private readonly string[] _directivePrefixes;
-    private readonly string[] _importPrefixes;
     private readonly string[] _instantiationKeywords;
     private readonly string[] _lineComments;
     private readonly string[] _memberAccess;
@@ -86,6 +85,21 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     ///     what makes this cost nothing there.
     /// </summary>
     private readonly SectionMarker[] _sectionMarkers;
+
+    /// <summary>
+    ///     How this language names the files it depends on, longest opener first so that
+    ///     <c>global using </c> is tried before the <c>using </c> it begins with. The profile is free
+    ///     to write them in whatever order reads best.
+    /// </summary>
+    private readonly ImportForm[] _importForms;
+
+    /// <summary>
+    ///     Which of <see cref="_importForms" /> may run past the end of its line, or -1 where none
+    ///     does — which is every language here but Delphi. It is one and not a set because carrying
+    ///     two open clauses at once is a shape no language writes, and a bool on the position is what
+    ///     a walk can afford where a stack of them is not.
+    /// </summary>
+    private readonly int _spanningImport;
 
     /// <summary>
     ///     Everything a line can be inside: the block comments and the string literals, in one table
@@ -131,7 +145,8 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         _instantiationKeywords = [.. profile.InstantiationKeywords];
         _memberAccess = [.. profile.MemberAccessOperators];
         _typePrefixes = [.. profile.TypePrefixOperators];
-        _importPrefixes = [.. profile.ImportPrefixes];
+        _importForms = [.. profile.ImportForms.OrderByDescending(form => form.Opener.Length)];
+        _spanningImport = Array.FindIndex(_importForms, form => form.SpansLines);
         _declarationModifiers = [.. profile.DeclarationModifiers];
         _sectionMarkers = [.. profile.SectionMarkers.OrderByDescending(marker => marker.Phrase.Length)];
         char[] opensInCode =
@@ -298,8 +313,14 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     ///     declaration/implementation split the file is on — a Delphi unit's <c>interface</c> against
     ///     its <c>implementation</c>, a PL/SQL package spec against its body — and null until a marker
     ///     has said.
+    ///     <see cref="OpenClause" /> is the third: whether an import clause that runs past the end of
+    ///     its line is still open — Delphi's <c>uses</c>, which lists its units over as many lines as
+    ///     it likes until a <c>;</c>. It is what makes the second line of one an import rather than a
+    ///     list of bare identifiers, and it is on the position rather than in the extractor because
+    ///     the shape of the clause is Delphi's fact and not its reader's (ADR-0008).
     /// </summary>
-    private sealed record TextPosition(TextAnalyzer Owner, Frame[] Frames, DeclarationRole? Section)
+    private sealed record TextPosition(
+        TextAnalyzer Owner, Frame[] Frames, DeclarationRole? Section, bool OpenClause = false)
         : FilePosition;
 
     /// <summary>
@@ -343,6 +364,18 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         /// </summary>
         private bool _lineCommented;
 
+        /// <summary>
+        ///     Where this line stops being code: the first position a comment opens at, or the length
+        ///     of the line. Recorded by the walk as it passes rather than found by asking the cursor
+        ///     per character afterwards — on a minified bundle, one line of several million characters
+        ///     well inside <c>Index:MaxFileBytes</c>, the second form cost a call per character.
+        ///     Only meaningful once the whole line has been read, which is what <see cref="Position" />
+        ///     guarantees and what <see cref="CommentOpensAt" /> is read after.
+        /// </summary>
+        private int _commentOpensAt;
+
+        public readonly int CommentOpensAt => Math.Min(_commentOpensAt, _line.Length);
+
         public LineCursor(TextAnalyzer analyzer, FilePosition position, string line, Span<Frame> frames)
         {
             _analyzer = analyzer;
@@ -373,6 +406,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             if (analyzer._sectionMarkers.Length > 0 && _depth == 0 && !_lineCommented
                 && analyzer.MarkerOn(line) is { } entered)
                 _section = entered;
+            _commentOpensAt = _lineCommented ? start : int.MaxValue;
             _at = start;
         }
 
@@ -405,18 +439,30 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             // every depth.
             int depth = 0;
             while (depth < _depth && _analyzer._forms[_frames[depth].Index].Spans) depth++;
+            // Asked here rather than in the constructor, so that it is asked once the line has been
+            // read — the walk is what says where prose begins on it — and so that it is not asked at
+            // all by a caller that only wants the state at a position. `Occurrences` and `StateAt`
+            // build a cursor per line too, and neither has any use for a clause.
+            // The depth the line BEGAN at, which is what the carried position holds: a `uses` written
+            // inside a block comment opened further up opens nothing, and a file that read it as a
+            // clause would report the next twenty lines as imports.
+            bool openClause = _analyzer._spanningImport >= 0 && _carried.Frames.Length == 0
+                              && !_lineCommented
+                              && _analyzer.ClauseAfter(_carried.OpenClause, _line, FirstNonSpace(_line),
+                                  CommentOpensAt);
             // A line inside a long block comment or a license header leaves the file exactly where it
             // found it, and there are a thousand such lines in a row. Handing the carried position
             // back is what keeps those from allocating a copy apiece to say nothing changed.
-            if (Unchanged(depth)) return _carried;
-            if (depth == 0 && _section is null) return _analyzer._start;
-            return new TextPosition(_analyzer, depth == 0 ? [] : _frames[..depth].ToArray(), _section);
+            if (Unchanged(depth, openClause)) return _carried;
+            if (depth == 0 && _section is null && !openClause) return _analyzer._start;
+            return new TextPosition(_analyzer, depth == 0 ? [] : _frames[..depth].ToArray(), _section,
+                openClause);
         }
 
         /// <summary>Whether what carries is what this line began with, section and open spans alike.</summary>
-        private readonly bool Unchanged(int depth) =>
-            _section == _carried.Section && depth == _carried.Frames.Length
-            && _frames[..depth].SequenceEqual(_carried.Frames);
+        private readonly bool Unchanged(int depth, bool openClause) =>
+            _section == _carried.Section && openClause == _carried.OpenClause
+            && depth == _carried.Frames.Length && _frames[..depth].SequenceEqual(_carried.Frames);
 
         /// <summary>
         ///     Walks from wherever the last question left off to this one. A skip over an escape or a
@@ -468,6 +514,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                     if (At(_line, _at, _analyzer._lineComments[c]))
                     {
                         _lineCommented = true;
+                        if (_at < _commentOpensAt) _commentOpensAt = _at;
                         return;
                     }
             }
@@ -571,6 +618,9 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                 return;
             }
 
+            // Where the line stops being code, recorded as the walk passes it rather than found by a
+            // second walk asking per character: a block comment opening here is prose from here on.
+            if (!hole && _analyzer._forms[index].Prose && _at < _commentOpensAt) _commentOpensAt = _at;
             _frames[_depth++] = new Frame(index, 0, hole);
         }
     }
@@ -703,16 +753,15 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         return at >= line.Length || !SymbolText.IsWordChar(line[at]);
     }
 
-    public Answer<string?> ImportOn(string line)
+    public bool HasImports => _importForms.Length > 0;
+
+    public ImportPathRules ImportPaths => _profile.ImportPaths;
+
+    public Answer<ImportsOnLine> ImportsOn(FilePosition position, string line)
     {
+        ArgumentNullException.ThrowIfNull(position);
         ArgumentNullException.ThrowIfNull(line);
-        int start = FirstNonSpace(line);
-        // Tested against the line in place and only cut once one matches: this runs per occurrence,
-        // and a project of import-free lines should not allocate a trimmed copy of every one of them.
-        int matched = ImportPrefixLength(line, start);
-        return matched < 0
-            ? new Answer<string?>(null, Evidence.Text)
-            : new Answer<string?>(line[(start + matched)..].Trim().TrimEnd(';'), Evidence.Text);
+        return new Answer<ImportsOnLine>(Extract(position, line), Evidence.Text);
     }
 
     public Answer<bool> IsGenerated(string qualifiedPath)
@@ -840,16 +889,384 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         return false;
     }
 
-    /// <summary>Whether this line is an import line at all, without cutting what it imports out of it.</summary>
-    private bool IsImportLine(string line) => ImportPrefixLength(line, FirstNonSpace(line)) >= 0;
-
-    /// <summary>How long the import prefix on this line is, or -1 when it has none.</summary>
-    private int ImportPrefixLength(string line, int start)
+    /// <summary>
+    ///     Whether this line is an import line at all, without reading the names out of it — which is
+    ///     what <see cref="ReferenceKind.Import" /> is decided by, and the reason it is a question
+    ///     about the line rather than about a position on it.
+    ///     A form is looked for at the start of the line's text whether or not it may also be written
+    ///     mid-line: a <c>require(</c> standing there is what the line is, while one found inside an
+    ///     expression is one call among several and does not make every name beside it a mention.
+    /// </summary>
+    private bool IsImportLine(string line)
     {
-        for (int i = 0; i < _importPrefixes.Length; i++)
-            if (At(line, start, _importPrefixes[i], _keywordComparison))
-                return _importPrefixes[i].Length;
+        int start = FirstNonSpace(line);
+        for (int i = 0; i < _importForms.Length; i++)
+            if (OpenerLength(line, start, _importForms[i]) >= 0)
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    ///     What this line imports and what it declares this file to be. The walk of the file decided
+    ///     the two things this cannot see for itself — whether the line begins inside a comment, and
+    ///     whether a clause from further up is still open — and both arrive on the position.
+    /// </summary>
+    private ImportsOnLine Extract(FilePosition position, string line)
+    {
+        if (_importForms.Length == 0) return ImportsOnLine.Nothing;
+        var carried = position as TextPosition;
+        bool mine = carried is not null && carried.Owner == this;
+        // A line that begins inside a block comment or inside a literal opened further up is not
+        // code, and a `using` written in one imports nothing. A hole is never the outermost span, so
+        // this one test covers both.
+        if (mine && carried!.Frames.Length > 0) return ImportsOnLine.Nothing;
+
+        bool continuing = mine && carried!.OpenClause;
+        if (!continuing && !MayHoldAnImport(line, FirstNonSpace(line))) return ImportsOnLine.Nothing;
+
+        // Prose cut away, so a `using` behind a `//` imports nothing and a trailing note is not read
+        // as part of the clause. One walk of the line, paid only by the lines that already look like
+        // they hold an import.
+        string code = line[..CodeEnd(position, line)];
+        var names = new List<ImportedName>();
+
+        if (continuing)
+        {
+            // The middle or the end of a clause that began further up. Nothing else is read from such
+            // a line: a `uses` list and a second import form on one line is not written.
+            var spanning = _importForms[_spanningImport];
+            Collect(names, ClauseOf(code, 0, spanning), spanning);
+            return Line(names, null);
+        }
+
+        int start = FirstNonSpace(code);
+        if (start >= code.Length || OpensAWholeLine(code, start)) return ImportsOnLine.Nothing;
+
+        // The line's own shape first. A form standing at the start of a line is what that line is,
+        // and a form found further along it belongs to this clause rather than sitting beside it.
+        // Only the forms that must stand there: a `<script>` at the start of a line is one tag among
+        // however many follow it on the same line, and returning on the first would lose the rest.
+        foreach (var form in _importForms)
+        {
+            if (form.Anywhere) continue;
+            int opener = OpenerLength(code, start, form);
+            if (opener < 0) continue;
+            string clause = ClauseOf(code, start + opener, form);
+            if (form.Declares) return Line(names, Single(clause, form));
+            Collect(names, clause, form);
+            return Line(names, null);
+        }
+
+        // Otherwise every occurrence of a form that may be written mid-line: `require("./a")` in an
+        // assignment, a `<script src>` among the rest of a tag.
+        foreach (var form in _importForms)
+        {
+            if (!form.Anywhere) continue;
+            for (int at = IndexOfOpener(code, start, form); at >= 0; at = IndexOfOpener(code, at + 1, form))
+                Collect(names, ClauseOf(code, at + OpenerLength(code, at, form), form), form);
+        }
+
+        return Line(names, null);
+    }
+
+    private static ImportsOnLine Line(List<ImportedName> names, string? declares) =>
+        names.Count == 0 && declares is null ? ImportsOnLine.Nothing : new ImportsOnLine(names, declares);
+
+    /// <summary>
+    ///     Whether this line could hold an import at all. The cheap test that keeps the careful one
+    ///     off the lines that cannot: a build reads every line of every file, and all but a handful
+    ///     per file hold no opener anywhere.
+    ///     A form that must stand at the start of the line is tested there and nowhere else, which
+    ///     costs the length of its opener in character compares rather than a scan of the line. That
+    ///     is the whole of the test for C#, X# and Delphi, whose forms are all anchored; only the
+    ///     handful that may be written mid-line — <c>require(</c>, <c>url(</c>, <c>&lt;script</c> —
+    ///     are searched for along it.
+    /// </summary>
+    private bool MayHoldAnImport(string line, int start)
+    {
+        for (int i = 0; i < _importForms.Length; i++)
+        {
+            var form = _importForms[i];
+            if (form.Anywhere
+                    ? line.Contains(form.Head, _keywordComparison)
+                    : OpenerLength(line, start, form) >= 0)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     Where the live code on this line ends: the first position a comment opens at, or the end
+    ///     of the line. A literal is not an end — the name in <c>import x from "./y"</c> is written
+    ///     inside one — so only prose cuts it.
+    /// </summary>
+    private int CodeEnd(FilePosition position, string line)
+    {
+        Span<Frame> frames = stackalloc Frame[MaxNesting];
+        var cursor = new LineCursor(this, position, line, frames);
+        // One walk of the line, and the answer read off it. Asked per character instead — which is
+        // what this did first — a minified bundle cost a call per character of a line several
+        // million characters long, for a question the walk answers on its way past.
+        cursor.StateAt(line.Length);
+        return cursor.CommentOpensAt;
+    }
+
+    /// <summary>
+    ///     The names one clause yields, appended in the order written. A clause that quotes its name
+    ///     is read for the quoted part and one that does not is read whole — asked in that order
+    ///     rather than declared per form, because <c>url(a.png)</c> and <c>url("a.png")</c> are one
+    ///     form written two ways and a flag saying which would have to be right about both.
+    /// </summary>
+    private static void Collect(List<ImportedName> names, string clause, ImportForm form)
+    {
+        if (form.Attribute is { } attribute)
+        {
+            if (AttributeValue(clause, attribute) is { } value) Add(names, value, form);
+            return;
+        }
+
+        if (!form.Separated)
+        {
+            Add(names, Quoted(clause) ?? clause, form);
+            return;
+        }
+
+        foreach (string part in clause.Split(',')) Add(names, Quoted(part) ?? part, form);
+    }
+
+    /// <summary>The one name a clause that declares rather than imports holds, or null where it is empty.</summary>
+    private static string? Single(string clause, ImportForm form) => NameOf(clause, form.Shape);
+
+    private static void Add(List<ImportedName> names, string text, ImportForm form)
+    {
+        if (NameOf(text, form.Shape) is { } name) names.Add(new ImportedName(name, form.Shape));
+    }
+
+    /// <summary>
+    ///     The name this clause holds, or null where it holds none. A path is whatever was written; a
+    ///     module has a shape, and checking it is what keeps the word that opens a directive from
+    ///     also opening a statement.
+    ///     C# spells <c>using System.Text;</c>, <c>using var reader = new StreamReader(path);</c> and
+    ///     <c>using (var scope = …)</c> with the same first word, and only the first is an import. An
+    ///     opener alone cannot tell them apart — the clause can, because a module name is a dotted
+    ///     identifier and an expression is not. The same test covers X#'s <c>using</c>, and it drops
+    ///     the fragments a conditional Delphi <c>uses</c> clause leaves behind, at the cost of the
+    ///     real unit name beside them: a missing edge, which is the error this module prefers.
+    /// </summary>
+    private static string? NameOf(string text, ImportShape shape)
+    {
+        string name = Clean(text);
+        if (name.Length == 0) return null;
+        if (shape == ImportShape.Path) return name;
+
+        // An alias names the module on the right of the `=` and binds it to the name on the left:
+        // `using Grid = System.Windows.Controls.Grid;` imports the Grid, not the alias. The left has
+        // to be one identifier, which is what a declaration written with the same word is not —
+        // `var reader` is two.
+        int equals = name.IndexOf('=', StringComparison.Ordinal);
+        if (equals >= 0)
+        {
+            if (!IsIdentifier(name.AsSpan(0, equals).Trim())) return null;
+            name = name[(equals + 1)..].Trim();
+        }
+
+        // The last word, so that a qualifier in front of the name — C#'s `using static System.Math`
+        // — is read past rather than read as part of it.
+        int space = name.LastIndexOfAny(Whitespace);
+        if (space >= 0) name = name[(space + 1)..];
+        return IsDottedIdentifier(name) ? name : null;
+    }
+
+    private static readonly char[] Whitespace = [' ', '\t'];
+
+    /// <summary>
+    ///     Whether this is a name and nothing else: letters, digits and underscores, not starting
+    ///     with a digit. Deliberately narrow — a generic argument, a bracket or a parenthesis means
+    ///     the line was an expression wearing an import's first word.
+    /// </summary>
+    private static bool IsIdentifier(ReadOnlySpan<char> text)
+    {
+        if (text.Length == 0 || char.IsAsciiDigit(text[0])) return false;
+        foreach (char c in text)
+            if (!SymbolText.IsWordChar(c))
+                return false;
+        return true;
+    }
+
+    /// <summary>Identifiers joined by dots, which is how every language here spells a module.</summary>
+    private static bool IsDottedIdentifier(string text)
+    {
+        if (text.Length == 0) return false;
+        foreach (var part in text.Split('.'))
+            if (!IsIdentifier(part))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    ///     A name as the answer carries it: trimmed, without what ends the statement it was written
+    ///     in, and without the quotes around it — <c>url(a.png)</c> and <c>url('a.png')</c> name one
+    ///     file and must not read as two. The trailing brace goes for the same reason: C# writes both
+    ///     <c>namespace Foo;</c> and <c>namespace Foo {</c>.
+    /// </summary>
+    private static string Clean(string text)
+    {
+        string name = text.Trim().TrimEnd(';', '{').Trim();
+        if (name.Length >= 2 && (name[0] == '"' || name[0] == '\'') && name[^1] == name[0])
+            name = name[1..^1].Trim();
+        return name;
+    }
+
+    /// <summary>
+    ///     The first quoted string in the clause, or null where it holds none. The angle brackets are
+    ///     here with the quotes because <c>#include &lt;Set_Ansi.ch&gt;</c> is the dominant spelling
+    ///     in X# and in C, and a reader that knew only <c>"…"</c> answered that such a file imports
+    ///     nothing — which is the one sentence this must not say by accident.
+    /// </summary>
+    private static string? Quoted(string clause)
+    {
+        int open = clause.IndexOfAny(QuoteOpeners);
+        if (open < 0) return null;
+        char closer = clause[open] == '<' ? '>' : clause[open];
+        int close = clause.IndexOf(closer, open + 1);
+        return close < 0 ? null : clause[(open + 1)..close];
+    }
+
+    private static readonly char[] QuoteOpeners = ['"', '\'', '`', '<'];
+
+    /// <summary>
+    ///     The quoted value of one attribute inside a tag. Read no further than the tag's own
+    ///     <c>&gt;</c>, so the next tag on the line is not read as part of this one, and matched on a
+    ///     word boundary so that <c>data-src=</c> is not read as <c>src=</c>.
+    /// </summary>
+    private static string? AttributeValue(string clause, string attribute)
+    {
+        int close = clause.IndexOf('>', StringComparison.Ordinal);
+        var tag = close < 0 ? clause.AsSpan() : clause.AsSpan(0, close);
+        for (int at = 0; at < tag.Length; at++)
+        {
+            int found = tag[at..].IndexOf(attribute.AsSpan(), StringComparison.OrdinalIgnoreCase);
+            if (found < 0) return null;
+            at += found;
+            if (at > 0 && (char.IsLetterOrDigit(tag[at - 1]) || tag[at - 1] == '-' || tag[at - 1] == '_'))
+                continue;
+            int after = at + attribute.Length;
+            while (after < tag.Length && char.IsWhiteSpace(tag[after])) after++;
+            if (after >= tag.Length || tag[after] != '=') continue;
+            return Quoted(tag[(after + 1)..].ToString());
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     The text of one clause: from just past the opener to the form's closer, or to the end of
+    ///     the line's code where the form has no closer or it is not on this line.
+    /// </summary>
+    private static string ClauseOf(string code, int from, ImportForm form)
+    {
+        if (from < 0 || from >= code.Length) return "";
+        if (form.Closer is { } closer)
+        {
+            int end = code.IndexOf(closer, from, StringComparison.Ordinal);
+            if (end >= 0) return code[from..end];
+        }
+
+        return code[from..];
+    }
+
+    /// <summary>
+    ///     How many characters of the line this form's opener takes at <paramref name="index" />, or
+    ///     -1 where it does not stand there. A space in the opener matches a run of whitespace, or
+    ///     the end of the line: Delphi writes <c>uses</c> alone on its line with the units under it,
+    ///     and an opener matched on one literal space would find no clause there at all.
+    /// </summary>
+    private int OpenerLength(string line, int index, ImportForm form)
+    {
+        if (index < 0) return -1;
+        int at = index;
+        string opener = form.Opener;
+        for (int i = 0; i < opener.Length; i++)
+        {
+            if (char.IsWhiteSpace(opener[i]))
+            {
+                // The clause is on the next line, which is a shape only a spanning form has and which
+                // the position carries for it.
+                if (at >= line.Length) return at - index;
+                if (!char.IsWhiteSpace(line[at])) return -1;
+                while (at < line.Length && char.IsWhiteSpace(line[at])) at++;
+                continue;
+            }
+
+            if (at >= line.Length || !SameLetter(line[at], opener[i])) return -1;
+            at++;
+        }
+
+        return at - index;
+    }
+
+    /// <summary>The next index at or after <paramref name="from" /> where this form's opener stands, or -1.</summary>
+    private int IndexOfOpener(string line, int from, ImportForm form)
+    {
+        string head = form.Head;
+        int at = Math.Max(0, from);
+        while (at <= line.Length - head.Length)
+        {
+            int found = line.AsSpan(at).IndexOf(head, _keywordComparison);
+            if (found < 0) return -1;
+            at += found;
+            if (OpenerLength(line, at, form) >= 0) return at;
+            at++;
+        }
+
         return -1;
+    }
+
+    /// <summary>
+    ///     Whether the one import form that may run past the end of its line is open once this line
+    ///     has been read. Delphi's <c>uses</c> is that form: it lists its units comma-separated over
+    ///     as many lines as it likes and ends at a <c>;</c>, and it is written twice in a unit.
+    ///     The closer is what ends it, and so is a line that cannot be part of a name list. The
+    ///     second rule is what bounds the damage: a clause whose <c>;</c> this cannot see — hidden in
+    ///     a <c>{ }</c> comment, or simply never written — would otherwise stay open to the end of the
+    ///     file and report every line below it as an import. One line is the most a missed terminator
+    ///     can now cost.
+    ///     The cheap rejection runs first, because every line of a Delphi unit but a handful is
+    ///     neither opening a clause nor inside one and must pay only for finding that out.
+    /// </summary>
+    /// <param name="open">Whether a clause was already open when this line began.</param>
+    /// <param name="line">The line, whole.</param>
+    /// <param name="start">Its first non-space character.</param>
+    /// <param name="codeEnd">Where prose begins on this line, which the walk has already established.</param>
+    private bool ClauseAfter(bool open, string line, int start, int codeEnd)
+    {
+        var form = _importForms[_spanningImport];
+        if (form.Closer is not { } closer) return false;
+        int at = start;
+        if (!open)
+        {
+            int opener = OpenerLength(line, start, form);
+            if (opener < 0) return false;
+            at = start + opener;
+        }
+
+        if (at > codeEnd) return open && IsNameList(line.AsSpan(start, Math.Max(0, codeEnd - start)));
+        var rest = line.AsSpan(at, codeEnd - at);
+        return rest.IndexOf(closer, StringComparison.Ordinal) < 0 && IsNameList(rest);
+    }
+
+    /// <summary>
+    ///     Whether this is the shape a clause of names is written in: identifiers, the dots between
+    ///     their parts, and the commas between them. Anything else — a bracket, an assignment, a
+    ///     keyword's punctuation — says the clause ended further up and this line is ordinary code.
+    /// </summary>
+    private static bool IsNameList(ReadOnlySpan<char> text)
+    {
+        foreach (char c in text)
+            if (!SymbolText.IsWordChar(c) && c != '.' && c != ',' && !char.IsWhiteSpace(c))
+                return false;
+        return true;
     }
 
     /// <summary>
