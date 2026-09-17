@@ -108,18 +108,6 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     public const int MaxLinesPerFile = 200;
 
     /// <summary>
-    ///     How far into a file the lines above a match are read to find out whether it sits inside a
-    ///     block comment or a literal opened earlier (#53). The scan has to start at line 1 — there is
-    ///     no point further down that can be known to be outside everything — so the only bound
-    ///     available is where it stops.
-    ///     Twenty thousand lines covers every hand-written file and most generated ones, at a read of a
-    ///     few hundred kilobytes for the largest of them. Past it the position is reported as unknown
-    ///     and the references on those lines are kept and listed as unplaced: a file long enough to hit
-    ///     this is one where a guess would be wrong quietly and often.
-    /// </summary>
-    public const int MaxScanLines = 20_000;
-
-    /// <summary>
     ///     Every reference search goes through here, which is what makes this the one place such a
     ///     search is recorded. It is the only public method for the same reason grep has one: a second
     ///     entry point has nothing else to call.
@@ -138,7 +126,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         CancellationToken cancellationToken)
     {
         string symbol = request.Symbol.Trim();
-        if (Unusable(symbol) is { } unusable) return new SearchProblem(unusable);
+        if (SearchQuery.Unusable(symbol, "find_references") is { } unusable) return new SearchProblem(unusable);
 
         var open = await IndexReader.OpenAsync(indexes, slug, request.Filter.Repository, cancellationToken);
         if (open is IndexOpen.Refused refused) return new SearchProblem(refused.Explanation);
@@ -148,7 +136,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         // The slug the index holds, not the one the caller typed: the filter's subquery matches it exactly.
         var filter = request.Filter with { Repository = index.Repository?.Slug };
         int maxFiles = Math.Clamp(request.MaxFiles, 1, MaxFiles);
-        string pattern = Pattern(symbol);
+        string pattern = SymbolText.WholeWordPattern(symbol);
 
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
@@ -209,7 +197,10 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                 matchParameters, cancellationToken);
 
         var scopes = await ScopesAsync(connection, matched, cancellationToken);
-        var positions = await PositionsAsync(connection, matched, cancellationToken);
+        // Where each matched line's file stands at the start of it, which is what keeps a line inside
+        // a block comment opened forty lines up from reading as a call (#53).
+        var positions = await FilePositions.ReadAsync(connection,
+            matched.Select(line => (line.FileId, line.Analyzer, line.LineNumber)), cancellationToken);
         // Every appearance on the line, not only the first: a line naming the identifier twice is two
         // references, and they are often of different kinds. What each one looks like is the file's
         // language's question (ADR-0008), so `:=` is a write in an X# file and not in a C# one, and a
@@ -239,75 +230,6 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         long FileId, string Path, ILanguageAnalyzer Analyzer, int LineNumber, string Content);
 
     /// <summary>
-    ///     Where each matched line's file stands at the start of it: inside a block comment or a
-    ///     literal opened further up, or outside everything (#53). Without this a commented-out block
-    ///     reads as a comment on its first line and as calls, writes and instantiations on every line
-    ///     after it — under the headings an agent trusts most.
-    ///     One walk per file and not one per match, which is what decides the cost: the lines above a
-    ///     match are read once and the position is recorded for every match in the file as the walk
-    ///     passes it. The whole answer is one query, the lines of every file read in one pass.
-    ///     A line further into a file than <see cref="MaxScanLines" /> is left out of the result and
-    ///     classified from <see cref="FilePosition.Unknown" />, which keeps its references and lists
-    ///     them as unplaced rather than placing them from a scan that never reached them.
-    /// </summary>
-    private static async Task<Dictionary<(long File, int Line), FilePosition>> PositionsAsync(
-        DuckDBConnection connection, List<MatchedLine> matched, CancellationToken cancellationToken)
-    {
-        var positions = new Dictionary<(long, int), FilePosition>();
-        var files = matched.GroupBy(line => line.FileId)
-            // A file whose every match is past the bound is not read at all: scanning the twenty
-            // thousand lines above them would end in the same unknown position it started from.
-            .Where(group => group.Min(line => line.LineNumber) <= MaxScanLines)
-            .ToDictionary(
-                group => group.Key,
-                group => (group.First().Analyzer,
-                    Through: Math.Min(group.Max(line => line.LineNumber), MaxScanLines),
-                    Wanted: group.Select(line => line.LineNumber).ToHashSet()));
-        if (files.Count == 0) return positions;
-
-        // The ids and line numbers came from the query above and never from the request, so inlining
-        // them is safe. A join against the bounds rather than a chain of ORed ranges, which DuckDB
-        // has to evaluate per row of `lines` where this is a hash probe; and one bound per file
-        // rather than one for all of them, so that a file whose last match is on line 12 is not read
-        // to the end because another file's match is on line 4000.
-        string bounds = string.Join(", ", files.Select(file => string.Create(CultureInfo.InvariantCulture,
-            $"({file.Key}, {file.Value.Through})")));
-        using var command = connection.Query($"""
-                                                 SELECT l.file_id, l.line_number, l.content
-                                                 FROM lines l JOIN (VALUES {bounds}) AS b(file_id, through)
-                                                   ON l.file_id = b.file_id AND l.line_number <= b.through
-                                                 ORDER BY l.file_id, l.line_number
-                                                 """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
-
-        long walking = -1;
-        // Seeded from any file so the walk's state is definitely assigned; the first row replaces it,
-        // because no file id is -1.
-        var scanning = files.Values.First();
-        FilePosition position = FilePosition.Unknown;
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            long fileId = reader.Int64("file_id");
-            // The rows arrive grouped by file and in line order, so a new file id is the top of one.
-            if (fileId != walking)
-            {
-                walking = fileId;
-                scanning = files[fileId];
-                position = scanning.Analyzer.Start;
-            }
-
-            int lineNumber = reader.Int32("line_number");
-            if (scanning.Wanted.Contains(lineNumber)) positions[(fileId, lineNumber)] = position;
-            // Nothing reads the position after the last line asked for, and on a minified bundle that
-            // line is the whole file.
-            if (lineNumber < scanning.Through)
-                position = scanning.Analyzer.After(position, reader.Text("content"));
-        }
-
-        return positions;
-    }
-
-    /// <summary>
     ///     The declaration lines of every file a reference was read from, which is what an enclosing
     ///     scope is worked out from. DuckDB narrows each file to the few lines that could be a
     ///     declaration, so the whole file never leaves the index for the sake of a label on one line.
@@ -323,31 +245,32 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
 
         foreach (var group in matched.GroupBy(line => line.Analyzer))
         {
-            // A language that declares nothing this can read is not asked for lines it would only
-            // throw away.
-            if (group.Key.DeclarationCandidates is CandidateLines.NoLine) continue;
             long[] fileIds = [.. group.Select(line => line.FileId).Distinct()];
             if (fileIds.Length == 0) continue;
+
+            // A language that declares nothing this can read is not asked for lines it would only
+            // throw away; one that reads every line — a parser-backed analyser — narrows nothing.
+            var parameters = new List<DuckDBParameter>();
+            if (SearchQuery.Narrowing(group.Key.DeclarationCandidates, "d", parameters) is not { } narrowing)
+                continue;
 
             // The ids came from the query above and never from the request, so inlining them is safe
             // and saves binding one parameter per file.
             string ids = string.Join(",", fileIds.Select(id => id.ToString(CultureInfo.InvariantCulture)));
-            // An analyser that reads every line — a parser-backed one — narrows nothing here.
-            bool everyLine = group.Key.DeclarationCandidates is CandidateLines.EveryLine;
             using var command = connection.Query($"""
                                                      SELECT file_id, line_number, content FROM lines
-                                                     WHERE file_id IN ({ids})
-                                                       {(everyLine ? "" : "AND regexp_matches(content, $d, '')")}
+                                                     WHERE file_id IN ({ids}){narrowing}
                                                      ORDER BY file_id, line_number
-                                                     """,
-                everyLine
-                    ? []
-                    : [new DuckDBParameter("d", ((CandidateLines.Re2Pattern)group.Key.DeclarationCandidates).Pattern)]);
+                                                     """, parameters);
             using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
                 string content = reader.Text("content");
-                if (group.Key.Declares(content).Value is not { } declared) continue;
+                // Unknown and not the file's real position: a scope label needs the name a line
+                // declares and never which side of a declaration/implementation split it is on, and
+                // walking every file again to answer a question nothing here asks would double the
+                // cost of every reference search. The role comes back null, which is what it means.
+                if (group.Key.Declares(FilePosition.Unknown, content).Value is not { } declared) continue;
                 long fileId = reader.Int64("file_id");
                 if (!scopes.TryGetValue(fileId, out var declarations))
                     scopes[fileId] = declarations = [];
@@ -359,36 +282,4 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         return scopes;
     }
 
-    /// <summary>
-    ///     Why this is not something to look for, or null. Malformed input must never come back as an
-    ///     empty result: a caller acts on "nothing uses this", and a refusal shaped like one teaches
-    ///     the agent something false.
-    /// </summary>
-    private static string? Unusable(string symbol)
-    {
-        if (symbol.Length == 0)
-            return "No symbol given. Pass the identifier to look for, such as \"OrderStatus\".";
-        if (symbol.Any(char.IsWhiteSpace))
-            return $"\"{symbol}\" is not one identifier. find_references looks for a single name; "
-                   + "use grep for a phrase, or regex=true for a pattern.";
-        if (!symbol.Any(c => char.IsLetterOrDigit(c) || c == '_'))
-            return $"\"{symbol}\" holds no identifier characters, so it names no symbol. "
-                   + "Use grep for punctuation and operators.";
-        return null;
-    }
-
-    /// <summary>
-    ///     The identifier as an RE2 pattern: escaped, and anchored on a word boundary at each end that
-    ///     has a word character to anchor to. A <c>\b</c> against punctuation would mean the opposite
-    ///     of what it does against a letter, so it is left off there rather than applied blindly.
-    /// </summary>
-    private static string Pattern(string symbol)
-    {
-        // What counts as a word is SymbolText's, because the engine anchors the candidate set with
-        // \b here and .NET re-finds the symbol on the line it hands back: two definitions of a word
-        // character would be the two matchers disagreeing that this design exists to prevent.
-        string head = SymbolText.IsWordChar(symbol[0]) ? @"\b" : "";
-        string tail = SymbolText.IsWordChar(symbol[^1]) ? @"\b" : "";
-        return head + SymbolText.Re2Literal(symbol) + tail;
-    }
 }

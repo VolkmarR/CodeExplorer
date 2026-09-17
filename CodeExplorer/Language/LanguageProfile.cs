@@ -47,6 +47,19 @@ public sealed record StringDelimiter(string Open, string Close, StringEscape Esc
 }
 
 /// <summary>
+///     A line that puts everything below it on one side of the declaration/implementation split:
+///     Delphi's <c>implementation</c>, a PL/SQL <c>create package body</c>. It holds from the line it
+///     stands on — the header of a package body is itself the body's declaration — until another
+///     marker replaces it, which is what lets a spec and a body in two different files be told apart
+///     without either knowing about the other.
+///     Matched at the start of the line's text, on a word boundary and under the profile's own case
+///     rule, with one run of whitespace matching any other so that <c>CREATE  OR REPLACE  PACKAGE
+///     BODY</c> is the phrase it reads as. Longest phrase first, so <c>create package body</c> is not
+///     read as the <c>create package</c> it begins with.
+/// </summary>
+public sealed record SectionMarker(string Phrase, DeclarationRole Role);
+
+/// <summary>
 ///     The text facts about one language, in the shape <see cref="TextAnalyzer" /> reads them. This is
 ///     the extension point for <em>a new language</em>: a profile and one line in the registration
 ///     table, touching no caller. (The other extension point — a <em>better implementation</em> for a
@@ -144,11 +157,26 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     /// </summary>
     public bool DeclarationNamesFollowKeyword { get; init; }
 
+    /// <summary>
+    ///     Whether a type is declared with its name in front of the keyword — Delphi's
+    ///     <c>TCustomer = class(TBase)</c> — as against the C-family <c>class TCustomer</c>. Where this
+    ///     is set both shapes are read, because a unit that writes the first usually writes
+    ///     <c>type TAlias = Integer</c> somewhere too and neither costs the other anything.
+    /// </summary>
+    public bool TypeNamesPrecedeKeyword { get; init; }
+
     /// <summary>Whether the language's keywords are case-insensitive, as X#, Delphi and SQL's are.</summary>
     public bool CaseInsensitiveKeywords { get; init; }
 
     /// <summary>See <see cref="ILanguageAnalyzer.SeparatesDeclarationFromImplementation" />.</summary>
     public bool SeparatesDeclarationFromImplementation { get; init; }
+
+    /// <summary>
+    ///     What moves a file from one side of that split to the other, or empty where the language has
+    ///     no split at all. A profile that separates the two and names no marker says every
+    ///     declaration's role is unknown, which is the honest answer and not a useful one.
+    /// </summary>
+    public IReadOnlyList<SectionMarker> SectionMarkers { get; init; } = [];
 
     /// <summary>
     ///     Qualified paths that mean a generated file, as globs where <c>*</c> crosses <c>/</c> — the
