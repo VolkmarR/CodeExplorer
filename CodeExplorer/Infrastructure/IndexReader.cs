@@ -14,6 +14,7 @@ public sealed record IndexedFile(
     long FileId,
     string QualifiedPath,
     string RepositorySlug,
+    string PathInRepository,
     int LineCount,
     long SizeBytes,
     string? SkipReason,
@@ -172,32 +173,15 @@ public sealed record TreeItem(
 public sealed record GlobResult(int Total, IReadOnlyList<IndexedFile> Files, int? MatchesInOtherRepositories);
 
 /// <summary>
-///     What <see cref="IndexReader.OpenAsync" /> answers. Either the project's index is open for one
-///     call, or it is not and the case says why in agent-facing prose: a semantic failure is an answer,
-///     never an exception (CODING_STANDARDS). Every reader — MCP tool, operator endpoint, search — gets
-///     the same three cases, so a project with nothing to read from or a <c>repo</c> that names nothing
-///     is explained in one wording everywhere rather than eleven.
+///     A directory an agent named, resolved to what the index holds. <see cref="Repository" /> is null
+///     at the project level, which only a multi-repository project has; <see cref="PathInRepository" />
+///     is empty at a repository's own root. <see cref="QualifiedPath" /> is how this project spells it
+///     (ADR-0006), which is what a reply names it by.
 /// </summary>
-public abstract record IndexOpen
-{
-    /// <summary>The caller disposes the reader after one unit of work and never keeps it (ADR-0003).</summary>
-    public sealed record Opened(IndexReader Reader) : IndexOpen;
-
-    /// <summary>
-    ///     The two ways an open is declined, with the prose to hand the caller and the
-    ///     <see cref="ProblemKind" /> a caller answering with an <see cref="Outcome" /> gives it.
-    /// </summary>
-    public abstract record Refused(string Explanation, ProblemKind Kind) : IndexOpen;
-
-    /// <summary>Never built, or a refresh is still building the first one.</summary>
-    public sealed record NoIndex(string Explanation) : Refused(Explanation, ProblemKind.NoIndex);
-
-    /// <summary>The <c>repo</c> argument names no repository in this index.</summary>
-    public sealed record UnknownRepository(string Explanation) : Refused(Explanation, ProblemKind.Invalid);
-}
+public sealed record IndexedDirectory(IndexedRepository? Repository, string PathInRepository, string QualifiedPath);
 
 /// <summary>
-///     The one way a project's index is read. <see cref="OpenAsync" /> is the seam every reader
+///     The one way a project's index is read. <see cref="OverIndexAsync{T}" /> is the seam every reader
 ///     crosses — the MCP tools, the operator UI's endpoints and the three text searches — and what it
 ///     hands back is a connection bound to the project for one call (ADR-0003) together with the
 ///     answers every reader used to derive for itself: which repositories the build read, how this
@@ -219,7 +203,7 @@ public sealed class IndexReader : IDisposable
     // The join is for the slug only; qualified_path already carries it as a prefix, but splitting a
     // string to recover what a column holds would be the worse choice.
     private const string FileColumns =
-        "SELECT f.file_id, f.qualified_path, r.slug, f.line_count, f.size_bytes, f.skip_reason, f.module";
+        "SELECT f.file_id, f.qualified_path, r.slug, f.path, f.line_count, f.size_bytes, f.skip_reason, f.module";
 
     private const string FileSource = "FROM files f JOIN repositories r USING (repo_id)";
 
@@ -242,7 +226,7 @@ public sealed class IndexReader : IDisposable
 
     /// <summary>
     ///     The repository the <c>repo</c> argument resolved to, in the spelling the index holds, or null
-    ///     when the call covers every repository. Set by <see cref="OpenAsync" />; an unknown slug never
+    ///     when the call covers every repository. Set by <see cref="OverIndexAsync{T}" />; an unknown slug never
     ///     gets this far.
     /// </summary>
     public IndexedRepository? Repository { get; private set; }
@@ -268,40 +252,76 @@ public sealed class IndexReader : IDisposable
     public void Dispose() => _lease.Dispose();
 
     /// <summary>
-    ///     Opens the project's index for one call, restoring it from the durable copy first when a
-    ///     replica's disk lost it (#9). <paramref name="repository" /> is the caller's <c>repo</c>
-    ///     argument, matched case-insensitively the way a path is, so an agent quoting a slug from
-    ///     memory in the wrong case is not told the repository does not exist; null or blank covers
-    ///     every repository.
+    ///     Opens the project's index for one call and hands it to <paramref name="read" />, or hands
+    ///     <paramref name="refused" /> the <see cref="Problem" /> saying why it could not: never built,
+    ///     or a <c>repo</c> that names no repository in it. A semantic failure is an answer, never an
+    ///     exception (CODING_STANDARDS), and every reader — MCP tool, operator endpoint, search — is
+    ///     refused in one wording rather than eleven.
+    ///     The open, the refusal and the dispose are one contract, and it lives here because twenty-four
+    ///     callers had each spelled it out: a second copy of it is a second place for it to be got wrong,
+    ///     and a reader kept past the call is what holds up a swap (ADR-0003). The index is restored from
+    ///     its durable copy first when a replica's disk lost it (#9). <paramref name="repository" /> is
+    ///     the caller's <c>repo</c> argument, matched case-insensitively the way a path is, so an agent
+    ///     quoting a slug from memory in the wrong case is not told the repository does not exist; null
+    ///     or blank covers every repository, and the one it names is <see cref="Repository" />.
     /// </summary>
-    public static async Task<IndexOpen> OpenAsync(ProjectIndexes indexes, string projectSlug, string? repository,
+    public static async Task<T> OverIndexAsync<T>(ProjectIndexes indexes, string projectSlug, string? repository,
+        Func<IndexReader, CancellationToken, Task<T>> read, Func<Problem, T> refused,
         CancellationToken cancellationToken)
     {
         var lease = await indexes.OpenAsync(projectSlug, cancellationToken);
-        if (lease is null) return new IndexOpen.NoIndex(NoIndex(projectSlug));
+        if (lease is null) return refused(new Problem(NoIndex(projectSlug), ProblemKind.NoIndex));
 
-        var reader = new IndexReader(lease, projectSlug);
-        if (string.IsNullOrWhiteSpace(repository)) return new IndexOpen.Opened(reader);
-
-        try
+        using var reader = new IndexReader(lease, projectSlug);
+        if (!string.IsNullOrWhiteSpace(repository))
         {
             string wanted = repository.Trim();
-            if (await reader.FindRepositoryAsync(wanted, cancellationToken) is { } found)
-            {
-                reader.Repository = found;
-                return new IndexOpen.Opened(reader);
-            }
+            if (await reader.FindRepositoryAsync(wanted, cancellationToken) is not { } found)
+                return refused(new Problem(
+                    $"{await reader.UnknownRepositoryAsync(wanted, cancellationToken)} Drop `repo` to cover every repository."));
+            reader.Repository = found;
+        }
 
-            string explanation = await reader.UnknownRepositoryAsync(wanted, cancellationToken);
-            reader.Dispose();
-            return new IndexOpen.UnknownRepository($"{explanation} Drop `repo` to cover every repository.");
-        }
-        catch
-        {
-            reader.Dispose();
-            throw;
-        }
+        return await read(reader, cancellationToken);
     }
+
+    /// <summary>The same for a caller whose answer is an <see cref="Outcome" />, which a problem already is.</summary>
+    public static Task<Outcome> OverIndexAsync(ProjectIndexes indexes, string projectSlug, string? repository,
+        Func<IndexReader, CancellationToken, Task<Outcome>> read, CancellationToken cancellationToken) =>
+        OverIndexAsync(indexes, projectSlug, repository, read, problem => problem, cancellationToken);
+
+    /// <summary>
+    ///     Opens the project's index, resolves <paramref name="path" /> the way <see cref="LocateAsync" />
+    ///     does, and hands <paramref name="read" /> the file — or <paramref name="refused" /> the sentence
+    ///     saying why there is none. Every tool that takes one file begins this way.
+    /// </summary>
+    public static Task<T> OverFileAsync<T>(ProjectIndexes indexes, string projectSlug, string path, bool suggestions,
+        Func<IndexReader, IndexedFile, CancellationToken, Task<T>> read, Func<Problem, T> refused,
+        CancellationToken cancellationToken) =>
+        OverIndexAsync(indexes, projectSlug, null, async (index, token) =>
+        {
+            var (file, problem) = await index.LocateAsync(path, suggestions, token);
+            return file is null ? refused(problem!) : await read(index, file, token);
+        }, refused, cancellationToken);
+
+    /// <summary>The same for a caller whose answer is an <see cref="Outcome" />.</summary>
+    public static Task<Outcome> OverFileAsync(ProjectIndexes indexes, string projectSlug, string path, bool suggestions,
+        Func<IndexReader, IndexedFile, CancellationToken, Task<Outcome>> read, CancellationToken cancellationToken) =>
+        OverFileAsync(indexes, projectSlug, path, suggestions, read, problem => problem, cancellationToken);
+
+    /// <summary>
+    ///     Opens the project's index, resolves <paramref name="path" /> the way
+    ///     <see cref="LocateDirectoryAsync" /> does, and hands <paramref name="read" /> the directory —
+    ///     or <paramref name="refused" /> the sentence saying why there is none.
+    /// </summary>
+    public static Task<T> OverDirectoryAsync<T>(ProjectIndexes indexes, string projectSlug, string? path,
+        Func<IndexReader, IndexedDirectory, CancellationToken, Task<T>> read, Func<Problem, T> refused,
+        CancellationToken cancellationToken) =>
+        OverIndexAsync(indexes, projectSlug, null, async (index, token) =>
+        {
+            var (directory, problem) = await index.LocateDirectoryAsync(path, token);
+            return directory is null ? refused(problem!) : await read(index, directory, token);
+        }, refused, cancellationToken);
 
     /// <summary>
     ///     What the index holds, for a reader describing the project rather than reading from it. Null
@@ -415,9 +435,8 @@ public sealed class IndexReader : IDisposable
     ///     not exceptions, the way CODING_STANDARDS asks.
     ///     It is on the reader rather than in each tool because three tools were resolving a path by
     ///     spelling this sequence out, and the three refusal sentences an agent reads had begun to
-    ///     drift apart. The explanation is a string and not a <c>SearchProblem</c>: that type is
-    ///     declared in <c>Search/</c>, which <c>Infrastructure/</c> may not name (ADR-0005), and each
-    ///     caller wraps it in whatever its own answer shape is.
+    ///     drift apart. Most callers reach it through <see cref="OverFileAsync{T}" />; this is for the
+    ///     one that resolves several paths over one open.
     /// </summary>
     /// <param name="path">The qualified path an agent wrote.</param>
     /// <param name="suggestions">
@@ -426,19 +445,19 @@ public sealed class IndexReader : IDisposable
     ///     produced.
     /// </param>
     /// <param name="cancellationToken">Threaded to every command this runs.</param>
-    public async Task<(IndexedFile? File, string? Explanation)> LocateAsync(string path, bool suggestions,
+    public async Task<(IndexedFile? File, Problem? Problem)> LocateAsync(string path, bool suggestions,
         CancellationToken cancellationToken)
     {
         var paths = await PathsAsync(cancellationToken);
         var qualified = paths.Parse(path);
         if (qualified is null || qualified.PathInRepository.Length == 0)
-            return (null,
-                $"'{path}' names no file: {await PathRuleAsync(cancellationToken)} Write it like `{paths.Example()}`.");
+            return (null, new Problem(
+                $"'{path}' names no file: {await PathRuleAsync(cancellationToken)} Write it like `{paths.Example()}`."));
 
         var repository = await FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
         if (repository is null)
-            return (null,
-                $"{await UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these.");
+            return (null, new Problem(
+                $"{await UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these."));
 
         string spelled = paths.Format(qualified with { RepositorySlug = repository.Slug });
         if (await FindFileAsync(spelled, cancellationToken) is { } file) return (file, null);
@@ -446,13 +465,43 @@ public sealed class IndexReader : IDisposable
         string explanation = $"No indexed file '{spelled}' in repository '{repository.Slug}' of project "
                              + $"'{ProjectSlug}'. ";
         if (!suggestions)
-            return (null, explanation + "Use glob or list_tree to locate it.");
+            return (null, new Problem(explanation + "Use glob or list_tree to locate it."));
 
         string name = qualified.PathInRepository[(qualified.PathInRepository.LastIndexOf('/') + 1)..];
         var similar = await FilesNamedAsync(name, MaxSuggestions, cancellationToken);
-        return (null, explanation + (similar.Count > 0
+        return (null, new Problem(explanation + (similar.Count > 0
             ? $"Did you mean {string.Join(" or ", similar)}? Otherwise use glob or list_tree to locate it."
-            : "Use glob or list_tree to locate it; the path is case-insensitive here but must otherwise match the committed path."));
+            : "Use glob or list_tree to locate it; the path is case-insensitive here but must otherwise match the committed path.")));
+    }
+
+    /// <summary>
+    ///     The directory a path names, or the sentence saying why it names none. A blank path is the
+    ///     project level, and a repository slug alone is that repository's root. Whether
+    ///     the directory holds anything is not asked: that is a fact about the tree, and the tree's
+    ///     reader is the one place to say "this is a file" or "nothing is here" in one wording.
+    ///     It exists for the reason <see cref="LocateAsync" /> does: three tools had spelled out the
+    ///     parse, the repository match and the respelling for themselves.
+    /// </summary>
+    public async Task<(IndexedDirectory? Directory, Problem? Problem)> LocateDirectoryAsync(string? path,
+        CancellationToken cancellationToken)
+    {
+        var paths = await PathsAsync(cancellationToken);
+        // Null from Parse is the project level, which only a multi-repository project has and which a
+        // non-blank path cannot mean: one that parses to it — a bare `/` — names nothing.
+        // Blank is the project level whatever the project's shape; what a single-repository project,
+        // which has no such level, makes of it is the caller's question (ADR-0006).
+        if (string.IsNullOrWhiteSpace(path)) return (new IndexedDirectory(null, "", ""), null);
+        var qualified = paths.Parse(path);
+        if (qualified is null)
+            return (null, new Problem($"'{path}' names no directory: {await PathRuleAsync(cancellationToken)}"));
+
+        var repository = await FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
+        if (repository is null)
+            return (null, new Problem(
+                $"{await UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these."));
+
+        string spelled = paths.Format(qualified with { RepositorySlug = repository.Slug });
+        return (new IndexedDirectory(repository, qualified.PathInRepository, spelled), null);
     }
 
     /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
@@ -1185,7 +1234,7 @@ public sealed class IndexReader : IDisposable
     ///     prepends anything to its own projection.
     /// </summary>
     private static IndexedFile ReadFile(DbDataReader reader) => new(
-        reader.Int64("file_id"), reader.Text("qualified_path"), reader.Text("slug"),
+        reader.Int64("file_id"), reader.Text("qualified_path"), reader.Text("slug"), reader.Text("path"),
         reader.Int32("line_count"), reader.Int64("size_bytes"), reader.TextOrNull("skip_reason"),
         reader.TextOrNull("module"));
 }

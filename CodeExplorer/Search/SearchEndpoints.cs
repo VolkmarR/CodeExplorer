@@ -263,22 +263,19 @@ internal static class SearchEndpoints
     /// <summary>The most commits one page may hold. The same ceiling <c>git_log</c> has.</summary>
     private const int MaxCommitPage = 200;
 
-    private static async Task<IResult> CommitsAsync(ProjectIndexes indexes, string project, string? repository,
-        int page, int pageSize, CancellationToken cancellationToken)
-    {
-        var open = await IndexReader.OpenAsync(indexes, project, repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return Refuse(refused);
-        using var index = ((IndexOpen.Opened)open).Reader;
-
-        pageSize = Math.Clamp(pageSize, 1, MaxCommitPage);
-        page = Math.Max(1, page);
-        string? scope = index.Repository?.Slug;
-        long total = await index.CommitCountAsync(scope, cancellationToken);
-        var commits = await index.ChangeLogAsync(scope, pageSize, (page - 1) * pageSize, cancellationToken);
-        return Results.Ok(new CommitListResponse(total, page, pageSize,
-            commits.Select(c => new CommitResponse(c.Sha, c.RepositorySlug, c.AuthorName, c.AuthorEmail,
-                c.AuthoredAt, c.Subject, c.Body, c.FilesChanged, c.Added, c.Deleted)).ToList()));
-    }
+    private static Task<IResult> CommitsAsync(ProjectIndexes indexes, string project, string? repository,
+        int page, int pageSize, CancellationToken cancellationToken) =>
+        IndexReader.OverIndexAsync(indexes, project, repository, async (index, token) =>
+        {
+            pageSize = Math.Clamp(pageSize, 1, MaxCommitPage);
+            page = Math.Max(1, page);
+            string? scope = index.Repository?.Slug;
+            long total = await index.CommitCountAsync(scope, token);
+            var commits = await index.ChangeLogAsync(scope, pageSize, (page - 1) * pageSize, token);
+            return Results.Ok(new CommitListResponse(total, page, pageSize,
+                commits.Select(c => new CommitResponse(c.Sha, c.RepositorySlug, c.AuthorName, c.AuthorEmail,
+                    c.AuthoredAt, c.Subject, c.Body, c.FilesChanged, c.Added, c.Deleted)).ToList()));
+        }, Status, cancellationToken);
 
     /// <summary>
     ///     Files in a churn ranking when the caller does not say. A screenful: the ranking is read from
@@ -294,61 +291,51 @@ internal static class SearchEndpoints
     ///     ranking and no dates rather than a failure: that is a project whose history has not been
     ///     imported, which the page says in its own words.
     /// </summary>
-    private static async Task<IResult> ChurnAsync(ProjectIndexes indexes, string project, string? repository,
-        int days, int limit, CancellationToken cancellationToken)
-    {
-        var open = await IndexReader.OpenAsync(indexes, project, repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return Refuse(refused);
-        using var index = ((IndexOpen.Opened)open).Reader;
+    private static Task<IResult> ChurnAsync(ProjectIndexes indexes, string project, string? repository,
+        int days, int limit, CancellationToken cancellationToken) =>
+        IndexReader.OverIndexAsync(indexes, project, repository, async (index, token) =>
+        {
+            string? scope = index.Repository?.Slug;
+            // Read whether or not there is a ranking: an empty page is where a reader is most likely to
+            // conclude that nothing changed. Which repositories these are is the reader's rule, not this
+            // route's — the tool reply draws the same answer from the same place.
+            var coverage = await index.HistoryCoverageAsync(scope, token);
 
-        string? scope = index.Repository?.Slug;
-        // Read whether or not there is a ranking: an empty page is where a reader is most likely to
-        // conclude that nothing changed. Which repositories these are is the reader's rule, not this
-        // route's — the tool reply draws the same answer from the same place.
-        var coverage = await index.HistoryCoverageAsync(scope, cancellationToken);
+            var window = await index.WindowAsync(days, scope, token);
+            if (window is null) return Results.Ok(new ChurnResponse(null, null, [], coverage.Without));
 
-        var window = await index.WindowAsync(days, scope, cancellationToken);
-        if (window is null) return Results.Ok(new ChurnResponse(null, null, [], coverage.Without));
+            var ranked = await index.ChurnAsync(window, scope, null, Math.Clamp(limit, 1, MaxChurnFiles), token);
+            return Results.Ok(new ChurnResponse(window.Since, window.Until,
+                ranked.Select(f => new ChurnFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits,
+                    f.Added, f.Deleted)).ToList(), coverage.Without));
+        }, Status, cancellationToken);
 
-        var ranked = await index.ChurnAsync(window, scope, null, Math.Clamp(limit, 1, MaxChurnFiles),
-            cancellationToken);
-        return Results.Ok(new ChurnResponse(window.Since, window.Until,
-            ranked.Select(f => new ChurnFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits, f.Added,
-                f.Deleted)).ToList(), coverage.Without));
-    }
+    private static Task<IResult> CommitFilesAsync(ProjectIndexes indexes, string project, string sha,
+        CancellationToken cancellationToken) =>
+        IndexReader.OverIndexAsync(indexes, project, null, async (index, token) =>
+        {
+            var files = await index.CommitFilesAsync(sha, token);
+            // No files means no such commit, in practice: every commit the walk records touched something,
+            // the root included. Said as a 404 rather than an empty list the page would draw as "nothing".
+            if (files.Count == 0)
+                return Results.NotFound(new { error = $"No commit '{sha}' in the history of project '{project}'." });
+            return Results.Ok(new CommitFilesResponse(sha,
+                files.Select(f => new CommitFileResponse(f.Path, f.ChangeKind, f.Added, f.Deleted, f.QualifiedPath))
+                    .ToList()));
+        }, Status, cancellationToken);
 
-    private static async Task<IResult> CommitFilesAsync(ProjectIndexes indexes, string project, string sha,
-        CancellationToken cancellationToken)
-    {
-        var open = await IndexReader.OpenAsync(indexes, project, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return Refuse(refused);
-        using var index = ((IndexOpen.Opened)open).Reader;
-
-        var files = await index.CommitFilesAsync(sha, cancellationToken);
-        // No files means no such commit, in practice: every commit the walk records touched something,
-        // the root included. Said as a 404 rather than an empty list the page would draw as "nothing".
-        if (files.Count == 0)
-            return Results.NotFound(new { error = $"No commit '{sha}' in the history of project '{project}'." });
-        return Results.Ok(new CommitFilesResponse(sha,
-            files.Select(f => new CommitFileResponse(f.Path, f.ChangeKind, f.Added, f.Deleted, f.QualifiedPath))
-                .ToList()));
-    }
-
-    private static async Task<IResult> ListAsync(
+    private static Task<IResult> ListAsync(
         ProjectIndexes indexes, string project, string glob, string? repository,
-        CancellationToken cancellationToken)
-    {
-        var open = await IndexReader.OpenAsync(indexes, project, repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return Refuse(refused);
-        using var index = ((IndexOpen.Opened)open).Reader;
-
-        var result = await index.GlobAsync(glob, IndexReader.MaxFiles, cancellationToken);
-        return Results.Ok(new FileListResponse(result.Total,
-            result.Files
-                .Select(f => new FileListEntry(f.QualifiedPath, f.RepositorySlug, f.LineCount, f.SizeBytes,
-                    f.SkipReason))
-                .ToList()));
-    }
+        CancellationToken cancellationToken) =>
+        IndexReader.OverIndexAsync(indexes, project, repository, async (index, token) =>
+        {
+            var result = await index.GlobAsync(glob, IndexReader.MaxFiles, token);
+            return Results.Ok(new FileListResponse(result.Total,
+                result.Files
+                    .Select(f => new FileListEntry(f.QualifiedPath, f.RepositorySlug, f.LineCount, f.SizeBytes,
+                        f.SkipReason))
+                    .ToList()));
+        }, Status, cancellationToken);
 
     /// <summary>
     ///     A level of the tree. An unknown directory answers with an empty level rather than an error:
@@ -356,73 +343,58 @@ internal static class SearchEndpoints
     ///     400 with the repositories that exist, the same answer every other reader gives that slug — a
     ///     stale link is told what changed rather than shown an empty tree.
     /// </summary>
-    private static async Task<IResult> TreeAsync(
-        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken)
-    {
-        var open = await IndexReader.OpenAsync(indexes, project, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return Refuse(refused);
-        using var index = ((IndexOpen.Opened)open).Reader;
-
-        // The shape has to be known before the path can be read at all: `src/x.ts` is a file in one
-        // project and a repository in another (ADR-0006). Null back from Parse is the repository level,
-        // which a single-repository project does not have.
-        var paths = await index.PathsAsync(cancellationToken);
-        var location = paths.Parse(path);
-        if (location is not null)
+    private static Task<IResult> TreeAsync(
+        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken) =>
+        IndexReader.OverDirectoryAsync(indexes, project, path, async (index, directory, token) =>
         {
-            if (await index.FindRepositoryAsync(location.RepositorySlug, cancellationToken) is not { } repository)
-                return Results.BadRequest(new
-                    { error = await index.UnknownRepositoryAsync(location.RepositorySlug, cancellationToken) });
-            location = location with { RepositorySlug = repository.Slug };
-        }
+            // The project level is the list of repositories, which a single-repository project does
+            // not have: there it is that repository's own top level (ADR-0006).
+            var paths = await index.PathsAsync(token);
+            var location = directory.Repository is null
+                ? paths.SingleRepository ? new QualifiedPath(paths.RepositorySlug, "") : null
+                : new QualifiedPath(directory.Repository.Slug, directory.PathInRepository);
 
-        var entries = await index.TreeAsync(location, 1, cancellationToken);
-        return Results.Ok(new TreeResponse(location is null ? "" : paths.Format(location), location is null,
-            entries
-                .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
-                    e.SkipReason))
-                .ToList()));
-    }
+            var entries = await index.TreeAsync(location, 1, token);
+            return Results.Ok(new TreeResponse(directory.QualifiedPath, location is null,
+                entries
+                    .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
+                        e.SkipReason))
+                    .ToList()));
+        }, Status, cancellationToken);
 
-    private static async Task<IResult> ReadAsync(
-        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken)
-    {
-        var open = await IndexReader.OpenAsync(indexes, project, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return Refuse(refused);
-        using var index = ((IndexOpen.Opened)open).Reader;
+    private static Task<IResult> ReadAsync(
+        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken) =>
+        IndexReader.OverIndexAsync(indexes, project, null, async (index, token) =>
+        {
+            if (await index.FindFileAsync(path, token) is not { } file)
+                return Results.NotFound(new { error = $"No file '{path}' in project '{project}'." });
 
-        if (await index.FindFileAsync(path, cancellationToken) is not { } file)
-            return Results.NotFound(new { error = $"No file '{path}' in project '{project}'." });
-
-        var lines = file.SkipReason is null
-            ? await index.LinesAsync(file.FileId, 1, MaxLinesPerFileView, cancellationToken)
-            : [];
-        // Carried on the file read and not fetched separately: they are columns on the row that read
-        // already has in hand, so a second request would be one for data this one was holding.
-        var span = await index.FileCommitsAsync(file.FileId, cancellationToken);
-        return Results.Ok(new FileContentResponse(file.QualifiedPath, file.RepositorySlug, file.LineCount,
-            file.SizeBytes, file.SkipReason, string.Join('\n', lines), Commit(span.First), Commit(span.Last)));
-    }
+            var lines = file.SkipReason is null
+                ? await index.LinesAsync(file.FileId, 1, MaxLinesPerFileView, token)
+                : [];
+            // Carried on the file read and not fetched separately: they are columns on the row that read
+            // already has in hand, so a second request would be one for data this one was holding.
+            var span = await index.FileCommitsAsync(file.FileId, token);
+            return Results.Ok(new FileContentResponse(file.QualifiedPath, file.RepositorySlug, file.LineCount,
+                file.SizeBytes, file.SkipReason, string.Join('\n', lines), Commit(span.First), Commit(span.Last)));
+        }, Status, cancellationToken);
 
     /// <summary>
     ///     A file's attribution as runs. A file with no history answers with no runs rather than a
     ///     failure: the gutter simply does not draw, and the header line is what says why.
     /// </summary>
-    private static async Task<IResult> BlameAsync(
-        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken)
-    {
-        var open = await IndexReader.OpenAsync(indexes, project, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return Refuse(refused);
-        using var index = ((IndexOpen.Opened)open).Reader;
+    private static Task<IResult> BlameAsync(
+        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken) =>
+        IndexReader.OverIndexAsync(indexes, project, null, async (index, token) =>
+        {
+            if (await index.FindFileAsync(path, token) is not { } file)
+                return Results.NotFound(new { error = $"No file '{path}' in project '{project}'." });
+            if (file.SkipReason is not null) return Results.Ok(new BlameResponse(file.QualifiedPath, []));
 
-        if (await index.FindFileAsync(path, cancellationToken) is not { } file)
-            return Results.NotFound(new { error = $"No file '{path}' in project '{project}'." });
-        if (file.SkipReason is not null) return Results.Ok(new BlameResponse(file.QualifiedPath, []));
-
-        var runs = await index.BlameAsync(file.FileId, 1, MaxLinesPerFileView, cancellationToken);
-        return Results.Ok(new BlameResponse(file.QualifiedPath,
-            runs.Select(r => new BlameRunResponse(r.StartLine, r.EndLine, Commit(r.By))).ToList()));
-    }
+            var runs = await index.BlameAsync(file.FileId, 1, MaxLinesPerFileView, token);
+            return Results.Ok(new BlameResponse(file.QualifiedPath,
+                runs.Select(r => new BlameRunResponse(r.StartLine, r.EndLine, Commit(r.By))).ToList()));
+        }, Status, cancellationToken);
 
     /// <summary>
     ///     A search outcome as JSON. A problem is a 400 whichever kind it is, where the browsing routes
@@ -444,10 +416,7 @@ internal static class SearchEndpoints
             result.Dependents
                 .Select(d => new DependentResponse(d.QualifiedPath, d.Name, d.LineNumber))
                 .ToList())),
-        // No index is a 404 the browse view renders as the starting state a new project is in; every
-        // other problem is a 400, because the project is there and the request asked it something wrong.
-        Problem { Kind: ProblemKind.NoIndex } problem => Results.NotFound(new { error = problem.Explanation }),
-        Problem problem => Results.BadRequest(new { error = problem.Explanation }),
+        Problem problem => Status(problem),
         // Unreachable while these are the outcomes grep and the graph answer with, and a 500 rather
         // than a cast that throws if another is ever added.
         _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
@@ -457,16 +426,10 @@ internal static class SearchEndpoints
         by is null ? null : new FileCommitResponse(by.Sha, by.AuthorName, by.AuthoredAt, by.Subject);
 
     /// <summary>
-    ///     No index is a 404 — the view renders it as the starting state a new project is in — and an
-    ///     unknown repository a 400, because the project is there and the request named something in it
-    ///     that is not.
+    ///     No index is a 404 — the view renders it as the starting state a new project is in — and every
+    ///     other problem a 400, because the project is there and the request asked it something wrong.
     /// </summary>
-    private static IResult Refuse(IndexOpen.Refused refused) => refused switch
-    {
-        IndexOpen.NoIndex => Results.NotFound(new { error = refused.Explanation }),
-        IndexOpen.UnknownRepository => Results.BadRequest(new { error = refused.Explanation }),
-        // Unreachable while Refused has two cases, and a 500 rather than a cast that throws if a
-        // third is ever added.
-        _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
-    };
+    private static IResult Status(Problem problem) => problem.Kind == ProblemKind.NoIndex
+        ? Results.NotFound(new { error = problem.Explanation })
+        : Results.BadRequest(new { error = problem.Explanation });
 }

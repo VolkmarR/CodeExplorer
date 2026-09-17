@@ -30,9 +30,6 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
     /// </summary>
     private const int MaxTreeEntries = 2000;
 
-    /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
-    private const int MaxSuggestions = 5;
-
     [McpServerTool(Name = "read_file", ReadOnly = true, Idempotent = true, Title = "Read files from the index")]
     [Description("""
                  Returns one or more indexed files with line numbers, so the numbers line up with what grep reports. Paths are qualified: the repository slug, then the path inside it (`main/src/Api/Foo.cs`), exactly as grep, glob and list_tree print them.
@@ -71,59 +68,33 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             targets.Add(parsed);
         }
 
-        var open = await IndexReader.OpenAsync(indexes, project.Slug, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
-
-        var text = new StringBuilder();
-        for (int i = 0; i < targets.Count; i++)
+        return await IndexReader.OverIndexAsync(indexes, project.Slug, null, async (index, token) =>
         {
-            if (text.Length > 0) text.Append('\n');
-            // Whatever the entries before this one left unused is handed on, so four small windows
-            // and one large one read in full where an equal split would truncate the large one.
-            int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (targets.Count - i);
-            await AppendReadAsync(text, index, targets[i], allowance, withHistory, cancellationToken);
-        }
+            var text = new StringBuilder();
+            for (int i = 0; i < targets.Count; i++)
+            {
+                if (text.Length > 0) text.Append('\n');
+                // Whatever the entries before this one left unused is handed on, so four small windows
+                // and one large one read in full where an equal split would truncate the large one.
+                int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (targets.Count - i);
+                await AppendReadAsync(text, index, targets[i], allowance, withHistory, token);
+            }
 
-        return text.ToString();
+            return text.ToString();
+        }, problem => problem.Explanation, cancellationToken);
     }
 
     private static async Task AppendReadAsync(
         StringBuilder text, IndexReader index, ReadTarget target, int allowance, bool withHistory,
         CancellationToken cancellationToken)
     {
-        var paths = await index.PathsAsync(cancellationToken);
-        var qualified = paths.Parse(target.Path);
-        if (qualified is null || qualified.PathInRepository.Length == 0)
-        {
-            text.Append(CultureInfo.InvariantCulture,
-                $"'{target.Path}' names no file: {await index.PathRuleAsync(cancellationToken)} Write it like `{paths.Example()}`.\n");
-            return;
-        }
-
-        // The slug is matched like the rest of the path, case-insensitively, and the file lookup gets
-        // the spelling the index holds so the two cannot disagree. A single-repository project wrote no
-        // slug for us to match, and the one it resolves to is the only one there is.
-        var repository = await index.FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
-        if (repository is null)
-        {
-            text.Append(CultureInfo.InvariantCulture,
-                $"{await index.UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these.\n");
-            return;
-        }
-
-        qualified = qualified with { RepositorySlug = repository.Slug };
-        string spelled = paths.Format(qualified);
-        var file = await index.FindFileAsync(spelled, cancellationToken);
+        // The path rule and the refusal sentences are the reader's, so an agent that got the path wrong
+        // is told the same thing here as by imports or file_history. Several entries share this one
+        // open, which is why this is LocateAsync and not OverFileAsync.
+        var (file, problem) = await index.LocateAsync(target.Path, true, cancellationToken);
         if (file is null)
         {
-            text.Append(CultureInfo.InvariantCulture,
-                $"No indexed file '{spelled}' in repository '{repository.Slug}' of project '{index.ProjectSlug}'. ");
-            string name = qualified.PathInRepository[(qualified.PathInRepository.LastIndexOf('/') + 1)..];
-            var similar = await index.FilesNamedAsync(name, MaxSuggestions, cancellationToken);
-            text.Append(similar.Count > 0
-                ? $"Did you mean {string.Join(" or ", similar)}? Otherwise use glob or list_tree to locate it.\n"
-                : "Use glob or list_tree to locate it; the path is case-insensitive here but must otherwise match the committed path.\n");
+            text.Append(problem!.Explanation).Append('\n');
             return;
         }
 
@@ -197,11 +168,15 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         string pattern = glob.Trim().Replace('\\', '/');
         if (MalformedGlob(pattern) is { } malformed) return malformed;
 
-        var open = await IndexReader.OpenAsync(indexes, project.Slug, repo, cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
-        var repository = index.Repository;
+        return await IndexReader.OverIndexAsync(indexes, project.Slug, repo,
+            (index, token) => ReadGlobAsync(index, project, pattern, limit, token),
+            problem => problem.Explanation, cancellationToken);
+    }
 
+    private static async Task<string> ReadGlobAsync(IndexReader index, Project project, string pattern, int limit,
+        CancellationToken cancellationToken)
+    {
+        var repository = index.Repository;
         var result = await index.GlobAsync(pattern, limit, cancellationToken);
         if (result.Total == 0)
         {
@@ -257,22 +232,21 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         if (depth < 1)
             return "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on.";
 
-        var open = await IndexReader.OpenAsync(indexes, project.Slug, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
+        return await IndexReader.OverDirectoryAsync(indexes, project.Slug, path,
+            (index, directory, token) => ReadTreeAsync(index, project, directory, depth, token),
+            problem => problem.Explanation, cancellationToken);
+    }
 
-        // Null is the repository level, which a single-repository project does not have: there an empty
-        // path already means that repository's own top level (ADR-0006).
+    private static async Task<string> ReadTreeAsync(IndexReader index, Project project, IndexedDirectory directory,
+        int depth, CancellationToken cancellationToken)
+    {
+        // Null is the repository level, which a single-repository project does not have: there the
+        // project level is that repository's own top level (ADR-0006).
         var paths = await index.PathsAsync(cancellationToken);
-        var location = paths.Parse(path);
-        string listed = "";
-        if (location is not null)
-        {
-            if (await index.FindRepositoryAsync(location.RepositorySlug, cancellationToken) is not { } repository)
-                return await index.UnknownRepositoryAsync(location.RepositorySlug, cancellationToken);
-            location = location with { RepositorySlug = repository.Slug };
-            listed = paths.Format(location);
-        }
+        var location = directory.Repository is null
+            ? paths.SingleRepository ? new QualifiedPath(paths.RepositorySlug, "") : null
+            : new QualifiedPath(directory.Repository.Slug, directory.PathInRepository);
+        string listed = directory.QualifiedPath;
 
         var entries = await index.TreeAsync(location, depth, cancellationToken);
         if (entries.Count == 0)
@@ -330,11 +304,15 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
     {
         var project = BoundProject.Get(httpContextAccessor);
 
-        var open = await IndexReader.OpenAsync(indexes, project.Slug, repo, cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
-        var repository = index.Repository;
+        return await IndexReader.OverIndexAsync(indexes, project.Slug, repo,
+            (index, token) => ReadExtensionsAsync(index, project, token),
+            problem => problem.Explanation, cancellationToken);
+    }
 
+    private static async Task<string> ReadExtensionsAsync(IndexReader index, Project project,
+        CancellationToken cancellationToken)
+    {
+        var repository = index.Repository;
         var extensions = await index.ExtensionsAsync(cancellationToken);
         if (extensions.Count == 0)
             return repository is null

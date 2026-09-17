@@ -120,11 +120,9 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
     /// </summary>
     public async Task<ProjectOverviewDetail> OverviewAsync(Project project, CancellationToken cancellationToken)
     {
-        var open = await IndexReader.OpenAsync(indexes, project.Slug, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new ProjectOverviewDetail(null, refused.Explanation);
-
-        using var index = ((IndexOpen.Opened)open).Reader;
-        return new ProjectOverviewDetail(await index.OverviewAsync(cancellationToken), null);
+        return await IndexReader.OverIndexAsync(indexes, project.Slug, null,
+            async (index, token) => new ProjectOverviewDetail(await index.OverviewAsync(token), null),
+            problem => new ProjectOverviewDetail(null, problem.Explanation), cancellationToken);
     }
 
     /// <summary>
