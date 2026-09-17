@@ -69,23 +69,27 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
             targets.Add(parsed);
         }
 
-        var outcome = await files.ReadAsync(project.Slug,
-            new ReadRequest(targets.Select(t => new FileWindow(t.Path, t.Start, t.End)).ToList(), withHistory, true),
-            cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
+        return ToolReply.Render<ReadResult>(
+            await files.ReadAsync(project.Slug,
+                new ReadRequest(targets.Select(t => new FileWindow(t.Path, t.Start, t.End)).ToList(), withHistory,
+                    true), cancellationToken),
+            Format, "Read fewer paths at once, or pass a narrower line range.");
 
-        var reads = ((ReadResult)outcome).Files;
-        var text = new StringBuilder();
-        for (int i = 0; i < reads.Count; i++)
+        string Format(ReadResult result)
         {
-            if (text.Length > 0) text.Append('\n');
-            // Whatever the entries before this one left unused is handed on, so four small windows
-            // and one large one read in full where an equal split would truncate the large one.
-            int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (reads.Count - i);
-            Append(text, reads[i], targets[i].ExplicitRange, allowance);
-        }
+            var reads = result.Files;
+            var text = new StringBuilder();
+            for (int i = 0; i < reads.Count; i++)
+            {
+                if (text.Length > 0) text.Append('\n');
+                // Whatever the entries before this one left unused is handed on, so four small windows
+                // and one large one read in full where an equal split would truncate the large one.
+                int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (reads.Count - i);
+                Append(text, reads[i], targets[i].ExplicitRange, allowance);
+            }
 
-        return text.ToString();
+            return text.ToString();
+        }
     }
 
     private static void Append(StringBuilder text, FileRead read, bool explicitRange, int allowance)
@@ -182,42 +186,45 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        var outcome = await files.GlobAsync(project.Slug, new GlobRequest(glob, repo, limit), cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
+        return ToolReply.Render<GlobListing>(
+            await files.GlobAsync(project.Slug, new GlobRequest(glob, repo, limit), cancellationToken), Format,
+            "Narrow the glob, or lower limit.");
 
-        var listing = (GlobListing)outcome;
-        string pattern = listing.Glob;
-        var repository = listing.Repository;
-        if (listing.Total == 0)
+        string Format(GlobListing listing)
         {
-            if (repository is null)
-                return
-                    $"No indexed file matches \"{pattern}\" in project '{project.Slug}' ({listing.Repositories.Sum(r => r.FileCount)} files in repositories {string.Join(", ", listing.Repositories.Select(r => r.Slug))}). "
-                    + "Remember `*` crosses directories, so a bare \"*Commands.cs\" is usually the right shape, and the first path segment is the repository slug.";
+            string pattern = listing.Glob;
+            var repository = listing.Repository;
+            if (listing.Total == 0)
+            {
+                if (repository is null)
+                    return
+                        $"No indexed file matches \"{pattern}\" in project '{project.Slug}' ({listing.Repositories.Sum(r => r.FileCount)} files in repositories {string.Join(", ", listing.Repositories.Select(r => r.Slug))}). "
+                        + "Remember `*` crosses directories, so a bare \"*Commands.cs\" is usually the right shape, and the first path segment is the repository slug.";
 
-            return $"No indexed file matches \"{pattern}\" in repository '{repository.Slug}'. "
-                   + (listing.MatchesInOtherRepositories > 0
-                       ? $"{listing.MatchesInOtherRepositories} {ToolReply.Plural(listing.MatchesInOtherRepositories.Value, "file")} match in the other repositories of project '{project.Slug}'; drop `repo` to see them."
-                       : $"Nothing matches in the other repositories of project '{project.Slug}' either; try a wider glob.");
-        }
+                return $"No indexed file matches \"{pattern}\" in repository '{repository.Slug}'. "
+                       + (listing.MatchesInOtherRepositories > 0
+                           ? $"{listing.MatchesInOtherRepositories} {ToolReply.Plural(listing.MatchesInOtherRepositories.Value, "file")} match in the other repositories of project '{project.Slug}'; drop `repo` to see them."
+                           : $"Nothing matches in the other repositories of project '{project.Slug}' either; try a wider glob.");
+            }
 
-        var text = new StringBuilder();
-        text.Append(CultureInfo.InvariantCulture,
-            $"{listing.Total} {ToolReply.Plural(listing.Total, "file")} matching \"{pattern}\"");
-        if (repository is not null) text.Append(CultureInfo.InvariantCulture, $" in repository '{repository.Slug}'");
-        if (listing.Total > listing.Files.Count)
+            var text = new StringBuilder();
             text.Append(CultureInfo.InvariantCulture,
-                $"; showing the first {listing.Files.Count} by path (raise limit or narrow the glob)");
-        text.Append(":\n");
-        foreach (var file in listing.Files)
-        {
-            text.Append(CultureInfo.InvariantCulture, $"{file.LineCount,6}L  {file.QualifiedPath}");
-            if (file.SkipReason is not null)
-                text.Append(CultureInfo.InvariantCulture, $"  (not indexed: {file.SkipReason})");
-            text.Append('\n');
-        }
+                $"{listing.Total} {ToolReply.Plural(listing.Total, "file")} matching \"{pattern}\"");
+            if (repository is not null) text.Append(CultureInfo.InvariantCulture, $" in repository '{repository.Slug}'");
+            if (listing.Total > listing.Files.Count)
+                text.Append(CultureInfo.InvariantCulture,
+                    $"; showing the first {listing.Files.Count} by path (raise limit or narrow the glob)");
+            text.Append(":\n");
+            foreach (var file in listing.Files)
+            {
+                text.Append(CultureInfo.InvariantCulture, $"{file.LineCount,6}L  {file.QualifiedPath}");
+                if (file.SkipReason is not null)
+                    text.Append(CultureInfo.InvariantCulture, $"  (not indexed: {file.SkipReason})");
+                text.Append('\n');
+            }
 
-        return ToolReply.Cap(text.ToString(), "Narrow the glob, or lower limit.");
+            return text.ToString();
+        }
     }
 
     [McpServerTool(Name = "list_tree", ReadOnly = true, Idempotent = true, Title = "List directories and files")]
@@ -236,41 +243,44 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        var outcome = await files.TreeAsync(project.Slug, new TreeRequest(path, depth), cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
+        return ToolReply.Render<TreeListing>(
+            await files.TreeAsync(project.Slug, new TreeRequest(path, depth), cancellationToken), Format,
+            "List a subdirectory, or use a smaller depth.");
 
-        var listing = (TreeListing)outcome;
-        string listed = listing.Directory.QualifiedPath;
-        if (listing.Entries.Count == 0)
-            return
-                $"{(listed.Length == 0 ? $"Project '{project.Slug}'" : $"Repository '{listed}'")} has no indexed files. Call repo_info to see what the index holds.";
-
-        var text = new StringBuilder();
-        if (listing.RepositoryLevel)
-            text.Append(CultureInfo.InvariantCulture,
-                $"{project.Slug} (depth {depth}, {listing.Repositories} {ToolReply.Plural(listing.Repositories, "repository", "repositories")})\n");
-        else
-            // A single-repository project's root formats as the empty path (ADR-0006); it is headed by
-            // the project, which is what the caller asked for.
-            text.Append(CultureInfo.InvariantCulture,
-                $"{(listed.Length == 0 ? project.Slug : listed + "/")} (depth {depth}, {listing.Entries.Count} entries)\n");
-
-        // Entries are printed relative to what was listed, as `tree` does; at the repository level the
-        // qualified path already starts with the slug and nothing is stripped.
-        int skip = listed.Length == 0 ? 0 : listed.Length + 1;
-        foreach (var entry in listing.Entries.Take(MaxTreeEntries))
+        string Format(TreeListing listing)
         {
-            text.Append(entry.QualifiedPath, skip, entry.QualifiedPath.Length - skip);
-            if (entry.Files is not null) text.Append('/');
-            else if (entry.SkipReason is not null)
-                text.Append(CultureInfo.InvariantCulture, $"  (not indexed: {entry.SkipReason})");
-            text.Append('\n');
-        }
+            string listed = listing.Directory.QualifiedPath;
+            if (listing.Entries.Count == 0)
+                return
+                    $"{(listed.Length == 0 ? $"Project '{project.Slug}'" : $"Repository '{listed}'")} has no indexed files. Call repo_info to see what the index holds.";
 
-        if (listing.Entries.Count > MaxTreeEntries)
-            text.Append(CultureInfo.InvariantCulture,
-                $"... {listing.Entries.Count - MaxTreeEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
-        return text.ToString();
+            var text = new StringBuilder();
+            if (listing.RepositoryLevel)
+                text.Append(CultureInfo.InvariantCulture,
+                    $"{project.Slug} (depth {depth}, {listing.Repositories} {ToolReply.Plural(listing.Repositories, "repository", "repositories")})\n");
+            else
+                // A single-repository project's root formats as the empty path (ADR-0006); it is headed by
+                // the project, which is what the caller asked for.
+                text.Append(CultureInfo.InvariantCulture,
+                    $"{(listed.Length == 0 ? project.Slug : listed + "/")} (depth {depth}, {listing.Entries.Count} entries)\n");
+
+            // Entries are printed relative to what was listed, as `tree` does; at the repository level the
+            // qualified path already starts with the slug and nothing is stripped.
+            int skip = listed.Length == 0 ? 0 : listed.Length + 1;
+            foreach (var entry in listing.Entries.Take(MaxTreeEntries))
+            {
+                text.Append(entry.QualifiedPath, skip, entry.QualifiedPath.Length - skip);
+                if (entry.Files is not null) text.Append('/');
+                else if (entry.SkipReason is not null)
+                    text.Append(CultureInfo.InvariantCulture, $"  (not indexed: {entry.SkipReason})");
+                text.Append('\n');
+            }
+
+            if (listing.Entries.Count > MaxTreeEntries)
+                text.Append(CultureInfo.InvariantCulture,
+                    $"... {listing.Entries.Count - MaxTreeEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
+            return text.ToString();
+        }
     }
 
     [McpServerTool(Name = "list_extensions", ReadOnly = true, Idempotent = true, Title = "List file extensions")]
@@ -283,38 +293,41 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        var outcome = await files.ExtensionsAsync(project.Slug, new ExtensionsRequest(repo), cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
+        return ToolReply.Render<ExtensionListing>(
+            await files.ExtensionsAsync(project.Slug, new ExtensionsRequest(repo), cancellationToken), Format,
+            "Scope to one repository with repo.");
 
-        var listing = (ExtensionListing)outcome;
-        var repository = listing.Repository;
-        var extensions = listing.Extensions;
-        if (extensions.Count == 0)
-            return repository is null
-                ? $"Project '{project.Slug}' has no files in its index. Its repositories may be empty; repo_info shows what was indexed."
-                : $"Repository '{repository.Slug}' has no files in the index of project '{project.Slug}'.";
-
-        var text = new StringBuilder();
-        int total = extensions.Sum(e => e.Files);
-        text.Append(repository is null
-            ? $"Extensions in project '{project.Slug}'"
-            : $"Extensions in repository '{repository.Slug}' of project '{project.Slug}'");
-        text.Append(CultureInfo.InvariantCulture, $" ({total} {ToolReply.Plural(total, "file")}), most files first:\n");
-        int width = Math.Max(6, extensions.Max(e => Label(e).Length));
-        foreach (var extension in extensions)
+        string Format(ExtensionListing listing)
         {
-            text.Append(Label(extension).PadRight(width)).Append(CultureInfo.InvariantCulture,
-                $"  {extension.Files} {ToolReply.Plural(extension.Files, "file")} ({extension.Lines} {ToolReply.Plural(extension.Lines, "line")})");
-            if (extension.Skipped > 0)
-                text.Append(CultureInfo.InvariantCulture, $", {extension.Skipped} not indexed");
-            text.Append('\n');
-        }
+            var repository = listing.Repository;
+            var extensions = listing.Extensions;
+            if (extensions.Count == 0)
+                return repository is null
+                    ? $"Project '{project.Slug}' has no files in its index. Its repositories may be empty; repo_info shows what was indexed."
+                    : $"Repository '{repository.Slug}' has no files in the index of project '{project.Slug}'.";
 
-        return text.ToString();
+            var text = new StringBuilder();
+            int total = extensions.Sum(e => e.Files);
+            text.Append(repository is null
+                ? $"Extensions in project '{project.Slug}'"
+                : $"Extensions in repository '{repository.Slug}' of project '{project.Slug}'");
+            text.Append(CultureInfo.InvariantCulture, $" ({total} {ToolReply.Plural(total, "file")}), most files first:\n");
+            int width = Math.Max(6, extensions.Max(e => Label(e).Length));
+            foreach (var extension in extensions)
+            {
+                text.Append(Label(extension).PadRight(width)).Append(CultureInfo.InvariantCulture,
+                    $"  {extension.Files} {ToolReply.Plural(extension.Files, "file")} ({extension.Lines} {ToolReply.Plural(extension.Lines, "line")})");
+                if (extension.Skipped > 0)
+                    text.Append(CultureInfo.InvariantCulture, $", {extension.Skipped} not indexed");
+                text.Append('\n');
+            }
 
-        static string Label(ExtensionCount e)
-        {
-            return e.Extension.Length == 0 ? "(none)" : e.Extension;
+            return text.ToString();
+
+            static string Label(ExtensionCount e)
+            {
+                return e.Extension.Length == 0 ? "(none)" : e.Extension;
+            }
         }
     }
 

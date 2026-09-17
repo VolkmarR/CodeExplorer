@@ -73,10 +73,9 @@ internal sealed class SearchTools(
         var request = new GrepRequest(query, regex, caseSensitive, path, exclude, ext, multiline, wholeWord, context,
             filesOnly, maxLinesPerFile, page, pageSize, withHistory);
 
-        var outcome = await grep.SearchAsync(project.Slug, request, cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
-        var result = (GrepResult)outcome;
-        return result.TotalFiles == 0 ? NoMatches(request, result) : Format(request, result);
+        return ToolReply.Render<GrepResult>(await grep.SearchAsync(project.Slug, request, cancellationToken),
+            result => result.TotalFiles == 0 ? NoMatches(request, result) : Format(request, result),
+            "Narrow with path/ext/exclude, lower pageSize or maxLinesPerFile, or use filesOnly=true to see the shape of the answer first.");
     }
 
     private static string NoMatches(GrepRequest request, GrepResult result)
@@ -147,8 +146,7 @@ internal sealed class SearchTools(
             text.Append(CultureInfo.InvariantCulture,
                 $"\nMore files match. Call grep again with page={result.Page + 1}.\n");
 
-        return ToolReply.Cap(text.ToString(),
-            "Narrow with path/ext/exclude, lower pageSize or maxLinesPerFile, or use filesOnly=true to see the shape of the answer first.");
+        return text.ToString();
     }
 
     private static void AppendFile(StringBuilder text, GrepRequest request, GrepFile file)
@@ -221,13 +219,11 @@ internal sealed class SearchTools(
         var project = BoundProject.Get(httpContextAccessor);
         var request = new ReferenceRequest(symbol, new FileFilter(repo, path, exclude, ext), maxFiles);
 
-        var outcome = await references.FindAsync(project.Slug, request, cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
-        var result = (ReferenceResult)outcome;
-        return result.TotalFiles == 0
-            ? NoReferences(symbol.Trim(), result)
-            : ToolReply.Cap(FormatReferences(symbol.Trim(), result, writesOnly, includeNoise),
-                "Narrow with repo/path/ext/exclude, or lower maxFiles.");
+        return ToolReply.Render<ReferenceResult>(await references.FindAsync(project.Slug, request, cancellationToken),
+            result => result.TotalFiles == 0
+                ? NoReferences(symbol.Trim(), result)
+                : FormatReferences(symbol.Trim(), result, writesOnly, includeNoise),
+            "Narrow with repo/path/ext/exclude, or lower maxFiles.");
     }
 
     private static string NoReferences(string symbol, ReferenceResult result)
@@ -361,12 +357,11 @@ internal sealed class SearchTools(
         var project = BoundProject.Get(httpContextAccessor);
         var request = new DefinitionRequest(symbol, new FileFilter(repo, path, exclude, ext));
 
-        var outcome = await definitions.FindAsync(project.Slug, request, cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
-        var result = (DefinitionResult)outcome;
-        return result.Sites.Count == 0
-            ? NoDefinition(symbol.Trim(), result)
-            : ToolReply.Cap(FormatDefinitions(symbol.Trim(), result), "Narrow with repo/path/ext/exclude.");
+        return ToolReply.Render<DefinitionResult>(await definitions.FindAsync(project.Slug, request, cancellationToken),
+            result => result.Sites.Count == 0
+                ? NoDefinition(symbol.Trim(), result)
+                : FormatDefinitions(symbol.Trim(), result),
+            "Narrow with repo/path/ext/exclude.");
     }
 
     /// <summary>
@@ -515,12 +510,9 @@ internal sealed class SearchTools(
         var request = new MatchListRequest(query, new FileFilter(repo, path, exclude, ext), group, caseSensitive,
             wholeWord, limit);
 
-        var outcome = await matches.ListAsync(project.Slug, request, cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
-        var result = (MatchListResult)outcome;
-        return result.TotalDistinct == 0
-            ? NoValues(request, result)
-            : ToolReply.Cap(FormatValues(result), "Lower limit, or narrow with repo/path/ext/exclude.");
+        return ToolReply.Render<MatchListResult>(await matches.ListAsync(project.Slug, request, cancellationToken),
+            result => result.TotalDistinct == 0 ? NoValues(request, result) : FormatValues(result),
+            "Lower limit, or narrow with repo/path/ext/exclude.");
     }
 
     private static string NoValues(MatchListRequest request, MatchListResult result)

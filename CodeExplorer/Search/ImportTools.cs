@@ -54,9 +54,8 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        var outcome = await graph.ImportsAsync(project.Slug, path, cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
-        return ToolReply.Cap(Format((ImportsResult)outcome), "Read the file's import lines directly for the rest.");
+        return ToolReply.Render<ImportsResult>(await graph.ImportsAsync(project.Slug, path, cancellationToken),
+            Format, "Read the file's import lines directly for the rest.");
     }
 
     [McpServerTool(Name = "who_imports", ReadOnly = true, Idempotent = true,
@@ -75,9 +74,8 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        var outcome = await graph.DependentsAsync(project.Slug, path, cancellationToken);
-        if (outcome is Problem problem) return problem.Explanation;
-        return ToolReply.Cap(Format((DependentsResult)outcome), "Narrow by asking about a more specific file.");
+        return ToolReply.Render<DependentsResult>(await graph.DependentsAsync(project.Slug, path, cancellationToken),
+            Format, "Narrow by asking about a more specific file.");
     }
 
     private static string Format(ImportsResult result)
