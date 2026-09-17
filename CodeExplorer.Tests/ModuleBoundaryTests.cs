@@ -53,6 +53,21 @@ public sealed partial class ModuleBoundaryTests
         Assert.Empty(ReferencesFrom("Infrastructure", TypesDeclaredIn(module)));
     }
 
+    [Theory]
+    [InlineData("Search")]
+    [InlineData("Index")]
+    [InlineData("Control")]
+    [InlineData("Refresh")]
+    [InlineData("Operator")]
+    [InlineData("Infrastructure")]
+    public void Language_references_nothing_declared_in(string module)
+    {
+        // Language is the leaf of the graph (ADR-0008). It answers questions about a line of text and
+        // knows nothing about indexes, searches or projects, which is what lets a parser-backed
+        // analyser be dropped in beside a profile without any of them noticing.
+        Assert.Empty(ReferencesFrom("Language", TypesDeclaredIn(module)));
+    }
+
     /// <summary>
     ///     A package boundary rather than a folder one: LibGit2Sharp is how <c>Git/</c> reads a local
     ///     copy, and the refresh and the build are handed what it read as <c>LocalCopy</c> and
