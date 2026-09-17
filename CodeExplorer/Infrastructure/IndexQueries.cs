@@ -165,6 +165,111 @@ internal static class IndexQueries
     }
 
     /// <summary>
+    ///     The files a window's commits changed alongside one file, most shared commits first, with
+    ///     what the ceiling had to leave out to say it.
+    ///     Pairing is anchored rather than a self-join of <c>commit_files</c> against itself. A
+    ///     self-join is the obvious reading of "which files change together" and it is quadratic in the
+    ///     size of every commit in the window at once: one vendor drop of five thousand paths is
+    ///     twenty-five million pairs on its own, computed to answer a question about one file. Anchored,
+    ///     the work is the anchor's own commits times what each of them touched, which the ceiling
+    ///     bounds — so the cost of the query is bounded by the ceiling and not by the repository.
+    ///     The ceiling is still needed for what it was needed for: one mass commit that happens to
+    ///     touch the anchor pairs it with every path in the repository at once, and those pairs are not
+    ///     coupling, they are one commit. Excluding them is the caller's to explain, which is why the
+    ///     count of what was excluded comes back rather than being quietly dropped.
+    /// </summary>
+    /// <param name="connection">Bound to the index being read.</param>
+    /// <param name="paths">How this project names a file (ADR-0006).</param>
+    /// <param name="window">The span to pair over, inclusive at both ends.</param>
+    /// <param name="repositorySlug">The anchor's repository. A commit touches one repository, so pairing never crosses one.</param>
+    /// <param name="pathInRepository">The anchor file, repository-relative, as <c>commit_files</c> records it.</param>
+    /// <param name="maxCommitPaths">The most paths a commit may touch and still be paired.</param>
+    /// <param name="limit">How many co-changed files to return.</param>
+    /// <param name="cancellationToken">Threaded through to the command.</param>
+    public static async Task<CoChanges> CoChangedAsync(DuckDBConnection connection, ProjectPaths paths,
+        HistoryWindow window, string repositorySlug, string pathInRepository, int maxCommitPaths, int limit,
+        CancellationToken cancellationToken)
+    {
+        // Epoch seconds rather than timestamp parameters, for the reason RankAsync compares them that
+        // way: it keeps the comparison off the session time zone and a DateTimeOffset out of the driver.
+        var parameters = new List<DuckDBParameter>
+        {
+            new("since", window.Since.ToUnixTimeSeconds()),
+            new("until", window.Until.ToUnixTimeSeconds()),
+            new("r", repositorySlug),
+            new("p", pathInRepository),
+            new("c", maxCommitPaths)
+        };
+
+        using var command = connection.Query($"""
+                                              -- The anchor's own commits first, and everything after
+                                              -- reads only those. Narrowing here rather than later is
+                                              -- what keeps the work proportional to one file's history
+                                              -- instead of to the whole window's.
+                                              WITH anchor AS (
+                                                  SELECT cf.commit_id
+                                                  FROM commit_files cf
+                                                  JOIN commits c USING (commit_id)
+                                                  WHERE c.repo_slug = $r
+                                                    AND epoch(c.authored_at) BETWEEN $since AND $until
+                                                    AND cf.path = $p),
+                                              -- Every path those commits touched. The window and the
+                                              -- repository are not repeated: a commit_id from anchor
+                                              -- already satisfies both.
+                                              touched AS (
+                                                  SELECT cf.commit_id, cf.path
+                                                  FROM commit_files cf JOIN anchor USING (commit_id)),
+                                              sized AS (
+                                                  SELECT commit_id,
+                                                         count(*) <= $c AS paired
+                                                  FROM touched GROUP BY commit_id),
+                                              -- One row per commit that touched the anchor, so this
+                                              -- counts commits and not paths.
+                                              counts AS (
+                                                  SELECT count(*)::INTEGER AS commits,
+                                                         count(*) FILTER (WHERE paired)::INTEGER AS paired
+                                                  FROM sized),
+                                              ranked AS (
+                                                  SELECT t.path, count(*)::INTEGER AS shared
+                                                  FROM touched t JOIN sized s USING (commit_id)
+                                                  WHERE s.paired AND t.path <> $p
+                                                  GROUP BY t.path
+                                                  -- Spelled out rather than ordered by the alias, for
+                                                  -- the reason RankAsync spells its ORDER BY out.
+                                                  ORDER BY count(*) DESC, t.path
+                                                  -- Inlined and not parameterised: it is an int the
+                                                  -- caller has already clamped to a range, so there is
+                                                  -- nothing to escape, and RankAsync inlines its own
+                                                  -- the same way.
+                                                  LIMIT {limit})
+                                              -- LEFT JOIN ON TRUE so the counts survive an empty
+                                              -- ranking: a file that moves alone still has to say how
+                                              -- many commits it was looked at over.
+                                              SELECT counts.commits, counts.paired, ranked.path, ranked.shared,
+                                                     EXISTS (SELECT 1
+                                                             FROM files f JOIN repositories rp USING (repo_id)
+                                                             WHERE rp.slug = $r
+                                                               AND f.path = ranked.path) AS at_head
+                                              FROM counts LEFT JOIN ranked ON TRUE
+                                              ORDER BY ranked.shared DESC, ranked.path
+                                              """, parameters);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var files = new List<CoChangedFile>();
+        int commits = 0, paired = 0;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            commits = reader.Int32("commits");
+            paired = reader.Int32("paired");
+            // Null where the join found no co-changed file at all, which is one row and not none.
+            if (reader.IsNull("path")) continue;
+            files.Add(new CoChangedFile(paths.Format(repositorySlug, reader.Text("path")), reader.Flag("at_head"),
+                reader.Int32("shared")));
+        }
+
+        return new CoChanges(commits, paired, files);
+    }
+
+    /// <summary>
     ///     The WHERE clause and its parameter for one repository's commits, or neither for the
     ///     project's. Public because every read of the commit tables narrows the same way — the change
     ///     log and the commit count as much as the ranking — and two spellings of one clause is one of

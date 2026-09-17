@@ -16,7 +16,10 @@ namespace CodeExplorer;
 ///     rather than relying on the agent having read another one's.
 /// </summary>
 [McpServerToolType]
-internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, ProjectIndexes indexes)
+internal sealed class HistoryTools(
+    IHttpContextAccessor httpContextAccessor,
+    ProjectIndexes indexes,
+    IConfiguration configuration)
 {
     private const int DefaultCommits = 30;
 
@@ -239,13 +242,141 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, Pro
         foreach (var file in ranked)
         {
             text.Append(CultureInfo.InvariantCulture,
-                $"{file.Commits,4} {ToolReply.Plural(file.Commits, "commit"),-8} +{file.Added,-7:N0} -{file.Deleted,-7:N0} {file.QualifiedPath}");
-            if (!file.AtHead) text.Append("  (no longer at HEAD)");
-            text.Append('\n');
+                $"{file.Commits,4} {ToolReply.Plural(file.Commits, "commit"),-8} +{file.Added,-7:N0} -{file.Deleted,-7:N0} ");
+            AppendPath(text, file.QualifiedPath, file.AtHead);
         }
 
         if (coverage is not null) text.Append(CultureInfo.InvariantCulture, $"\n{coverage}\n");
         return ToolReply.Cap(text.ToString(), "Lower limit, or narrow with directory.");
+    }
+
+    /// <summary>
+    ///     A screenful, for the reason a churn ranking is one: a coupling list is read from the top and
+    ///     the twentieth file a path shares one commit with is noise.
+    /// </summary>
+    private const int DefaultCoChanged = 20;
+
+    /// <summary>The ceiling <see cref="MaxHotFiles" /> is, and for the same reasons.</summary>
+    private const int MaxCoChanged = 100;
+
+    /// <summary>
+    ///     Default for <c>History:MaxCommitPaths</c>, the most paths a commit may touch and still be
+    ///     paired. A reformat, a vendor drop or an initial import couples every path it touched to
+    ///     every other, and those pairs are one commit rather than evidence about any file in it.
+    ///     Two hundred is the judgement: high enough that a feature landing across a module still
+    ///     counts as coupling, low enough that nothing a person wrote by hand in one sitting reaches
+    ///     it. It is a setting and not a constant because what counts as a mass commit differs between
+    ///     a repository of two hundred files and one of eighty thousand.
+    /// </summary>
+    private const int DefaultMaxCommitPaths = 200;
+
+    private readonly int _maxCommitPaths = configuration.GetValue("History:MaxCommitPaths", DefaultMaxCommitPaths);
+
+    [McpServerTool(Name = "co_changed", ReadOnly = true, Idempotent = true,
+        Title = "Find the files that usually change with a file")]
+    [Description("""
+                 Ranks the files that were committed alongside one file over a window of history, most shared commits first. Use it once you have found the file you need to change, to find what usually has to change with it: the coupling the code does not show — a constant and the places that read it, a stored procedure and its caller, two files that have simply always moved together.
+
+                 - This is evidence and not proof. Two files in one reformat share a commit without sharing anything else, and the ranking says how many commits each pair shares so you can tell a habit from an accident.
+                 - The window ends at the newest commit in the index, not at today, and the reply says which dates it covered.
+                 - Commits that touched a great many paths at once are left out of the pairing: one reformat or vendor drop pairs every path it touched with every other and would swamp the answer. The reply says when that happened.
+                 - Pairing never crosses a repository, because a commit does not.
+                 - History is matched by path, so it begins where the file was last renamed.
+                 """)]
+    public async Task<string> CoChanged(
+        [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
+        string path,
+        [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
+        int days = HistoryWindow.DefaultDays,
+        [Description("Files to return, 1-100. Default 20.")]
+        int limit = DefaultCoChanged,
+        CancellationToken cancellationToken = default)
+    {
+        var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+            cancellationToken);
+        if (open is IndexOpen.Refused refused) return refused.Explanation;
+        using var index = ((IndexOpen.Opened)open).Reader;
+        if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
+
+        var located = await LocateAsync(index, path, cancellationToken);
+        if (located.Problem is not null) return located.Problem;
+
+        // Scoped to the anchor's own repository, because that is the only one whose commits could have
+        // carried it — and so the window is that repository's newest commit, not another's.
+        var window = await index.WindowAsync(days, located.RepositorySlug, cancellationToken);
+        if (window is null)
+            return $"No commit is recorded for repository '{located.RepositorySlug}', although project "
+                   + $"'{index.ProjectSlug}' has history. Its history could not be walked; git_log without a "
+                   + "scope shows what was imported.";
+
+        var coupling = await index.CoChangedAsync(window, located.RepositorySlug!, located.PathInRepository!,
+            _maxCommitPaths, Math.Clamp(limit, 1, MaxCoChanged), cancellationToken);
+
+        // Read before the answer branches: a window that reached none of the file's commits is not a
+        // file that moves alone, and an agent shown the wrong one of those two learns a wrong fact.
+        if (coupling.Commits == 0)
+            // The window names its own end, so the repository is not named here: in a single-repository
+            // project its slug is one the operator never assigned and no path an agent holds contains.
+            return $"No commit changed {located.Spelled} between {window.Describe()}, so there is nothing it "
+                   + "could have changed alongside; raise days to look further back.";
+
+        string excluded = ExcludedNote(coupling);
+        if (coupling.Files.Count == 0)
+            return $"No other file was changed by any of the {coupling.Paired} "
+                   + $"{ToolReply.Plural(coupling.Paired, "commit")} that touched {located.Spelled} between "
+                   + $"{window.Describe()}. It moves alone in the history that was imported, which is evidence "
+                   + $"and not proof: that history begins where the file was last renamed." + excluded;
+
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture,
+            $"{coupling.Files.Count} {ToolReply.Plural(coupling.Files.Count, "file")} changed alongside {located.Spelled}, ");
+        text.Append(CultureInfo.InvariantCulture,
+            $"out of the {coupling.Paired} {ToolReply.Plural(coupling.Paired, "commit")} that touched it, {window.Describe()}.\n");
+        // Above the ranking and not below it: a full ranking is exactly where the reply cap bites, and
+        // it is also exactly where knowing that a third of the file's commits were left out matters.
+        if (excluded.Length > 0) text.Append(CultureInfo.InvariantCulture, $"{excluded.TrimStart()}\n");
+        text.Append('\n');
+
+        foreach (var file in coupling.Files)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"{file.SharedCommits,4} shared {ToolReply.Plural(file.SharedCommits, "commit"),-8} ");
+            AppendPath(text, file.QualifiedPath, file.AtHead);
+        }
+
+        return ToolReply.Cap(text.ToString(), "Lower limit to see fewer.");
+    }
+
+    /// <summary>
+    ///     Ends a ranked row: the path, and the mark saying there is nothing at it to read any more.
+    ///     Both rankings here rank paths a later commit deleted, and two spellings of that mark would be
+    ///     one of them eventually sending an agent to open a file that is not there.
+    /// </summary>
+    private static void AppendPath(StringBuilder text, string qualifiedPath, bool atHead)
+    {
+        text.Append(qualifiedPath);
+        if (!atHead) text.Append("  (no longer at HEAD)");
+        text.Append('\n');
+    }
+
+    /// <summary>
+    ///     What the ceiling kept out, as a sentence to append, or empty when it kept nothing out. Said
+    ///     rather than dropped: a ranking drawn from a third of a file's commits without saying so is
+    ///     the one that misleads, and the number is also how a caller learns the ceiling is wrong for
+    ///     their repository.
+    /// </summary>
+    private string ExcludedNote(CoChanges coupling)
+    {
+        if (coupling.Excluded == 0) return "";
+
+        // Built in one piece and only then concatenated: an interpolated string joined to another with
+        // `+` is a string, not a handler, and the culture-aware overloads bind to char* instead.
+        string counted = string.Create(CultureInfo.InvariantCulture,
+            $" {coupling.Excluded} of its {coupling.Commits} commits touched more than {_maxCommitPaths} paths");
+        return counted
+               + $" and {ToolReply.Plural(coupling.Excluded, "was", "were")} left out of the pairing: a commit "
+               + "that size pairs every path it touched with every other, which is one commit and not coupling. "
+               + "An operator can raise History:MaxCommitPaths where a repository really does land changes that wide.";
     }
 
     /// <summary>

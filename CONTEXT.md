@@ -63,6 +63,15 @@ the same way it is an attribution — so it answers "what is this project busy w
 is unstable". A path that churned and is no longer at HEAD is churn that happened.
 _Avoid_: Hotness, activity, volatility, code age
 
+**Co-Change**:
+Two files having been committed together, counted over a window. It is the coupling the code does
+not show — a constant and the three places that read it, a stored procedure and the class that calls
+it — and it is evidence rather than proof, because two files in one reformat share a commit without
+sharing anything else. Pairing never crosses a repository, because a commit does not, and commits
+that touched more paths than a configured ceiling are left out of it: a mass commit pairs every path
+it touched with every other, which is one commit and not a relationship between any two files in it.
+_Avoid_: Coupling, correlation, related files, change coupling
+
 **Overview**:
 What a project is, in one answer: its repositories and where each stands, what it is written in, how
 it is laid out, what is largest in it, where work has been happening and who has been doing it.

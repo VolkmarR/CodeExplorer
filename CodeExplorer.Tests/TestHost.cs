@@ -43,8 +43,14 @@ public sealed class TestHost : IDisposable
     ///     default; the container arrangement (#14) is the one thing that sets it, so the one test that
     ///     asserts on it is the one that passes it.
     /// </param>
+    /// <param name="maxCommitPaths">
+    ///     Lowered far below any real ceiling so that a fixture commit of a dozen paths counts as a mass
+    ///     commit. A fixture large enough to cross the shipped default would take longer to build than
+    ///     the rest of the suite takes to run.
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
-        bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null)
+        bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
+        int? maxCommitPaths = null)
     {
         _engine = engine;
         _drainSeconds = drainSeconds;
@@ -52,6 +58,7 @@ public sealed class TestHost : IDisposable
         _warmUpOnStart = warmUpOnStart;
         _authenticated = authenticated;
         _extensionDirectory = extensionDirectory;
+        _maxCommitPaths = maxCommitPaths;
         Factory = Build();
     }
 
@@ -61,6 +68,7 @@ public sealed class TestHost : IDisposable
     private readonly bool _warmUpOnStart;
     private readonly bool _authenticated;
     private readonly string? _extensionDirectory;
+    private readonly int? _maxCommitPaths;
 
     /// <summary>
     ///     Private, so a test cannot build a client that bypasses <see cref="CreateClient" /> or reach a
@@ -85,6 +93,8 @@ public sealed class TestHost : IDisposable
                 builder.UseSetting("Index:DrainSeconds", seconds.ToString(CultureInfo.InvariantCulture));
             if (_minimumFreeBytes is { } bytes)
                 builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
+            if (_maxCommitPaths is { } paths)
+                builder.UseSetting("History:MaxCommitPaths", paths.ToString(CultureInfo.InvariantCulture));
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
             if (!_authenticated) return;
 
