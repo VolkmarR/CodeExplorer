@@ -53,14 +53,12 @@ public static class Languages
     private static readonly StringDelimiter RawSingle = new("'", "'", StringEscape.None);
 
     /// <summary>
-    ///     What opens and closes a hole of live code in an interpolated literal. One pair for C#,
-    ///     another for the template literal, because the languages spell the opener differently and
-    ///     both nest on the brace.
+    ///     The holes of live code in an interpolated literal. One for C# and another for the template
+    ///     literal, because the languages spell the opener differently; both close and nest on the brace.
     /// </summary>
-    private const string CSharpHoleOpen = "{";
+    private static readonly Hole CSharpHole = new("{", "}", "{");
 
-    private const string TemplateHoleOpen = "${";
-    private const string HoleClose = "}";
+    private static readonly Hole TemplateHole = new("${", "}", "{");
 
     /// <summary>
     ///     The C# literals that carry on past the end of a line, which is what makes them #53's: a
@@ -73,15 +71,15 @@ public static class Languages
     private static readonly StringDelimiter[] CSharpLiterals =
     [
         new StringDelimiter("$\"\"\"", "\"\"\"", StringEscape.None)
-            { SpansLines = true, HoleOpen = CSharpHoleOpen, HoleClose = HoleClose },
+            { SpansLines = true, Hole = CSharpHole },
         new StringDelimiter("\"\"\"", "\"\"\"", StringEscape.None) { SpansLines = true },
         new StringDelimiter("$@\"", "\"", StringEscape.Doubled)
-            { SpansLines = true, HoleOpen = CSharpHoleOpen, HoleClose = HoleClose },
+            { SpansLines = true, Hole = CSharpHole },
         new StringDelimiter("@$\"", "\"", StringEscape.Doubled)
-            { SpansLines = true, HoleOpen = CSharpHoleOpen, HoleClose = HoleClose },
+            { SpansLines = true, Hole = CSharpHole },
         new StringDelimiter("@\"", "\"", StringEscape.Doubled) { SpansLines = true },
         new StringDelimiter("$\"", "\"", StringEscape.Backslash)
-            { HoleOpen = CSharpHoleOpen, HoleClose = HoleClose },
+            { Hole = CSharpHole },
         DoubleQuoted
     ];
 
@@ -92,7 +90,7 @@ public static class Languages
     /// </summary>
     private static readonly StringDelimiter Template =
         new("`", "`", StringEscape.Backslash)
-            { SpansLines = true, HoleOpen = TemplateHoleOpen, HoleClose = HoleClose };
+            { SpansLines = true, Hole = TemplateHole };
 
     /// <summary>The C family builds an object with a word in front of the type.</summary>
     private static readonly string[] New = ["new"];

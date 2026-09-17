@@ -43,10 +43,11 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
 
     /// <summary>
     ///     How deeply comments, literals and the interpolation holes inside them may nest before the
-    ///     scan stops claiming to know where it is. Three is already <c>$"{ Name($"{x}") }"</c>, and a
-    ///     line that needs more than this is one no text scan should be confident about; past it the
-    ///     rest of the file is <see cref="Lexical.Unknown" />, which is the answer that keeps a
-    ///     reference rather than placing it wrongly.
+    ///     scan stops claiming to know where it is. A literal and its hole are two, so eight is four
+    ///     literals inside each other's holes — past anything a person writes, and the point at which
+    ///     a text scan with no grammar behind it should stop being believed. Past it the rest of the
+    ///     file is <see cref="Lexical.Unknown" />, which is the answer that keeps a reference rather
+    ///     than placing it wrongly.
     /// </summary>
     private const int MaxNesting = 8;
 
@@ -78,17 +79,16 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     private readonly string[] _lineStartComments;
 
     /// <summary>
-    ///     Block comments and string literals, longest opener first, so that a form which begins with
-    ///     another — C#'s <c>"""</c> against its <c>"</c> — is tried before the one it contains and a
-    ///     raw literal is never read as an empty one. The profile is free to list them in whatever
-    ///     order reads best.
-    ///     A <see cref="Frame" /> holds an index into one of these two, and everything the scan needs
-    ///     about that form is on the record it indexes: four arrays read against the same number were
-    ///     four places to get the number wrong.
+    ///     Everything a line can be inside: the block comments and the string literals, in one table
+    ///     because the scan does one thing with them — find the opener, then look for the closer. What
+    ///     tells them apart is <see cref="Delimited.Prose" />, which is what the state on the far side
+    ///     of the seam is called, and it is read in one place.
+    ///     Longest opener first, so that a form which begins with another — C#'s <c>"""</c> against
+    ///     its <c>"</c> — is tried before the one it contains and a raw literal is never read as an
+    ///     empty one. The profile is free to list its forms in whatever order reads best.
     /// </summary>
-    private readonly Block[] _blocks;
+    private readonly Delimited[] _forms;
 
-    private readonly Quoted[] _quotes;
     private readonly string[] _typePrefixes;
 
     /// <summary>
@@ -112,11 +112,13 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         _lineComments = [.. profile.LineComments];
         _directivePrefixes = [.. profile.DirectivePrefixes];
         _lineStartComments = [.. profile.LineStartComments];
-        // Longest opener first in both, so `"""` is tried before `"` and `(*` before a `(` some
-        // profile may one day add. Ordering here rather than in the table keeps a profile from
-        // having a silent correctness rule in the order its forms are written.
-        var comments = profile.BlockComments.OrderByDescending(b => b.Open.Length).ToArray();
-        var quotes = profile.Strings.OrderByDescending(s => s.Open.Length).ToArray();
+        // Longest opener first, so `"""` is tried before `"` and `(*` before a `(` some profile may
+        // one day add. Ordering here rather than in the table keeps a profile from having a silent
+        // correctness rule in the order its forms are written.
+        var forms = profile.BlockComments.Select(comment => (Form: comment, Prose: true))
+            .Concat(profile.Strings.Select(literal => (Form: literal, Prose: false)))
+            .OrderByDescending(entry => entry.Form.Open.Length)
+            .ToArray();
         _instantiationKeywords = [.. profile.InstantiationKeywords];
         _memberAccess = [.. profile.MemberAccessOperators];
         _typePrefixes = [.. profile.TypePrefixOperators];
@@ -124,35 +126,25 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         _declarationModifiers = [.. profile.DeclarationModifiers];
         char[] opensInCode =
         [
-            .. _lineComments.Concat(comments.Select(b => b.Open)).Concat(quotes.Select(s => s.Open))
-                .Select(o => o[0]).Distinct()
+            .. _lineComments.Concat(forms.Select(entry => entry.Form.Open)).Select(o => o[0]).Distinct()
         ];
         _codeJump = SearchValues.Create(opensInCode);
-        _blocks =
+        _forms =
         [
-            .. comments.Select(form =>
+            .. forms.Select(entry =>
             {
-                char[] ends = [form.Close[0]];
-                return new Block(form, SearchValues.Create(ends));
-            })
-        ];
-        _quotes =
-        [
-            .. quotes.Select(form =>
-            {
+                var (form, prose) = entry;
                 var ends = new List<char> { form.Close[0] };
                 if (form.Escape == StringEscape.Backslash) ends.Add('\\');
-                if (form.HoleOpen is { Length: > 0 } hole) ends.Add(hole[0]);
-                // A brace nests inside a hole on the last character of what opened it, so
-                // TypeScript's `${` nests on `{` the way C#'s `{` does.
-                string nesting = form.HoleOpen is { Length: > 0 } opener ? opener[^1..] : "";
+                if (form.Hole is { } hole) ends.Add(hole.Open[0]);
                 // Inside a hole everything that matters in code matters too, and the braces that end
                 // it or nest inside it as well.
                 var inside = new List<char>(opensInCode);
-                if (form.HoleClose is { Length: > 0 } close) inside.Add(close[0]);
-                if (nesting.Length > 0) inside.Add(nesting[0]);
-                return new Quoted(form, SearchValues.Create(ends.ToArray()),
-                    SearchValues.Create(inside.ToArray()), nesting);
+                if (form.Hole is { } holes) inside.AddRange([holes.Close[0], holes.Nest[0]]);
+                // A comment carries to the next line whatever its profile said, because a block
+                // comment that stopped at the end of its line would not be a block comment.
+                return new Delimited(form, prose, prose || form.SpansLines,
+                    SearchValues.Create(ends.ToArray()), SearchValues.Create(inside.ToArray()));
             })
         ];
         _start = new TextPosition(this, []);
@@ -242,45 +234,29 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     }
 
     /// <summary>
-    ///     One block comment form and the characters that can end it, which is all the scan needs
-    ///     inside one.
+    ///     One delimited form — a block comment or a string literal — and everything the scan needs to
+    ///     walk it. A comment is a literal the scan never looks for an escape or a hole in, which is
+    ///     what makes the two one record and one loop rather than two of each.
     /// </summary>
     /// <param name="Form">The pair as the profile wrote it.</param>
-    /// <param name="Ends">What to jump to from inside it: the first character of its closer.</param>
-    private sealed record Block(StringDelimiter Form, SearchValues<char> Ends);
-
-    /// <summary>
-    ///     One string literal form and everything the scan needs to walk it and the interpolation
-    ///     holes in it.
-    /// </summary>
-    /// <param name="Form">The delimiter as the profile wrote it.</param>
+    /// <param name="Prose">Whether what is inside it is a comment rather than a string.</param>
+    /// <param name="Spans">Whether an unclosed one carries on onto the next line.</param>
     /// <param name="Ends">What can end or interrupt it from inside: its closer, an escape, a hole.</param>
     /// <param name="InsideAHole">What matters in the live code of one of its holes.</param>
-    /// <param name="Nesting">What a brace nested inside a hole looks like, or empty where it has none.</param>
-    private sealed record Quoted(
+    private sealed record Delimited(
         StringDelimiter Form,
+        bool Prose,
+        bool Spans,
         SearchValues<char> Ends,
-        SearchValues<char> InsideAHole,
-        string Nesting);
-
-    /// <summary>What kind of span the scan is inside.</summary>
-    private enum SpanKind
-    {
-        Comment,
-        Literal,
-
-        /// <summary>The live code inside an interpolated literal: <c>${…}</c>, <c>{…}</c>.</summary>
-        Hole
-    }
+        SearchValues<char> InsideAHole);
 
     /// <summary>
-    ///     One span the scan is inside. <see cref="Index" /> points into <see cref="_blocks" />
-    ///     for a comment and into <see cref="_quotes" /> for a literal — and, for a hole, into the
-    ///     literal the hole was opened in, which is what says how the hole ends.
+    ///     One span the scan is inside. <see cref="Index" /> points into <see cref="_forms" /> — for a
+    ///     hole, at the literal the hole was opened in, which is what says how the hole ends.
     ///     <see cref="Depth" /> counts the braces nested inside a hole, so that the <c>}</c> of a
     ///     collection expression in it does not end it.
     /// </summary>
-    private readonly record struct Frame(SpanKind Kind, int Index, int Depth);
+    private readonly record struct Frame(int Index, int Depth, bool Hole);
 
     /// <summary>
     ///     What earlier lines of one file left open, as this analyser records it. It names the analyser
@@ -312,10 +288,19 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         private readonly TextAnalyzer _analyzer;
         private readonly string _line;
         private readonly Span<Frame> _frames;
-        private readonly bool _wholeLine;
+
+        /// <summary>What the carried position was, to hand back unchanged where the line changes nothing.</summary>
+        private readonly TextPosition _carried;
+
         private int _depth;
         private int _at;
         private bool _unknown;
+
+        /// <summary>
+        ///     The rest of this line is a comment: a line comment opened on it, or one of the forms
+        ///     that means a comment only at the start of a line did. Neither carries to the next line,
+        ///     which is why both are this one flag and not two.
+        /// </summary>
         private bool _lineCommented;
 
         public LineCursor(TextAnalyzer analyzer, FilePosition position, string line, Span<Frame> frames)
@@ -330,34 +315,32 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                                                     || carried.Frames.Length > frames.Length)
             {
                 _unknown = true;
+                _carried = analyzer._start;
                 return;
             }
 
+            _carried = carried;
             carried.Frames.CopyTo(frames);
             _depth = carried.Frames.Length;
             int start = FirstNonSpace(line);
             // Only where the line begins outside everything: a `*` inside an open block comment is
             // the comment's own continuation marker and decides nothing.
-            _wholeLine = _depth == 0 && start < line.Length && analyzer.OpensAWholeLine(line, start);
+            _lineCommented = _depth == 0 && start < line.Length && analyzer.OpensAWholeLine(line, start);
             _at = start;
         }
 
         public Lexical StateAt(int index)
         {
             if (_unknown) return Lexical.Unknown;
-            if (_wholeLine) return Lexical.Comment;
             Advance(index);
             if (_unknown) return Lexical.Unknown;
             if (_lineCommented) return Lexical.Comment;
             if (_depth == 0) return Lexical.Code;
-            return _frames[_depth - 1].Kind switch
-            {
-                SpanKind.Comment => Lexical.Comment,
-                SpanKind.Literal => Lexical.Literal,
-                // A hole is live code that happens to sit inside a literal: `${advance(1)}` calls
-                // something, and reading it as a mention loses a real call.
-                _ => Lexical.Code
-            };
+            var frame = _frames[_depth - 1];
+            // A hole is live code that happens to sit inside a literal: `${advance(1)}` calls
+            // something, and reading it as a mention loses a real call.
+            if (frame.Hole) return Lexical.Code;
+            return _analyzer._forms[frame.Index].Prose ? Lexical.Comment : Lexical.Literal;
         }
 
         /// <summary>
@@ -374,9 +357,17 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             // it. Cutting at the lowest one rather than unwinding from the top says that once, at
             // every depth.
             int depth = 0;
-            while (depth < _depth && _analyzer.Spans(_frames[depth])) depth++;
-            return depth == 0 ? _analyzer._start : new TextPosition(_analyzer, _frames[..depth].ToArray());
+            while (depth < _depth && _analyzer._forms[_frames[depth].Index].Spans) depth++;
+            if (depth == 0) return _analyzer._start;
+            // A line inside a long block comment or a license header leaves the file exactly where it
+            // found it, and there are a thousand such lines in a row. Handing the carried position
+            // back is what keeps those from allocating a copy apiece to say nothing changed.
+            return Unchanged(depth) ? _carried : new TextPosition(_analyzer, _frames[..depth].ToArray());
         }
+
+        /// <summary>Whether the frames that carry are the ones this line began with.</summary>
+        private readonly bool Unchanged(int depth) =>
+            depth == _carried.Frames.Length && _frames[..depth].SequenceEqual(_carried.Frames);
 
         /// <summary>
         ///     Walks from wherever the last question left off to this one. A skip over an escape or a
@@ -395,18 +386,8 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                 }
 
                 var frame = _frames[_depth - 1];
-                switch (frame.Kind)
-                {
-                    case SpanKind.Comment:
-                        InComment(index, frame);
-                        break;
-                    case SpanKind.Literal:
-                        InLiteral(index, frame);
-                        break;
-                    default:
-                        InCode(index, frame.Index);
-                        break;
-                }
+                if (frame.Hole) InCode(index, frame.Index);
+                else InDelimited(index, frame);
             }
         }
 
@@ -420,7 +401,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             // Jump to the next character that could begin a comment or a literal. Everything between
             // is ordinary code and needs no decision.
             int next = _line.AsSpan(_at, index - _at)
-                .IndexOfAny(holeIn < 0 ? _analyzer._codeJump : _analyzer._quotes[holeIn].InsideAHole);
+                .IndexOfAny(holeIn < 0 ? _analyzer._codeJump : _analyzer._forms[holeIn].InsideAHole);
             if (next < 0)
             {
                 _at = index;
@@ -441,24 +422,16 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                         return;
                     }
             }
-            else if (CloseOrNestTheHole(holeIn))
+            else if (CloseOrNestTheHole())
             {
                 return;
             }
 
-            int comment = _analyzer.BlockOpenerAt(_line, _at);
-            if (comment >= 0)
+            int opened = _analyzer.OpenerAt(_line, _at);
+            if (opened >= 0)
             {
-                Push(SpanKind.Comment, comment);
-                _at += _analyzer._blocks[comment].Form.Open.Length;
-                return;
-            }
-
-            int literal = _analyzer.OpenerAt(_line, _at);
-            if (literal >= 0)
-            {
-                Push(SpanKind.Literal, literal);
-                _at += _analyzer._quotes[literal].Form.Open.Length;
+                Push(opened, false);
+                _at += _analyzer._forms[opened].Form.Open.Length;
                 return;
             }
 
@@ -470,50 +443,32 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         ///     hole are counted rather than acted on, so the first <c>}</c> of <c>{new[]{1}}</c> does
         ///     not put the scan back into the literal a character early.
         /// </summary>
-        private bool CloseOrNestTheHole(int holeIn)
+        private bool CloseOrNestTheHole()
         {
             var frame = _frames[_depth - 1];
-            string close = _analyzer._quotes[holeIn].Form.HoleClose!;
-            if (At(_line, _at, close))
+            var hole = _analyzer._forms[frame.Index].Form.Hole!;
+            if (At(_line, _at, hole.Close))
             {
                 if (frame.Depth == 0) _depth--;
                 else _frames[_depth - 1] = frame with { Depth = frame.Depth - 1 };
-                _at += close.Length;
+                _at += hole.Close.Length;
                 return true;
             }
 
-            string nesting = _analyzer._quotes[holeIn].Nesting;
-            if (nesting.Length == 0 || !At(_line, _at, nesting)) return false;
+            if (!At(_line, _at, hole.Nest)) return false;
             _frames[_depth - 1] = frame with { Depth = frame.Depth + 1 };
-            _at += nesting.Length;
+            _at += hole.Nest.Length;
             return true;
         }
 
-        private void InComment(int index, Frame frame)
+        /// <summary>
+        ///     Inside a block comment or a string literal: look for the closer, and for the escape and
+        ///     the hole the form has where it has them, which a comment never does.
+        /// </summary>
+        private void InDelimited(int index, Frame frame)
         {
-            var comment = _analyzer._blocks[frame.Index].Form;
-            int found = _line.AsSpan(_at, index - _at).IndexOfAny(_analyzer._blocks[frame.Index].Ends);
-            if (found < 0)
-            {
-                _at = index;
-                return;
-            }
-
-            _at += found;
-            if (At(_line, _at, comment.Close))
-            {
-                _depth--;
-                _at += comment.Close.Length;
-                return;
-            }
-
-            _at++;
-        }
-
-        private void InLiteral(int index, Frame frame)
-        {
-            var open = _analyzer._quotes[frame.Index].Form;
-            int found = _line.AsSpan(_at, index - _at).IndexOfAny(_analyzer._quotes[frame.Index].Ends);
+            var open = _analyzer._forms[frame.Index].Form;
+            int found = _line.AsSpan(_at, index - _at).IndexOfAny(_analyzer._forms[frame.Index].Ends);
             if (found < 0)
             {
                 _at = index;
@@ -528,15 +483,15 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                 return;
             }
 
-            if (open.HoleOpen is { } hole && At(_line, _at, hole))
+            if (open.Hole is { } hole && At(_line, _at, hole.Open))
             {
                 // The opener doubled stands for itself and opens nothing, which is how C# writes a
                 // literal brace inside an interpolated string.
-                if (At(_line, _at + hole.Length, hole)) _at += 2 * hole.Length;
+                if (At(_line, _at + hole.Open.Length, hole.Open)) _at += 2 * hole.Open.Length;
                 else
                 {
-                    Push(SpanKind.Hole, frame.Index);
-                    _at += hole.Length;
+                    Push(frame.Index, true);
+                    _at += hole.Open.Length;
                 }
 
                 return;
@@ -559,7 +514,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             _at++;
         }
 
-        private void Push(SpanKind kind, int index)
+        private void Push(int index, bool hole)
         {
             if (_depth == _frames.Length)
             {
@@ -567,47 +522,37 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                 return;
             }
 
-            _frames[_depth++] = new Frame(kind, index, 0);
+            _frames[_depth++] = new Frame(index, 0, hole);
         }
     }
 
-    /// <summary>Which string literal opens here, as an index into <see cref="_quotes" />, or -1.</summary>
-    private int OpenerAt(string line, int index)
-    {
-        // A loop rather than a LINQ predicate: this runs once per candidate character of every line.
-        for (int i = 0; i < _quotes.Length; i++)
-            if (At(line, index, _quotes[i].Form.Open))
-                return i;
-        return -1;
-    }
-
     /// <summary>
-    ///     Which block comment opens here, as an index into <see cref="_blocks" />, or -1. A
-    ///     compiler directive that begins the way one does opens none — Delphi's <c>{$IFDEF}</c>
+    ///     Which comment or literal opens here, as an index into <see cref="_forms" />, or -1. A
+    ///     compiler directive that begins the way a comment does opens none — Delphi's <c>{$IFDEF}</c>
     ///     against its <c>{ }</c> comment — and the exemption is checked wherever the opener is found
     ///     and not only at the start of a line, because a directive is written after code too.
     /// </summary>
-    private int BlockOpenerAt(string line, int index)
+    private int OpenerAt(string line, int index)
     {
-        for (int i = 0; i < _blocks.Length; i++)
-            if (At(line, index, _blocks[i].Form.Open))
-            {
-                for (int d = 0; d < _directivePrefixes.Length; d++)
-                    if (At(line, index, _directivePrefixes[d], _keywordComparison))
-                        return -1;
-                return i;
-            }
-
+        // A loop rather than a LINQ predicate: this runs once per candidate character of every line.
+        for (int i = 0; i < _forms.Length; i++)
+            if (At(line, index, _forms[i].Form.Open))
+                return _forms[i].Prose && IsDirectiveAt(line, index) ? -1 : i;
         return -1;
     }
 
     /// <summary>
-    ///     Whether what this frame holds open carries on past the end of its line. A comment always
-    ///     does; a literal does where its profile says so; a hole does exactly as long as the literal
-    ///     around it, because a hole is part of one.
+    ///     Whether a compiler directive begins here. One copy, because the whole-line comment test and
+    ///     the scan both have to make the same exemption and a profile adding a directive form must
+    ///     not have to be right in two places.
     /// </summary>
-    private bool Spans(Frame frame) =>
-        frame.Kind == SpanKind.Comment || _quotes[frame.Index].Form.SpansLines;
+    private bool IsDirectiveAt(string line, int index)
+    {
+        for (int i = 0; i < _directivePrefixes.Length; i++)
+            if (At(line, index, _directivePrefixes[i], _keywordComparison))
+                return true;
+        return false;
+    }
 
     /// <summary>Where the line's text begins, without allocating the trimmed copy to find out.</summary>
     private static int FirstNonSpace(string line)
@@ -791,9 +736,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     /// </summary>
     private bool OpensAWholeLine(string line, int start)
     {
-        for (int i = 0; i < _directivePrefixes.Length; i++)
-            if (At(line, start, _directivePrefixes[i], _keywordComparison))
-                return false;
+        if (IsDirectiveAt(line, start)) return false;
         for (int i = 0; i < _lineStartComments.Length; i++)
             if (At(line, start, _lineStartComments[i]))
                 return true;
