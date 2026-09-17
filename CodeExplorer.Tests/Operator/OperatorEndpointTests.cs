@@ -166,4 +166,57 @@ public sealed class OperatorEndpointTests : IDisposable
         Assert.NotNull(detail);
         return detail;
     }
+
+    [Fact]
+    public async Task Project_page_reads_the_overview_the_build_stored()
+    {
+        await _host.IndexedProjectAsync("alpha",
+            new Dictionary<string, Dictionary<string, string>>
+            {
+                ["one"] = new()
+                {
+                    ["src/A.cs"] = "class A;\nclass B;\n",
+                    ["src/Old.prg"] = "function Old()\n",
+                    ["README.md"] = "read me\n"
+                }
+            });
+
+        var detail = await OverviewAsync("alpha");
+
+        Assert.NotNull(detail.Overview);
+        // The same grouping the tool reports, from the same row: C# and X# by language, and the
+        // extension no profile covers standing for itself and saying so.
+        Assert.Contains(detail.Overview.Languages, l => l is { Name: "C#", Mapped: true, Files: 1 });
+        Assert.Contains(detail.Overview.Languages, l => l is { Name: "X#", Mapped: true, Files: 1 });
+        Assert.Contains(detail.Overview.Languages, l => l is { Name: ".md", Mapped: false });
+        // A directory and a file at the root, which is what the top level has to be able to show.
+        Assert.Contains(detail.Overview.Tree, e => e is { QualifiedPath: "one/src", IsDirectory: true });
+        Assert.Contains(detail.Overview.Tree, e => e is { QualifiedPath: "one/README.md", IsDirectory: false });
+        Assert.NotEmpty(detail.Overview.LargestFiles);
+        Assert.NotNull(detail.Overview.Churn.Until);
+        Assert.NotEmpty(detail.Overview.Authors);
+    }
+
+    [Fact]
+    public async Task A_project_with_no_index_has_no_overview_rather_than_an_empty_one()
+    {
+        await _host.CreateProjectAsync("unbuilt");
+
+        var detail = await OverviewAsync("unbuilt");
+
+        // Null and not an overview of nothing: every project passes through this state, and empty
+        // sections would read as a project that really is empty. The prose comes with it, so the page
+        // says what an agent asking the same question is told rather than leaving a blank.
+        Assert.Null(detail.Overview);
+        Assert.NotNull(detail.Unavailable);
+        Assert.Contains("has no index to read from", detail.Unavailable, StringComparison.Ordinal);
+    }
+
+    private async Task<ProjectOverviewDetail> OverviewAsync(string slug)
+    {
+        using var http = _host.CreateClient();
+        var detail = await http.GetFromJsonAsync<ProjectOverviewDetail>($"/api/projects/{slug}/overview", Ct);
+        Assert.NotNull(detail);
+        return detail;
+    }
 }

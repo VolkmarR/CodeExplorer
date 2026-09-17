@@ -39,7 +39,13 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     key between them, so the order is for readability rather than for the engine.
     /// </summary>
     private static readonly string[] Tables =
-        ["index_info", "repositories", "files", "lines", "commits", "commit_files", "attribution"];
+    [
+        "index_info", "repositories", "files", "lines", "commits", "commit_files", "attribution",
+        // The overview the build computed (#51). It travels with the tables it was derived from, so a
+        // restored index answers project_overview without a rebuild — which is the whole point of
+        // computing it at build time rather than per call.
+        "project_overview"
+    ];
 
     /// <summary>
     ///     Where <c>COPY TO</c> writes and a fetch lands: on the volume ADR-0003 budgets, next to the

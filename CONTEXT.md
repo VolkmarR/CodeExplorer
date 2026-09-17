@@ -63,6 +63,22 @@ the same way it is an attribution — so it answers "what is this project busy w
 is unstable". A path that churned and is no longer at HEAD is churn that happened.
 _Avoid_: Hotness, activity, volatility, code age
 
+**Overview**:
+What a project is, in one answer: its repositories and where each stands, what it is written in, how
+it is laid out, what is largest in it, where work has been happening and who has been doing it.
+Computed by the build that produced the index and stored with it, so it describes the index rather
+than the repositories as they are now, and so a caller pays one row read however large the project
+is. It is the first thing an agent asks and the first thing an operator sees, and it is one answer
+because a reader who has to assemble it from a dozen calls has already formed a wrong picture.
+_Avoid_: Summary, stats, dashboard, profile
+
+**Language**:
+What a file is written in, resolved from its extension. Counts are reported by language rather than
+by extension because "53% X#" tells a reader what "42% .prg, 11% .vh" does not. An extension no
+profile covers stands for itself instead of being guessed at: a vaguer answer costs a reader a
+lookup, an invented one costs them a wrong belief.
+_Avoid_: File type, dialect, tech stack
+
 **Window**:
 The span of history a question is asked over, anchored to the newest commit imported rather than to
 the clock. An index is built by a refresh and may be behind its remotes, so "the last thirty days"

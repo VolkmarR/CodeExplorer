@@ -316,6 +316,16 @@ public sealed class IndexReader : IDisposable
         $"Project '{projectSlug}' has no index to read from right now: it was never built, or a refresh is still building the first one. "
         + $"Ask the operator to refresh it with POST /api/projects/{projectSlug}/refresh, or retry shortly.";
 
+    /// <summary>
+    ///     The one explanation every reader gives for a built index that carries no overview (#51). It
+    ///     sits beside <see cref="NoIndex" /> because it is the same kind of sentence — nothing to read
+    ///     and what to do about it — and because the tool and the operator's page must not word it
+    ///     differently when they are looking at the same index.
+    /// </summary>
+    public static string NoOverview(string projectSlug) =>
+        $"The index of project '{projectSlug}' holds no overview: it was built before overviews existed, or its row was removed. "
+        + $"Ask the operator to refresh it with POST /api/projects/{projectSlug}/refresh; the rest of the index is readable meanwhile.";
+
     /// <summary>What the last build read, in build order, which is what a path may name.</summary>
     public async Task<IReadOnlyList<IndexedRepository>> RepositoriesAsync(CancellationToken cancellationToken)
     {
@@ -634,18 +644,9 @@ public sealed class IndexReader : IDisposable
     ///     or null when the scope holds no commit at all — a repository whose history could not be
     ///     walked, which is not the same as one nobody changed and must not be answered as one.
     /// </summary>
-    public async Task<HistoryWindow?> WindowAsync(int days, string? repositorySlug,
-        CancellationToken cancellationToken)
-    {
-        var (scope, parameters) = CommitScope(repositorySlug);
-        // epoch() for the reason StatusAsync gives: seconds as a double are the one representation of
-        // a TIMESTAMPTZ that does not depend on whether ICU is loaded to decide the session time zone.
-        using var command = Connection.Query($"SELECT epoch(max(authored_at)) AS newest FROM commits {scope}",
-            parameters);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken) || reader.IsNull("newest")) return null;
-        return HistoryWindow.Ending(DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("newest")), days);
-    }
+    public Task<HistoryWindow?> WindowAsync(int days, string? repositorySlug,
+        CancellationToken cancellationToken) =>
+        HistoryQueries.WindowAsync(Connection, days, repositorySlug, cancellationToken);
 
     /// <summary>
     ///     The files a window's commits touched, most commits first: the first read of the commit
@@ -664,77 +665,26 @@ public sealed class IndexReader : IDisposable
     /// <param name="limit">How many files to return.</param>
     /// <param name="cancellationToken">Threaded through to the command.</param>
     public async Task<IReadOnlyList<ChurnedFile>> ChurnAsync(HistoryWindow window, string? repositorySlug,
-        string? directoryInRepository, int limit, CancellationToken cancellationToken)
+        string? directoryInRepository, int limit, CancellationToken cancellationToken) =>
+        await HistoryQueries.RankAsync(Connection, await PathsAsync(cancellationToken), window, repositorySlug,
+            directoryInRepository, limit, cancellationToken);
+
+    /// <summary>
+    ///     The overview the build stored with this index (#51): one row, no joins and no aggregates, so
+    ///     a caller orienting itself pays a row read rather than five passes over <c>files</c> and the
+    ///     commit tables.
+    ///     Null where the row is missing, which the schema version means only an index this process
+    ///     built and then had its <c>project_overview</c> emptied can be. It is still answered rather
+    ///     than thrown, because the caller's move — ask for a refresh — is the same one every "this
+    ///     index predates the question" answer ends with.
+    /// </summary>
+    public async Task<IndexOverview?> OverviewAsync(CancellationToken cancellationToken)
     {
-        // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
-        // WindowAsync reads it that way: it keeps the comparison off the session time zone, and it
-        // keeps a DateTimeOffset out of the driver's parameter mapping entirely.
-        var parameters = new List<DuckDBParameter>
-        {
-            new("since", window.Since.ToUnixTimeSeconds()),
-            new("until", window.Until.ToUnixTimeSeconds())
-        };
-        var conditions = new List<string> { "epoch(c.authored_at) BETWEEN $since AND $until" };
-        if (repositorySlug is not null)
-        {
-            conditions.Add("c.repo_slug = $r");
-            parameters.Add(new DuckDBParameter("r", repositorySlug));
-        }
-
-        if (!string.IsNullOrEmpty(directoryInRepository))
-        {
-            // GLOB and not LIKE: it is this project's one glob dialect (ADR-0004, CODING_STANDARDS),
-            // and `*` crosses `/` in it, so a single pattern covers every depth beneath the directory.
-            conditions.Add("cf.path GLOB $d");
-            parameters.Add(new DuckDBParameter("d", directoryInRepository.TrimEnd('/') + "/*"));
-        }
-
-        // Ranked first, and only then asked which of the survivors still exist. Resolving `at_head`
-        // inside the aggregate would join `files` — the largest table here after `lines` — against
-        // every path in the window, to answer a question about the twenty rows that outlive the LIMIT.
-        // The semi-join below is paid per returned row instead of per window row.
-        using var command = Connection.Query($"""
-                                              WITH ranked AS (
-                                                  SELECT c.repo_slug, cf.path,
-                                                         count(*)::INTEGER AS commits,
-                                                         -- Cast for the reason ChangeLogAsync casts:
-                                                         -- DuckDB widens sum of an INTEGER to HUGEINT,
-                                                         -- which the driver hands back as a BigInteger.
-                                                         sum(cf.added)::BIGINT AS added,
-                                                         sum(cf.deleted)::BIGINT AS deleted
-                                                  FROM commit_files cf
-                                                  JOIN commits c USING (commit_id)
-                                                  WHERE {string.Join(" AND ", conditions)}
-                                                  GROUP BY c.repo_slug, cf.path
-                                                  -- Spelled out rather than ordered by the aliases:
-                                                  -- DuckDB resolves a bare name in ORDER BY against the
-                                                  -- input columns first, so `added` would bind to
-                                                  -- commit_files.added and the statement fail to bind.
-                                                  ORDER BY count(*) DESC,
-                                                           sum(cf.added) + sum(cf.deleted) DESC, cf.path
-                                                  LIMIT {limit})
-                                              SELECT ranked.*,
-                                                     EXISTS (SELECT 1
-                                                             FROM files f JOIN repositories r USING (repo_id)
-                                                             WHERE r.slug = ranked.repo_slug
-                                                               AND f.path = ranked.path) AS at_head
-                                              FROM ranked
-                                              ORDER BY commits DESC, added + deleted DESC, path
-                                              """, parameters);
-        var paths = await PathsAsync(cancellationToken);
+        using var command = Connection.Query("SELECT document FROM project_overview LIMIT 1", []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var files = new List<ChurnedFile>();
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            // Spelled from the repository and the path rather than read off a files row, because the
-            // paths that have none are exactly the ones no longer at HEAD — and those are ranked and
-            // must still be named.
-            string slug = reader.Text("repo_slug");
-            files.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug, reader.Flag("at_head"),
-                reader.Int32("commits"), reader.Int64("added"), reader.Int64("deleted")));
-        }
-
-        return files;
+        return await reader.ReadAsync(cancellationToken)
+            ? IndexOverview.FromDocument(reader.Text("document"))
+            : null;
     }
 
     /// <summary>The WHERE clause and its parameter for one repository's commits, or neither for the project's.</summary>

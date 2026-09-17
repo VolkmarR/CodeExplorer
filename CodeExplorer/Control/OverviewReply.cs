@@ -1,0 +1,144 @@
+using System.Globalization;
+using System.Text;
+
+namespace CodeExplorer;
+
+/// <summary>
+///     An <see cref="IndexOverview" /> as <c>project_overview</c> hands it to an agent. It is its own
+///     type because it is all rendering and no reading: <see cref="ProjectTools" /> is where the tools
+///     are declared and where the index is opened, and a hundred lines of formatting living there
+///     would make that class change both when a tool changes and when the overview's shape does.
+///     Every section is written the way the tool that owns the same question writes it — the ranking
+///     like <c>hot_files</c>, the counts like <c>repo_info</c> — so an agent reading two of them is
+///     reading one format.
+/// </summary>
+internal static class OverviewReply
+{
+    public static string Render(Project project, IReadOnlyList<IndexedRepository> repositories,
+        IndexOverview overview)
+    {
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture,
+            $"Project '{project.Slug}' ({project.Name}): {repositories.Count} {ToolReply.Plural(repositories.Count, "repository", "repositories")}, "
+            + $"{repositories.Sum(r => r.FileCount):N0} files, {repositories.Sum(r => r.LineCount):N0} lines.\n");
+
+        text.Append("\nRepositories\n");
+        foreach (var repository in repositories)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  {repository.Slug}  at {repository.HeadCommit[..Math.Min(12, repository.HeadCommit.Length)]}  "
+                + $"{repository.FileCount:N0} {ToolReply.Plural(repository.FileCount, "file")}, {repository.LineCount:N0} {ToolReply.Plural(repository.LineCount, "line")}  {repository.Url}\n");
+
+        AppendLanguages(text, overview);
+        AppendTree(text, overview);
+        AppendLargestFiles(text, overview);
+        AppendChurn(text, overview);
+        AppendAuthors(text, overview);
+        return ToolReply.Cap(text.ToString(), "Use list_tree, hot_files or git_log for the section you want in full.");
+    }
+
+    private static void AppendLanguages(StringBuilder text, IndexOverview overview)
+    {
+        text.Append("\nLanguages\n");
+        if (overview.Languages.Count == 0)
+        {
+            text.Append("  No files are indexed for this project.\n");
+            return;
+        }
+
+        foreach (var language in overview.Languages)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"  {language.Name,-14}{language.Files,7:N0} {ToolReply.Plural(language.Files, "file"),-6}{language.Lines,9:N0} {ToolReply.Plural(language.Lines, "line"),-6}");
+            // Said on the row rather than in a footnote: an agent reading ".vh" beside "C#" has to be
+            // able to tell that the first is an extension nobody mapped and not a language this
+            // server recognised.
+            if (!language.Mapped) text.Append("  (extension; no language profile covers it)");
+            if (language.Skipped > 0)
+                text.Append(CultureInfo.InvariantCulture,
+                    $"  ({language.Skipped:N0} not indexed: binary or oversized)");
+            text.Append('\n');
+        }
+
+        if (overview.OtherLanguages > 0)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  and {overview.OtherLanguages} further {ToolReply.Plural(overview.OtherLanguages, "language or extension", "languages or extensions")}.\n");
+    }
+
+    private static void AppendTree(StringBuilder text, IndexOverview overview)
+    {
+        if (overview.Tree.Count == 0) return;
+
+        // Counts first and the path last, the way every other section here reads: a path is the one
+        // field with no bound on its length, so anything after it is a column that does not line up.
+        text.Append("\nTop level\n");
+        foreach (var entry in overview.Tree)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  {entry.Files,6:N0} {ToolReply.Plural(entry.Files, "file"),-6}{entry.Lines,9:N0} {ToolReply.Plural(entry.Lines, "line"),-6}{ToolReply.Bytes(entry.SizeBytes),10}  {entry.QualifiedPath}{(entry.IsDirectory ? "/" : "")}\n");
+        if (overview.OtherEntries > 0)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  and {overview.OtherEntries} further top-level {ToolReply.Plural(overview.OtherEntries, "entry", "entries")}; list_tree shows them all.\n");
+    }
+
+    private static void AppendLargestFiles(StringBuilder text, IndexOverview overview)
+    {
+        if (overview.LargestFiles.Count == 0) return;
+
+        text.Append("\nLargest files\n");
+        foreach (var file in overview.LargestFiles)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  {ToolReply.Bytes(file.SizeBytes),10}  {file.LineCount,8:N0} {ToolReply.Plural(file.LineCount, "line"),-6}  {file.QualifiedPath}\n");
+    }
+
+    private static void AppendChurn(StringBuilder text, IndexOverview overview)
+    {
+        var churn = overview.Churn;
+        if (churn is not { Since: { } since, Until: { } until })
+        {
+            text.Append("\nMost changed\n  ").Append(NoHistory).Append('\n');
+            return;
+        }
+
+        text.Append(CultureInfo.InvariantCulture,
+            $"\nMost changed, {new HistoryWindow(since, until, churn.Days).Describe()}\n");
+        if (churn.Files.Count == 0)
+        {
+            text.Append(
+                "  No commit in that window changed a file. Use hot_files with more days to look further back.\n");
+            return;
+        }
+
+        foreach (var file in churn.Files)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"  {file.Commits,4} {ToolReply.Plural(file.Commits, "commit"),-8} +{file.Added,-7:N0} -{file.Deleted,-7:N0} {file.QualifiedPath}");
+            if (!file.AtHead) text.Append("  (no longer at HEAD)");
+            text.Append('\n');
+        }
+    }
+
+    private static void AppendAuthors(StringBuilder text, IndexOverview overview)
+    {
+        text.Append("\nMost commits, over the whole imported history (who to ask, never who wrote it)\n");
+        if (overview.Authors.Count == 0)
+        {
+            // Said and not left out, for the reason the ranking above says it: a section that simply
+            // vanishes reads as a project nobody has worked on, which is the opposite claim.
+            text.Append("  ").Append(NoHistory).Append('\n');
+            return;
+        }
+
+        foreach (var author in overview.Authors)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  {author.Commits,6} {ToolReply.Plural(author.Commits, "commit"),-8} {author.Name} <{author.Email}>, last on {author.LastCommit:yyyy-MM-dd}\n");
+    }
+
+    /// <summary>
+    ///     What both history-derived sections say when there was none to derive from. The one thing
+    ///     history must never say by accident is "nothing changed" (CONTEXT.md, History), and an empty
+    ///     section says exactly that — so the absence is spelled out where the answer would have been,
+    ///     in both places, from one sentence.
+    /// </summary>
+    private const string NoHistory =
+        "This project's index holds no history, so no file can be ranked by how much it changed and no "
+        + "author can be named. Ask the operator to refresh the project; the code itself is searchable meanwhile.";
+}
