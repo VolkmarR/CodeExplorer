@@ -1,5 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import { fileSearch } from '@/features/files/fileParams'
 import type { BrowseParameters } from '@/features/files/browseParams'
 import { browseQuery } from '@/features/files/queries'
 import { formatBytes, formatCount } from '@/lib/format'
@@ -45,7 +46,7 @@ export function FileList({ project, search }: { project: string; search: BrowseP
                   <Link
                     to="/projects/$project/file"
                     params={{ project }}
-                    search={{ path: file.qualifiedPath }}
+                    search={fileSearch(file.qualifiedPath)}
                     className="hover:underline"
                   >
                     {file.qualifiedPath}

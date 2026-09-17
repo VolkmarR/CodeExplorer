@@ -1,21 +1,65 @@
-import type { ProjectTab } from '@/features/projects/projectParams'
+import { Activity, BarChart3, Clock, FolderTree, Search, Settings } from 'lucide-react'
+import { churnSearch } from '@/features/churn/churnParams'
+import { treeSearch } from '@/features/files/browseParams'
+import { historySearch } from '@/features/history/historyParams'
+import { projectSearch, type ProjectTab } from '@/features/projects/projectParams'
+import { searchSearch } from '@/features/search/searchParams'
 
 /** The sidebar's items, in the order it lists them. */
 export type View = 'overview' | 'files' | 'search' | 'history' | 'churn' | 'settings'
 
 /**
- * What each one is called, wherever something other than the sidebar has to name it — the
- * breadcrumb, so far. Beside `activeView` rather than in the bar that reads it, so that adding a
- * view puts its matcher and its name in the same edit and they cannot come to disagree.
+ * Every view of a project: what it is called, what it is drawn as, and where it goes. One table
+ * rather than six near-identical blocks in the sidebar, so that adding a view is an entry here
+ * beside its matcher below, and not a block to copy in the sidebar plus a name to remember to add
+ * for the breadcrumb.
+ *
+ * `link` is spread onto a `Link`, which supplies the `params`; the search for each view comes from
+ * that view's own params module, so no default is spelled out here either.
  */
-export const VIEW_NAMES: Record<View, string> = {
-  churn: 'Churn',
-  files: 'Files',
-  history: 'History',
-  overview: 'Overview',
-  search: 'Search',
-  settings: 'Settings',
-}
+export const PROJECT_VIEWS = [
+  {
+    Icon: Activity,
+    label: 'Overview',
+    link: { search: projectSearch('overview'), to: '/projects/$project' },
+    view: 'overview',
+  },
+  {
+    Icon: FolderTree,
+    label: 'Files',
+    link: { search: treeSearch(), to: '/projects/$project/files' },
+    view: 'files',
+  },
+  {
+    Icon: Search,
+    label: 'Search',
+    link: { search: searchSearch(), to: '/projects/$project/search' },
+    view: 'search',
+  },
+  {
+    Icon: Clock,
+    label: 'History',
+    link: { search: historySearch(), to: '/projects/$project/history' },
+    view: 'history',
+  },
+  {
+    Icon: BarChart3,
+    label: 'Churn',
+    link: { search: churnSearch(), to: '/projects/$project/churn' },
+    view: 'churn',
+  },
+  {
+    Icon: Settings,
+    label: 'Settings',
+    link: { search: projectSearch('settings'), to: '/projects/$project' },
+    view: 'settings',
+  },
+] as const satisfies readonly { Icon: typeof Activity; label: string; link: object; view: View }[]
+
+/** What each view is called, for whatever has to name one without listing them all. */
+export const VIEW_NAMES: Record<View, string> = Object.fromEntries(
+  PROJECT_VIEWS.map((item) => [item.view, item.label]),
+) as Record<View, string>
 
 /**
  * Which sidebar item is lit, decided from the path rather than by each link's `activeProps`,

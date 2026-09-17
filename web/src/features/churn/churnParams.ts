@@ -41,3 +41,8 @@ export function describeWindow(days: number): string {
   if (days % 7 === 0) return `Last ${days / 7} weeks`
   return `Last ${days} days`
 }
+
+/** The URL of the default ranking, so no link has to spell the default window itself. */
+export function churnSearch(): ChurnParameters {
+  return { days: DEFAULT_CHURN_DAYS }
+}

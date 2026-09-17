@@ -19,3 +19,8 @@ export function validateHistorySearch(search: Record<string, unknown>): HistoryP
         : undefined,
   }
 }
+
+/** The URL of the first page of everything, so no link has to remember the page it starts on. */
+export function historySearch(): HistoryParameters {
+  return { page: 1 }
+}

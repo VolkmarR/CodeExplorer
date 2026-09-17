@@ -6,7 +6,7 @@ import { CommitLine } from '@/components/CommitLine'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { CommitRef, FileContent } from '@/lib/api'
-import { fileName } from '@/lib/format'
+import { splitFileName } from '@/lib/format'
 
 /**
  * How many commits the rail names. Enough to recognise the stretch of work a file is in the middle
@@ -129,7 +129,5 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
  * only ever seeds a search the reader can see and edit, and never claims to be a symbol.
  */
 function symbolName(qualifiedPath: string) {
-  const name = fileName(qualifiedPath)
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? name.slice(0, dot) : name
+  return splitFileName(qualifiedPath).stem
 }
