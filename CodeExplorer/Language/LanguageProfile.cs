@@ -60,6 +60,71 @@ public sealed record StringDelimiter(string Open, string Close, StringEscape Esc
 public sealed record SectionMarker(string Phrase, DeclarationRole Role);
 
 /// <summary>
+///     One way this language names a file it depends on: C#'s <c>using</c>, Delphi's <c>uses</c>
+///     clause, a <c>&lt;script src&gt;</c> in markup. The forms diverge more than they look, which is
+///     why this is a record of what varies rather than the list of prefixes it began as — a prefix
+///     alone finds <c>uses Vcl.Forms,</c> and then loses the three units on the lines below it.
+///     The rule the rest of this file follows holds here too, and harder: a form this does not know
+///     costs an edge that is missing, a form it invents costs an edge reported as read from the code.
+///     Leave a doubtful form out.
+/// </summary>
+/// <param name="Opener">
+///     What begins the form, matched under the profile's own case rule. Longest first is not required
+///     of the profile — <see cref="TextAnalyzer" /> orders them — so <c>global using </c> may be
+///     written after <c>using </c> and is still tried before it.
+/// </param>
+/// <param name="Shape">What kind of name the form names, which is what decides how it is resolved.</param>
+public sealed record ImportForm(string Opener, ImportShape Shape)
+{
+    /// <summary>
+    ///     The opener without its trailing space — what can be searched for, where the whitespace
+    ///     after it is matched by the run rather than by the character. Computed once with the form
+    ///     rather than where it is used: a build asks for it per line of every file.
+    /// </summary>
+    public string Head { get; } = Opener.TrimEnd();
+
+    /// <summary>
+    ///     Whether the opener may sit anywhere on the line rather than at the start of its text.
+    ///     <c>require(</c> and <c>url(</c> are written mid-expression; <c>using</c> and <c>uses</c>
+    ///     begin their line, and reading them anywhere would make <c>// see the uses clause</c> an
+    ///     import of "clause".
+    /// </summary>
+    public bool Anywhere { get; init; }
+
+    /// <summary>
+    ///     For a markup form, the attribute whose quoted value is the path: <c>src</c> on a
+    ///     <c>&lt;script&gt;</c>, <c>href</c> on a <c>&lt;link&gt;</c>. The tag is the opener and this
+    ///     is what is read out of it, because a bare <c>href=</c> anywhere would make every
+    ///     <c>&lt;a&gt;</c> in the document a dependency.
+    /// </summary>
+    public string? Attribute { get; init; }
+
+    /// <summary>
+    ///     What ends the clause, where the end of the line is not it: Delphi's <c>;</c>, the <c>)</c>
+    ///     of CSS's <c>url(</c>. Null means the clause ends with its line.
+    /// </summary>
+    public string? Closer { get; init; }
+
+    /// <summary>Whether one clause lists several names, comma-separated. Delphi's <c>uses</c>.</summary>
+    public bool Separated { get; init; }
+
+    /// <summary>
+    ///     Whether an unclosed clause carries on onto the next line, which only a form with a
+    ///     <see cref="Closer" /> can do. Delphi's <c>uses</c> is the one that does: it runs as many
+    ///     lines as it likes until its <c>;</c>, and it appears twice in a unit.
+    /// </summary>
+    public bool SpansLines { get; init; }
+
+    /// <summary>
+    ///     Whether the form says what this file <em>is</em> rather than what it needs: C#'s
+    ///     <c>namespace</c>, Delphi's <c>unit</c>. It is the other half of an import edge — without it
+    ///     a name has nothing in the project to resolve against, and the reverse direction cannot be
+    ///     answered at all.
+    /// </summary>
+    public bool Declares { get; init; }
+}
+
+/// <summary>
 ///     The text facts about one language, in the shape <see cref="TextAnalyzer" /> reads them. This is
 ///     the extension point for <em>a new language</em>: a profile and one line in the registration
 ///     table, touching no caller. (The other extension point — a <em>better implementation</em> for a
@@ -134,8 +199,21 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     /// </summary>
     public IReadOnlyList<string> InstantiationKeywords { get; init; } = [];
 
-    /// <summary>How an import line begins, matched against the trimmed line.</summary>
-    public IReadOnlyList<string> ImportPrefixes { get; init; } = [];
+    /// <summary>
+    ///     How this language names the files it depends on. Empty where it has no import concept at
+    ///     all, which is what the SQL family means and which is a different answer from a file that
+    ///     imports nothing — <see cref="ILanguageAnalyzer.HasImports" /> is read off this for that
+    ///     reason.
+    /// </summary>
+    public IReadOnlyList<ImportForm> ImportForms { get; init; } = [];
+
+    /// <summary>
+    ///     How short a path an import here may be written. The default is that it may not: a path
+    ///     names the file it spells, which is true of every language here but TypeScript and
+    ///     JavaScript, and applying their rule to the rest answered a markup <c>src="a"</c> with
+    ///     <c>a.html</c>.
+    /// </summary>
+    public ImportPathRules ImportPaths { get; init; } = ImportPathRules.AsWritten;
 
     /// <summary>
     ///     Words that may introduce a member declaration. Keeping the list short and boring is the

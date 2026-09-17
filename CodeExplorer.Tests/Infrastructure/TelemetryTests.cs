@@ -141,14 +141,14 @@ public sealed class TelemetryTests
     /// <summary>
     ///     And the recording is started in that one method: the instruments are private to
     ///     <see cref="Telemetry" />, so this is about which file holds the call, which only the source
-    ///     shows. A search recording may be started in each of the four search services and nowhere
-    ///     else — it is the recording type that fixes the tag set, so four services cannot report
-    ///     different attributes, but a fifth file appearing here would be an entry point that
-    ///     measured a search without being one.
+    ///     shows. A search recording may be started in each of the search services and nowhere else —
+    ///     it is the recording type that fixes the tag set, so several services cannot report
+    ///     different attributes, but a file appearing here that is not one of them would be an entry
+    ///     point that measured a search without being one.
     /// </summary>
     [Theory]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "DefinitionSearch.cs", "GrepSearch.cs",
-        "MatchList.cs", "ReferenceSearch.cs")]
+        "ImportGraph.cs", "MatchList.cs", "ReferenceSearch.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.IndexBuild)}(", "IndexBuilder.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.DurableCopy)}(", "DurableIndex.cs")]
     public void Only_the_recording_services_start_a_recording(string call, params string[] files) =>

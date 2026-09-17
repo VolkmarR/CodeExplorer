@@ -49,6 +49,18 @@ nothing rather than picking one.
 _Avoid_: Definition (except as the name of the tool that answers with declarations), signature,
 symbol
 
+**Import**:
+One file naming another it depends on: a `using`, a `#include`, a `uses` clause, a `<script src>`.
+The name is recorded as the file wrote it and then resolved to a file in the project where the
+mapping is unambiguous, which is what makes "who depends on this" answerable at all. Read from the
+shape of the line in the language the file is written in, so it is evidence of the same strength as
+a reference and never proof, and a form no language profile knows is an import this does not find
+rather than one that is not there. A name that resolves to nothing, or to several files, stays in
+the answer as the name it was and says so: an import left out reads as a dependency the file does
+not have. A language with no import concept — the SQL family — is told apart from a file that
+imports nothing, because an empty answer would otherwise read as "this depends on nothing".
+_Avoid_: Dependency, include, reference (which is a different thing here), edge
+
 **Commit**:
 One recorded change on a repository's default branch, identified by its SHA and carrying the author
 who wrote it. Merges count as one commit and their side branches are not walked (ADR-0007), so a

@@ -389,7 +389,7 @@ public sealed class LanguageAnalyzerTests
         var analyzer = Languages.Default.For("cs");
         Assert.Equal(Evidence.Text, analyzer.StateAt(analyzer.Start, "// x", 3).Evidence);
         Assert.Equal(Evidence.Text, analyzer.Declares(analyzer.Start, "public class Order").Evidence);
-        Assert.Equal(Evidence.Text, analyzer.ImportOn("using System;").Evidence);
+        Assert.Equal(Evidence.Text, analyzer.ImportsOn(analyzer.Start, "using System;").Evidence);
         Assert.Equal(Evidence.Text, analyzer.IsGenerated("src/Order.g.cs").Evidence);
         Assert.Equal(Evidence.Text, analyzer.Occurrences(analyzer.Start, "Order x;", "Order")[0].Evidence);
     }
@@ -397,10 +397,185 @@ public sealed class LanguageAnalyzerTests
     [Fact]
     public void An_import_line_is_told_apart_from_what_it_imports()
     {
-        Assert.Equal("System.Text", Languages.Default.For("cs").ImportOn("using System.Text;").Value);
-        Assert.Equal("System.Collections", Languages.Default.For("prg").ImportOn("#using System.Collections").Value);
-        Assert.Equal("Vcl.Forms, Vcl.Dialogs", Languages.Default.For("pas").ImportOn("uses Vcl.Forms, Vcl.Dialogs;").Value);
-        Assert.Null(Languages.Default.For("cs").ImportOn("        Status = next;").Value);
+        Assert.Equal([("System.Text", ImportShape.Module)], Imports("cs", "using System.Text;"));
+        Assert.Equal([("System.Text.Json", ImportShape.Module)], Imports("cs", "global using System.Text.Json;"));
+        Assert.Equal([("System.Collections", ImportShape.Module)], Imports("prg", "#using System.Collections"));
+        Assert.Equal([("Common.vh", ImportShape.Path)], Imports("prg", "#include \"Common.vh\""));
+        Assert.Empty(Imports("cs", "        Status = next;"));
+    }
+
+    [Fact]
+    public void The_forms_each_language_writes_are_the_ones_it_reads()
+    {
+        // A TypeScript specifier is a path however it is written, and the names in front of it are
+        // what the file takes out of the module rather than what it depends on.
+        Assert.Equal([("./orders", ImportShape.Path)], Imports("ts", "import { a, b } from \"./orders\";"));
+        Assert.Equal([("./orders", ImportShape.Path)], Imports("ts", "import \"./orders\";"));
+        Assert.Equal([("./late", ImportShape.Path)], Imports("ts", "const m = await import(\"./late\");"));
+        Assert.Equal([("./util", ImportShape.Path)], Imports("js", "const u = require(\"./util\");"));
+
+        // The tag is the opener and the attribute is what is read out of it, so an anchor is not a
+        // dependency and a `data-src` is not a `src`.
+        Assert.Equal([("app.js", ImportShape.Path)], Imports("html", "  <script defer src=\"app.js\"></script>"));
+        Assert.Equal([("site.css", ImportShape.Path)], Imports("html", "<link rel=\"stylesheet\" href=\"site.css\">"));
+        Assert.Empty(Imports("html", "<a href=\"/about\">About</a>"));
+        // Markup puts several of them on one line, and a form that stopped at the first would lose
+        // the rest.
+        Assert.Equal([("a.css", ImportShape.Path), ("b.css", ImportShape.Path)],
+            Imports("html", "<link href=\"a.css\"><link href=\"b.css\">"));
+
+        // Three spellings of one thing, and all three answer with the file.
+        Assert.Equal([("base.css", ImportShape.Path)], Imports("css", "@import \"base.css\";"));
+        Assert.Equal([("base.css", ImportShape.Path)], Imports("css", "@import url(\"base.css\");"));
+        Assert.Equal([("logo.png", ImportShape.Path)], Imports("css", "  background: url(logo.png) no-repeat;"));
+
+        // SQL names no file it depends on, and says so by having no forms at all rather than by
+        // answering with an empty list that reads as "this depends on nothing".
+        Assert.False(Languages.Default.For("sql").HasImports);
+        Assert.False(Languages.Default.For("pks").HasImports);
+        Assert.True(Languages.Default.For("cs").HasImports);
+    }
+
+    /// <summary>
+    ///     The word that opens a C# using directive also opens a using statement and a using block,
+    ///     and only the first is an import. An opener alone cannot tell them apart; the clause can,
+    ///     because a module name is a dotted identifier and an expression is not.
+    /// </summary>
+    [Fact]
+    public void A_using_statement_is_not_a_using_directive()
+    {
+        Assert.Empty(Imports("cs", "        using var reader = new StreamReader(path);"));
+        Assert.Empty(Imports("cs", "        using (var scope = provider.CreateScope())"));
+        Assert.Empty(Imports("cs", "        using var a = b.c;"));
+        // And the directive still is one, which is the half that must not regress.
+        Assert.Equal([("System.Text", ImportShape.Module)], Imports("cs", "using System.Text;"));
+        // `static` is a qualifier in front of the name, and the name is what is imported.
+        Assert.Equal([("System.Math", ImportShape.Module)], Imports("cs", "using static System.Math;"));
+        // An alias imports the type on the right of the `=`, not the name it binds on the left.
+        Assert.Equal([("System.Windows.Controls.Grid", ImportShape.Module)],
+            Imports("cs", "using Grid = System.Windows.Controls.Grid;"));
+    }
+
+    [Fact]
+    public void An_include_is_read_however_its_header_is_quoted() =>
+        // The angle-bracket spelling is the dominant one in X#, and a reader that knew only `"…"`
+        // answered that a file including only system headers imports nothing.
+        Assert.Equal([("Set_Ansi.ch", ImportShape.Path)], Imports("prg", "#include <Set_Ansi.ch>"));
+
+    [Fact]
+    public void A_file_says_what_it_declares_itself_to_be()
+    {
+        Assert.Equal("Orders.Domain", Declared("cs", "namespace Orders.Domain;"));
+        Assert.Equal("Orders.Domain", Declared("cs", "namespace Orders.Domain"));
+        Assert.Equal("Orders.Domain", Declared("cs", "namespace Orders.Domain {"));
+        Assert.Equal("Customers", Declared("pas", "unit Customers;"));
+        // What a file declares is not what it imports, and the two must not end up in one list.
+        Assert.Empty(Imports("cs", "namespace Orders.Domain;"));
+    }
+
+    /// <summary>
+    ///     The clause the ticket was written around: comma-separated, as many lines as it likes until
+    ///     the <c>;</c>, and written twice in a unit. Read one line at a time it yields the first unit
+    ///     of each clause and loses every unit under it.
+    /// </summary>
+    [Fact]
+    public void A_Delphi_uses_clause_is_read_across_its_lines_and_in_both_sections()
+    {
+        string[] unit =
+        [
+            "unit Customers;",
+            "",
+            "interface",
+            "",
+            "uses",
+            "  Vcl.Forms, Vcl.Dialogs,",
+            "  System.SysUtils;",
+            "",
+            "implementation",
+            "",
+            "uses Orders, Invoices;",
+            "",
+            "end."
+        ];
+
+        var (names, declared) = Walk("pas", unit);
+
+        Assert.Equal("Customers", declared);
+        Assert.Equal(
+            ["Vcl.Forms", "Vcl.Dialogs", "System.SysUtils", "Orders", "Invoices"],
+            names.Select(name => name.Name));
+        Assert.All(names, name => Assert.Equal(ImportShape.Module, name.Shape));
+    }
+
+    /// <summary>
+    ///     A clause whose terminator this cannot see — hidden in a <c>{ }</c> comment, or never
+    ///     written — would otherwise stay open to the end of the file and report every line below it
+    ///     as an import. One line is the most a missed <c>;</c> may cost.
+    /// </summary>
+    [Fact]
+    public void An_unclosed_uses_clause_does_not_swallow_the_file()
+    {
+        var (names, _) = Walk("pas",
+        [
+            "unit Broken;",
+            "interface",
+            "uses",
+            "  Vcl.Forms,",
+            "procedure Advance(n: Integer);",
+            "implementation",
+            "procedure Advance(n: Integer);",
+            "begin",
+            "end;",
+            "end."
+        ]);
+
+        // The units that were written are read; the line that cannot be part of a name list ends the
+        // clause, and nothing below it is reported as an import.
+        Assert.Equal(["Vcl.Forms"], names.Select(name => name.Name));
+    }
+
+    [Fact]
+    public void An_import_written_in_prose_is_not_an_import()
+    {
+        // Both lines are shaped exactly like an import; only the lines above them say they are not
+        // one, which is why the walk carries a position at all.
+        var (commented, _) = Walk("cs",
+            ["/* the old shape:", "using System.Text;", "*/", "using System.Linq;"]);
+        Assert.Equal(["System.Linq"], commented.Select(name => name.Name));
+
+        // A trailing note is not part of the clause either.
+        Assert.Equal([("System.Text", ImportShape.Module)], Imports("cs", "using System.Text; // for the builder"));
+        Assert.Empty(Imports("cs", "// using System.Text;"));
+    }
+
+    private static (string Name, ImportShape Shape)[] Imports(string extension, string line)
+    {
+        var analyzer = Languages.Default.For(extension);
+        return [.. analyzer.ImportsOn(analyzer.Start, line).Value.Imports.Select(n => (n.Name, n.Shape))];
+    }
+
+    private static string? Declared(string extension, string line)
+    {
+        var analyzer = Languages.Default.For(extension);
+        return analyzer.ImportsOn(analyzer.Start, line).Value.Declares;
+    }
+
+    /// <summary>The file walked as a build walks it: a position per line, carried.</summary>
+    private static (List<ImportedName> Names, string? Declared) Walk(string extension, string[] lines)
+    {
+        var analyzer = Languages.Default.For(extension);
+        var position = analyzer.Start;
+        var names = new List<ImportedName>();
+        string? declared = null;
+        foreach (string line in lines)
+        {
+            var found = analyzer.ImportsOn(position, line).Value;
+            names.AddRange(found.Imports);
+            declared ??= found.Declares;
+            position = analyzer.After(position, line);
+        }
+
+        return (names, declared);
     }
 
     [Fact]
@@ -576,7 +751,12 @@ public sealed class LanguageAnalyzerTests
         public Answer<Declared?> Declares(FilePosition position, string line) =>
             new(new Declared("Order", "Advance", DeclarationRole.Declaration), Evidence.Parsed);
 
-        public Answer<string?> ImportOn(string line) => new(null, Evidence.Parsed);
+        public bool HasImports => true;
+
+        public ImportPathRules ImportPaths => ImportPathRules.AsWritten;
+
+        public Answer<ImportsOnLine> ImportsOn(FilePosition position, string line) =>
+            new(ImportsOnLine.Nothing, Evidence.Parsed);
 
         public Answer<bool> IsGenerated(string qualifiedPath) => new(false, Evidence.Parsed);
 

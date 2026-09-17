@@ -41,6 +41,10 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     private static readonly string[] Tables =
     [
         "index_info", "repositories", "files", "lines", "commits", "commit_files", "attribution",
+        // The import edges the build read and resolved (#55). They travel with the tables, like the
+        // overview and for the same reason: a restored index that had lost them would answer
+        // `who_imports` with nothing, which reads as "nothing depends on this file".
+        "imports",
         // The overview the build computed (#51). It travels with the tables it was derived from, so a
         // restored index answers project_overview without a rebuild — which is the whole point of
         // computing it at build time rather than per call.
@@ -72,7 +76,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
                 // ZSTD over the default SNAPPY: the transfer and the blob bill are what this is paying
                 // for, and line content compresses far enough that the extra CPU is repaid on the way
                 // back too.
-                await ExecuteAsync(connection,
+                await connection.ExecuteAsync(
                     $"COPY (SELECT * FROM {table}) TO '{Escape(local)}' (FORMAT parquet, COMPRESSION zstd)",
                     cancellationToken);
                 await store.StoreAsync(Name(slug, table), local, cancellationToken);
@@ -142,7 +146,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
             string columns = table == "index_info"
                 ? $"schema_version, built_at, {(ftsAvailable ? "true" : "false")} AS fts_indexed, single_repository"
                 : "*";
-            await ExecuteAsync(connection,
+            await connection.ExecuteAsync(
                 $"INSERT INTO {table} SELECT {columns} FROM read_parquet('{Escape(Parquet(copy, table))}')",
                 cancellationToken);
         }

@@ -41,12 +41,14 @@ builder.Services.AddSingleton<DurableIndex>();
 builder.Services.AddSingleton<ProjectIndexes>();
 builder.Services.AddSingleton<HistoryBuilder>();
 builder.Services.AddSingleton<OverviewBuilder>();
+builder.Services.AddSingleton<ImportBuilder>();
 builder.Services.AddSingleton<IndexBuilder>();
 builder.Services.AddSingleton<ProjectRefresh>();
 builder.Services.AddSingleton<RefreshService>();
 builder.Services.AddSingleton<GrepSearch>();
 builder.Services.AddSingleton<ReferenceSearch>();
 builder.Services.AddSingleton<DefinitionSearch>();
+builder.Services.AddSingleton<ImportGraph>();
 builder.Services.AddSingleton<MatchList>();
 builder.Services.AddSingleton<ProjectOverview>();
 builder.Services.AddSingleton<WarmUp>();
@@ -59,7 +61,8 @@ builder.Services.AddMcpServer().WithHttpTransport()
     .WithTools<ProjectTools>()
     .WithTools<SearchTools>()
     .WithTools<FileTools>()
-    .WithTools<HistoryTools>();
+    .WithTools<HistoryTools>()
+    .WithTools<ImportTools>();
 
 var app = builder.Build();
 

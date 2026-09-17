@@ -112,6 +112,32 @@ public static class Languages
     private static readonly string[] New = ["new"];
 
     /// <summary>
+    ///     How TypeScript and JavaScript name a module, which is the same three forms in both and so
+    ///     is written once. Every one of them names a path rather than a namespace — even a bare
+    ///     <c>import "react"</c>, which names a package this project does not hold and which
+    ///     therefore resolves to nothing and says so.
+    ///     The static <c>import</c> is read for its quoted specifier and not for the names in front
+    ///     of it: <c>import { a, b } from "./c"</c> depends on <c>./c</c>, and <c>a</c> and <c>b</c>
+    ///     are what it takes out of it.
+    /// </summary>
+    private static readonly ImportForm[] EcmaImports =
+    [
+        new ImportForm("import ", ImportShape.Path),
+        new ImportForm("import(", ImportShape.Path) { Anywhere = true, Closer = ")" },
+        new ImportForm("require(", ImportShape.Path) { Anywhere = true, Closer = ")" }
+    ];
+
+    /// <summary>
+    ///     Node's module resolution, which TypeScript and JavaScript share and nothing else here has:
+    ///     a specifier may leave its extension off, and may name a directory that holds an index
+    ///     file. It is declared rather than assumed because the resolver applied to every language
+    ///     answered a markup <c>&lt;script src="a"&gt;</c> with <c>a.html</c> and <c>a/index.html</c>,
+    ///     which is this rule read into a language that does not have it.
+    /// </summary>
+    private static readonly ImportPathRules EcmaPaths =
+        new(["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "json"], "index");
+
+    /// <summary>
     ///     What answers for an extension no profile claims. It is today's behaviour exactly, kept that
     ///     way on purpose: a project written in a language nobody declared must read no worse after
     ///     this seam than before it, and the way to be sure is for the fallback to be the old rules
@@ -127,7 +153,20 @@ public static class Languages
         AssignmentOperators = ["="],
         MemberAccessOperators = ["."],
         TypePrefixOperators = [":", "<", ","],
-        ImportPrefixes = ["using ", "import ", "namespace ", "#include", "from ", "package ", "require("],
+        // These decide nothing but ReferenceKind.Import here: a build extracts import edges only for
+        // a language a profile claims, because an extension nobody declared is one whose import
+        // forms nobody declared either, and an edge read out of it would be a guess with a path on
+        // the end of it.
+        ImportForms =
+        [
+            new ImportForm("using ", ImportShape.Module),
+            new ImportForm("import ", ImportShape.Module),
+            new ImportForm("namespace ", ImportShape.Module) { Declares = true },
+            new ImportForm("#include", ImportShape.Path),
+            new ImportForm("from ", ImportShape.Module),
+            new ImportForm("package ", ImportShape.Module) { Declares = true },
+            new ImportForm("require(", ImportShape.Path) { Anywhere = true, Closer = ")" }
+        ],
         InstantiationKeywords = New,
         DeclarationModifiers = CFamilyModifiers,
         DeclarationKeywords = ["class", "interface", "struct", "record", "enum"]
@@ -154,7 +193,16 @@ public static class Languages
             AssignmentOperators = [":="],
             MemberAccessOperators = [":", "."],
             TypePrefixOperators = ["<", ","],
-            ImportPrefixes = ["using ", "#using", "#include"],
+            // `#include` names a header file and the other two name a namespace, which is the whole
+            // of the difference between resolving against a directory and resolving against what a
+            // file declares itself to be. X# declares no namespace per file, so nothing here says
+            // what a file IS and a `#using` resolves only where another project file happens to.
+            ImportForms =
+            [
+                new ImportForm("using ", ImportShape.Module),
+                new ImportForm("#using ", ImportShape.Module),
+                new ImportForm("#include", ImportShape.Path)
+            ],
             // `local`, `instance` and `define` are deliberately absent. They introduce a name, but not
             // a scope, and every modifier here is also what DeclarationScope reads as one: with them
             // in, every reference below a `local cLabel := …` was labelled with the local instead of
@@ -181,7 +229,16 @@ public static class Languages
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", "<", ","],
             // `#` opens no comment here, so `#if` and `#region` no longer read as prose.
-            ImportPrefixes = ["using ", "global using ", "namespace "],
+            // The `namespace` line is here with the two `using` forms because it is the other half of
+            // the same fact: it says what this file is, which is what another file's `using` has to
+            // resolve against. Both the file-scoped `namespace Foo;` and the block `namespace Foo {`
+            // read the same, because the name is what is wanted and the punctuation after it is not.
+            ImportForms =
+            [
+                new ImportForm("using ", ImportShape.Module),
+                new ImportForm("global using ", ImportShape.Module),
+                new ImportForm("namespace ", ImportShape.Module) { Declares = true }
+            ],
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
             DeclarationKeywords = ["class", "interface", "struct", "record", "enum"],
@@ -198,7 +255,8 @@ public static class Languages
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", "<", ","],
-            ImportPrefixes = ["import "],
+            ImportForms = EcmaImports,
+            ImportPaths = EcmaPaths,
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
             DeclarationKeywords = ["class", "interface", "enum", "type"]
@@ -212,7 +270,8 @@ public static class Languages
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = ["<", ","],
-            ImportPrefixes = ["import ", "require("],
+            ImportForms = EcmaImports,
+            ImportPaths = EcmaPaths,
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
             DeclarationKeywords = ["class"]
@@ -227,7 +286,17 @@ public static class Languages
             AssignmentOperators = [":="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", ","],
-            ImportPrefixes = ["uses ", "unit "],
+            // The awkward one. A `uses` clause is comma-separated, runs as many lines as it likes
+            // until its `;`, and a unit writes one in `interface` and another in `implementation` —
+            // so a prefix read one line at a time finds the first unit of each clause and loses
+            // every unit under it. The `unit` line is the other half: it is what a `uses` elsewhere
+            // resolves against, and Delphi is the language where that mapping is actually exact.
+            ImportForms =
+            [
+                new ImportForm("uses ", ImportShape.Module)
+                    { Separated = true, Closer = ";", SpansLines = true },
+                new ImportForm("unit ", ImportShape.Module) { Declares = true }
+            ],
             // `var` and `const` are left out for the reason X#'s `local` is: they open a block of
             // names, not a scope, and DeclarationScope would label everything under one with it.
             DeclarationModifiers =
@@ -262,6 +331,14 @@ public static class Languages
             Strings = [RawDouble, RawSingle],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
+            // The tag is the opener and the attribute is what is read out of it. A bare `src=` or
+            // `href=` anywhere would make every `<a>` and every `<img>` in the document a
+            // dependency, which is a great many edges that are not imports.
+            ImportForms =
+            [
+                new ImportForm("<script", ImportShape.Path) { Anywhere = true, Attribute = "src" },
+                new ImportForm("<link", ImportShape.Path) { Anywhere = true, Attribute = "href" }
+            ],
             CaseInsensitiveKeywords = true
         },
         new LanguageProfile("CSS", ["css"])
@@ -271,7 +348,16 @@ public static class Languages
             Strings = [DoubleQuoted, SingleQuotedEscaped],
             // A declaration here is `property: value`, which is the nearest thing CSS has to a write.
             AssignmentOperators = [":"],
-            ImportPrefixes = ["@import"],
+            // `@import "a.css"`, `@import url("a.css")` and `url(a.png)` are three spellings of one
+            // thing, and each gets its own form. The middle one is a form and not a rule about
+            // forms nesting inside each other: the longest opener is tried first, so it is read
+            // before the `@import` it begins with, and no other language pays for CSS's shape.
+            ImportForms =
+            [
+                new ImportForm("@import url(", ImportShape.Path) { Closer = ")" },
+                new ImportForm("@import", ImportShape.Path),
+                new ImportForm("url(", ImportShape.Path) { Anywhere = true, Closer = ")" }
+            ],
             CaseInsensitiveKeywords = true
         },
         // `.sql` alone is SQL. PL/SQL is told apart by the package and program-unit extensions, which
@@ -329,6 +415,18 @@ public static class Languages
     ///     dot is tolerated so a caller quoting a file name does not have to strip it.
     /// </summary>
     public static string? Of(string extension) => Default.For(extension).Language;
+
+    /// <summary>
+    ///     The extension of a path as <c>files.extension</c> stores it: lowercase, without the dot.
+    ///     Written once because the build derives it when it writes the column and every read derives
+    ///     it again from the path, and two spellings of one rule are a rule that drifts — the same
+    ///     reason <see cref="ProjectPaths" /> both parses and formats a qualified path.
+    /// </summary>
+    public static string ExtensionOf(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+    }
 
     /// <summary>
     ///     What to call this extension in an answer: its language where one is known, the extension

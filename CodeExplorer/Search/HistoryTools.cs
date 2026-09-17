@@ -458,24 +458,16 @@ internal sealed class HistoryTools(
     private static async Task<LocatedFile> LocateAsync(IndexReader index, string path,
         CancellationToken cancellationToken)
     {
+        // The rule and the refusal sentences are the reader's, because `read_file` and `imports` ask
+        // the same question and an agent that got the path wrong must be told the same thing
+        // whichever tool it asked. What stays here is the two pieces this file's callers need beside
+        // the row: which repository it landed in, and the path inside it.
+        var (file, explanation) = await index.LocateAsync(path, false, cancellationToken);
+        if (file is null) return new LocatedFile(explanation);
+
         var paths = await index.PathsAsync(cancellationToken);
-        var qualified = paths.Parse(path);
-        if (qualified is null || qualified.PathInRepository.Length == 0)
-            return new LocatedFile(
-                $"'{path}' names no file: {await index.PathRuleAsync(cancellationToken)} Write it like `{paths.Example()}`.");
-
-        var repository = await index.FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
-        if (repository is null)
-            return new LocatedFile(
-                $"{await index.UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these.");
-
-        qualified = qualified with { RepositorySlug = repository.Slug };
-        string spelled = paths.Format(qualified);
-        var file = await index.FindFileAsync(spelled, cancellationToken);
-        return file is null
-            ? new LocatedFile($"No indexed file '{spelled}' in project '{index.ProjectSlug}'. "
-                              + "Use glob or list_tree to locate it.")
-            : new LocatedFile(null, file, repository.Slug, qualified.PathInRepository, spelled);
+        return new LocatedFile(null, file, file.RepositorySlug,
+            paths.Parse(file.QualifiedPath)!.PathInRepository, file.QualifiedPath);
     }
 
     /// <summary>A resolved file, or the sentence to answer with instead. Never both.</summary>
