@@ -81,7 +81,7 @@ public sealed record ExtensionListing(IndexedRepository? Repository, IReadOnlyLi
 public sealed class FileQueries(ProjectIndexes indexes)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell a listing apart from a scan.</summary>
-    public const string Engine = "index listing";
+    private const string Engine = "index listing";
 
     /// <summary>
     ///     The most lines one window may reach, whoever asks. A file view scrolls and asks for the whole
@@ -89,7 +89,7 @@ public sealed class FileQueries(ProjectIndexes indexes)
     ///     bounds this well below it. A tool that protects an agent's context sets a lower ceiling of its
     ///     own; this one protects the server.
     /// </summary>
-    public const int MaxLinesPerWindow = 100_000;
+    private const int MaxLinesPerWindow = 100_000;
 
     /// <summary>
     ///     The windows asked for, each answered on its own, over one open of the index. The one refusal
