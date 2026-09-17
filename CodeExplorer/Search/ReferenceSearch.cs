@@ -266,33 +266,42 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         if (files.Count == 0) return positions;
 
         // The ids and line numbers came from the query above and never from the request, so inlining
-        // them is safe. One bound per file rather than one for all of them: a file whose last match is
-        // on line 12 must not be read to the end because another file's match is on line 4000.
-        string scope = string.Join(" OR ", files.Select(file => string.Create(CultureInfo.InvariantCulture,
-            $"(file_id = {file.Key} AND line_number <= {file.Value.Through})")));
+        // them is safe. A join against the bounds rather than a chain of ORed ranges, which DuckDB
+        // has to evaluate per row of `lines` where this is a hash probe; and one bound per file
+        // rather than one for all of them, so that a file whose last match is on line 12 is not read
+        // to the end because another file's match is on line 4000.
+        string bounds = string.Join(", ", files.Select(file => string.Create(CultureInfo.InvariantCulture,
+            $"({file.Key}, {file.Value.Through})")));
         using var command = connection.Query($"""
-                                                 SELECT file_id, line_number, content FROM lines
-                                                 WHERE {scope}
-                                                 ORDER BY file_id, line_number
+                                                 SELECT l.file_id, l.line_number, l.content
+                                                 FROM lines l JOIN (VALUES {bounds}) AS b(file_id, through)
+                                                   ON l.file_id = b.file_id AND l.line_number <= b.through
+                                                 ORDER BY l.file_id, l.line_number
                                                  """, []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
         long walking = -1;
+        // Seeded from any file so the walk's state is definitely assigned; the first row replaces it,
+        // because no file id is -1.
+        var scanning = files.Values.First();
         FilePosition position = FilePosition.Unknown;
         while (await reader.ReadAsync(cancellationToken))
         {
             long fileId = reader.Int64("file_id");
-            var file = files[fileId];
             // The rows arrive grouped by file and in line order, so a new file id is the top of one.
             if (fileId != walking)
             {
                 walking = fileId;
-                position = file.Analyzer.Start;
+                scanning = files[fileId];
+                position = scanning.Analyzer.Start;
             }
 
             int lineNumber = reader.Int32("line_number");
-            if (file.Wanted.Contains(lineNumber)) positions[(fileId, lineNumber)] = position;
-            position = file.Analyzer.After(position, reader.Text("content"));
+            if (scanning.Wanted.Contains(lineNumber)) positions[(fileId, lineNumber)] = position;
+            // Nothing reads the position after the last line asked for, and on a minified bundle that
+            // line is the whole file.
+            if (lineNumber < scanning.Through)
+                position = scanning.Analyzer.After(position, reader.Text("content"));
         }
 
         return positions;
