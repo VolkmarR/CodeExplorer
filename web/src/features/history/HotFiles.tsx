@@ -1,4 +1,5 @@
-import { Link } from '@tanstack/react-router'
+import { DiffStat } from '@/components/DiffStat'
+import { FilePathLink } from '@/components/FilePathLink'
 import type { HotFiles as Ranking } from '@/lib/api'
 import { formatCount, formatDate } from '@/lib/format'
 
@@ -17,49 +18,39 @@ export function HotFiles({ project, ranking }: { project: string; ranking: Ranki
 
   return (
     <section className="rounded-lg border bg-card px-4 py-3">
-      <h2 className="text-sm font-medium">
-        Most changed{' '}
-        <span className="font-normal text-muted-foreground">
-          {ranking.since && ranking.until
-            ? `on this page, ${formatDate(ranking.since)} to ${formatDate(ranking.until)}`
-            : 'on this page'}
-        </span>
-      </h2>
-      <ul className="mt-2 space-y-0.5 font-mono text-xs empty:hidden">
-        {ranking.files.map((file) => (
-          <li key={file.qualifiedPath} className="flex items-baseline gap-3">
-            <span className="w-20 shrink-0 tabular-nums text-muted-foreground">
-              {formatCount(file.commits)}&times;
+      {ranking.files.length > 0 ? (
+        <>
+          <h2 className="text-sm font-medium">
+            Most changed{' '}
+            <span className="font-normal text-muted-foreground">
+              {/* Both dates or neither: the server sends the span of the page, and a page with no
+                  commits has none — which is the branch above, not a half-filled window here. */}
+              {ranking.since && ranking.until
+                ? `on this page, ${formatDate(ranking.since)} to ${formatDate(ranking.until)}`
+                : 'on this page'}
             </span>
-            <span className="w-24 shrink-0 tabular-nums">
-              <span className="text-emerald-600 dark:text-emerald-400">
-                +{formatCount(file.added)}
-              </span>{' '}
-              <span className="text-rose-600 dark:text-rose-400">
-                &minus;{formatCount(file.deleted)}
-              </span>
-            </span>
-            {/* A path still at HEAD opens the file; one a later commit deleted or moved is named and
-                not linked, the same way the files of a commit are. */}
-            {file.atHead ? (
-              <Link
-                to="/projects/$project/file"
-                params={{ project }}
-                search={{ path: file.qualifiedPath }}
-                className="truncate hover:text-primary hover:underline"
-              >
-                {file.qualifiedPath}
-              </Link>
-            ) : (
-              <span className="truncate text-muted-foreground line-through decoration-muted-foreground/50">
-                {file.qualifiedPath}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+          </h2>
+          <ul className="mt-2 space-y-0.5 font-mono text-xs">
+            {ranking.files.map((file) => (
+              <li key={file.qualifiedPath} className="flex items-baseline gap-3">
+                <span className="w-20 shrink-0 tabular-nums text-muted-foreground">
+                  {formatCount(file.commits)}&times;
+                </span>
+                <span className="w-24 shrink-0 tabular-nums">
+                  <DiffStat added={file.added} deleted={file.deleted} />
+                </span>
+                <FilePathLink
+                  project={project}
+                  qualifiedPath={file.qualifiedPath}
+                  atHead={file.atHead}
+                />
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       {ranking.withoutHistory.length > 0 ? (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground not-first:mt-2">
           No history was imported for {ranking.withoutHistory.join(', ')}, so nothing from{' '}
           {ranking.withoutHistory.length === 1 ? 'it' : 'those'} can appear here however much{' '}
           {ranking.withoutHistory.length === 1 ? 'it' : 'they'} changed.

@@ -247,23 +247,18 @@ internal static class SearchEndpoints
         pageSize = Math.Clamp(pageSize, 1, MaxCommitPage);
         page = Math.Max(1, page);
         string? scope = index.Repository?.Slug;
-        // Which repositories the ranking cannot speak for, read whether or not there is a ranking: the
-        // empty panel is where a reader is most likely to conclude that nothing changed. A scoped
-        // request raises no such question, and neither does a project of one repository.
-        var counts = scope is null
-            ? await index.CommitCountsAsync(cancellationToken)
-            : [];
-        var withoutHistory = counts.Count < 2
-            ? []
-            : counts.Where(c => c.Commits == 0).Select(c => c.Slug).ToList();
+        // Read whether or not there is a ranking: the empty panel is where a reader is most likely to
+        // conclude that nothing changed. Which repositories these are is the reader's rule, not this
+        // route's — the tool reply draws the same answer from the same place.
+        var coverage = await index.HistoryCoverageAsync(scope, cancellationToken);
 
         var window = await index.CommitPageWindowAsync(scope, pageSize, (page - 1) * pageSize, cancellationToken);
-        if (window is null) return Results.Ok(new HotFilesResponse(null, null, [], withoutHistory));
+        if (window is null) return Results.Ok(new HotFilesResponse(null, null, [], coverage.Without));
 
         var ranked = await index.ChurnAsync(window, scope, null, HotFilesShown, cancellationToken);
         return Results.Ok(new HotFilesResponse(window.Since, window.Until,
             ranked.Select(f => new HotFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits, f.Added,
-                f.Deleted)).ToList(), withoutHistory));
+                f.Deleted)).ToList(), coverage.Without));
     }
 
     private static async Task<IResult> CommitFilesAsync(ProjectIndexes indexes, string project, string sha,

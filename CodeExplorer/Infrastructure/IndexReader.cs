@@ -101,6 +101,19 @@ public sealed record ChurnedFile(
     long Added,
     long Deleted);
 
+/// <summary>
+///     Which repositories of a project an answer drawn from history can speak for, and which it
+///     cannot. Both sides, because "says which is which" is the point: naming only the repositories
+///     that were not walked leaves a reader to infer the rest from a ranking, which is the inference
+///     the caveat exists to prevent (CONTEXT.md, History).
+///     <see cref="NothingToSay" /> where the question does not arise — a project of one repository, an
+///     answer already scoped to one, or every repository walked — so a caller tests one thing.
+/// </summary>
+public sealed record HistoryCoverage(IReadOnlyList<string> With, IReadOnlyList<string> Without)
+{
+    public static readonly HistoryCoverage NothingToSay = new([], []);
+}
+
 /// <summary>A run of consecutive lines sharing one attribution (CONTEXT.md, Attribution).</summary>
 public sealed record AttributedLines(int StartLine, int EndLine, AttributedBy? By);
 
@@ -575,27 +588,45 @@ public sealed class IndexReader : IDisposable
     }
 
     /// <summary>
-    ///     How many commits are recorded for each repository of the project, in build order. For an
-    ///     answer that has to say which repositories it can speak for: a ranking over the project
-    ///     silently omits a repository whose walk found nothing, and that reads as a complete picture.
-    ///     Its own query rather than <see cref="RepositoriesAsync" />'s rows, whose <c>Commits</c> is
-    ///     filled only on the <see cref="StatusAsync" /> path and is zero on this one.
+    ///     The repositories of this project that have no imported history, in build order — the one
+    ///     place the rule lives, because an answer covering half a project reads as covering all of it
+    ///     and every surface that ranks over history has to say so in its own words (CONTEXT.md,
+    ///     History).
+    ///     Empty where the question does not arise, which is the caller's answer and not its judgement:
+    ///     a call already scoped to one repository is not speaking for the others, and a project of one
+    ///     repository has nothing to contrast with.
+    ///     Not <see cref="RepositoriesAsync" />'s rows, whose <c>Commits</c> is filled only on the
+    ///     <see cref="StatusAsync" /> path and is silently zero on this one — reading it here would
+    ///     report every repository as historyless.
     /// </summary>
-    public async Task<IReadOnlyList<(string Slug, long Commits)>> CommitCountsAsync(
+    /// <param name="scopedTo">The repository the caller narrowed to, or null for the whole project.</param>
+    /// <param name="cancellationToken">Threaded through to the command.</param>
+    public async Task<HistoryCoverage> HistoryCoverageAsync(string? scopedTo,
         CancellationToken cancellationToken)
     {
-        // Left-joined on the slug, not the id, because that is what commits records (ADR-0007), and
-        // left so that a repository with no history is a zero rather than a missing row.
+        if (scopedTo is not null) return HistoryCoverage.NothingToSay;
+
+        // EXISTS rather than a count: the question is whether a repository was walked at all, and a
+        // semi-join stops at the first commit where count(*) reads every one of them. Matched on the
+        // slug, not the id, because that is what commits records (ADR-0007).
         using var command = Connection.Query("""
-                                             SELECT r.slug, count(c.commit_id)::BIGINT AS commits
-                                             FROM repositories r LEFT JOIN commits c ON c.repo_slug = r.slug
-                                             GROUP BY r.repo_id, r.slug
+                                             SELECT r.slug,
+                                                    EXISTS (SELECT 1 FROM commits c WHERE c.repo_slug = r.slug)
+                                                        AS walked
+                                             FROM repositories r
                                              ORDER BY r.repo_id
                                              """, []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var counts = new List<(string, long)>();
-        while (await reader.ReadAsync(cancellationToken)) counts.Add((reader.Text("slug"), reader.Int64("commits")));
-        return counts;
+        var all = new List<(string Slug, bool Walked)>();
+        while (await reader.ReadAsync(cancellationToken)) all.Add((reader.Text("slug"), reader.Flag("walked")));
+        // One repository cannot be contrasted with another, so there is nothing to say about it here;
+        // that a project has no history at all is a different sentence, said before this is reached.
+        if (all.Count < 2) return HistoryCoverage.NothingToSay;
+
+        var without = all.Where(r => !r.Walked).Select(r => r.Slug).ToList();
+        return without.Count == 0
+            ? HistoryCoverage.NothingToSay
+            : new HistoryCoverage(all.Where(r => r.Walked).Select(r => r.Slug).ToList(), without);
     }
 
     /// <summary>
@@ -682,46 +713,49 @@ public sealed class IndexReader : IDisposable
             parameters.Add(new DuckDBParameter("d", directoryInRepository.TrimEnd('/') + "/*"));
         }
 
+        // Ranked first, and only then asked which of the survivors still exist. Resolving `at_head`
+        // inside the aggregate would join `files` — the largest table here after `lines` — against
+        // every path in the window, to answer a question about the twenty rows that outlive the LIMIT.
+        // The semi-join below is paid per returned row instead of per window row.
         using var command = Connection.Query($"""
-                                              SELECT c.repo_slug, cf.path,
-                                                     count(*)::INTEGER AS commits,
-                                                     -- Cast for the reason ChangeLogAsync casts: DuckDB
-                                                     -- widens sum of an INTEGER to HUGEINT, which the
-                                                     -- driver hands back as a BigInteger.
-                                                     sum(cf.added)::BIGINT AS added,
-                                                     sum(cf.deleted)::BIGINT AS deleted,
-                                                     -- A build writes at most one files row per
-                                                     -- repository and path, so any_value picks the only
-                                                     -- one there is; null says the path is no longer at
-                                                     -- HEAD. It is an aggregate because the column is
-                                                     -- not in the GROUP BY and cannot be: two commits
-                                                     -- touching the same path must stay one row.
-                                                     any_value(f.qualified_path) AS qualified_path
-                                              FROM commit_files cf
-                                              JOIN commits c USING (commit_id)
-                                              LEFT JOIN repositories r ON r.slug = c.repo_slug
-                                              LEFT JOIN files f ON f.repo_id = r.repo_id AND f.path = cf.path
-                                              WHERE {string.Join(" AND ", conditions)}
-                                              GROUP BY c.repo_slug, cf.path
-                                              -- Spelled out rather than ordered by the aliases above:
-                                              -- DuckDB resolves a bare name in ORDER BY against the
-                                              -- input columns first, so `added` binds to
-                                              -- commit_files.added and the statement fails to bind.
-                                              ORDER BY count(*) DESC, sum(cf.added) + sum(cf.deleted) DESC, cf.path
-                                              LIMIT {limit}
+                                              WITH ranked AS (
+                                                  SELECT c.repo_slug, cf.path,
+                                                         count(*)::INTEGER AS commits,
+                                                         -- Cast for the reason ChangeLogAsync casts:
+                                                         -- DuckDB widens sum of an INTEGER to HUGEINT,
+                                                         -- which the driver hands back as a BigInteger.
+                                                         sum(cf.added)::BIGINT AS added,
+                                                         sum(cf.deleted)::BIGINT AS deleted
+                                                  FROM commit_files cf
+                                                  JOIN commits c USING (commit_id)
+                                                  WHERE {string.Join(" AND ", conditions)}
+                                                  GROUP BY c.repo_slug, cf.path
+                                                  -- Spelled out rather than ordered by the aliases:
+                                                  -- DuckDB resolves a bare name in ORDER BY against the
+                                                  -- input columns first, so `added` would bind to
+                                                  -- commit_files.added and the statement fail to bind.
+                                                  ORDER BY count(*) DESC,
+                                                           sum(cf.added) + sum(cf.deleted) DESC, cf.path
+                                                  LIMIT {limit})
+                                              SELECT ranked.*,
+                                                     EXISTS (SELECT 1
+                                                             FROM files f JOIN repositories r USING (repo_id)
+                                                             WHERE r.slug = ranked.repo_slug
+                                                               AND f.path = ranked.path) AS at_head
+                                              FROM ranked
+                                              ORDER BY commits DESC, added + deleted DESC, path
                                               """, parameters);
         var paths = await PathsAsync(cancellationToken);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var files = new List<ChurnedFile>();
         while (await reader.ReadAsync(cancellationToken))
         {
-            string slug = reader.Text("repo_slug");
-            // Spelled from the repository and the path rather than taken from the joined files row,
-            // which is null exactly for the paths that are no longer at HEAD — those are ranked and
+            // Spelled from the repository and the path rather than read off a files row, because the
+            // paths that have none are exactly the ones no longer at HEAD — and those are ranked and
             // must still be named.
-            files.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug,
-                !reader.IsNull("qualified_path"), reader.Int32("commits"), reader.Int64("added"),
-                reader.Int64("deleted")));
+            string slug = reader.Text("repo_slug");
+            files.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug, reader.Flag("at_head"),
+                reader.Int32("commits"), reader.Int64("added"), reader.Int64("deleted")));
         }
 
         return files;

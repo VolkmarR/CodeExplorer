@@ -339,6 +339,14 @@ const http = ky.create({
   timeout: 30_000,
 })
 
+/**
+ * Which page of history, and of which repository. Omitted rather than sent empty when there is no
+ * repository, because the server reads a blank `repository` as a request to scope to one named "".
+ */
+function historyPage(page: number, repository?: string): Record<string, string> {
+  return repository ? { page: String(page), repository } : { page: String(page) }
+}
+
 export const api = {
   /** Anonymous, and mapped whether or not there is a tenant: it is what says which of those it is. */
   auth: () => http.get('auth/me').json<AuthStatus>(),
@@ -367,19 +375,18 @@ export const api = {
   blame: (project: string, path: string) =>
     http.get(`projects/${project}/file/blame`, { searchParams: { path } }).json<Blame>(),
 
-  commits: (project: string, page: number, repository?: string) => {
-    const searchParams: Record<string, string> = { page: String(page) }
-    if (repository) searchParams.repository = repository
-    return http.get(`projects/${project}/commits`, { searchParams }).json<CommitList>()
-  },
+  commits: (project: string, page: number, repository?: string) =>
+    http
+      .get(`projects/${project}/commits`, { searchParams: historyPage(page, repository) })
+      .json<CommitList>(),
 
-  // The same page arguments the commit list is asked with, and no dates: the server derives the
-  // window from that page, so the panel cannot end up describing a different set of commits.
-  hotFiles: (project: string, page: number, repository?: string) => {
-    const searchParams: Record<string, string> = { page: String(page) }
-    if (repository) searchParams.repository = repository
-    return http.get(`projects/${project}/hot-files`, { searchParams }).json<HotFiles>()
-  },
+  // Built from the same arguments as the commit list and carrying no dates: the server derives the
+  // window from that page, so the panel cannot end up describing a different set of commits. The two
+  // therefore have to be asked for identically, which is what sharing the builder enforces.
+  hotFiles: (project: string, page: number, repository?: string) =>
+    http
+      .get(`projects/${project}/hot-files`, { searchParams: historyPage(page, repository) })
+      .json<HotFiles>(),
 
   commitFiles: (project: string, sha: string) =>
     http.get(`projects/${project}/commits/${sha}/files`).json<CommitFiles>(),
