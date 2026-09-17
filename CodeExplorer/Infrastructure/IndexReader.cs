@@ -323,6 +323,11 @@ public sealed class IndexReader : IDisposable
             return directory is null ? refused(problem!) : await read(index, directory, token);
         }, refused, cancellationToken);
 
+    /// <summary>The same for a caller whose answer is an <see cref="Outcome" />.</summary>
+    public static Task<Outcome> OverDirectoryAsync(ProjectIndexes indexes, string projectSlug, string? path,
+        Func<IndexReader, IndexedDirectory, CancellationToken, Task<Outcome>> read, CancellationToken cancellationToken) =>
+        OverDirectoryAsync(indexes, projectSlug, path, read, problem => problem, cancellationToken);
+
     /// <summary>
     ///     What the index holds, for a reader describing the project rather than reading from it. Null
     ///     when there is no index, and null when the file exists but has no <c>index_info</c> row: the
@@ -465,13 +470,14 @@ public sealed class IndexReader : IDisposable
         string explanation = $"No indexed file '{spelled}' in repository '{repository.Slug}' of project "
                              + $"'{ProjectSlug}'. ";
         if (!suggestions)
-            return (null, new Problem(explanation + "Use glob or list_tree to locate it."));
+            return (null, new Problem(explanation + "Use glob or list_tree to locate it.", ProblemKind.Missing));
 
         string name = qualified.PathInRepository[(qualified.PathInRepository.LastIndexOf('/') + 1)..];
         var similar = await FilesNamedAsync(name, MaxSuggestions, cancellationToken);
         return (null, new Problem(explanation + (similar.Count > 0
-            ? $"Did you mean {string.Join(" or ", similar)}? Otherwise use glob or list_tree to locate it."
-            : "Use glob or list_tree to locate it; the path is case-insensitive here but must otherwise match the committed path.")));
+                ? $"Did you mean {string.Join(" or ", similar)}? Otherwise use glob or list_tree to locate it."
+                : "Use glob or list_tree to locate it; the path is case-insensitive here but must otherwise match the committed path."),
+            ProblemKind.Missing));
     }
 
     /// <summary>
@@ -601,26 +607,6 @@ public sealed class IndexReader : IDisposable
                         reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
                         reader.Text("subject"))));
         return runs;
-    }
-
-    /// <summary>
-    ///     One line saying which commits a file was first and last changed by, ready to print, or a
-    ///     sentence saying there is none. A file whose history is absent and one that was never changed
-    ///     must not read alike, so neither is an empty string.
-    /// </summary>
-    public async Task<string> FileSpanAsync(long fileId, CancellationToken cancellationToken)
-    {
-        var span = await FileCommitsAsync(fileId, cancellationToken);
-        if (span.Last is null) return "  history: none recorded for this file\n";
-
-        // Named "since"/"last changed" rather than "created"/"author": history begins where the file was
-        // last renamed, so the first commit recorded for a path is often a move and not its origin.
-        return string.Create(CultureInfo.InvariantCulture,
-            $"  history: since {Short(span.First)}; last changed {Short(span.Last)}\n");
-
-        static string Short(AttributedBy? by) => by is null
-            ? "unknown"
-            : string.Create(CultureInfo.InvariantCulture, $"{by.Sha[..8]} {by.AuthoredAt:yyyy-MM-dd} {by.AuthorName}");
     }
 
     /// <summary>
@@ -1114,18 +1100,6 @@ public sealed class IndexReader : IDisposable
 
         return entries;
     }
-
-    /// <summary>
-    ///     Extensions in the project, or in <see cref="Repository" /> when one was resolved, most files
-    ///     first. What an extension counts as is <see cref="IndexQueries" />'s, so a build grouping the
-    ///     same numbers into languages cannot come to a different total; the order is this tool's, which
-    ///     lists extensions rather than ranking languages.
-    /// </summary>
-    public async Task<IReadOnlyList<ExtensionCount>> ExtensionsAsync(CancellationToken cancellationToken) =>
-        (await IndexQueries.ExtensionCountsAsync(Connection, Repository?.Slug, cancellationToken))
-        .OrderByDescending(e => e.Files)
-        .ThenBy(e => e.Extension, StringComparer.Ordinal)
-        .ToList();
 
     /// <summary>
     ///     The root of a project: its repositories, which are what qualified paths begin with. The file

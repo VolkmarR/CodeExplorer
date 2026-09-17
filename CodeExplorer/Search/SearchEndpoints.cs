@@ -197,22 +197,27 @@ internal static class SearchEndpoints
                 Project project, string q, GrepSearch search, CancellationToken ct,
                 bool regex = false, bool caseSensitive = false, string? path = null,
                 string? extension = null, int page = 1, int pageSize = 20) =>
-            Answer(await search.SearchAsync(project.Slug,
+            Answer<GrepResult>(await search.SearchAsync(project.Slug,
                 new GrepRequest(q, regex, caseSensitive, path, Extension: extension, Page: page,
-                    PageSize: pageSize), ct)));
+                    PageSize: pageSize), ct), Results.Ok));
 
         project.MapGet("/files",
-            async (Project project, ProjectIndexes indexes, CancellationToken ct, string glob = "*",
+            async (Project project, FileQueries files, CancellationToken ct, string glob = "*",
                     string? repository = null) =>
-                await ListAsync(indexes, project.Slug, glob, repository, ct));
+                Answer<GlobListing>(
+                    await files.GlobAsync(project.Slug, new GlobRequest(glob, repository, IndexReader.MaxFiles), ct),
+                    FileList));
 
         project.MapGet("/tree",
-            async (Project project, ProjectIndexes indexes, CancellationToken ct, string path = "") =>
-                await TreeAsync(indexes, project.Slug, path, ct));
+            async (Project project, FileQueries files, CancellationToken ct, string path = "") =>
+                Answer<TreeListing>(await files.TreeAsync(project.Slug, new TreeRequest(path, 1), ct), Tree));
 
+        // The whole file rather than a window, because the view scrolls; the query module's ceiling is
+        // what bounds it. No suggestions on a miss: the path came from a link this server printed.
         project.MapGet("/file",
-            async (Project project, string path, ProjectIndexes indexes, CancellationToken ct) =>
-                await ReadAsync(indexes, project.Slug, path, ct));
+            async (Project project, string path, FileQueries files, CancellationToken ct) =>
+                Answer<ReadResult>(await files.ReadAsync(project.Slug,
+                    new ReadRequest([new FileWindow(path, 1, int.MaxValue)], true, false), ct), FileContent));
 
         // Its own route rather than a flag on /file: the runs are the size of the file, and the view
         // renders the code without them and fills the gutter in when they arrive.
@@ -226,11 +231,11 @@ internal static class SearchEndpoints
         // than either answer is.
         project.MapGet("/file/imports",
             async (Project project, string path, ImportGraph graph, CancellationToken ct) =>
-                Answer(await graph.ImportsAsync(project.Slug, path, ct)));
+                Answer<ImportsResult>(await graph.ImportsAsync(project.Slug, path, ct), Imports));
 
         project.MapGet("/file/dependents",
             async (Project project, string path, ImportGraph graph, CancellationToken ct) =>
-                Answer(await graph.DependentsAsync(project.Slug, path, ct)));
+                Answer<DependentsResult>(await graph.DependentsAsync(project.Slug, path, ct), Dependents));
 
         // The change log, paged. The files a commit touched are their own route, like blame is: a
         // page of fifty commits touching a few hundred paths each would be mostly paths nobody opens.
@@ -324,60 +329,51 @@ internal static class SearchEndpoints
                     .ToList()));
         }, Status, cancellationToken);
 
-    private static Task<IResult> ListAsync(
-        ProjectIndexes indexes, string project, string glob, string? repository,
-        CancellationToken cancellationToken) =>
-        IndexReader.OverIndexAsync(indexes, project, repository, async (index, token) =>
-        {
-            var result = await index.GlobAsync(glob, IndexReader.MaxFiles, token);
-            return Results.Ok(new FileListResponse(result.Total,
-                result.Files
-                    .Select(f => new FileListEntry(f.QualifiedPath, f.RepositorySlug, f.LineCount, f.SizeBytes,
-                        f.SkipReason))
-                    .ToList()));
-        }, Status, cancellationToken);
+    private static IResult FileList(GlobListing listing) =>
+        Results.Ok(new FileListResponse(listing.Total,
+            listing.Files
+                .Select(f => new FileListEntry(f.QualifiedPath, f.RepositorySlug, f.LineCount, f.SizeBytes,
+                    f.SkipReason))
+                .ToList()));
 
     /// <summary>
-    ///     A level of the tree. An unknown directory answers with an empty level rather than an error:
-    ///     the view has a breadcrumb out of it. A path whose first segment names no repository is a
-    ///     400 with the repositories that exist, the same answer every other reader gives that slug — a
-    ///     stale link is told what changed rather than shown an empty tree.
+    ///     A level of the tree. A path that names no directory is the query module's problem and a 400
+    ///     here, like a path whose first segment names no repository: a stale link is told what changed
+    ///     rather than shown an empty tree, and the view draws the same "nothing here" for both.
     /// </summary>
-    private static Task<IResult> TreeAsync(
-        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken) =>
-        IndexReader.OverDirectoryAsync(indexes, project, path, async (index, directory, token) =>
-        {
-            // The project level is the list of repositories, which a single-repository project does
-            // not have: there it is that repository's own top level (ADR-0006).
-            var paths = await index.PathsAsync(token);
-            var location = directory.Repository is null
-                ? paths.SingleRepository ? new QualifiedPath(paths.RepositorySlug, "") : null
-                : new QualifiedPath(directory.Repository.Slug, directory.PathInRepository);
+    private static IResult Tree(TreeListing listing) =>
+        Results.Ok(new TreeResponse(listing.Directory.QualifiedPath, listing.RepositoryLevel,
+            listing.Entries
+                .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
+                    e.SkipReason))
+                .ToList()));
 
-            var entries = await index.TreeAsync(location, 1, token);
-            return Results.Ok(new TreeResponse(directory.QualifiedPath, location is null,
-                entries
-                    .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
-                        e.SkipReason))
-                    .ToList()));
-        }, Status, cancellationToken);
+    /// <summary>
+    ///     The one file the view asked for. A read answers per entry, so the miss is on the entry and not
+    ///     on the outcome; with one entry it is the page's answer.
+    /// </summary>
+    private static IResult FileContent(ReadResult result)
+    {
+        var read = result.Files[0];
+        if (read.File is not { } file) return Status(read.Problem!);
+        return Results.Ok(new FileContentResponse(file.QualifiedPath, file.RepositorySlug, file.LineCount,
+            file.SizeBytes, file.SkipReason, string.Join('\n', read.Lines), Commit(read.History?.First),
+            Commit(read.History?.Last)));
+    }
 
-    private static Task<IResult> ReadAsync(
-        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken) =>
-        IndexReader.OverIndexAsync(indexes, project, null, async (index, token) =>
-        {
-            if (await index.FindFileAsync(path, token) is not { } file)
-                return Results.NotFound(new { error = $"No file '{path}' in project '{project}'." });
+    private static IResult Imports(ImportsResult result) =>
+        Results.Ok(new FileImportsResponse(result.QualifiedPath, result.LanguageName,
+            result.Profiled, result.HasImports, result.Module, result.Capped,
+            result.Imports
+                .Select(i => new ImportEdgeResponse(i.Name, i.LineNumber, i.TargetPath, i.Unresolved))
+                .ToList()));
 
-            var lines = file.SkipReason is null
-                ? await index.LinesAsync(file.FileId, 1, MaxLinesPerFileView, token)
-                : [];
-            // Carried on the file read and not fetched separately: they are columns on the row that read
-            // already has in hand, so a second request would be one for data this one was holding.
-            var span = await index.FileCommitsAsync(file.FileId, token);
-            return Results.Ok(new FileContentResponse(file.QualifiedPath, file.RepositorySlug, file.LineCount,
-                file.SizeBytes, file.SkipReason, string.Join('\n', lines), Commit(span.First), Commit(span.Last)));
-        }, Status, cancellationToken);
+    private static IResult Dependents(DependentsResult result) =>
+        Results.Ok(new FileDependentsResponse(result.QualifiedPath, result.Module,
+            result.ShareTheModule, result.Unplaced, result.Capped,
+            result.Dependents
+                .Select(d => new DependentResponse(d.QualifiedPath, d.Name, d.LineNumber))
+                .ToList()));
 
     /// <summary>
     ///     A file's attribution as runs. A file with no history answers with no runs rather than a
@@ -397,39 +393,24 @@ internal static class SearchEndpoints
         }, Status, cancellationToken);
 
     /// <summary>
-    ///     A search outcome as JSON. A problem is a 400 whichever kind it is, where the browsing routes
-    ///     split 404 from 400: these routes are reached with a file already open or a query already
-    ///     typed, so a refusal is a page gone stale rather than a state the view draws differently, and
-    ///     the prose is the whole of what it shows. Written once because three routes answer with the
-    ///     same outcome type, and three copies of the mapping would agree only until one was edited.
+    ///     An outcome as JSON: a problem becomes the status its kind says, and a result the shape the
+    ///     route owns. The problem-to-status rule is written once here; each route supplies its own
+    ///     mapping, because that is what a reader of the route wants to see beside it. The cast is safe
+    ///     while every query module answers with its one result type or a problem, and throws rather
+    ///     than lies if one ever answers with something else.
     /// </summary>
-    private static IResult Answer(Outcome outcome) => outcome switch
-    {
-        GrepResult result => Results.Ok(result),
-        ImportsResult result => Results.Ok(new FileImportsResponse(result.QualifiedPath, result.LanguageName,
-            result.Profiled, result.HasImports, result.Module, result.Capped,
-            result.Imports
-                .Select(i => new ImportEdgeResponse(i.Name, i.LineNumber, i.TargetPath, i.Unresolved))
-                .ToList())),
-        DependentsResult result => Results.Ok(new FileDependentsResponse(result.QualifiedPath, result.Module,
-            result.ShareTheModule, result.Unplaced, result.Capped,
-            result.Dependents
-                .Select(d => new DependentResponse(d.QualifiedPath, d.Name, d.LineNumber))
-                .ToList())),
-        Problem problem => Status(problem),
-        // Unreachable while these are the outcomes grep and the graph answer with, and a 500 rather
-        // than a cast that throws if another is ever added.
-        _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
-    };
+    private static IResult Answer<T>(Outcome outcome, Func<T, IResult> answer) where T : Outcome =>
+        outcome is Problem problem ? Status(problem) : answer((T)outcome);
 
     private static FileCommitResponse? Commit(AttributedBy? by) =>
         by is null ? null : new FileCommitResponse(by.Sha, by.AuthorName, by.AuthoredAt, by.Subject);
 
     /// <summary>
-    ///     No index is a 404 — the view renders it as the starting state a new project is in — and every
-    ///     other problem a 400, because the project is there and the request asked it something wrong.
+    ///     No index is a 404 — the view renders it as the starting state a new project is in — and so is
+    ///     a file or commit that is not there, because a link to it is a page that is not there. Every
+    ///     other problem is a 400: the project is there and the request asked it something wrong.
     /// </summary>
-    private static IResult Status(Problem problem) => problem.Kind == ProblemKind.NoIndex
+    private static IResult Status(Problem problem) => problem.Kind is ProblemKind.NoIndex or ProblemKind.Missing
         ? Results.NotFound(new { error = problem.Explanation })
         : Results.BadRequest(new { error = problem.Explanation });
 }
