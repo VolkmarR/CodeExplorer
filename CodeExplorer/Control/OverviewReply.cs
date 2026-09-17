@@ -92,14 +92,13 @@ internal static class OverviewReply
     private static void AppendChurn(StringBuilder text, IndexOverview overview)
     {
         var churn = overview.Churn;
-        if (churn is not { Since: { } since, Until: { } until })
+        if (churn.Window() is not { } window)
         {
             text.Append("\nMost changed\n  ").Append(NoHistory).Append('\n');
             return;
         }
 
-        text.Append(CultureInfo.InvariantCulture,
-            $"\nMost changed, {new HistoryWindow(since, until, churn.Days).Describe()}\n");
+        text.Append(CultureInfo.InvariantCulture, $"\nMost changed, {window.Describe()}\n");
         if (churn.Files.Count == 0)
         {
             text.Append(

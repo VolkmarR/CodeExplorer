@@ -290,7 +290,6 @@ export interface LanguageShare {
 /** One entry at the top level of a repository. `files` counts everything beneath a directory. */
 export interface OverviewEntry {
   qualifiedPath: string
-  repositorySlug: string
   isDirectory: boolean
   files: number
   lines: number
@@ -299,7 +298,6 @@ export interface OverviewEntry {
 
 export interface OverviewFile {
   qualifiedPath: string
-  repositorySlug: string
   lineCount: number
   sizeBytes: number
 }

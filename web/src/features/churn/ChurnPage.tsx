@@ -103,7 +103,7 @@ export function ChurnPage() {
       </div>
 
       {ranking.files.length > 0 ? (
-        <ChurnList project={project} ranking={ranking} />
+        <ChurnList project={project} files={ranking.files} />
       ) : (
         <p className="rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground">
           {ranking.since

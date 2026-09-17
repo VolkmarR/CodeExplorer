@@ -14,8 +14,9 @@ export function projectQuery(slug: string) {
 
 /**
  * What the build computed about the project as a whole. Its own query rather than a field on the one
- * above, because it is the read on this page that restores a durable copy — the header and the
- * repository table must not wait behind it — and because it goes stale on exactly the same event,
+ * above, because the overview is the page's heaviest read and the only one that would grow with the
+ * project — keeping it separate is what lets the header and the repository table be shown from a
+ * cached `projectQuery` while this one is still in flight. It goes stale on exactly the same event,
  * so it sits under the project's key and `invalidateProject` already covers it.
  */
 export function projectOverviewQuery(slug: string) {

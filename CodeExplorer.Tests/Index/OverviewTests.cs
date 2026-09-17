@@ -83,7 +83,7 @@ public sealed class OverviewTests : IDisposable
         shadow.Dispose();
         await _host.Indexes.SwapShadowAsync("beta", Ct);
 
-        Assert.False(overview.Churn.HasHistory);
+        Assert.Null(overview.Churn.Window());
         Assert.Empty(overview.Authors);
 
         await using var client = await _host.ConnectAsync("beta");

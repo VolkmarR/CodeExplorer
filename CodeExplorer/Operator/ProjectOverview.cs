@@ -47,7 +47,8 @@ public sealed record RepositoryCommit(string Sha, string AuthorName, DateTimeOff
 ///     and it is carried rather than collapsed to null so that the page says what an agent asking the
 ///     same question is told, instead of showing an operator a blank where there is an explanation.
 ///     It is its own response rather than a field on <see cref="ProjectDetail" /> because it is the
-///     one read on this page that restores a durable copy, and the page's header must not wait behind it.
+///     page's heaviest read and the only one that grows with the project, so the header and the
+///     repository table are not held behind it.
 /// </summary>
 public sealed record ProjectOverviewDetail(IndexOverview? Overview, string? Unavailable);
 
@@ -123,12 +124,7 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
         if (open is IndexOpen.Refused refused) return new ProjectOverviewDetail(null, refused.Explanation);
 
         using var index = ((IndexOpen.Opened)open).Reader;
-        var overview = await index.OverviewAsync(cancellationToken);
-        // A built index with no overview row is the one case neither side can explain from what it
-        // holds, so it is named here in the words the tool uses: the index came from another build.
-        return overview is null
-            ? new ProjectOverviewDetail(null, IndexReader.NoOverview(project.Slug))
-            : new ProjectOverviewDetail(overview, null);
+        return new ProjectOverviewDetail(await index.OverviewAsync(cancellationToken), null);
     }
 
     /// <summary>
