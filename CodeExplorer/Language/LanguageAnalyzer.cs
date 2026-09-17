@@ -32,13 +32,41 @@ public enum Lexical
 ///     Which side of the declaration/implementation split a declaration line sits on, for the
 ///     languages that have one: a Delphi unit's <c>interface</c> section against its
 ///     <c>implementation</c>, a PL/SQL package spec against its body.
-///     Languages without the split answer <see cref="Declaration" /> for everything, which is what
-///     they mean.
 /// </summary>
 public enum DeclarationRole
 {
     Declaration,
     Implementation
+}
+
+/// <summary>
+///     Which lines an analyser needs to see to answer <see cref="ILanguageAnalyzer.Declares" />, for
+///     the engine to narrow a file down with (CODING_STANDARDS: the candidate set is chosen by
+///     DuckDB, and .NET says what each candidate is).
+///     It is a question about which lines, not a regex, because a parser-backed analyser has no regex
+///     to give and would have to invent one to answer at all. <see cref="Matching" /> is what a text
+///     profile answers, <see cref="All" /> what a parser does, and <see cref="None" /> what a
+///     language with no declarations this can read — HTML, CSS — means, so the engine is not asked
+///     for lines that will all be thrown away.
+/// </summary>
+public abstract record CandidateLines
+{
+    private CandidateLines() { }
+
+    /// <summary>Every line of the file.</summary>
+    public static CandidateLines All { get; } = new EveryLine();
+
+    /// <summary>No line, because this language declares nothing this can read.</summary>
+    public static CandidateLines None { get; } = new NoLine();
+
+    /// <summary>The lines an RE2 pattern matches.</summary>
+    public static CandidateLines Matching(string pattern) => new Re2Pattern(pattern);
+
+    public sealed record EveryLine : CandidateLines;
+
+    public sealed record NoLine : CandidateLines;
+
+    public sealed record Re2Pattern(string Pattern) : CandidateLines;
 }
 
 /// <summary>
@@ -94,8 +122,12 @@ public readonly record struct Answer<T>(T Value, Evidence Evidence);
 /// <summary>
 ///     What one line declares. Either name may be null — a member declaration names no type and a
 ///     type declaration no member — and a line that reads as both fills both.
+///     <see cref="Role" /> is null where the analyser cannot tell which side of the split the line
+///     sits on. Null and not <see cref="DeclarationRole.Declaration" />: a Delphi
+///     <c>implementation</c> line labelled a declaration is a guess reported as a fact, which is the
+///     one failure this module is written to avoid.
 /// </summary>
-public sealed record Declared(string? Type, string? Member, DeclarationRole Role);
+public sealed record Declared(string? Type, string? Member, DeclarationRole? Role);
 
 /// <summary>
 ///     Everything this server knows about one language, as questions rather than as tables. This is
@@ -118,9 +150,6 @@ public interface ILanguageAnalyzer
     /// <summary>Extensions this claims, lowercase and without the dot, as <c>files.extension</c> stores them.</summary>
     IReadOnlyList<string> Extensions { get; }
 
-    /// <summary>How every answer from this analyser was reached.</summary>
-    Evidence Evidence { get; }
-
     /// <summary>
     ///     Whether this language splits a declaration from its implementation — a Delphi unit's
     ///     <c>interface</c> and <c>implementation</c> sections, a PL/SQL package spec and body. Where
@@ -129,14 +158,11 @@ public interface ILanguageAnalyzer
     bool SeparatesDeclarationFromImplementation { get; }
 
     /// <summary>
-    ///     The RE2 pattern that narrows a file to the lines <see cref="Declares" /> could place, for
-    ///     the engine to run (CODING_STANDARDS: the candidate set is chosen by DuckDB, and .NET says
-    ///     what each candidate is). It is the engine-side half of the declaration question and is
-    ///     published beside it so the two cannot drift: a line the engine skipped is a declaration
-    ///     this would never have found anyway. A parser-backed analyser returns a wider net here, or
-    ///     one matching every line.
+    ///     Which lines the engine should hand to <see cref="Declares" />. The engine-side half of the
+    ///     declaration question, published beside it so the two cannot drift: a line the engine
+    ///     skipped is a declaration this would never have found anyway.
     /// </summary>
-    string DeclarationCandidatePattern { get; }
+    CandidateLines DeclarationCandidates { get; }
 
     /// <summary>What the position at <paramref name="index" /> on this line sits in.</summary>
     Answer<Lexical> StateAt(string line, int index);
@@ -151,15 +177,18 @@ public interface ILanguageAnalyzer
     Answer<bool> IsGenerated(string qualifiedPath);
 
     /// <summary>
-    ///     What the appearance of an identifier at <paramref name="index" /> looks like — the question
-    ///     <c>find_references</c> asks, and the one that cannot be answered from
-    ///     <see cref="StateAt" /> alone, because <c>:=</c> is an assignment in X# and a syntax error in
-    ///     C#. It is here rather than at the caller for the same reason the other four are: the
-    ///     operators that decide it are the profile's, and a caller reading them would weld the
+    ///     What every appearance of <paramref name="symbol" /> on this line looks like, in the order
+    ///     they occur — the question <c>find_references</c> asks, and the one that cannot be answered
+    ///     from <see cref="StateAt" /> alone, because <c>:=</c> is an assignment in X# and a syntax
+    ///     error in C#. It is here rather than at the caller for the same reason the other four are:
+    ///     the operators that decide it are the profile's, and a caller reading them would weld the
     ///     classification to a regex for good.
+    ///     The whole line at once rather than one position at a time, because most of what decides an
+    ///     appearance is a fact about the line — where its comments and literals are, what it
+    ///     declares — and asking per position makes an implementation either recompute that per
+    ///     appearance or keep state it cannot keep, since one analyser answers for every search at
+    ///     once. Asked per position, a line naming a common identifier a thousand times cost a
+    ///     thousand walks of it; asked this way it costs one.
     /// </summary>
-    /// <param name="line">The whole line, which is what a declaration head is judged from.</param>
-    /// <param name="index">Where the identifier starts.</param>
-    /// <param name="length">How long it is.</param>
-    Answer<ReferenceKind> Occurrence(string line, int index, int length);
+    IReadOnlyList<Answer<ReferenceKind>> Occurrences(string line, string symbol);
 }

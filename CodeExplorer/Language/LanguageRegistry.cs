@@ -44,9 +44,6 @@ public sealed class LanguageRegistry
         _byExtension = byExtension.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>Every analyser registered, in registration order.</summary>
-    public IEnumerable<ILanguageAnalyzer> Analyzers => _registrations;
-
     /// <summary>
     ///     The same set with one more analyser laid over the extensions it claims. A new registry
     ///     rather than a mutation, so a test that registers a stub cannot leak it into another test
@@ -68,14 +65,5 @@ public sealed class LanguageRegistry
     {
         ArgumentNullException.ThrowIfNull(extension);
         return _byExtension.GetValueOrDefault(extension.TrimStart('.'), _fallback);
-    }
-
-    /// <summary>The analyser for a qualified path, from whatever follows its last dot.</summary>
-    public ILanguageAnalyzer ForPath(string qualifiedPath)
-    {
-        ArgumentNullException.ThrowIfNull(qualifiedPath);
-        int dot = qualifiedPath.LastIndexOf('.');
-        int slash = qualifiedPath.LastIndexOf('/');
-        return For(dot > slash ? qualifiedPath[(dot + 1)..] : "");
     }
 }

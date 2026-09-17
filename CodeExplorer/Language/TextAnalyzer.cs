@@ -54,18 +54,20 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     // The profile's lists as arrays. <see cref="Scan" /> walks them once per character of every line
     // examined, and an IReadOnlyList<string> there is an interface dispatch per opener per character —
     // which on a minified bundle, where the whole file is one line, is most of the time spent.
-    private readonly string[] _blockCommentOpeners;
     private readonly string[] _declarationModifiers;
     private readonly string[] _directivePrefixes;
     private readonly string[] _importPrefixes;
+    private readonly string[] _instantiationKeywords;
     private readonly string[] _lineComments;
-    private readonly string[] _lineStartComments;
     private readonly string[] _memberAccess;
+
+    /// <summary>Everything that, at the start of a line's text, makes the whole line a comment.</summary>
+    private readonly string[] _opensALine;
     private readonly StringDelimiter[] _strings;
     private readonly string[] _typePrefixes;
 
     /// <summary>
-    ///     The characters that can begin anything <see cref="Scan" /> cares about outside a literal,
+    ///     The characters that can begin anything <see cref="LineCursor" /> cares about outside a literal,
     ///     and the ones that can end each literal from inside it. The scan jumps between them instead
     ///     of testing every character against every delimiter: ordinary code is nearly all characters
     ///     that start nothing, and skipping those runs is what keeps a one-line minified bundle from
@@ -80,10 +82,13 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         ArgumentNullException.ThrowIfNull(profile);
         _profile = profile;
         _lineComments = [.. profile.LineComments];
-        _lineStartComments = [.. profile.LineStartComments];
         _directivePrefixes = [.. profile.DirectivePrefixes];
-        _blockCommentOpeners = [.. profile.BlockComments.Select(b => b.Open)];
+        _opensALine =
+        [
+            .. profile.LineStartComments, .. profile.LineComments, .. profile.BlockComments.Select(b => b.Open)
+        ];
         _strings = [.. profile.Strings];
+        _instantiationKeywords = [.. profile.InstantiationKeywords];
         _memberAccess = [.. profile.MemberAccessOperators];
         _typePrefixes = [.. profile.TypePrefixOperators];
         _importPrefixes = [.. profile.ImportPrefixes];
@@ -118,8 +123,13 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         _memberDeclaration = new Regex(flag + memberPattern, RegexOptions.CultureInvariant);
         _keywordDeclaration = new Regex(flag + keywordPattern, RegexOptions.CultureInvariant);
         _typeDeclaration = new Regex(flag + typePattern, RegexOptions.CultureInvariant);
-        DeclarationCandidatePattern =
-            $"{flag}(?:(?:{memberPattern})|(?:{keywordPattern})|(?:{typePattern}))";
+        // Only the shapes this language actually writes. A language that declares nothing this can
+        // read asks the engine for no lines at all, rather than for the lines a pattern that matches
+        // nothing would return.
+        string[] shapes = [.. new[] { memberPattern, keywordPattern, typePattern }.Where(p => p != MatchesNothing)];
+        DeclarationCandidates = shapes.Length == 0
+            ? CandidateLines.None
+            : CandidateLines.Matching($"{flag}{string.Join("|", shapes.Select(p => $"(?:{p})"))}");
 
         _declarationPrefix = new Regex(DeclarationPrefixPattern, RegexOptions.CultureInvariant);
         _assignment = new Regex(AssignmentPattern(profile.AssignmentOperators), RegexOptions.CultureInvariant);
@@ -129,6 +139,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             ? null
             : new Regex(
                 "^(?:" + string.Join("|", profile.GeneratedPathPatterns.Select(GlobToPattern)) + ")$",
+                // A path is compared without regard to case, the way a file system does.
                 RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     }
 
@@ -145,83 +156,125 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
 
     public IReadOnlyList<string> Extensions => _profile.Extensions;
 
-    public Evidence Evidence => Evidence.Text;
-
     public bool SeparatesDeclarationFromImplementation => _profile.SeparatesDeclarationFromImplementation;
 
-    public string DeclarationCandidatePattern { get; }
+    public CandidateLines DeclarationCandidates { get; }
 
     public Answer<Lexical> StateAt(string line, int index)
     {
         ArgumentNullException.ThrowIfNull(line);
         if (index < 0 || index > line.Length) return new Answer<Lexical>(Lexical.Code, Evidence.Text);
-        return new Answer<Lexical>(Scan(line, index), Evidence.Text);
+        var cursor = new LineCursor(this, line);
+        return new Answer<Lexical>(cursor.StateAt(index), Evidence.Text);
     }
 
     /// <summary>
-    ///     What the position sits in, in one left-to-right pass of everything before it. One pass and
-    ///     not one per question: a minified bundle is a single line of several million characters, and
-    ///     an index built from <c>Index:MaxFileBytes</c> holds such lines, so re-walking the prefix per
-    ///     comment opener turned one <c>find_references</c> into minutes inside a single tool call.
-    ///     Nothing is allocated here for the same reason.
+    ///     One left-to-right pass of a line, handing out the lexical state at each position asked
+    ///     about in turn. It is a cursor and not a function of the position because the positions
+    ///     arrive in ascending order: asked as a function it re-walked the line from the start every
+    ///     time, which on a minified bundle — one line of several million characters, well inside
+    ///     <c>Index:MaxFileBytes</c> — cost a walk per match rather than a walk per line.
+    ///     It lives here rather than on the analyser because an analyser answers every search at once
+    ///     and can hold no per-line state of its own.
+    ///     Nothing is allocated per position.
     /// </summary>
-    private Lexical Scan(string line, int index)
+    private struct LineCursor
     {
-        int start = FirstNonSpace(line);
-        if (start < line.Length && OpensAComment(line, start)) return Lexical.Comment;
+        private readonly TextAnalyzer _analyzer;
+        private readonly string _line;
+        private readonly bool _wholeLine;
+        private int _at;
+        private int _openIndex;
+        private bool _commented;
 
-        int openIndex = -1;
-        int i = start;
-        while (i < index)
+        public LineCursor(TextAnalyzer analyzer, string line)
         {
-            if (openIndex < 0)
+            _analyzer = analyzer;
+            _line = line;
+            _openIndex = -1;
+            int start = FirstNonSpace(line);
+            _wholeLine = start < line.Length && analyzer.OpensAComment(line, start);
+            _at = start;
+        }
+
+        public Lexical StateAt(int index)
+        {
+            if (_wholeLine || _commented) return Lexical.Comment;
+            Advance(index);
+            if (_commented) return Lexical.Comment;
+            return _openIndex < 0 ? Lexical.Code : Lexical.Literal;
+        }
+
+        /// <summary>
+        ///     Walks from wherever the last question left off to this one. A skip over an escape or a
+        ///     closing delimiter can carry <c>_at</c> a character or two past the position asked
+        ///     about; the state is the same either side of one, because no identifier begins inside a
+        ///     quote or an escape, so the overshoot is left rather than backtracked.
+        /// </summary>
+        private void Advance(int index)
+        {
+            while (_at < index)
             {
-                // Jump to the next character that could begin a comment or a literal. Everything
-                // between is ordinary code and needs no decision.
-                int next = line.AsSpan(i, index - i).IndexOfAny(_opensSomething);
-                if (next < 0) break;
-                i += next;
-
-                // A comment opener outside a literal takes the rest of the line. Inside one it is
-                // text: a URL in a string would otherwise turn everything after it into prose.
-                for (int c = 0; c < _lineComments.Length; c++)
-                    if (At(line, i, _lineComments[c]))
-                        return Lexical.Comment;
-
-                openIndex = OpenerAt(line, i);
-                i += openIndex < 0 ? 1 : _strings[openIndex].Open.Length;
-                continue;
-            }
-
-            var open = _strings[openIndex];
-            int found = line.AsSpan(i, index - i).IndexOfAny(_closesLiteral[openIndex]);
-            if (found < 0) break;
-            i += found;
-
-            if (open.Escape == StringEscape.Backslash && line[i] == '\\')
-            {
-                i += 2;
-                continue;
-            }
-
-            if (At(line, i, open.Close))
-            {
-                // A doubled delimiter stands for itself and does not close the literal.
-                if (open.Escape == StringEscape.Doubled && At(line, i + open.Close.Length, open.Close))
+                if (_openIndex < 0)
                 {
-                    i += 2 * open.Close.Length;
+                    // Jump to the next character that could begin a comment or a literal. Everything
+                    // between is ordinary code and needs no decision.
+                    int next = _line.AsSpan(_at, index - _at).IndexOfAny(_analyzer._opensSomething);
+                    if (next < 0)
+                    {
+                        _at = index;
+                        return;
+                    }
+
+                    _at += next;
+
+                    // A comment opener outside a literal takes the rest of the line. Inside one it is
+                    // text: a URL in a string would otherwise turn everything after it into prose.
+                    for (int c = 0; c < _analyzer._lineComments.Length; c++)
+                        if (At(_line, _at, _analyzer._lineComments[c]))
+                        {
+                            _commented = true;
+                            return;
+                        }
+
+                    _openIndex = _analyzer.OpenerAt(_line, _at);
+                    _at += _openIndex < 0 ? 1 : _analyzer._strings[_openIndex].Open.Length;
                     continue;
                 }
 
-                i += open.Close.Length;
-                openIndex = -1;
-                continue;
+                var open = _analyzer._strings[_openIndex];
+                int found = _line.AsSpan(_at, index - _at).IndexOfAny(_analyzer._closesLiteral[_openIndex]);
+                if (found < 0)
+                {
+                    _at = index;
+                    return;
+                }
+
+                _at += found;
+
+                if (open.Escape == StringEscape.Backslash && _line[_at] == '\\')
+                {
+                    _at += 2;
+                    continue;
+                }
+
+                if (At(_line, _at, open.Close))
+                {
+                    // A doubled delimiter stands for itself and does not close the literal.
+                    if (open.Escape == StringEscape.Doubled && At(_line, _at + open.Close.Length, open.Close))
+                    {
+                        _at += 2 * open.Close.Length;
+                        continue;
+                    }
+
+                    _at += open.Close.Length;
+                    _openIndex = -1;
+                    continue;
+                }
+
+                _at++;
             }
-
-            i++;
         }
-
-        return openIndex < 0 ? Lexical.Code : Lexical.Literal;
     }
 
     /// <summary>Which string literal opens here, as an index into <see cref="_strings" />, or -1.</summary>
@@ -251,12 +304,12 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         string? member = _memberDeclaration.Match(line) is { Success: true } m ? m.Groups[1].Value
             : _keywordDeclaration.Match(line) is { Success: true } k ? k.Groups[1].Value
             : null;
-        // The role is always Declaration for now. Telling a Delphi interface section from its
-        // implementation, or a PL/SQL package spec from its body, needs the file-level position #53
-        // builds; until then saying "implementation" would be a guess, and a guess reported as a fact
-        // is the one failure this seam exists to avoid.
+        // The role is left unsaid. Telling a Delphi interface section from its implementation, or a
+        // PL/SQL package spec from its body, needs the file-level position #53 builds; until then
+        // either answer would be a guess, and a guess reported as a fact is the one failure this
+        // seam exists to avoid.
         return new Answer<Declared?>(
-            type is null && member is null ? null : new Declared(type, member, DeclarationRole.Declaration),
+            type is null && member is null ? null : new Declared(type, member, null),
             Evidence.Text);
     }
 
@@ -282,10 +335,35 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     ///     Order matters: noise first, so a commented-out call is never counted as a call, and the
     ///     declaration before the call so that the line declaring a method is not also one calling it.
     /// </summary>
-    public Answer<ReferenceKind> Occurrence(string line, int index, int length)
+    public IReadOnlyList<Answer<ReferenceKind>> Occurrences(string line, string symbol)
     {
         ArgumentNullException.ThrowIfNull(line);
-        if (index < 0 || length < 0 || index + length > line.Length) return Placed(ReferenceKind.Other);
+        ArgumentNullException.ThrowIfNull(symbol);
+
+        // What the line is, asked once. Whether it is an import and what type it declares do not
+        // change between one appearance of the symbol and the next, and the type regex alone cost
+        // milliseconds per appearance on a long line when it was asked per appearance.
+        bool import = IsImportLine(line);
+        string? typeDeclared = _typeDeclaration.Match(line) is { Success: true } t ? t.Groups[1].Value : null;
+        var cursor = new LineCursor(this, line);
+
+        var placed = new List<Answer<ReferenceKind>>();
+        foreach (int at in SymbolText.Occurrences(line, symbol))
+            placed.Add(Place(line, at, symbol.Length, cursor.StateAt(at), import, typeDeclared));
+        return placed;
+    }
+
+    /// <summary>
+    ///     What one appearance looks like, given what the line already said about itself. Order
+    ///     matters: noise first, so a commented-out call is never counted as a call, and the
+    ///     declaration before the call so that the line declaring a method is not also one calling it.
+    /// </summary>
+    private Answer<ReferenceKind> Place(string line, int index, int length, Lexical state, bool import,
+        string? typeDeclared)
+    {
+        if (state == Lexical.Comment) return Placed(ReferenceKind.Comment);
+        if (state == Lexical.Literal) return Placed(ReferenceKind.StringLiteral);
+        if (import) return Placed(ReferenceKind.Import);
 
         // Spans and not substrings. A line naming a common identifier a thousand times would otherwise
         // allocate a thousand copies of the line either side of the match, and the lines this reads
@@ -294,17 +372,12 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         var suffix = line.AsSpan(index + length);
         var head = prefix.TrimEnd();
 
-        var state = Scan(line, index);
-        if (state == Lexical.Comment) return Placed(ReferenceKind.Comment);
-        if (state == Lexical.Literal) return Placed(ReferenceKind.StringLiteral);
-        if (IsImportLine(line)) return Placed(ReferenceKind.Import);
-
         bool afterReceiver = EndsWithAny(head, _memberAccess);
         bool invoked = Invocation.IsMatch(suffix);
 
-        if (!afterReceiver && IsDeclaration(prefix, suffix, line, index, length))
+        if (!afterReceiver && IsDeclaration(prefix, suffix, line.AsSpan(index, length), typeDeclared))
             return Placed(ReferenceKind.Definition);
-        if (invoked && head.EndsWith("new", StringComparison.Ordinal)) return Placed(ReferenceKind.Instantiation);
+        if (invoked && EndsWithKeyword(head, _instantiationKeywords)) return Placed(ReferenceKind.Instantiation);
         if (invoked) return Placed(ReferenceKind.Call);
         if (_assignment.IsMatch(suffix)) return Placed(ReferenceKind.Write);
         // "Foo.Bar()" — Foo itself is a reference to the type, not a member access on something else.
@@ -322,20 +395,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     private static string? Alternation(IReadOnlyList<string> words) =>
         words.Count == 0
             ? null
-            : string.Join("|", words.OrderByDescending(w => w.Length).Select(Escape));
-
-    /// <summary>
-    ///     A literal for a pattern both .NET and RE2 accept. Not <see cref="Regex.Escape" />, which
-    ///     also escapes whitespace and <c>#</c> in ways RE2 rejects — and a modifier may be a phrase
-    ///     with a space in it, which is exactly the case that would have failed inside DuckDB rather
-    ///     than here.
-    /// </summary>
-    private static string Escape(string word) =>
-        string.Concat(word.Select(c =>
-            Metacharacters.Contains(c, StringComparison.Ordinal) ? $"\\{c}" : c.ToString()));
-
-    /// <summary>The characters RE2 and .NET both read as pattern syntax.</summary>
-    private const string Metacharacters = @"\.+*?()|[]{}^$";
+            : string.Join("|", words.OrderByDescending(w => w.Length).Select(SymbolText.Re2Literal));
 
     /// <summary>
     ///     The identifier as the left-hand side of an assignment, plain or compound. The negative
@@ -347,7 +407,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     {
         if (assignments.Count == 0) return MatchesNothing;
         var operators = CompoundOperators.Select(op => op + "=").Concat(assignments)
-            .OrderByDescending(op => op.Length).Select(Escape);
+            .OrderByDescending(op => op.Length).Select(SymbolText.Re2Literal);
         return $@"^\s*(?:{string.Join("|", operators)})(?!=|>)";
     }
 
@@ -363,7 +423,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             {
                 '*' => ".*",
                 '?' => ".",
-                _ => Regex.Escape(c.ToString())
+                _ => SymbolText.Re2Literal(c.ToString())
             });
         return pattern.ToString();
     }
@@ -391,14 +451,8 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     private int ImportPrefixLength(string line, int start)
     {
         for (int i = 0; i < _importPrefixes.Length; i++)
-        {
-            string prefix = _importPrefixes[i];
-            if (_profile.CaseInsensitiveKeywords
-                    ? AtIgnoringCase(line, start, prefix)
-                    : At(line, start, prefix))
-                return prefix.Length;
-        }
-
+            if (At(line, start, _importPrefixes[i], _keywordComparison))
+                return _importPrefixes[i].Length;
         return -1;
     }
 
@@ -406,55 +460,67 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     private bool OpensAComment(string line, int start)
     {
         for (int i = 0; i < _directivePrefixes.Length; i++)
-            if (AtIgnoringCase(line, start, _directivePrefixes[i]))
+            if (At(line, start, _directivePrefixes[i], _keywordComparison))
                 return false;
-        for (int i = 0; i < _lineStartComments.Length; i++)
-            if (At(line, start, _lineStartComments[i]))
-                return true;
-        for (int i = 0; i < _lineComments.Length; i++)
-            if (At(line, start, _lineComments[i]))
-                return true;
-        for (int i = 0; i < _blockCommentOpeners.Length; i++)
-            if (At(line, start, _blockCommentOpeners[i]))
+        for (int i = 0; i < _opensALine.Length; i++)
+            if (At(line, start, _opensALine[i]))
                 return true;
         return false;
     }
 
-    private static bool At(string text, int index, string value) =>
+    private static bool At(string text, int index, string value,
+        StringComparison comparison = StringComparison.Ordinal) =>
         index >= 0 && index + value.Length <= text.Length
-                   && string.CompareOrdinal(text, index, value, 0, value.Length) == 0;
+                   && text.AsSpan(index, value.Length).Equals(value, comparison);
 
-    private static bool AtIgnoringCase(string text, int index, string value) =>
-        index >= 0 && index + value.Length <= text.Length
-                   && text.AsSpan(index, value.Length).Equals(value, StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    ///     Whether the text ends with one of these words, on a word boundary and under the profile's
+    ///     own case rule — <c>renew(</c> does not end with <c>new</c>, and <c>NEW</c> does where the
+    ///     language says case does not matter.
+    /// </summary>
+    private bool EndsWithKeyword(ReadOnlySpan<char> text, string[] words)
+    {
+        for (int i = 0; i < words.Length; i++)
+        {
+            string word = words[i];
+            if (text.Length < word.Length) continue;
+            if (!text[^word.Length..].Equals(word, _keywordComparison)) continue;
+            if (text.Length == word.Length || !SymbolText.IsWordChar(text[^(word.Length + 1)])) return true;
+        }
+
+        return false;
+    }
 
     private static Answer<ReferenceKind> Placed(ReferenceKind kind) => new(kind, Evidence.Text);
 
-    private bool IsDeclaration(ReadOnlySpan<char> prefix, ReadOnlySpan<char> suffix, string line, int index,
-        int length)
+    private bool IsDeclaration(ReadOnlySpan<char> prefix, ReadOnlySpan<char> suffix, ReadOnlySpan<char> symbol,
+        string? typeDeclared)
     {
         // "class Foo", "record Foo", "interface Foo" — the symbol is the thing being declared, and the
         // type regex already knows what may sit in front of the keyword.
-        if (_typeDeclaration.Match(line) is { Success: true } declared
-            && declared.Groups[1].ValueSpan.SequenceEqual(line.AsSpan(index, length)))
-            return true;
+        if (typeDeclared is not null && symbol.SequenceEqual(typeDeclared)) return true;
 
-        // Otherwise the prefix must look like a declaration head — modifiers and a return type and
-        // nothing else. This is what keeps "return Foo(" and "x => Foo(" out.
+        // The tail first, though it is the last of the three conditions to have been written. All
+        // three are ANDed, and this one is anchored and reads a few characters, where the two below
+        // each walk a prefix that on a long line is most of the file; ordering the cheap gate first
+        // turns most appearances away before either of them runs.
+        if (!DeclarationTail.IsMatch(suffix)) return false;
+
+        // The prefix must look like a declaration head — modifiers and a return type and nothing
+        // else. This is what keeps "return Foo(" and "x => Foo(" out.
         if (!_declarationPrefix.IsMatch(prefix)) return false;
+
         // The same comparison the patterns above were built with. Asking ordinally where the language
         // shouts its keywords answered "no declaration here" for every `CREATE PROCEDURE` in a project
         // — and then reported it as a call, which is a wrong answer shaped like a right one.
-        bool introduced = false;
-        for (int i = 0; i < _declarationModifiers.Length && !introduced; i++)
-            introduced = SymbolText.ContainsWord(prefix, _declarationModifiers[i], _keywordComparison);
-        if (!introduced) return false;
-
-        return DeclarationTail.IsMatch(suffix);
+        for (int i = 0; i < _declarationModifiers.Length; i++)
+            if (SymbolText.ContainsWord(prefix, _declarationModifiers[i], _keywordComparison))
+                return true;
+        return false;
     }
 
     private bool LooksLikeType(ReadOnlySpan<char> head, ReadOnlySpan<char> suffix) =>
-        head.EndsWith("new", StringComparison.Ordinal)
+        EndsWithKeyword(head, _instantiationKeywords)
         || EndsWithAny(head, _typePrefixes)
         || _typedDeclarationTail.IsMatch(suffix);
 }

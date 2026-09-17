@@ -107,10 +107,6 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     /// </summary>
     public const int MaxLinesPerFile = 200;
 
-    /// <summary>RE2 metacharacters. Escaped one by one rather than with .NET's <c>Regex.Escape</c>,
-    ///     which also escapes whitespace and <c>#</c> in ways RE2 does not accept.</summary>
-    private const string Metacharacters = @"\.+*?()|[]{}^$";
-
     /// <summary>
     ///     Every reference search goes through here, which is what makes this the one place such a
     ///     search is recorded. It is the only public method for the same reason grep has one: a second
@@ -186,7 +182,8 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                 totalLines = reader.Int64("total_lines");
                 if (reader.IsNull("qualified_path")) continue;
                 matched.Add(new MatchedLine(reader.Int64("file_id"), reader.Text("qualified_path"),
-                    reader.Text("extension"), reader.Int32("line_number"), reader.Text("content")));
+                    Languages.Default.For(reader.Text("extension")), reader.Int32("line_number"),
+                    reader.Text("content")));
             }
         }
 
@@ -204,7 +201,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         // references, and they are often of different kinds. What each one looks like is the file's
         // language's question (ADR-0008), so `:=` is a write in an X# file and not in a C# one.
         var references = matched
-            .SelectMany(line => Resolved(line, symbol)
+            .SelectMany(line => line.Analyzer.Occurrences(line.Content, symbol)
                 .Select(kind => new Reference(line.Path, line.LineNumber, line.Content, kind.Value,
                     scopes.TryGetValue(line.FileId, out var declarations)
                         ? DeclarationScope.Enclosing(declarations, line.LineNumber,
@@ -218,20 +215,12 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     }
 
     /// <summary>
-    ///     Every appearance of the symbol on one matched line, classified. The analyser is resolved
-    ///     once for the line rather than once per appearance, which is the same reason the scope scan
-    ///     is per file: a line naming a common identifier a dozen times must not pay a dozen lookups.
+    ///     One line the engine matched, before it is taken apart into the references on it. It carries
+    ///     the analyser its file resolved to, so the lookup happens once per line rather than once for
+    ///     the grouping and again for the classification.
     /// </summary>
-    private static IEnumerable<Answer<ReferenceKind>> Resolved(MatchedLine line, string symbol)
-    {
-        var analyzer = Languages.Default.For(line.Extension);
-        return SymbolText.Occurrences(line.Content, symbol)
-            .Select(at => analyzer.Occurrence(line.Content, at, symbol.Length));
-    }
-
-    /// <summary>One line the engine matched, before it is taken apart into the references on it.</summary>
     private readonly record struct MatchedLine(
-        long FileId, string Path, string Extension, int LineNumber, string Content);
+        long FileId, string Path, ILanguageAnalyzer Analyzer, int LineNumber, string Content);
 
     /// <summary>
     ///     The declaration lines of every file a reference was read from, which is what an enclosing
@@ -247,20 +236,28 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     {
         var scopes = new Dictionary<long, List<DeclarationLine>>();
 
-        foreach (var group in matched.GroupBy(line => Languages.Default.For(line.Extension)))
+        foreach (var group in matched.GroupBy(line => line.Analyzer))
         {
+            // A language that declares nothing this can read is not asked for lines it would only
+            // throw away.
+            if (group.Key.DeclarationCandidates is CandidateLines.NoLine) continue;
             long[] fileIds = [.. group.Select(line => line.FileId).Distinct()];
             if (fileIds.Length == 0) continue;
 
             // The ids came from the query above and never from the request, so inlining them is safe
             // and saves binding one parameter per file.
             string ids = string.Join(",", fileIds.Select(id => id.ToString(CultureInfo.InvariantCulture)));
+            // An analyser that reads every line — a parser-backed one — narrows nothing here.
+            bool everyLine = group.Key.DeclarationCandidates is CandidateLines.EveryLine;
             using var command = connection.Query($"""
                                                      SELECT file_id, line_number, content FROM lines
-                                                     WHERE file_id IN ({ids}) AND regexp_matches(content, $d, '')
+                                                     WHERE file_id IN ({ids})
+                                                       {(everyLine ? "" : "AND regexp_matches(content, $d, '')")}
                                                      ORDER BY file_id, line_number
                                                      """,
-                [new DuckDBParameter("d", group.Key.DeclarationCandidatePattern)]);
+                everyLine
+                    ? []
+                    : [new DuckDBParameter("d", ((CandidateLines.Re2Pattern)group.Key.DeclarationCandidates).Pattern)]);
             using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -302,12 +299,11 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     /// </summary>
     private static string Pattern(string symbol)
     {
-        string escaped = string.Concat(symbol.Select(c =>
-            Metacharacters.Contains(c, StringComparison.Ordinal) ? $"\\{c}" : c.ToString()));
-        string head = IsWord(symbol[0]) ? @"\b" : "";
-        string tail = IsWord(symbol[^1]) ? @"\b" : "";
-        return head + escaped + tail;
+        // What counts as a word is SymbolText's, because the engine anchors the candidate set with
+        // \b here and .NET re-finds the symbol on the line it hands back: two definitions of a word
+        // character would be the two matchers disagreeing that this design exists to prevent.
+        string head = SymbolText.IsWordChar(symbol[0]) ? @"\b" : "";
+        string tail = SymbolText.IsWordChar(symbol[^1]) ? @"\b" : "";
+        return head + SymbolText.Re2Literal(symbol) + tail;
     }
-
-    private static bool IsWord(char c) => char.IsLetterOrDigit(c) || c == '_';
 }

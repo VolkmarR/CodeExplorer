@@ -10,10 +10,20 @@ The questions are:
 - What, if anything, does this line declare, and is it a declaration or an implementation?
 - What does this file import?
 - Is this file generated?
-- What does this appearance of an identifier look like — a write, a call, a read, a type use?
+- What does every appearance of an identifier on this line look like — a write, a call, a read, a
+  type use?
 
 Every answer is an `Answer<T>`, which carries the value and the `Evidence` it was reached by:
-`Text` for one read from the source, `Parsed` for one a real parser produced.
+`Text` for one read from the source, `Parsed` for one a real parser produced. It is on the answer
+and not on the analyser, because an analyser that parses what it can and falls back on the rest
+tells the truth only per answer.
+
+Each question is asked about as much text as decides it. Classification takes a whole line and
+returns every appearance on it, because most of what decides an appearance — where the line's
+comments and literals are, what it declares — is a fact about the line, and an implementation asked
+one position at a time must either recompute that per appearance or keep state it cannot keep, since
+one analyser answers every search at once. Asked per position, a 640 KB line naming an identifier
+20,000 times cost 20,000 walks of it; asked per line it costs one.
 
 ## Why questions and not tables
 
@@ -78,10 +88,12 @@ reported as a right one. A doubtful form is left out.
 - **`find_references` reads X#, Delphi and PL/SQL writes.** `:=` is an assignment where it is one,
   `=` stays a comparison where it is one, and the WRITES section stops being empty on a third of
   the codebases here.
-- **The declaration prefilter is per language.** The RE2 pattern DuckDB narrows a file with is the
-  analyser's, published beside the declaration question so the two cannot drift, so a reference
-  search issues one scope query per language among the files it read rather than one for all of
-  them.
+- **The declaration prefilter is per language, and is a question rather than a pattern.** An
+  analyser says which lines it needs — all of them, none of them, or the ones an RE2 pattern matches
+  — and `ReferenceSearch` turns that into a query. A bare pattern would have made every
+  parser-backed analyser invent a regex it has no use for, which is the mechanism leaking through
+  the seam that hides it. A reference search issues one scope query per language among the files it
+  read, and none at all for a language that declares nothing it can read.
 - **`Language/` is a module and a leaf.** It owns the extension-to-language table that
   `Infrastructure/Languages.cs` used to hold, because the language a file is written in and the way
   it opens a comment are one fact and were two copies of one. It references no other module, which
@@ -105,5 +117,10 @@ reported as a right one. A doubtful form is left out.
   that can begin a comment or a literal and skips the code between them.
 - **The declaration/implementation split is declared but not yet decided.** A profile says whether
   its language has one; telling a Delphi `interface` section from its `implementation` needs the
-  file-level position #53 builds, and until then every declaration answers `Declaration` rather than
-  guessing.
+  file-level position #53 builds, and until then a declaration's role is null. Null and not
+  `Declaration`, because either name would be a guess and the null-rather-than-guess rule is the one
+  this module is written around.
+- **A keyword is a keyword, not punctuation.** `new` comes from the profile like every other operator
+  and is matched on a word boundary under the profile's own case rule, so `renew(` constructs
+  nothing and a language that builds an object another way — X#'s `Foo{…}` — simply lists none.
+  One C-family keyword welded into the shared path was the last thing the seam had not absorbed.
