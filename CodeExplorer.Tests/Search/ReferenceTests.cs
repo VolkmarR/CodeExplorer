@@ -323,6 +323,52 @@ public sealed class ReferenceTests : IDisposable
         Assert.Contains("2 references, 1 in comments, strings or imports", text);
     }
 
+    /// <summary>
+    ///     The file-level scan over a real index (#53). The lines a match sits on are the only ones
+    ///     DuckDB hands back, so knowing that one of them is inside a block opened forty lines earlier
+    ///     means reading the lines above it — which this proves happens, and happens per file.
+    /// </summary>
+    [Fact]
+    public async Task A_commented_out_block_and_a_multi_line_literal_are_mentions_all_the_way_down()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("blocks", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Orders.cs"] = """
+                                    public class OrderService
+                                    {
+                                        /* The old flow, kept for reference:
+                                        Advance(next);
+                                        var made = new Advance();
+                                        */
+                                        public const string Sql = @"
+                                            select Advance from orders
+                                            ";
+
+                                        public void Run() => Advance(1);
+                                    }
+
+                                    """
+            }
+        });
+        await using var client = await _host.ConnectAsync("blocks");
+
+        string text = await FindAsync(client,
+            new Dictionary<string, object?> { ["symbol"] = "Advance", ["includeNoise"] = true });
+
+        // One call, and it is the live one. The two lines inside the block comment used to be reported
+        // as a call and an instantiation — deleted code under the headings an agent trusts most.
+        Assert.Contains("1 call", text);
+        Assert.Contains("=> Advance(1);", text);
+        Assert.Contains("0 instantiations", text);
+        // The commented-out lines and the line inside the verbatim literal are all mentions.
+        Assert.Contains("3 in comments, strings or imports", text);
+        Assert.Contains("select Advance from orders", text);
+        Assert.Contains("0 unplaced", text);
+    }
+
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation()
     {
