@@ -18,8 +18,17 @@ public sealed record ReferenceRequest(
 ///     use and a read and reporting it as one of them loses the other.
 ///     <see cref="Scope" /> is the enclosing <c>Type.Member</c> where indentation was enough to
 ///     determine one, and null where it was not — an unknown scope is left unsaid rather than guessed.
+///     <see cref="Evidence" /> is how the classification was reached (ADR-0008). Every reference
+///     carries it, so a reply can say whether it is repeating a parser or reading line shape — claims
+///     of different strength that must not read alike.
 /// </summary>
-public sealed record Reference(string QualifiedPath, int LineNumber, string Text, ReferenceKind Kind, string? Scope);
+public sealed record Reference(
+    string QualifiedPath,
+    int LineNumber,
+    string Text,
+    ReferenceKind Kind,
+    string? Scope,
+    Evidence Evidence);
 
 /// <summary>
 ///     Everything read, already classified; the answer when the search was not a <see cref="SearchProblem" />. <see cref="TotalFiles" /> and <see cref="TotalLines" />
@@ -67,7 +76,7 @@ public sealed record ReferenceResult(
 /// <summary>
 ///     Where an identifier is used, told apart from where it is merely mentioned (#11). The candidate
 ///     set comes from DuckDB — one RE2 <c>regexp_matches</c> per line, on word boundaries (ADR-0004) —
-///     and <see cref="ReferenceClassifier" /> then says what each candidate line looks like. That
+///     and the file's <see cref="ILanguageAnalyzer" /> then says what each candidate line looks like (ADR-0008). That
 ///     split is the whole design: the engine decides what matches and .NET decides what a match is,
 ///     so no answer depends on two matchers agreeing.
 ///     It is textual throughout and therefore evidence rather than proof, which every reply says in
@@ -140,24 +149,25 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         // zero counts, the way grep's page-past-the-end does.
         string sql = $"""
                       WITH hits AS (
-                          SELECT l.file_id, l.line_number, l.content, f.qualified_path
+                          SELECT l.file_id, l.line_number, l.content, f.qualified_path, f.extension
                           FROM lines l JOIN files f USING (file_id)
                           WHERE regexp_matches(l.content, $q, ''){fileFilter}),
                       per_file AS (
-                          SELECT file_id, qualified_path, count(*) AS n FROM hits GROUP BY ALL),
+                          SELECT file_id, qualified_path, extension, count(*) AS n FROM hits GROUP BY ALL),
                       totals AS (
                           SELECT count(*) AS total_files, coalesce(sum(n), 0) AS total_lines FROM per_file),
                       page_files AS (
-                          SELECT file_id, qualified_path FROM per_file
+                          SELECT file_id, qualified_path, extension FROM per_file
                           ORDER BY n DESC, qualified_path
                           LIMIT {maxFiles}),
                       kept AS (
-                          SELECT file_id, qualified_path, line_number, content FROM (
-                              SELECT h.file_id, p.qualified_path, h.line_number, h.content,
+                          SELECT file_id, qualified_path, extension, line_number, content FROM (
+                              SELECT h.file_id, p.qualified_path, p.extension, h.line_number, h.content,
                                      row_number() OVER (PARTITION BY h.file_id ORDER BY h.line_number) AS rn
                               FROM hits h JOIN page_files p USING (file_id))
                           WHERE rn <= {MaxLinesPerFile})
-                      SELECT t.total_files, t.total_lines, k.file_id, k.qualified_path, k.line_number, k.content
+                      SELECT t.total_files, t.total_lines, k.file_id, k.qualified_path, k.extension,
+                             k.line_number, k.content
                       FROM totals t LEFT JOIN kept k ON true
                       ORDER BY k.qualified_path, k.line_number
                       """;
@@ -176,7 +186,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                 totalLines = reader.Int64("total_lines");
                 if (reader.IsNull("qualified_path")) continue;
                 matched.Add(new MatchedLine(reader.Int64("file_id"), reader.Text("qualified_path"),
-                    reader.Int32("line_number"), reader.Text("content")));
+                    reader.Text("extension"), reader.Int32("line_number"), reader.Text("content")));
             }
         }
 
@@ -191,53 +201,77 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
 
         var scopes = await ScopesAsync(connection, matched, cancellationToken);
         // Every appearance on the line, not only the first: a line naming the identifier twice is two
-        // references, and they are often of different kinds.
+        // references, and they are often of different kinds. What each one looks like is the file's
+        // language's question (ADR-0008), so `:=` is a write in an X# file and not in a C# one.
         var references = matched
-            .SelectMany(line => ReferenceClassifier.Occurrences(line.Content, symbol)
-                .Select(at => new Reference(line.Path, line.LineNumber, line.Content,
-                    ReferenceClassifier.Classify(line.Content, symbol, at),
+            .SelectMany(line => Resolved(line, symbol)
+                .Select(kind => new Reference(line.Path, line.LineNumber, line.Content, kind.Value,
                     scopes.TryGetValue(line.FileId, out var declarations)
-                        ? ReferenceClassifier.EnclosingScope(declarations, line.LineNumber,
-                            ReferenceClassifier.Indent(line.Content))
-                        : null)))
+                        ? DeclarationScope.Enclosing(declarations, line.LineNumber,
+                            SymbolText.Indent(line.Content))
+                        : null,
+                    kind.Evidence)))
             .ToList();
 
         int filesExamined = matched.Select(line => line.FileId).Distinct().Count();
         return new ReferenceResult(totalFiles, filesExamined, totalLines, references, withoutFilters);
     }
 
+    /// <summary>
+    ///     Every appearance of the symbol on one matched line, classified. The analyser is resolved
+    ///     once for the line rather than once per appearance, which is the same reason the scope scan
+    ///     is per file: a line naming a common identifier a dozen times must not pay a dozen lookups.
+    /// </summary>
+    private static IEnumerable<Answer<ReferenceKind>> Resolved(MatchedLine line, string symbol)
+    {
+        var analyzer = Languages.Default.For(line.Extension);
+        return SymbolText.Occurrences(line.Content, symbol)
+            .Select(at => analyzer.Occurrence(line.Content, at, symbol.Length));
+    }
+
     /// <summary>One line the engine matched, before it is taken apart into the references on it.</summary>
-    private readonly record struct MatchedLine(long FileId, string Path, int LineNumber, string Content);
+    private readonly record struct MatchedLine(
+        long FileId, string Path, string Extension, int LineNumber, string Content);
 
     /// <summary>
     ///     The declaration lines of every file a reference was read from, which is what an enclosing
     ///     scope is worked out from. DuckDB narrows each file to the few lines that could be a
     ///     declaration, so the whole file never leaves the index for the sake of a label on one line.
+    ///     One query per language rather than one for all of them: what could be a declaration is the
+    ///     analyser's pattern (ADR-0008) and a Delphi unit and a C# file do not share one. The grouping
+    ///     is by analyser and not by extension, so the languages that spell declarations the same way
+    ///     are still read in a single pass.
     /// </summary>
     private static async Task<Dictionary<long, List<DeclarationLine>>> ScopesAsync(
         DuckDBConnection connection, List<MatchedLine> matched, CancellationToken cancellationToken)
     {
         var scopes = new Dictionary<long, List<DeclarationLine>>();
-        long[] fileIds = [.. matched.Select(line => line.FileId).Distinct()];
-        if (fileIds.Length == 0) return scopes;
 
-        // The ids came from the query above and never from the request, so inlining them is safe and
-        // saves binding one parameter per file.
-        string ids = string.Join(",", fileIds.Select(id => id.ToString(CultureInfo.InvariantCulture)));
-        using var command = connection.Query($"""
-                                                 SELECT file_id, line_number, content FROM lines
-                                                 WHERE file_id IN ({ids}) AND regexp_matches(content, $d, '')
-                                                 ORDER BY file_id, line_number
-                                                 """,
-            [new DuckDBParameter("d", ReferenceClassifier.DeclarationCandidatePattern)]);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        foreach (var group in matched.GroupBy(line => Languages.Default.For(line.Extension)))
         {
-            if (ReferenceClassifier.Declaration(reader.Int32("line_number"), reader.Text("content")) is not
-                { } declaration) continue;
-            if (!scopes.TryGetValue(reader.Int64("file_id"), out var declarations))
-                scopes[reader.Int64("file_id")] = declarations = [];
-            declarations.Add(declaration);
+            long[] fileIds = [.. group.Select(line => line.FileId).Distinct()];
+            if (fileIds.Length == 0) continue;
+
+            // The ids came from the query above and never from the request, so inlining them is safe
+            // and saves binding one parameter per file.
+            string ids = string.Join(",", fileIds.Select(id => id.ToString(CultureInfo.InvariantCulture)));
+            using var command = connection.Query($"""
+                                                     SELECT file_id, line_number, content FROM lines
+                                                     WHERE file_id IN ({ids}) AND regexp_matches(content, $d, '')
+                                                     ORDER BY file_id, line_number
+                                                     """,
+                [new DuckDBParameter("d", group.Key.DeclarationCandidatePattern)]);
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                string content = reader.Text("content");
+                if (group.Key.Declares(content).Value is not { } declared) continue;
+                long fileId = reader.Int64("file_id");
+                if (!scopes.TryGetValue(fileId, out var declarations))
+                    scopes[fileId] = declarations = [];
+                declarations.Add(new DeclarationLine(reader.Int32("line_number"), SymbolText.Indent(content),
+                    declared));
+            }
         }
 
         return scopes;

@@ -278,6 +278,51 @@ public sealed class ReferenceTests : IDisposable
         Assert.Contains("src/Many.cs", text);
     }
 
+    /// <summary>
+    ///     The visible outcome of the language seam (#57, ADR-0008): run find_references against an X#
+    ///     file and writes appear. They never did before, because `:=` was not an assignment to
+    ///     anything and `:` was not a receiver, so the one section that answers "what changes this?"
+    ///     was always empty on a third of the codebases this server exists to serve.
+    /// </summary>
+    [Fact]
+    public async Task An_XSharp_file_reports_its_writes_and_its_sends()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("xbase", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Orders.prg"] = """
+                                     #using System.Collections
+
+                                     class OrderService
+                                     	method Advance(oNext as OrderStatus) as void
+                                     		self:Status := oNext
+                                     		local cLabel := self:Status
+                                     		// Status in a comment
+                                     	end method
+                                     end class
+
+                                     """
+            }
+        });
+        await using var client = await _host.ConnectAsync("xbase");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Status" });
+
+        Assert.Contains("1 write", text);
+        Assert.Contains("WRITES", text);
+        // The scope label proves the per-language declaration pattern reached DuckDB and came back:
+        // `method Advance(` declares nothing a C# pattern would recognise.
+        Assert.Contains("[OrderService.Advance] self:Status := oNext", text);
+        // The send through `:` is a read and not an unplaced reference.
+        Assert.Contains("1 read", text);
+        Assert.Contains("READS", text);
+        Assert.Contains("0 unplaced", text);
+        // And the comment is still noise, counted rather than listed.
+        Assert.Contains("2 references, 1 in comments, strings or imports", text);
+    }
+
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation()
     {

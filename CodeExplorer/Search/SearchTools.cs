@@ -306,8 +306,12 @@ internal sealed class SearchTools(
             text.Append(CultureInfo.InvariantCulture,
                 $"\n0 calls but {Count(ReferenceKind.TypeUse)} type uses, and \"{symbol}\" looks like an interface. A call names the METHOD, not the interface, so this cannot answer \"who uses it?\". Read one implementation for its member names, then run find_references on the method you care about.\n");
 
-        text.Append(
-            "\nClassification is textual — line shape, no compiler. An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n");
+        // What the footer may claim is decided by how the answers were reached and not by what was
+        // true when it was written (ADR-0008): once a parser-backed analyser is registered for a
+        // language, a reply that still called itself textual would be understating what it knows.
+        text.Append(result.References.All(r => r.Evidence == Evidence.Text)
+            ? "\nClassification is textual — line shape, no compiler. An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n"
+            : "\nClassification is parsed where the language has a parser here and textual elsewhere — line shape, no compiler. An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n");
         return text.ToString();
 
         void Section(string title, ReferenceKind kind)
