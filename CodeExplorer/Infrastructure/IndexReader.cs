@@ -102,6 +102,30 @@ public sealed record ChurnedFile(
     long Deleted);
 
 /// <summary>
+///     One file that kept changing alongside another: how many of the anchor's commits also touched
+///     it. <see cref="QualifiedPath" /> is how the project names it (ADR-0006) and is set even for a
+///     path HEAD no longer holds, which <see cref="AtHead" /> is what says — coupling that happened
+///     is still coupling, and an agent sent to read a file that is gone has been told something false.
+/// </summary>
+public sealed record CoChangedFile(string QualifiedPath, bool AtHead, int SharedCommits);
+
+/// <summary>
+///     What one file's coupling amounts to over a window, and what the answer had to leave out to say
+///     it. <see cref="Paired" /> is the commits the ranking is drawn from and <see cref="Commits" />
+///     every commit that touched the file, so the difference is the mass commits the ceiling excluded
+///     — a number the reply says out loud, because a ranking drawn from a third of a file's history
+///     without saying so is the one that misleads.
+/// </summary>
+/// <param name="Commits">Commits of the window that touched the anchor file, ceiling or no ceiling.</param>
+/// <param name="Paired">How many of those were small enough to pair.</param>
+/// <param name="Files">The co-changed files, most shared commits first.</param>
+public sealed record CoChanges(int Commits, int Paired, IReadOnlyList<CoChangedFile> Files)
+{
+    /// <summary>The commits the ceiling kept out of the pairing.</summary>
+    public int Excluded => Commits - Paired;
+}
+
+/// <summary>
 ///     Which repositories of a project an answer drawn from history can speak for, and which it
 ///     cannot. Both sides, because "says which is which" is the point: naming only the repositories
 ///     that were not walked leaves a reader to infer the rest from a ranking, which is the inference
@@ -658,6 +682,22 @@ public sealed class IndexReader : IDisposable
         string? directoryInRepository, int limit, CancellationToken cancellationToken) =>
         await IndexQueries.RankAsync(Connection, await PathsAsync(cancellationToken), window, repositorySlug,
             directoryInRepository, limit, cancellationToken);
+
+    /// <summary>
+    ///     The files a window's commits changed alongside one file, most shared commits first. The
+    ///     coupling the code itself does not show — a constant and the three places that read it, two
+    ///     files that have simply always moved together.
+    /// </summary>
+    /// <param name="window">The span to pair over, inclusive at both ends.</param>
+    /// <param name="repositorySlug">The anchor's repository; a commit touches one, so pairing never crosses one.</param>
+    /// <param name="pathInRepository">The anchor file, repository-relative, as <c>commit_files</c> records it.</param>
+    /// <param name="maxCommitPaths">The most paths a commit may touch and still be paired.</param>
+    /// <param name="limit">How many co-changed files to return.</param>
+    /// <param name="cancellationToken">Threaded through to the command.</param>
+    public async Task<CoChanges> CoChangedAsync(HistoryWindow window, string repositorySlug,
+        string pathInRepository, int maxCommitPaths, int limit, CancellationToken cancellationToken) =>
+        await IndexQueries.CoChangedAsync(Connection, await PathsAsync(cancellationToken), window, repositorySlug,
+            pathInRepository, maxCommitPaths, limit, cancellationToken);
 
     /// <summary>
     ///     The overview the build stored with this index (#51): one row, no joins and no aggregates, so
