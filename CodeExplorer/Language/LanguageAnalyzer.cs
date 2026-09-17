@@ -222,8 +222,13 @@ public interface ILanguageAnalyzer
     /// </summary>
     Answer<Lexical> StateAt(FilePosition position, string line, int index);
 
-    /// <summary>What this line declares, or null when it turns out to declare nothing.</summary>
-    Answer<Declared?> Declares(string line);
+    /// <summary>
+    ///     What this line declares, or null when it turns out to declare nothing. The position says
+    ///     which side of the declaration/implementation split the line sits on, for the languages that
+    ///     have one; a caller that has not walked the file to here passes
+    ///     <see cref="FilePosition.Unknown" /> and is answered with a null role rather than a guess.
+    /// </summary>
+    Answer<Declared?> Declares(FilePosition position, string line);
 
     /// <summary>What this line imports, as written, or null when it is not an import line.</summary>
     Answer<string?> ImportOn(string line);

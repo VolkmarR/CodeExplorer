@@ -40,6 +40,19 @@ public static class Languages
     private static readonly string[] SqlModifiers =
         ["create", "alter", "or replace", "declare", "procedure", "function", "view", "table", "trigger", "type"];
 
+    /// <summary>
+    ///     What moves an Oracle file from a package spec to a package body. Shared by SQL and PL/SQL
+    ///     because a script holding both is written with the same two headers whatever it is named:
+    ///     the extension says which dialect to read a file as and never which half of one it is.
+    /// </summary>
+    private static readonly SectionMarker[] PackageSections =
+    [
+        new SectionMarker("create or replace package body", DeclarationRole.Implementation),
+        new SectionMarker("create package body", DeclarationRole.Implementation),
+        new SectionMarker("create or replace package", DeclarationRole.Declaration),
+        new SectionMarker("create package", DeclarationRole.Declaration)
+    ];
+
     private static readonly StringDelimiter CBlockComment = new("/*", "*/", StringEscape.None);
     private static readonly StringDelimiter DoubleQuoted = new("\"", "\"", StringEscape.Backslash);
     private static readonly StringDelimiter SingleQuotedEscaped = new("'", "'", StringEscape.Backslash);
@@ -221,8 +234,20 @@ public static class Languages
             ],
             DeclarationKeywords = ["class", "record", "interface", "object"],
             DeclarationNamesFollowKeyword = true,
+            // `TCustomer = class(TBase)` is how a Delphi type is declared; `class TCustomer` is not
+            // written here at all, and the shared shape found neither.
+            TypeNamesPrecedeKeyword = true,
             CaseInsensitiveKeywords = true,
-            SeparatesDeclarationFromImplementation = true
+            SeparatesDeclarationFromImplementation = true,
+            // A unit announces its routines in `interface` and writes them in `implementation`, and
+            // the two lines are the only thing in the file that says which half a `procedure Foo;` is
+            // in. Before the first of them — the `unit Foo;` line and the uses clause — neither role
+            // is claimed.
+            SectionMarkers =
+            [
+                new SectionMarker("interface", DeclarationRole.Declaration),
+                new SectionMarker("implementation", DeclarationRole.Implementation)
+            ]
         },
         new LanguageProfile("HTML", ["html", "htm"])
         {
@@ -263,7 +288,12 @@ public static class Languages
             MemberAccessOperators = ["."],
             DeclarationModifiers = SqlModifiers,
             DeclarationNamesFollowKeyword = true,
-            CaseInsensitiveKeywords = true
+            CaseInsensitiveKeywords = true,
+            // A `.sql` script may hold an Oracle package spec, a body, or both, and the headers are
+            // the only thing that says which. Without the split declared here, the half of this
+            // dialect that is written into `.sql` files answers that it has no halves.
+            SeparatesDeclarationFromImplementation = true,
+            SectionMarkers = PackageSections
         },
         new LanguageProfile("PL/SQL", ["pks", "pkb", "plsql", "prc", "fnc", "trg"])
         {
@@ -275,7 +305,11 @@ public static class Languages
             DeclarationModifiers = [.. SqlModifiers, "package", "body", "cursor", "exception"],
             DeclarationNamesFollowKeyword = true,
             CaseInsensitiveKeywords = true,
-            SeparatesDeclarationFromImplementation = true
+            SeparatesDeclarationFromImplementation = true,
+            // A package spec announces its routines and the body writes them, usually in two files,
+            // which is why the marker is the header line and not the extension: neither file knows
+            // about the other.
+            SectionMarkers = PackageSections
         }
     ];
 
