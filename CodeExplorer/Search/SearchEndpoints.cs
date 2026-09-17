@@ -176,12 +176,6 @@ internal sealed record TreeResponse(
 /// </summary>
 internal static class SearchEndpoints
 {
-    /// <summary>
-    ///     A file view scrolls, so it asks for the whole file rather than a window. The index refuses
-    ///     files over <c>Index:MaxFileBytes</c> (4 MiB by default), which bounds this well below it.
-    /// </summary>
-    private const int MaxLinesPerFileView = 100_000;
-
     public static void MapSearch(this RouteGroupBuilder api)
     {
         // The project is bound from the route (BoundProject), so an unknown slug is a 404 before the
@@ -222,8 +216,9 @@ internal static class SearchEndpoints
         // Its own route rather than a flag on /file: the runs are the size of the file, and the view
         // renders the code without them and fills the gutter in when they arrive.
         project.MapGet("/file/blame",
-            async (Project project, string path, ProjectIndexes indexes, CancellationToken ct) =>
-                await BlameAsync(indexes, project.Slug, path, ct));
+            async (Project project, string path, HistoryQueries history, CancellationToken ct) =>
+                Answer<BlameAnswer>(
+                    await history.BlameAsync(project.Slug, new BlameRequest(path, 1, null), ct), Blame));
 
         // The two directions of the import graph, a route each rather than one that answers both:
         // they are two reads, the panels draw as each arrives, and a file page that had to wait for
@@ -240,9 +235,11 @@ internal static class SearchEndpoints
         // The change log, paged. The files a commit touched are their own route, like blame is: a
         // page of fifty commits touching a few hundred paths each would be mostly paths nobody opens.
         project.MapGet("/commits",
-            async (Project project, ProjectIndexes indexes, CancellationToken ct, string? repository = null,
+            async (Project project, HistoryQueries history, CancellationToken ct, string? repository = null,
                     int page = 1, int pageSize = DefaultCommitPage) =>
-                await CommitsAsync(indexes, project.Slug, repository, page, pageSize, ct));
+                Answer<ChangeLogAnswer>(
+                    await history.ChangeLogAsync(project.Slug, new ChangeLogRequest(repository, page, pageSize), ct),
+                    Commits));
 
         // The churn ranking (CONTEXT.md, Churn), over a window of days rather than a page of commits:
         // it is a view of its own now, with nothing beside it to agree with. `days` and not a pair of
@@ -253,34 +250,26 @@ internal static class SearchEndpoints
         // oversight: a tool name is agent-facing and trades on the shell verbs a model already knows
         // (CODING_STANDARDS, Comments), where a URL the UI holds follows the vocabulary.
         project.MapGet("/churn",
-            async (Project project, ProjectIndexes indexes, CancellationToken ct, string? repository = null,
+            async (Project project, HistoryQueries history, CancellationToken ct, string? repository = null,
                     int days = HistoryWindow.DefaultDays, int limit = ChurnFilesShown) =>
-                await ChurnAsync(indexes, project.Slug, repository, days, limit, ct));
+                Answer<ChurnAnswer>(
+                    await history.ChurnAsync(project.Slug, new ChurnRequest(repository, days, limit), ct), Churn));
 
         project.MapGet("/commits/{sha}/files",
-            async (Project project, string sha, ProjectIndexes indexes, CancellationToken ct) =>
-                await CommitFilesAsync(indexes, project.Slug, sha, ct));
+            async (Project project, string sha, HistoryQueries history, CancellationToken ct) =>
+                Answer<CommitFilesAnswer>(
+                    await history.CommitFilesAsync(project.Slug, new CommitFilesRequest(sha), ct), CommitFiles));
     }
 
     /// <summary>Commits per page of the change log when the caller does not say. A screen and a bit.</summary>
     private const int DefaultCommitPage = 50;
 
-    /// <summary>The most commits one page may hold. The same ceiling <c>git_log</c> has.</summary>
-    private const int MaxCommitPage = 200;
-
-    private static Task<IResult> CommitsAsync(ProjectIndexes indexes, string project, string? repository,
-        int page, int pageSize, CancellationToken cancellationToken) =>
-        IndexReader.OverIndexAsync(indexes, project, repository, async (index, token) =>
-        {
-            pageSize = Math.Clamp(pageSize, 1, MaxCommitPage);
-            page = Math.Max(1, page);
-            string? scope = index.Repository?.Slug;
-            long total = await index.CommitCountAsync(scope, token);
-            var commits = await index.ChangeLogAsync(scope, pageSize, (page - 1) * pageSize, token);
-            return Results.Ok(new CommitListResponse(total, page, pageSize,
-                commits.Select(c => new CommitResponse(c.Sha, c.RepositorySlug, c.AuthorName, c.AuthorEmail,
-                    c.AuthoredAt, c.Subject, c.Body, c.FilesChanged, c.Added, c.Deleted)).ToList()));
-        }, Status, cancellationToken);
+    private static IResult Commits(ChangeLogAnswer answer) =>
+        Results.Ok(new CommitListResponse(answer.Total, answer.Page, answer.PageSize,
+            answer.Commits
+                .Select(c => new CommitResponse(c.Sha, c.RepositorySlug, c.AuthorName, c.AuthorEmail, c.AuthoredAt,
+                    c.Subject, c.Body, c.FilesChanged, c.Added, c.Deleted))
+                .ToList()));
 
     /// <summary>
     ///     Files in a churn ranking when the caller does not say. A screenful: the ranking is read from
@@ -288,46 +277,30 @@ internal static class SearchEndpoints
     /// </summary>
     private const int ChurnFilesShown = 25;
 
-    /// <summary>The ceiling <c>hot_files</c> has, for the same reason: past it a ranking is not read.</summary>
-    private const int MaxChurnFiles = 100;
+    /// <summary>
+    ///     The most-changed files of a window. A scope with no commits at all draws an empty ranking and
+    ///     no dates rather than a failure: that is a project whose history has not been imported, which
+    ///     the page says in its own words. The repositories the ranking cannot speak for ride along
+    ///     either way, because an empty ranking is where a reader is most likely to conclude that
+    ///     nothing changed.
+    /// </summary>
+    private static IResult Churn(ChurnAnswer answer) =>
+        Results.Ok(new ChurnResponse(answer.Window?.Since, answer.Window?.Until,
+            answer.Files
+                .Select(f => new ChurnFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits, f.Added,
+                    f.Deleted))
+                .ToList(), answer.Coverage.Without));
 
     /// <summary>
-    ///     The most-changed files of a window. A scope with no commits at all answers with an empty
-    ///     ranking and no dates rather than a failure: that is a project whose history has not been
-    ///     imported, which the page says in its own words.
+    ///     The paths one commit touched. A SHA the index does not hold is a problem of kind
+    ///     <see cref="ProblemKind.Missing" /> and therefore a 404 here, rather than an empty list the
+    ///     page would draw as "this commit changed nothing".
     /// </summary>
-    private static Task<IResult> ChurnAsync(ProjectIndexes indexes, string project, string? repository,
-        int days, int limit, CancellationToken cancellationToken) =>
-        IndexReader.OverIndexAsync(indexes, project, repository, async (index, token) =>
-        {
-            string? scope = index.Repository?.Slug;
-            // Read whether or not there is a ranking: an empty page is where a reader is most likely to
-            // conclude that nothing changed. Which repositories these are is the reader's rule, not this
-            // route's — the tool reply draws the same answer from the same place.
-            var coverage = await index.HistoryCoverageAsync(scope, token);
-
-            var window = await index.WindowAsync(days, scope, token);
-            if (window is null) return Results.Ok(new ChurnResponse(null, null, [], coverage.Without));
-
-            var ranked = await index.ChurnAsync(window, scope, null, Math.Clamp(limit, 1, MaxChurnFiles), token);
-            return Results.Ok(new ChurnResponse(window.Since, window.Until,
-                ranked.Select(f => new ChurnFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits,
-                    f.Added, f.Deleted)).ToList(), coverage.Without));
-        }, Status, cancellationToken);
-
-    private static Task<IResult> CommitFilesAsync(ProjectIndexes indexes, string project, string sha,
-        CancellationToken cancellationToken) =>
-        IndexReader.OverIndexAsync(indexes, project, null, async (index, token) =>
-        {
-            var files = await index.CommitFilesAsync(sha, token);
-            // No files means no such commit, in practice: every commit the walk records touched something,
-            // the root included. Said as a 404 rather than an empty list the page would draw as "nothing".
-            if (files.Count == 0)
-                return Results.NotFound(new { error = $"No commit '{sha}' in the history of project '{project}'." });
-            return Results.Ok(new CommitFilesResponse(sha,
-                files.Select(f => new CommitFileResponse(f.Path, f.ChangeKind, f.Added, f.Deleted, f.QualifiedPath))
-                    .ToList()));
-        }, Status, cancellationToken);
+    private static IResult CommitFiles(CommitFilesAnswer answer) =>
+        Results.Ok(new CommitFilesResponse(answer.Sha,
+            answer.Files
+                .Select(f => new CommitFileResponse(f.Path, f.ChangeKind, f.Added, f.Deleted, f.QualifiedPath))
+                .ToList()));
 
     private static IResult FileList(GlobListing listing) =>
         Results.Ok(new FileListResponse(listing.Total,
@@ -377,20 +350,12 @@ internal static class SearchEndpoints
 
     /// <summary>
     ///     A file's attribution as runs. A file with no history answers with no runs rather than a
-    ///     failure: the gutter simply does not draw, and the header line is what says why.
+    ///     failure: the gutter simply does not draw, and the header line is what says why. So does a
+    ///     file the build kept without lines, which the query module answers the same way.
     /// </summary>
-    private static Task<IResult> BlameAsync(
-        ProjectIndexes indexes, string project, string path, CancellationToken cancellationToken) =>
-        IndexReader.OverIndexAsync(indexes, project, null, async (index, token) =>
-        {
-            if (await index.FindFileAsync(path, token) is not { } file)
-                return Results.NotFound(new { error = $"No file '{path}' in project '{project}'." });
-            if (file.SkipReason is not null) return Results.Ok(new BlameResponse(file.QualifiedPath, []));
-
-            var runs = await index.BlameAsync(file.FileId, 1, MaxLinesPerFileView, token);
-            return Results.Ok(new BlameResponse(file.QualifiedPath,
-                runs.Select(r => new BlameRunResponse(r.StartLine, r.EndLine, Commit(r.By))).ToList()));
-        }, Status, cancellationToken);
+    private static IResult Blame(BlameAnswer answer) =>
+        Results.Ok(new BlameResponse(answer.File.QualifiedPath,
+            answer.Runs.Select(r => new BlameRunResponse(r.StartLine, r.EndLine, Commit(r.By))).ToList()));
 
     /// <summary>
     ///     An outcome as JSON: a problem becomes the status its kind says, and a result the shape the

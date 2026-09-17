@@ -10,20 +10,19 @@ namespace CodeExplorer;
 ///     file, and which commit each line was last changed by. They live beside the other index-backed
 ///     tools because that is what they are — history is tables in the project index like any other,
 ///     and none of these ever opens a local copy or talks to a remote.
+///     What each one does is <see cref="HistoryQueries" />'s, which the operator's pages ask the same
+///     questions of; what is left here is the reply an agent reads. That split is the point: a ranking
+///     and a page of the same window cannot disagree about what a window is when only one place
+///     decides, and the sentences below are the half a JSON response has no use for.
 ///     Every one of them is careful about the same thing: attribution says who touched a line last and
 ///     not who wrote the logic (CONTEXT.md, Attribution). An agent that reads it as authorship will
 ///     confidently name the person who reformatted the file, so each tool says so in its own words
 ///     rather than relying on the agent having read another one's.
 /// </summary>
 [McpServerToolType]
-internal sealed class HistoryTools(
-    IHttpContextAccessor httpContextAccessor,
-    ProjectIndexes indexes,
-    IConfiguration configuration)
+internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, HistoryQueries history)
 {
     private const int DefaultCommits = 30;
-
-    private const int MaxCommits = 200;
 
     /// <summary>
     ///     A whole mid-sized file's blame in one call. Runs, not lines, so this is far more of a file
@@ -40,6 +39,8 @@ internal sealed class HistoryTools(
         "This project's index holds no history, so no commit, author or date can be reported for it. "
         + "That is the case for an index built before history was imported, and for one whose repositories "
         + "could not be walked. Ask the operator to refresh the project; the code itself is searchable meanwhile.";
+
+    private string Project => BoundProject.Get(httpContextAccessor).Slug;
 
     [McpServerTool(Name = "git_log", ReadOnly = true, Idempotent = true, Title = "List the project's commits")]
     [Description("""
@@ -58,29 +59,25 @@ internal sealed class HistoryTools(
         int page = 1,
         CancellationToken cancellationToken = default)
     {
-        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, repository,
-            (index, token) => ReadLogAsync(index, limit, page, token), problem => problem.Explanation,
-            cancellationToken);
+        return Reply<LogAnswer>(
+            await history.LogAsync(Project, new LogRequest(repository, limit, page), cancellationToken), Log);
     }
 
-    private static async Task<string> ReadLogAsync(IndexReader index, int limit, int page,
-        CancellationToken cancellationToken)
+    private static string Log(LogAnswer answer)
     {
-        if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
+        if (!answer.HasHistory) return NoHistory;
 
-        limit = Math.Clamp(limit, 1, MaxCommits);
-        int skip = (Math.Max(1, page) - 1) * limit;
-        var commits = await index.CommitsAsync(index.Repository?.Slug, limit, skip, cancellationToken);
-        if (commits.Count == 0)
+        int skip = (answer.Page - 1) * answer.Limit;
+        if (answer.Commits.Count == 0)
             return skip > 0
-                ? $"No commits on page {page}. There are fewer than {skip + 1} commits recorded{Scope(index)}."
-                : $"No commits are recorded{Scope(index)}.";
+                ? $"No commits on page {answer.Page}. There are fewer than {skip + 1} commits recorded{Scope(answer.Repository)}."
+                : $"No commits are recorded{Scope(answer.Repository)}.";
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{commits.Count} {ToolReply.Plural(commits.Count, "commit")}{Scope(index)}, newest first:\n\n");
-        foreach (var commit in commits) Append(text, commit, index.Repository is null);
-        return ToolReply.Cap(text.ToString(), $"Narrow with repository, or raise page past {page}.");
+            $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{Scope(answer.Repository)}, newest first:\n\n");
+        foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null);
+        return ToolReply.Cap(text.ToString(), $"Narrow with repository, or raise page past {answer.Page}.");
     }
 
     [McpServerTool(Name = "file_history", ReadOnly = true, Idempotent = true,
@@ -99,30 +96,25 @@ internal sealed class HistoryTools(
         int limit = DefaultCommits,
         CancellationToken cancellationToken = default)
     {
-        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
-            (index, token) => ReadFileHistoryAsync(index, path, limit, token), problem => problem.Explanation,
-            cancellationToken);
+        return Reply<FileHistoryAnswer>(
+            await history.FileHistoryAsync(Project, new FileHistoryRequest(path, limit), cancellationToken),
+            Changes);
     }
 
-    private static async Task<string> ReadFileHistoryAsync(IndexReader index, string path, int limit,
-        CancellationToken cancellationToken)
+    private static string Changes(FileHistoryAnswer answer)
     {
-        if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
+        if (!answer.HasHistory) return NoHistory;
 
-        var located = await LocateAsync(index, path, cancellationToken);
-        if (located.Problem is not null) return located.Problem;
-
-        var commits = await index.FileHistoryAsync(located.RepositorySlug!, located.PathInRepository!,
-            Math.Clamp(limit, 1, MaxCommits), cancellationToken);
-        if (commits.Count == 0)
-            return $"No commit in the recorded history changed '{located.Spelled}'. "
+        string spelled = answer.File.QualifiedPath;
+        if (answer.Commits.Count == 0)
+            return $"No commit in the recorded history changed '{spelled}'. "
                    + "The file is in the index, so this means its history is older than what was imported, or it "
                    + "reached this path by a rename — try blame, which follows the content rather than the path.";
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{commits.Count} {ToolReply.Plural(commits.Count, "commit")} changed {located.Spelled}, newest first:\n\n");
-        foreach (var commit in commits) Append(text, commit, false);
+            $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")} changed {spelled}, newest first:\n\n");
+        foreach (var commit in answer.Commits) Append(text, commit, false);
         return ToolReply.Cap(text.ToString(), "Lower limit to see fewer.");
     }
 
@@ -143,31 +135,25 @@ internal sealed class HistoryTools(
         int? endLine = null,
         CancellationToken cancellationToken = default)
     {
-        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
-            (index, token) => ReadBlameAsync(index, path, startLine, endLine, token), problem => problem.Explanation,
-            cancellationToken);
+        return Reply<BlameAnswer>(
+            await history.BlameAsync(Project, new BlameRequest(path, startLine, endLine), cancellationToken),
+            Attribution);
     }
 
-    private static async Task<string> ReadBlameAsync(IndexReader index, string path, int startLine, int? endLine,
-        CancellationToken cancellationToken)
+    private static string Attribution(BlameAnswer answer)
     {
-        if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
+        if (!answer.HasHistory) return NoHistory;
 
-        var located = await LocateAsync(index, path, cancellationToken);
-        if (located.Problem is not null) return located.Problem;
-        if (located.File!.SkipReason is { } reason)
-            return $"'{located.Spelled}' was not indexed ({reason}), so it has no lines to attribute.";
-
-        int first = Math.Max(1, startLine);
-        int last = endLine is null or < 1 ? int.MaxValue : endLine.Value;
-        var runs = await index.BlameAsync(located.File.FileId, first, last, cancellationToken);
-        if (runs.Count == 0)
-            return $"'{located.Spelled}' has no lines between {first} and "
-                   + (last == int.MaxValue ? "the end of the file." : $"{last}.");
+        string spelled = answer.File.QualifiedPath;
+        if (answer.File.SkipReason is { } reason)
+            return $"'{spelled}' was not indexed ({reason}), so it has no lines to attribute.";
+        if (answer.Runs.Count == 0)
+            return $"'{spelled}' has no lines between {answer.First} and "
+                   + (answer.Last is null ? "the end of the file." : $"{answer.Last}.");
 
         var text = new StringBuilder();
-        text.Append(CultureInfo.InvariantCulture, $"{located.Spelled}, who last changed each line:\n\n");
-        foreach (var run in runs.Take(MaxBlameRuns))
+        text.Append(CultureInfo.InvariantCulture, $"{spelled}, who last changed each line:\n\n");
+        foreach (var run in answer.Runs.Take(MaxBlameRuns))
         {
             string lines = run.StartLine == run.EndLine
                 ? run.StartLine.ToString(CultureInfo.InvariantCulture)
@@ -181,9 +167,9 @@ internal sealed class HistoryTools(
             text.Append(entry);
         }
 
-        if (runs.Count > MaxBlameRuns)
+        if (answer.Runs.Count > MaxBlameRuns)
             text.Append(CultureInfo.InvariantCulture,
-                $"\n{runs.Count - MaxBlameRuns} further {ToolReply.Plural(runs.Count - MaxBlameRuns, "run")} not shown; narrow with startLine and endLine.\n");
+                $"\n{answer.Runs.Count - MaxBlameRuns} further {ToolReply.Plural(answer.Runs.Count - MaxBlameRuns, "run")} not shown; narrow with startLine and endLine.\n");
         return ToolReply.Cap(text.ToString(), "Narrow with startLine and endLine.");
     }
 
@@ -194,13 +180,6 @@ internal sealed class HistoryTools(
     ///     an agent the same range in their own prose, and two would eventually disagree.
     /// </summary>
     private const int DefaultRankedFiles = 20;
-
-    /// <summary>
-    ///     A hundred files is already more than anybody reads off a ranking, and the reply cap would
-    ///     bite around there anyway. High enough that an agent wanting the whole picture of a small
-    ///     project gets it in one call.
-    /// </summary>
-    private const int MaxRankedFiles = 100;
 
     [McpServerTool(Name = "hot_files", ReadOnly = true, Idempotent = true, Title = "Rank files by how much they changed")]
     [Description("""
@@ -221,41 +200,34 @@ internal sealed class HistoryTools(
         int limit = DefaultRankedFiles,
         CancellationToken cancellationToken = default)
     {
-        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
-            (index, token) => ReadHotFilesAsync(index, directory, days, limit, token), problem => problem.Explanation,
-            cancellationToken);
+        string project = Project;
+        return Reply<ChurnAnswer>(
+            await history.ChurnAsync(project, new ChurnRequest(directory, days, limit), cancellationToken),
+            answer => Ranking(answer, project));
     }
 
-    private static async Task<string> ReadHotFilesAsync(IndexReader index, string? directory, int days, int limit,
-        CancellationToken cancellationToken)
+    private static string Ranking(ChurnAnswer answer, string projectSlug)
     {
-        if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
-
-        var scope = await ScopeAsync(index, directory, cancellationToken);
-        if (scope.Problem is not null) return scope.Problem;
-
-        var window = await index.WindowAsync(days, scope.RepositorySlug, cancellationToken);
+        if (!answer.HasHistory) return NoHistory;
         // The project has history and this scope has none: a repository whose walk found nothing, which
         // reads as "nobody has changed it" unless it is said outright. This answer names the scope it
         // is about, so the coverage caveat below would only repeat it — and is not paid for here.
-        if (window is null) return NoCommitsIn(scope.Spelled, index.ProjectSlug);
+        if (answer.Window is not { } window) return NoCommitsIn(answer.ScopeSpelled, projectSlug);
 
-        // Read before the answer branches, because an empty ranking needs the caveat as much as a full
-        // one does, and more: a reader shown nothing is the one most likely to conclude nothing changed.
-        string? coverage = await CoverageAsync(index, scope.RepositorySlug, cancellationToken);
+        // Said whether or not there is a ranking, and more when there is not: a reader shown nothing is
+        // the one most likely to conclude that nothing changed.
+        string? coverage = Coverage(answer.Coverage);
 
-        var ranked = await index.ChurnAsync(window, scope.RepositorySlug, scope.DirectoryInRepository,
-            Math.Clamp(limit, 1, MaxRankedFiles), cancellationToken);
-        if (ranked.Count == 0)
-            return $"No commit changed a file in {scope.Spelled} between {window.Describe()}. "
+        if (answer.Files.Count == 0)
+            return $"No commit changed a file in {answer.ScopeSpelled} between {window.Describe()}. "
                    + $"The newest recorded commit there is {window.Until:yyyy-MM-dd}; raise days to look further back."
                    + (coverage is null ? "" : " " + coverage);
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{ranked.Count} most-changed {ToolReply.Plural(ranked.Count, "file")} in {scope.Spelled}, {window.Describe()}:\n\n");
+            $"{answer.Files.Count} most-changed {ToolReply.Plural(answer.Files.Count, "file")} in {answer.ScopeSpelled}, {window.Describe()}:\n\n");
 
-        foreach (var file in ranked)
+        foreach (var file in answer.Files)
         {
             text.Append(CultureInfo.InvariantCulture,
                 $"{file.Commits,4} {ToolReply.Plural(file.Commits, "commit"),-8} +{file.Added,-7:N0} -{file.Deleted,-7:N0} ");
@@ -265,19 +237,6 @@ internal sealed class HistoryTools(
         if (coverage is not null) text.Append(CultureInfo.InvariantCulture, $"\n{coverage}\n");
         return ToolReply.Cap(text.ToString(), "Lower limit, or narrow with directory.");
     }
-
-    /// <summary>
-    ///     Default for <c>History:MaxCommitPaths</c>, the most paths a commit may touch and still be
-    ///     paired. A reformat, a vendor drop or an initial import couples every path it touched to
-    ///     every other, and those pairs are one commit rather than evidence about any file in it.
-    ///     Two hundred is the judgement: high enough that a feature landing across a module still
-    ///     counts as coupling, low enough that nothing a person wrote by hand in one sitting reaches
-    ///     it. It is a setting and not a constant because what counts as a mass commit differs between
-    ///     a repository of two hundred files and one of eighty thousand.
-    /// </summary>
-    private const int DefaultMaxCommitPaths = 200;
-
-    private readonly int _maxCommitPaths = configuration.GetValue("History:MaxCommitPaths", DefaultMaxCommitPaths);
 
     [McpServerTool(Name = "co_changed", ReadOnly = true, Idempotent = true,
         Title = "Find the files that usually change with a file")]
@@ -299,50 +258,44 @@ internal sealed class HistoryTools(
         int limit = DefaultRankedFiles,
         CancellationToken cancellationToken = default)
     {
-        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
-            (index, token) => ReadCoChangedAsync(index, path, days, limit, token), problem => problem.Explanation,
-            cancellationToken);
+        string project = Project;
+        return Reply<CoChangeAnswer>(
+            await history.CoChangedAsync(project, new CoChangeRequest(path, days, limit), cancellationToken),
+            answer => Coupling(answer, project));
     }
 
-    private async Task<string> ReadCoChangedAsync(IndexReader index, string path, int days, int limit,
-        CancellationToken cancellationToken)
+    private static string Coupling(CoChangeAnswer answer, string projectSlug)
     {
-        if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
+        if (!answer.HasHistory) return NoHistory;
 
-        var located = await LocateAsync(index, path, cancellationToken);
-        if (located.Problem is not null) return located.Problem;
+        string spelled = answer.File.QualifiedPath;
+        if (answer.Window is not { } window) return NoCommitsIn($"repository '{answer.File.RepositorySlug}'", projectSlug);
 
-        // Scoped to the anchor's own repository, because that is the only one whose commits could have
-        // carried it — and so the window is that repository's newest commit, not another's.
-        var window = await index.WindowAsync(days, located.RepositorySlug, cancellationToken);
-        if (window is null) return NoCommitsIn($"repository '{located.RepositorySlug}'", index.ProjectSlug);
-
-        var coupling = await index.CoChangedAsync(window, located.RepositorySlug!, located.PathInRepository!,
-            _maxCommitPaths, Math.Clamp(limit, 1, MaxRankedFiles), cancellationToken);
-
-        // Read before the answer branches: a window that reached none of the file's commits is not a
+        var coupling = answer.Coupling;
+        // Said before the answer branches: a window that reached none of the file's commits is not a
         // file that moves alone, and an agent shown the wrong one of those two learns a wrong fact.
         if (coupling.Commits == 0)
             // The window names its own end, so the repository is not named here: in a single-repository
             // project its slug is one the operator never assigned and no path an agent holds contains.
-            return $"No commit changed {located.Spelled} between {window.Describe()}, so there is nothing it "
+            return $"No commit changed {spelled} between {window.Describe()}, so there is nothing it "
                    + "could have changed alongside; raise days to look further back.";
 
         if (coupling.Files.Count == 0)
             return $"No other file was changed by any of the {coupling.Paired} "
-                   + $"{ToolReply.Plural(coupling.Paired, "commit")} that touched {located.Spelled} between "
+                   + $"{ToolReply.Plural(coupling.Paired, "commit")} that touched {spelled} between "
                    + $"{window.Describe()}. It moves alone in the history that was imported, which is evidence "
                    + $"and not proof: that history begins where the file was last renamed."
-                   + (coupling.Excluded == 0 ? "" : " " + ExcludedNote(coupling));
+                   + (coupling.Excluded == 0 ? "" : " " + ExcludedNote(coupling, answer.MaxCommitPaths));
 
         string files = ToolReply.Plural(coupling.Files.Count, "file");
         string commits = ToolReply.Plural(coupling.Paired, "commit");
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{coupling.Files.Count} {files} changed alongside {located.Spelled}, out of the {coupling.Paired} {commits} that touched it, {window.Describe()}.\n");
+            $"{coupling.Files.Count} {files} changed alongside {spelled}, out of the {coupling.Paired} {commits} that touched it, {window.Describe()}.\n");
         // Above the ranking and not below it: a full ranking is exactly where the reply cap bites, and
         // it is also exactly where knowing that a third of the file's commits were left out matters.
-        if (coupling.Excluded > 0) text.Append(CultureInfo.InvariantCulture, $"{ExcludedNote(coupling)}\n");
+        if (coupling.Excluded > 0)
+            text.Append(CultureInfo.InvariantCulture, $"{ExcludedNote(coupling, answer.MaxCommitPaths)}\n");
         text.Append('\n');
 
         foreach (var file in coupling.Files)
@@ -354,6 +307,14 @@ internal sealed class HistoryTools(
 
         return ToolReply.Cap(text.ToString(), "Lower limit to see fewer.");
     }
+
+    /// <summary>
+    ///     A tool reply from an answer: the sentence a problem already is, or what this file makes of a
+    ///     result. The cast is safe while every query member answers with its one result type or a
+    ///     problem, and throws rather than lies if one ever answers with something else.
+    /// </summary>
+    private static string Reply<T>(Outcome outcome, Func<T, string> render) where T : Outcome =>
+        outcome is Problem problem ? problem.Explanation : render((T)outcome);
 
     /// <summary>
     ///     Ends a ranked row: the path, and the mark saying there is nothing at it to read any more.
@@ -374,12 +335,12 @@ internal sealed class HistoryTools(
     ///     ceiling is wrong for their repository.
     ///     The sentence carries no leading separator, because the two callers want different ones.
     /// </summary>
-    private string ExcludedNote(CoChanges coupling)
+    private static string ExcludedNote(CoChanges coupling, int maxCommitPaths)
     {
         // Built in one piece and only then concatenated: an interpolated string joined to another with
         // `+` is a string, not a handler, and the culture-aware overloads bind to char* instead.
         string counted = string.Create(CultureInfo.InvariantCulture,
-            $"{coupling.Excluded} of its {coupling.Commits} commits touched more than {_maxCommitPaths} paths");
+            $"{coupling.Excluded} of its {coupling.Commits} commits touched more than {maxCommitPaths} paths");
         return counted
                + $" and {ToolReply.Plural(coupling.Excluded, "was", "were")} left out of the pairing: a commit "
                + "that size pairs every path it touched with every other, which is one commit and not coupling. "
@@ -403,46 +364,12 @@ internal sealed class HistoryTools(
     ///     Which repositories those are is <see cref="IndexReader.HistoryCoverageAsync" />'s to decide;
     ///     this only says it in the words a tool reply uses.
     /// </summary>
-    private static async Task<string?> CoverageAsync(IndexReader index, string? scopedTo,
-        CancellationToken cancellationToken)
-    {
-        var coverage = await index.HistoryCoverageAsync(scopedTo, cancellationToken);
-        return coverage.Without.Count == 0
+    private static string? Coverage(HistoryCoverage coverage) =>
+        coverage.Without.Count == 0
             ? null
             : $"History was imported for {string.Join(", ", coverage.With)} and for none of "
               + $"{string.Join(", ", coverage.Without)}, so nothing from those can appear above however "
               + "much they changed.";
-    }
-
-    /// <summary>
-    ///     What a <c>directory</c> argument narrows to: a repository, a directory inside it, or neither
-    ///     for the whole project — with the sentence to answer with instead when it names a repository
-    ///     the project does not have. <c>Spelled</c> is what the reply calls the scope, so the ranking
-    ///     and the misses name it the same way.
-    /// </summary>
-    private static async Task<ChurnScope> ScopeAsync(IndexReader index, string? directory,
-        CancellationToken cancellationToken)
-    {
-        string project = $"project '{index.ProjectSlug}'";
-        var (located, problem) = await index.LocateDirectoryAsync(directory, cancellationToken);
-        if (located is null) return new ChurnScope(problem!.Explanation, null, null, "");
-        if (located.Repository is null) return new ChurnScope(null, null, null, project);
-
-        // Null rather than an empty path: the repository's own root is the whole repository, which the
-        // ranking scopes with the slug alone and names as such.
-        string? directoryInRepository = located.PathInRepository.Length == 0 ? null : located.PathInRepository;
-        return new ChurnScope(null, located.Repository.Slug, directoryInRepository,
-            directoryInRepository is null
-                ? $"repository '{located.Repository.Slug}' of {project}"
-                : $"'{located.QualifiedPath}' in {project}");
-    }
-
-    /// <summary>What a ranking covers, or the sentence to answer with instead. Never both.</summary>
-    private sealed record ChurnScope(
-        string? Problem,
-        string? RepositorySlug,
-        string? DirectoryInRepository,
-        string Spelled);
 
     private static void Append(StringBuilder text, RecordedChange commit, bool withRepository)
     {
@@ -454,32 +381,6 @@ internal sealed class HistoryTools(
         text.Append(CultureInfo.InvariantCulture, $"\n            {ToolReply.Clip(commit.Subject)}\n");
     }
 
-    private static string Scope(IndexReader index) =>
-        index.Repository is { } repository ? $" in repository '{repository.Slug}'" : "";
-
-    /// <summary>
-    ///     Resolves a qualified path to the file the index holds, with the same misses spelled the same
-    ///     way <c>read_file</c> spells them: a path that names no file and a path in an unknown
-    ///     repository are answers an agent acts on, not errors.
-    /// </summary>
-    private static async Task<LocatedFile> LocateAsync(IndexReader index, string path,
-        CancellationToken cancellationToken)
-    {
-        // The rule and the refusal sentences are the reader's, because `read_file` and `imports` ask
-        // the same question and an agent that got the path wrong must be told the same thing
-        // whichever tool it asked. What stays here is the two pieces this file's callers need beside
-        // the row: which repository it landed in, and the path inside it.
-        var (file, problem) = await index.LocateAsync(path, false, cancellationToken);
-        if (file is null) return new LocatedFile(problem!.Explanation);
-
-        return new LocatedFile(null, file, file.RepositorySlug, file.PathInRepository, file.QualifiedPath);
-    }
-
-    /// <summary>A resolved file, or the sentence to answer with instead. Never both.</summary>
-    private sealed record LocatedFile(
-        string? Problem,
-        IndexedFile? File = null,
-        string? RepositorySlug = null,
-        string? PathInRepository = null,
-        string Spelled = "");
+    private static string Scope(IndexedRepository? repository) =>
+        repository is { } found ? $" in repository '{found.Slug}'" : "";
 }
