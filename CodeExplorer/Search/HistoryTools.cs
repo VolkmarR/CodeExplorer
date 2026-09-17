@@ -172,6 +172,144 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, Pro
         return ToolReply.Cap(text.ToString(), "Narrow with startLine and endLine.");
     }
 
+    /// <summary>
+    ///     A screenful. A churn ranking is read from the top down and the tail of one is noise: the
+    ///     twentieth busiest file of a quarter is rarely what anybody was looking for.
+    /// </summary>
+    private const int DefaultHotFiles = 20;
+
+    /// <summary>
+    ///     A hundred files is already more than anybody reads off a ranking, and the reply cap would
+    ///     bite around there anyway. High enough that an agent wanting the whole picture of a small
+    ///     project gets it in one call.
+    /// </summary>
+    private const int MaxHotFiles = 100;
+
+    [McpServerTool(Name = "hot_files", ReadOnly = true, Idempotent = true, Title = "Rank files by how much they changed")]
+    [Description("""
+                 Ranks the files that changed most over a window of history, most commits first, with the lines each gained and lost. Use it to find where a project is actually moving before reading any of it, and to tell a file that is edited constantly from one nobody has touched in a year.
+
+                 - The window ends at the newest commit in the index, not at today: an index is built by a refresh and may be behind its remotes. The reply says which dates it covered, so a stale index shows as one.
+                 - Scope it with `directory`, a qualified path: `main/src/Api` for one area, or a bare repository slug for one repository.
+                 - Ranking is by number of commits, then by lines changed. A reformat counts as a change, the same way blame does — this is where work happened, not where the logic changed.
+                 - Files a later commit deleted or renamed away are ranked too and marked; there is nothing at those paths to read now.
+                 """)]
+    public async Task<string> HotFiles(
+        [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
+        int days = HistoryWindow.DefaultDays,
+        [Description(
+            "Qualified path of a directory to rank within, e.g. \"main/src/Api\", or a repository slug alone for one repository. Default: the whole project.")]
+        string? directory = null,
+        [Description("Files to return, 1-100. Default 20.")]
+        int limit = DefaultHotFiles,
+        CancellationToken cancellationToken = default)
+    {
+        var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+            cancellationToken);
+        if (open is IndexOpen.Refused refused) return refused.Explanation;
+        using var index = ((IndexOpen.Opened)open).Reader;
+        if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
+
+        var scope = await ScopeAsync(index, directory, cancellationToken);
+        if (scope.Problem is not null) return scope.Problem;
+
+        // Which repositories the ranking can speak for, decided before the answer branches: an empty
+        // ranking needs it as much as a full one does, and more — a reader shown nothing is the one
+        // most likely to conclude that nothing changed.
+        string? coverage = await HistoryCoverageAsync(index, scope.RepositorySlug, cancellationToken);
+
+        var window = await index.WindowAsync(days, scope.RepositorySlug, cancellationToken);
+        // The project has history and this scope has none: a repository whose walk found nothing, which
+        // reads as "nobody has changed it" unless it is said outright.
+        if (window is null)
+            return $"No commit is recorded for {scope.Spelled}, although project '{index.ProjectSlug}' has history "
+                   + "for other repositories. Its history could not be walked; git_log without a scope shows what was imported.";
+
+        var ranked = await index.ChurnAsync(window, scope.RepositorySlug, scope.DirectoryInRepository,
+            Math.Clamp(limit, 1, MaxHotFiles), cancellationToken);
+        if (ranked.Count == 0)
+            return $"No commit changed a file in {scope.Spelled} between {window.Describe()}. "
+                   + $"The newest recorded commit there is {window.Until:yyyy-MM-dd}; raise days to look further back."
+                   + (coverage is null ? "" : " " + coverage);
+
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture,
+            $"{ranked.Count} most-changed {ToolReply.Plural(ranked.Count, "file")} in {scope.Spelled}, {window.Describe()}:\n\n");
+
+        foreach (var file in ranked)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"{file.Commits,4} {ToolReply.Plural(file.Commits, "commit"),-8} +{file.Added,-7:N0} -{file.Deleted,-7:N0} {file.QualifiedPath}");
+            if (!file.AtHead) text.Append("  (no longer at HEAD)");
+            text.Append('\n');
+        }
+
+        if (coverage is not null) text.Append(CultureInfo.InvariantCulture, $"\n{coverage}\n");
+        return ToolReply.Cap(text.ToString(), "Lower limit, or narrow with directory.");
+    }
+
+    /// <summary>
+    ///     Which repositories of the project have imported history and which have none, or null when
+    ///     the question does not arise — one repository, or a call already scoped to one. A ranking
+    ///     that silently omits a repository whose walk failed is a ranking an agent reads as a complete
+    ///     picture of the project (CONTEXT.md, History).
+    /// </summary>
+    private static async Task<string?> HistoryCoverageAsync(IndexReader index, string? scopedTo,
+        CancellationToken cancellationToken)
+    {
+        if (scopedTo is not null) return null;
+        var counts = await index.CommitCountsAsync(cancellationToken);
+        if (counts.Count < 2) return null;
+
+        var without = counts.Where(r => r.Commits == 0).Select(r => r.Slug).ToList();
+        if (without.Count == 0) return null;
+
+        var with = counts.Where(r => r.Commits > 0).Select(r => r.Slug).ToList();
+        return $"History was imported for {string.Join(", ", with)} and for none of {string.Join(", ", without)}, "
+               + "so nothing from those can appear above however much they changed.";
+    }
+
+    /// <summary>
+    ///     What a <c>directory</c> argument narrows to: a repository, a directory inside it, or neither
+    ///     for the whole project — with the sentence to answer with instead when it names a repository
+    ///     the project does not have. <c>Spelled</c> is what the reply calls the scope, so the ranking
+    ///     and the misses name it the same way.
+    /// </summary>
+    private static async Task<ChurnScope> ScopeAsync(IndexReader index, string? directory,
+        CancellationToken cancellationToken)
+    {
+        string project = $"project '{index.ProjectSlug}'";
+        if (string.IsNullOrWhiteSpace(directory)) return new ChurnScope(null, null, null, project);
+
+        var paths = await index.PathsAsync(cancellationToken);
+        // Null is the repository level, which only a multi-repository project has and which a non-empty
+        // argument cannot parse to; a blank one was answered above.
+        var qualified = paths.Parse(directory);
+        if (qualified is null)
+            return new ChurnScope(
+                $"'{directory}' names no directory: {await index.PathRuleAsync(cancellationToken)}", null, null, "");
+
+        var repository = await index.FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
+        if (repository is null)
+            return new ChurnScope(
+                $"{await index.UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these.",
+                null, null, "");
+
+        string spelled = paths.Format(repository.Slug, qualified.PathInRepository);
+        return new ChurnScope(null, repository.Slug,
+            qualified.PathInRepository.Length == 0 ? null : qualified.PathInRepository,
+            qualified.PathInRepository.Length == 0
+                ? $"repository '{repository.Slug}' of {project}"
+                : $"'{spelled}' in {project}");
+    }
+
+    /// <summary>What a ranking covers, or the sentence to answer with instead. Never both.</summary>
+    private sealed record ChurnScope(
+        string? Problem,
+        string? RepositorySlug,
+        string? DirectoryInRepository,
+        string Spelled);
+
     private static void Append(StringBuilder text, RecordedChange commit, bool withRepository)
     {
         text.Append(CultureInfo.InvariantCulture,
