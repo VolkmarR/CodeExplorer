@@ -242,15 +242,18 @@ public sealed class SearchEndpointTests
     }
 
     [Fact]
-    public async Task A_directory_that_is_not_in_the_index_is_an_empty_level_not_a_not_found()
+    public async Task A_directory_that_is_not_in_the_index_is_explained_not_shown_as_an_empty_level()
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        // Only a project with no index at all is a 404 here. An empty level is an answer: the view
-        // still draws the breadcrumb that leads back out of it.
-        var level = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree?path=one/nowhere");
+        // The same sentence list_tree gives an agent, as a 400 the view draws as "nothing here": an
+        // empty level would read as a directory that exists and holds nothing, which is a different fact.
+        using var http = host.CreateClient();
+        using var response = await http.GetAsync("/api/projects/alpha/tree?path=one/nowhere", Ct);
 
-        Assert.Empty(level.Entries);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("'nowhere' is not a directory in repository 'one'",
+            await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -583,7 +586,9 @@ public sealed class SearchEndpointTests
         using var http = host.CreateClient();
         using var response = await http.GetAsync(Route("imports", "one/src/Nowhere.cs"), Ct);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        // A 404 like the file page itself gives for the path: the panel is a page that is not there,
+        // and the sentence is the one every reader gives a path that names no file.
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Contains("No indexed file 'one/src/Nowhere.cs'", await response.Content.ReadAsStringAsync(Ct),
             StringComparison.Ordinal);
     }
