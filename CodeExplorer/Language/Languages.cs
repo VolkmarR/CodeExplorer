@@ -45,6 +45,9 @@ public static class Languages
     ///     because a script holding both is written with the same two headers whatever it is named:
     ///     the extension says which dialect to read a file as and never which half of one it is.
     /// </summary>
+    /// <summary>What opens a routine body in the SQL family, where the C family writes a bracket.</summary>
+    private static readonly string[] SqlBodyOpeners = ["as", "is"];
+
     private static readonly SectionMarker[] PackageSections =
     [
         new SectionMarker("create or replace package body", DeclarationRole.Implementation),
@@ -164,6 +167,7 @@ public static class Languages
             ],
             DeclarationKeywords = ["class", "interface", "struct", "structure", "vostruct", "union", "enum"],
             DeclarationNamesFollowKeyword = true,
+            DeclarationBodyOpeners = ["as"],
             CaseInsensitiveKeywords = true,
             GeneratedPathPatterns = ["*_vo.prg", "*.designer.prg"]
         },
@@ -238,7 +242,6 @@ public static class Languages
             // written here at all, and the shared shape found neither.
             TypeNamesPrecedeKeyword = true,
             CaseInsensitiveKeywords = true,
-            SeparatesDeclarationFromImplementation = true,
             // A unit announces its routines in `interface` and writes them in `implementation`, and
             // the two lines are the only thing in the file that says which half a `procedure Foo;` is
             // in. Before the first of them — the `unit Foo;` line and the uses clause — neither role
@@ -288,11 +291,12 @@ public static class Languages
             MemberAccessOperators = ["."],
             DeclarationModifiers = SqlModifiers,
             DeclarationNamesFollowKeyword = true,
+            // A routine here opens its body with a word where the C family opens one with a bracket.
+            DeclarationBodyOpeners = SqlBodyOpeners,
             CaseInsensitiveKeywords = true,
             // A `.sql` script may hold an Oracle package spec, a body, or both, and the headers are
             // the only thing that says which. Without the split declared here, the half of this
             // dialect that is written into `.sql` files answers that it has no halves.
-            SeparatesDeclarationFromImplementation = true,
             SectionMarkers = PackageSections
         },
         new LanguageProfile("PL/SQL", ["pks", "pkb", "plsql", "prc", "fnc", "trg"])
@@ -304,8 +308,8 @@ public static class Languages
             MemberAccessOperators = ["."],
             DeclarationModifiers = [.. SqlModifiers, "package", "body", "cursor", "exception"],
             DeclarationNamesFollowKeyword = true,
+            DeclarationBodyOpeners = SqlBodyOpeners,
             CaseInsensitiveKeywords = true,
-            SeparatesDeclarationFromImplementation = true,
             // A package spec announces its routines and the body writes them, usually in two files,
             // which is why the marker is the header line and not the extension: neither file knows
             // about the other.

@@ -58,6 +58,16 @@ internal static class ToolReply
         string.Create(CultureInfo.InvariantCulture,
             $"{count} {Plural(count, "file")} outside your filters; the filters hid every match. Widen or drop them to see those.");
 
+    /// <summary>
+    ///     The other half of <see cref="HiddenByFilters" />: matches were shown, and the filters hid
+    ///     further ones. Said in one place because a thin answer whose declaration sits in an excluded
+    ///     file is the footgun every index search shares, and two spellings of the warning would let
+    ///     one tool sound more certain than another about the same thing.
+    /// </summary>
+    public static string PartlyHiddenByFilters(long count) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"your filters hid {count} further matching {Plural(count, "file")}. A declaration you cannot see may be in one of them. Re-run without them to check.");
+
     public static string Bytes(long size) => size switch
     {
         < 1024 => string.Create(CultureInfo.InvariantCulture, $"{size} B"),
