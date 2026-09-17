@@ -38,6 +38,17 @@ comment, a string or an import. Determined from the text alone, never from langu
 reference is strong evidence and not proof.
 _Avoid_: Usage, call site, occurrence
 
+**Declaration**:
+A line that introduces a name: a type, a routine, a member. Read from the shape of the line in the
+language the file is written in, so it is evidence of the same strength as a reference and never
+proof, and a form no language profile knows is a declaration this does not find rather than one
+that is not there. Where a language announces a routine in one place and writes it in another —
+Delphi's `interface` against its `implementation`, a PL/SQL package spec against its body — both
+lines are declarations and each says which of the two it is; where the two coincide, it says
+nothing rather than picking one.
+_Avoid_: Definition (except as the name of the tool that answers with declarations), signature,
+symbol
+
 **Commit**:
 One recorded change on a repository's default branch, identified by its SHA and carrying the author
 who wrote it. Merges count as one commit and their side branches are not walked (ADR-0007), so a

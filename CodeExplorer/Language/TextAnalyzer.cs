@@ -58,6 +58,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     private readonly Regex _keywordDeclaration;
     private readonly Regex _memberDeclaration;
     private readonly LanguageProfile _profile;
+    private readonly Regex _precedingTypeDeclaration;
     private readonly Regex _typeDeclaration;
     private readonly Regex _typedDeclarationTail;
 
@@ -77,6 +78,14 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     ///     while a bare <c>*</c> is a comment at the start of a line and a multiplication anywhere else.
     /// </summary>
     private readonly string[] _lineStartComments;
+
+    /// <summary>
+    ///     What moves the file from one side of the declaration/implementation split to the other,
+    ///     longest phrase first so that <c>create package body</c> is not read as the
+    ///     <c>create package</c> it begins with. Empty for every language without a split, which is
+    ///     what makes this cost nothing there.
+    /// </summary>
+    private readonly SectionMarker[] _sectionMarkers;
 
     /// <summary>
     ///     Everything a line can be inside: the block comments and the string literals, in one table
@@ -124,6 +133,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         _typePrefixes = [.. profile.TypePrefixOperators];
         _importPrefixes = [.. profile.ImportPrefixes];
         _declarationModifiers = [.. profile.DeclarationModifiers];
+        _sectionMarkers = [.. profile.SectionMarkers.OrderByDescending(marker => marker.Phrase.Length)];
         char[] opensInCode =
         [
             .. _lineComments.Concat(forms.Select(entry => entry.Form.Open)).Select(o => o[0]).Distinct()
@@ -147,7 +157,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                     SearchValues.Create(ends.ToArray()), SearchValues.Create(inside.ToArray()));
             })
         ];
-        _start = new TextPosition(this, []);
+        _start = new TextPosition(this, [], null);
 
         _keywordComparison = profile.CaseInsensitiveKeywords
             ? StringComparison.OrdinalIgnoreCase
@@ -159,21 +169,34 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             ? MatchesNothing
             : $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+[\w<>,\[\]\?\.]+\s+(\w+)\s*[\(<{{=]";
         // The xBase, Delphi and SQL shape: the introducing word and then the name, with the return
-        // type — where there is one — after it rather than before.
+        // type — where there is one — after it rather than before. The name may be qualified, which
+        // is how every language that splits declaration from implementation writes the second half:
+        // `procedure TCustomer.Save;` and `create package body app.orders` name the type they belong
+        // to, and reading only as far as the dot found no declaration on the line at all.
+        // `as` and `is` are terminators here beside the punctuation, because the SQL family opens a
+        // body with a word where the others open it with a bracket.
         string keywordPattern = modifiers is null || !profile.DeclarationNamesFollowKeyword
             ? MatchesNothing
-            : $@"^\s*(?:(?:{modifiers})\s+)+(\w+)\s*[\(<{{=;:]";
-        string typePattern = Alternation(profile.DeclarationKeywords) is { } keywords
-            ? $@"^\s*(?:\[[^\]]*\]\s*)*(?:[\w]+\s+)*\b(?:{keywords})\s+(\w+)"
-            : MatchesNothing;
+            : $@"^\s*(?:(?:{modifiers})\s+)+(?:(\w+)\s*\.\s*)?(\w+)\s*(?:[\(<{{=;:]|\s(?:as|is)\b)";
+        string? typeKeywords = Alternation(profile.DeclarationKeywords);
+        string typePattern = typeKeywords is null
+            ? MatchesNothing
+            : $@"^\s*(?:\[[^\]]*\]\s*)*(?:[\w]+\s+)*\b(?:{typeKeywords})\s+(\w+)";
+        // Delphi's `TCustomer = class(TBase)`, where the name is in front of the word that says what
+        // kind of thing it is. Written out as its own shape rather than folded into the one above: an
+        // alternation covering both would match a line that is neither.
+        string precedingTypePattern = typeKeywords is null || !profile.TypeNamesPrecedeKeyword
+            ? MatchesNothing
+            : $@"^\s*(\w+)\s*=\s*(?:packed\s+)?(?:{typeKeywords})\b";
 
         _memberDeclaration = new Regex(flag + memberPattern, RegexOptions.CultureInvariant);
         _keywordDeclaration = new Regex(flag + keywordPattern, RegexOptions.CultureInvariant);
         _typeDeclaration = new Regex(flag + typePattern, RegexOptions.CultureInvariant);
+        _precedingTypeDeclaration = new Regex(flag + precedingTypePattern, RegexOptions.CultureInvariant);
         // Only the shapes this language actually writes. A language that declares nothing this can
         // read asks the engine for no lines at all, rather than for the lines a pattern that matches
         // nothing would return.
-        string[] shapes = [.. new[] { memberPattern, keywordPattern, typePattern }.Where(p => p != MatchesNothing)];
+        string[] shapes = [.. new[] { memberPattern, keywordPattern, typePattern, precedingTypePattern }.Where(p => p != MatchesNothing)];
         DeclarationCandidates = shapes.Length == 0
             ? CandidateLines.None
             : CandidateLines.Matching($"{flag}{string.Join("|", shapes.Select(p => $"(?:{p})"))}");
@@ -263,11 +286,13 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     ///     that made it because the frames index that analyser's own tables: one handed to another
     ///     language would point at whatever happens to sit at those indexes, so it is read as
     ///     <see cref="FilePosition.Unknown" /> instead.
-    ///     This is also the record the declaration/implementation section becomes a field on: a Delphi
-    ///     unit's <c>interface</c> against its <c>implementation</c> is another thing earlier lines
-    ///     decided, and adding it changes nothing above.
+    ///     <see cref="Section" /> is the other thing earlier lines decided: which side of the
+    ///     declaration/implementation split the file is on — a Delphi unit's <c>interface</c> against
+    ///     its <c>implementation</c>, a PL/SQL package spec against its body — and null until a marker
+    ///     has said.
     /// </summary>
-    private sealed record TextPosition(TextAnalyzer Owner, Frame[] Frames) : FilePosition;
+    private sealed record TextPosition(TextAnalyzer Owner, Frame[] Frames, DeclarationRole? Section)
+        : FilePosition;
 
     /// <summary>
     ///     One left-to-right pass of a line, handing out the lexical state at each position asked
@@ -297,6 +322,13 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         private bool _unknown;
 
         /// <summary>
+        ///     Which side of the declaration/implementation split the file is on once this line has
+        ///     been read. A marker takes effect on the line it stands on, because the header of a
+        ///     package body is the first line of the body.
+        /// </summary>
+        private DeclarationRole? _section;
+
+        /// <summary>
         ///     The rest of this line is a comment: a line comment opened on it, or one of the forms
         ///     that means a comment only at the start of a line did. Neither carries to the next line,
         ///     which is why both are this one flag and not two.
@@ -320,12 +352,19 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             }
 
             _carried = carried;
+            _section = carried.Section;
             carried.Frames.CopyTo(frames);
             _depth = carried.Frames.Length;
             int start = FirstNonSpace(line);
             // Only where the line begins outside everything: a `*` inside an open block comment is
             // the comment's own continuation marker and decides nothing.
             _lineCommented = _depth == 0 && start < line.Length && analyzer.OpensAWholeLine(line, start);
+            // For the same reason: the word `implementation` inside a comment opened further up moves
+            // nothing, and a file that read it as a marker would report every routine below it as an
+            // implementation.
+            if (analyzer._sectionMarkers.Length > 0 && _depth == 0 && !_lineCommented
+                && analyzer.MarkerOn(line) is { } entered)
+                _section = entered;
             _at = start;
         }
 
@@ -358,16 +397,18 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             // every depth.
             int depth = 0;
             while (depth < _depth && _analyzer._forms[_frames[depth].Index].Spans) depth++;
-            if (depth == 0) return _analyzer._start;
             // A line inside a long block comment or a license header leaves the file exactly where it
             // found it, and there are a thousand such lines in a row. Handing the carried position
             // back is what keeps those from allocating a copy apiece to say nothing changed.
-            return Unchanged(depth) ? _carried : new TextPosition(_analyzer, _frames[..depth].ToArray());
+            if (Unchanged(depth)) return _carried;
+            if (depth == 0 && _section is null) return _analyzer._start;
+            return new TextPosition(_analyzer, depth == 0 ? [] : _frames[..depth].ToArray(), _section);
         }
 
-        /// <summary>Whether the frames that carry are the ones this line began with.</summary>
+        /// <summary>Whether what carries is what this line began with, section and open spans alike.</summary>
         private readonly bool Unchanged(int depth) =>
-            depth == _carried.Frames.Length && _frames[..depth].SequenceEqual(_carried.Frames);
+            _section == _carried.Section && depth == _carried.Frames.Length
+            && _frames[..depth].SequenceEqual(_carried.Frames);
 
         /// <summary>
         ///     Walks from wherever the last question left off to this one. A skip over an escape or a
@@ -562,22 +603,96 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         return i;
     }
 
-    public Answer<Declared?> Declares(string line)
+    public Answer<Declared?> Declares(FilePosition position, string line)
     {
+        ArgumentNullException.ThrowIfNull(position);
         ArgumentNullException.ThrowIfNull(line);
-        string? type = _typeDeclaration.Match(line) is { Success: true } t ? t.Groups[1].Value : null;
+        string? type = TypeOn(line);
+        string? member = null;
         // The C-family shape first: where a language writes both, it is the more specific of the two
         // and the keyword shape would stop at the return type.
-        string? member = _memberDeclaration.Match(line) is { Success: true } m ? m.Groups[1].Value
-            : _keywordDeclaration.Match(line) is { Success: true } k ? k.Groups[1].Value
-            : null;
-        // The role is left unsaid. Telling a Delphi interface section from its implementation, or a
-        // PL/SQL package spec from its body, needs the file-level position #53 builds; until then
-        // either answer would be a guess, and a guess reported as a fact is the one failure this
-        // seam exists to avoid.
+        if (_memberDeclaration.Match(line) is { Success: true } m) member = m.Groups[1].Value;
+        else if (_keywordDeclaration.Match(line) is { Success: true } k)
+        {
+            member = k.Groups[2].Value;
+            // `procedure TCustomer.Save;` names both, and the type it names is the one the member
+            // belongs to — which is what a caller looking for the enclosing scope of a line in that
+            // routine needs, since a Delphi implementation section nests nothing by indentation.
+            if (type is null && k.Groups[1].Success && k.Groups[1].Value.Length > 0) type = k.Groups[1].Value;
+        }
+
         return new Answer<Declared?>(
-            type is null && member is null ? null : new Declared(type, member, null),
+            type is null && member is null ? null : new Declared(type, member, RoleAt(position, line)),
             Evidence.Text);
+    }
+
+    /// <summary>
+    ///     The type this line declares, in whichever of the two shapes the language writes — the
+    ///     keyword first, or the name first. One method, because a caller that read only one of them
+    ///     would place a Delphi class as a declaration for the scope map and as something else for the
+    ///     counts.
+    /// </summary>
+    private string? TypeOn(string line)
+    {
+        if (_typeDeclaration.Match(line) is { Success: true } named) return named.Groups[1].Value;
+        return _precedingTypeDeclaration.Match(line) is { Success: true } preceding
+            ? preceding.Groups[1].Value
+            : null;
+    }
+
+    /// <summary>
+    ///     Which side of the declaration/implementation split this line sits on, or null where the
+    ///     language has no split, where no marker has been passed yet, or where the caller did not walk
+    ///     the file to here. Null and never <see cref="DeclarationRole.Declaration" />: an
+    ///     implementation labelled a declaration is a guess reported as a fact, and the announcement
+    ///     sorts first in an answer, so the guess would win.
+    ///     A marker on this very line decides it, because the header of a package body is itself the
+    ///     first declaration in the body.
+    /// </summary>
+    private DeclarationRole? RoleAt(FilePosition position, string line)
+    {
+        if (!_profile.SeparatesDeclarationFromImplementation) return null;
+        if (MarkerOn(line) is { } opened) return opened;
+        return position is TextPosition text && text.Owner == this ? text.Section : null;
+    }
+
+    /// <summary>
+    ///     The section this line moves the file into, or null when it moves it nowhere. Read at the
+    ///     start of the line's text, which is where every language that has these writes them.
+    /// </summary>
+    private DeclarationRole? MarkerOn(string line)
+    {
+        int start = FirstNonSpace(line);
+        for (int i = 0; i < _sectionMarkers.Length; i++)
+            if (PhraseAt(line, start, _sectionMarkers[i].Phrase))
+                return _sectionMarkers[i].Role;
+        return null;
+    }
+
+    /// <summary>
+    ///     Whether this phrase stands here as whole words: one run of whitespace in the phrase matches
+    ///     any run in the line, so <c>CREATE  OR REPLACE   PACKAGE BODY</c> is the phrase a formatter
+    ///     left behind and not a miss, and the word after it must not run on — <c>implementations</c>
+    ///     is not <c>implementation</c>.
+    /// </summary>
+    private bool PhraseAt(string line, int index, string phrase)
+    {
+        int at = index;
+        for (int i = 0; i < phrase.Length; i++)
+        {
+            if (char.IsWhiteSpace(phrase[i]))
+            {
+                if (at >= line.Length || !char.IsWhiteSpace(line[at])) return false;
+                while (at < line.Length && char.IsWhiteSpace(line[at])) at++;
+                while (i + 1 < phrase.Length && char.IsWhiteSpace(phrase[i + 1])) i++;
+                continue;
+            }
+
+            if (at >= line.Length || !SameLetter(line[at], phrase[i])) return false;
+            at++;
+        }
+
+        return at >= line.Length || !SymbolText.IsWordChar(line[at]);
     }
 
     public Answer<string?> ImportOn(string line)
@@ -612,7 +727,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         // change between one appearance of the symbol and the next, and the type regex alone cost
         // milliseconds per appearance on a long line when it was asked per appearance.
         bool import = IsImportLine(line);
-        string? typeDeclared = _typeDeclaration.Match(line) is { Success: true } t ? t.Groups[1].Value : null;
+        string? typeDeclared = TypeOn(line);
         Span<Frame> frames = stackalloc Frame[MaxNesting];
         var cursor = new LineCursor(this, position, line, frames);
 
@@ -742,6 +857,12 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
                 return true;
         return false;
     }
+
+    /// <summary>One character against another, under the profile's own case rule.</summary>
+    private bool SameLetter(char actual, char expected) =>
+        _keywordComparison == StringComparison.OrdinalIgnoreCase
+            ? char.ToUpperInvariant(actual) == char.ToUpperInvariant(expected)
+            : actual == expected;
 
     private static bool At(string text, int index, string value,
         StringComparison comparison = StringComparison.Ordinal) =>

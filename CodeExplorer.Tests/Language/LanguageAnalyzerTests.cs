@@ -26,6 +26,35 @@ public sealed class LanguageAnalyzerTests
     }
 
     /// <summary>
+    ///     What this line declares, read as the first line of a file — which is what a one-line test
+    ///     means, and which leaves the declaration/implementation split unsaid.
+    /// </summary>
+    private static Answer<Declared?> Declares(string extension, string line)
+    {
+        var analyzer = Languages.Default.For(extension);
+        return analyzer.Declares(analyzer.Start, line);
+    }
+
+    /// <summary>
+    ///     What each line of this file declares, each read from what the lines above it left open —
+    ///     the walk <c>find_definition</c> does, and the only way to ask which side of a
+    ///     declaration/implementation split a line sits on.
+    /// </summary>
+    private static List<Declared> DeclaredIn(string extension, string file)
+    {
+        var analyzer = Languages.Default.For(extension);
+        var position = analyzer.Start;
+        var declared = new List<Declared>();
+        foreach (string line in file.Split('\n'))
+        {
+            if (analyzer.Declares(position, line).Value is { } what) declared.Add(what);
+            position = analyzer.After(position, line);
+        }
+
+        return declared;
+    }
+
+    /// <summary>
     ///     Every appearance of the symbol in this file, in order, each placed from what the lines above
     ///     it left open — the walk <c>find_references</c> does over a file it read, and the only way to
     ///     ask about anything below the first line of a block comment or a multi-line literal.
@@ -143,7 +172,7 @@ public sealed class LanguageAnalyzerTests
     {
         Assert.Equal(ReferenceKind.Definition, Kind(extension, line, symbol));
         // And the two halves agree: the scope map and the counts must not read one line two ways.
-        Assert.Equal(symbol, Languages.Default.For(extension).Declares(line).Value?.Member);
+        Assert.Equal(symbol, Declares(extension, line).Value?.Member);
     }
 
     [Fact]
@@ -157,8 +186,8 @@ public sealed class LanguageAnalyzerTests
     {
         // `local`, `instance`, `var` and `const` introduce a name and not a scope. With them in the
         // modifier list every reference below one was labelled with the local instead of the method.
-        Assert.Null(Languages.Default.For("prg").Declares("	local cLabel := self:Status").Value);
-        Assert.Null(Languages.Default.For("pas").Declares("  var Total: Integer;").Value);
+        Assert.Null(Declares("prg", "	local cLabel := self:Status").Value);
+        Assert.Null(Declares("pas", "  var Total: Integer;").Value);
     }
 
     [Theory]
@@ -359,7 +388,7 @@ public sealed class LanguageAnalyzerTests
     {
         var analyzer = Languages.Default.For("cs");
         Assert.Equal(Evidence.Text, analyzer.StateAt(analyzer.Start, "// x", 3).Evidence);
-        Assert.Equal(Evidence.Text, analyzer.Declares("public class Order").Evidence);
+        Assert.Equal(Evidence.Text, analyzer.Declares(analyzer.Start, "public class Order").Evidence);
         Assert.Equal(Evidence.Text, analyzer.ImportOn("using System;").Evidence);
         Assert.Equal(Evidence.Text, analyzer.IsGenerated("src/Order.g.cs").Evidence);
         Assert.Equal(Evidence.Text, analyzer.Occurrences(analyzer.Start, "Order x;", "Order")[0].Evidence);
@@ -395,13 +424,121 @@ public sealed class LanguageAnalyzerTests
     [Fact]
     public void A_declaration_is_read_in_each_shape_a_language_writes_it()
     {
-        Assert.Equal("Advance", Languages.Default.For("cs").Declares("    public void Advance(int n)").Value?.Member);
-        Assert.Equal("OrderService", Languages.Default.For("cs").Declares("public class OrderService").Value?.Type);
+        Assert.Equal("Advance", Declares("cs", "    public void Advance(int n)").Value?.Member);
+        Assert.Equal("OrderService", Declares("cs", "public class OrderService").Value?.Type);
         // The name follows the introducing word here, with the return type after it rather than before.
-        Assert.Equal("Advance", Languages.Default.For("prg").Declares("method Advance(n as int) as void").Value?.Member);
-        Assert.Equal("Advance", Languages.Default.For("pas").Declares("procedure Advance(n: Integer);").Value?.Member);
-        Assert.Equal("advance", Languages.Default.For("sql").Declares("create or replace function advance(n int)").Value?.Member);
-        Assert.Null(Languages.Default.For("cs").Declares("        Status = next;").Value);
+        Assert.Equal("Advance", Declares("prg", "method Advance(n as int) as void").Value?.Member);
+        Assert.Equal("Advance", Declares("pas", "procedure Advance(n: Integer);").Value?.Member);
+        Assert.Equal("advance", Declares("sql", "create or replace function advance(n int)").Value?.Member);
+        Assert.Null(Declares("cs", "        Status = next;").Value);
+    }
+
+    [Fact]
+    public void A_Delphi_unit_announces_a_routine_in_one_section_and_writes_it_in_the_other()
+    {
+        var declared = DeclaredIn("pas", """
+                                         unit Customers;
+
+                                         interface
+
+                                         type
+                                           TCustomer = class(TObject)
+                                             procedure Save;
+                                           end;
+
+                                         implementation
+
+                                         procedure TCustomer.Save;
+                                         begin
+                                         end;
+
+                                         end.
+                                         """);
+
+        // The class and the announcement sit in the interface section, the body under implementation,
+        // and the two `procedure` lines are indistinguishable without knowing which section they are in.
+        Assert.Equal([
+                new Declared("TCustomer", null, DeclarationRole.Declaration),
+                new Declared(null, "Save", DeclarationRole.Declaration),
+                new Declared("TCustomer", "Save", DeclarationRole.Implementation)
+            ],
+            declared);
+    }
+
+    [Fact]
+    public void A_PLSQL_spec_and_body_are_told_apart_though_neither_file_mentions_the_other()
+    {
+        var spec = DeclaredIn("pks", """
+                                     create or replace package pkg_orders as
+                                       procedure add_order(p_id number);
+                                     end pkg_orders;
+                                     """);
+        var body = DeclaredIn("pkb", """
+                                     create or replace package body pkg_orders as
+                                       procedure add_order(p_id number) is
+                                       begin
+                                         null;
+                                       end add_order;
+                                     end pkg_orders;
+                                     """);
+
+        // The header line is itself the first declaration of its half, so the role holds from it and
+        // not from the line after it.
+        Assert.Equal(DeclarationRole.Declaration, spec[0].Role);
+        Assert.Equal([new Declared(null, "add_order", DeclarationRole.Declaration)], spec[1..]);
+        Assert.Equal(DeclarationRole.Implementation, body[0].Role);
+        Assert.Equal([new Declared(null, "add_order", DeclarationRole.Implementation)], body[1..]);
+    }
+
+    [Fact]
+    public void A_language_that_declares_once_says_nothing_about_which_side_it_is_on()
+    {
+        // C#, X#, TypeScript and JavaScript declare and implement in one place, so a role would be a
+        // distinction the language does not draw.
+        Assert.Null(Declares("cs", "public void Advance(int n)").Value?.Role);
+        Assert.Null(Declares("prg", "method Advance(n as int) as void").Value?.Role);
+        // And a Delphi line read on its own, by a caller that could not walk the file to it, is
+        // unplaced rather than guessed at.
+        Assert.Null(Declares("pas", "procedure Save;").Value?.Role);
+    }
+
+    [Fact]
+    public void The_word_that_moves_a_file_between_sections_is_read_as_a_word()
+    {
+        // `implementation` inside a comment moves nothing, or every routine below a commented-out
+        // block would be reported as a body.
+        var commented = DeclaredIn("pas", "interface\n{\nimplementation\n}\nprocedure Save;");
+        Assert.Equal([new Declared(null, "Save", DeclarationRole.Declaration)], commented);
+
+        // And a formatter's extra spaces do not hide a marker, while a longer word is not one.
+        Assert.Equal(DeclarationRole.Implementation,
+            DeclaredIn("pkb", "create  or replace   package body app.orders as\nprocedure Save;")[^1].Role);
+        Assert.Equal(DeclarationRole.Declaration,
+            DeclaredIn("pas", "interface\nimplementations := 1;\nprocedure Save;")[^1].Role);
+    }
+
+    [Fact]
+    public void Each_language_declares_in_the_shapes_it_writes()
+    {
+        // X#'s five forms, which no C-family pattern reads: the name follows the introducing word and
+        // the return type follows the name.
+        Assert.Equal("Advance", Declares("prg", "function Advance(n as int) as int").Value?.Member);
+        Assert.Equal("Advance", Declares("prg", "method Advance(n as int) as void").Value?.Member);
+        Assert.Equal("Status", Declares("prg", "access Status as string").Value?.Member);
+        Assert.Equal("Status", Declares("prg", "assign Status(value as string)").Value?.Member);
+        Assert.Equal("OrderService", Declares("prg", "class OrderService").Value?.Type);
+
+        // Delphi's, including the qualified head an implementation is written with.
+        Assert.Equal("Create", Declares("pas", "constructor Create(AOwner: TComponent);").Value?.Member);
+        Assert.Equal("Destroy", Declares("pas", "destructor Destroy; override;").Value?.Member);
+        Assert.Equal(new Declared("TCustomer", "Save", null), Declares("pas", "procedure TCustomer.Save;").Value);
+        Assert.Equal("TCustomer", Declares("pas", "  TCustomer = class(TObject)").Value?.Type);
+
+        // The SQL family's CREATE forms, whose body is opened by a word and not by a bracket.
+        Assert.Equal("advance", Declares("sql", "create or replace procedure advance(n int)").Value?.Member);
+        Assert.Equal("orders", Declares("sql", "create view orders as").Value?.Member);
+        Assert.Equal("pkg_orders",
+            Declares("pkb", "create or replace package body pkg_orders as").Value?.Member);
     }
 
     [Fact]
@@ -436,7 +573,7 @@ public sealed class LanguageAnalyzerTests
         public Answer<Lexical> StateAt(FilePosition position, string line, int index) =>
             new(Lexical.Code, Evidence.Parsed);
 
-        public Answer<Declared?> Declares(string line) =>
+        public Answer<Declared?> Declares(FilePosition position, string line) =>
             new(new Declared("Order", "Advance", DeclarationRole.Declaration), Evidence.Parsed);
 
         public Answer<string?> ImportOn(string line) => new(null, Evidence.Parsed);

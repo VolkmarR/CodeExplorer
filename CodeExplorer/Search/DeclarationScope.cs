@@ -18,9 +18,13 @@ internal sealed record DeclarationLine(int LineNumber, int Indent, Declared Decl
 ///     shows nesting.
 ///     That assumption is false for the SQL and PL/SQL profiles registered here, for Delphi's
 ///     <c>begin</c>/<c>end</c>, and for legacy X# written flat — where it costs a wrong label on a
-///     line, never a wrong kind. It sits on the search side rather than behind the seam because
-///     <c>find_definition</c> (#54) needs the same structure and will be what moves it there, at
-///     which point a Delphi profile or a parser can answer it properly.
+///     line, never a wrong kind. It sits on the search side rather than behind the seam because a
+///     reference search is the only caller that needs it: <c>find_definition</c> (#54) answers with
+///     the declaration itself and asks nothing about what encloses it, so the structure a parser
+///     would one day supply still has one caller and not two.
+///     Where a language writes the enclosing type into the declaration head — Delphi's
+///     <c>procedure TCustomer.Save;</c> — indentation is not consulted at all, because the line says
+///     it.
 /// </summary>
 internal static class DeclarationScope
 {
@@ -46,6 +50,16 @@ internal static class DeclarationScope
             {
                 member = declaration.Declared.Member;
                 memberIndent = declaration.Indent;
+                // A line that names both is the whole answer: `procedure TCustomer.Save;` says which
+                // type the routine belongs to, and nothing above it in a Delphi implementation
+                // section does — the type is declared in another section, at the same indent or in
+                // another file.
+                if (declaration.Declared.Type is not null)
+                {
+                    type = declaration.Declared.Type;
+                    break;
+                }
+
                 continue;
             }
 

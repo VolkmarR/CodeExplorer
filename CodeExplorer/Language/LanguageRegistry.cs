@@ -42,7 +42,36 @@ public sealed class LanguageRegistry
         foreach (string extension in analyzer.Extensions)
             byExtension[extension] = analyzer;
         _byExtension = byExtension.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+        Claims =
+        [
+            .. byExtension.GroupBy(entry => entry.Value)
+                .Select(group => new LanguageClaim(group.Key, [.. group.Select(entry => entry.Key).Order(
+                    StringComparer.OrdinalIgnoreCase)]))
+        ];
     }
+
+    /// <summary>
+    ///     One analyser and the extensions it actually answers for, after the overlays. What an
+    ///     analyser <em>claims</em> and what it <em>won</em> differ once a second one is laid over some
+    ///     of the same extensions, and a caller writing a query per language needs the second.
+    /// </summary>
+    public sealed record LanguageClaim(ILanguageAnalyzer Analyzer, IReadOnlyList<string> Extensions);
+
+    /// <summary>
+    ///     Every analyser in this set with the extensions it won, in no particular order. It exists for
+    ///     the one caller that has to ask a question of every language at once —
+    ///     <c>find_definition</c>, which narrows each file with its own language's candidate lines in a
+    ///     single query — and not for a caller walking these to resolve one file, which is
+    ///     <see cref="For" />'s job.
+    /// </summary>
+    public IReadOnlyList<LanguageClaim> Claims { get; }
+
+    /// <summary>
+    ///     What answers for an extension none of <see cref="Claims" /> covers. Named so that a caller
+    ///     writing the per-language halves of one query can write the remainder too; everything else
+    ///     reaches it through <see cref="For" /> without knowing it exists.
+    /// </summary>
+    public ILanguageAnalyzer Fallback => _fallback;
 
     /// <summary>
     ///     The same set with one more analyser laid over the extensions it claims. A new registry

@@ -127,18 +127,31 @@ reported as a right one. A doubtful form is left out.
   millions of characters. Copying the prefix per match and re-walking it per delimiter turned one
   `find_references` into half a minute inside one tool call; it now jumps between the characters
   that can begin a comment or a literal and skips the code between them.
-- **The declaration/implementation split is declared but not yet decided.** A profile says whether
-  its language has one; telling a Delphi `interface` section from its `implementation` means reading
-  it off the file-level position, which now exists (#53) but carries only the open comments and
-  literals. A declaration's role stays null until a section is a field on that record. Null and not
-  `Declaration`, because either name would be a guess and the null-rather-than-guess rule is the one
-  this module is written around.
+- **The declaration/implementation split is decided off the file-level position (#54).** The section
+  is a field on the analyser's own record beside the open comments and literals, moved by a phrase
+  the profile names — Delphi's `interface` and `implementation`, PL/SQL's `create package` and
+  `create package body` — and it holds from the line the phrase stands on, because the header of a
+  package body is itself the first declaration in the body. That is also what lets a spec and a body
+  in two different files be told apart without either knowing the other exists, which the extension
+  could not have done: the same two headers appear inside one `.sql` script. A caller that has not
+  walked the file to the line — `find_references` asking only what a line declares, for its scope
+  label — passes `FilePosition.Unknown` and is answered with a null role. Null and not
+  `Declaration`, because either name would be a guess, and the announcement is what an agent wanted
+  least and what sorts first.
+- **A declaration head is a shape per language and not one shape.** The C family writes the return
+  type before the name, the xBase and SQL families after it, Delphi writes its type as
+  `TCustomer = class(TBase)` and its implementation head as `procedure TCustomer.Save;`, and the SQL
+  family opens a body with a word where the others open one with a bracket. Each is a shape a
+  profile turns on, and the combined pattern is what `DeclarationCandidates` publishes, so a shape
+  added for one language costs the others nothing and the engine narrows every file with its own
+  language's.
 - **A comment or a literal stays open across lines, and a bounded scan says where it stopped (#53).**
   Classifying a line on its own reported the second line of a commented-out block as a call, which is
   a deleted call under the heading an agent trusts most. The position is built by walking a file's
   lines from the first, because no line further down can be known to be outside everything; a
-  reference search therefore reads the lines above each match once per file, to
-  `ReferenceSearch.MaxScanLines`, and everything past that bound is unplaced rather than guessed.
+  search therefore reads the lines above each line it cares about once per file, to
+  `FilePositions.MaxScanLines`, and everything past that bound is unplaced rather than guessed. That
+  walk is one component and not one per search, because a second copy could read one file two ways.
   Which literals span lines and where their interpolation holes are comes from the profile, so
   C#'s verbatim, raw and interpolated forms and the template literal are read as what they are, and
   a language with no multi-line literal — SQL's quoted string, which could legally hold a newline —

@@ -11,6 +11,7 @@ internal sealed class SearchTools(
     IHttpContextAccessor httpContextAccessor,
     GrepSearch grep,
     ReferenceSearch references,
+    DefinitionSearch definitions,
     MatchList matches)
 {
     [McpServerTool(Name = "grep", ReadOnly = true, Idempotent = true, Title = "Search the project's code")]
@@ -336,6 +337,123 @@ internal sealed class SearchTools(
                         .Append(": ")
                         .Append(reference.Scope is null ? "" : $"[{reference.Scope}] ")
                         .Append(ToolReply.Clip(reference.Text).TrimStart())
+                        .Append('\n');
+            }
+        }
+    }
+
+    [McpServerTool(Name = "find_definition", ReadOnly = true, Idempotent = true,
+        Title = "Find where a symbol is declared")]
+    [Description("""
+                 Finds where a symbol is DECLARED — the class, method, function, procedure or type of that name — with its qualified path, line number and the declaring line. Use it when you want the definition; use find_references when you want the uses.
+
+                 - Delphi and PL/SQL declare a routine twice: announced in the `interface` section or the package spec, written in `implementation` or the package body, usually in two different files. Both are listed, each labelled, and IMPLEMENTATIONS come first because the body is almost always what was wanted. C#, X#, TypeScript and JavaScript declare once, and the answer simply says so.
+                 - IMPORTANT: this is a heuristic over text, not a compiler. It knows the declaration forms its language profile knows, so a form it does not know is a miss and not proof there is none. A miss degrades to find_references and grep, and the reply says so rather than pretending the symbol has no declaration.
+                 - The name is matched whole and case-sensitively, exactly as find_references matches it.
+                 - A name declared more than once — an overload, a partial class, the same name on two unrelated types — returns every site, ranked.
+                 - Scope with `repo`, `path`, `ext` and `exclude` exactly as grep does.
+                 """)]
+    public async Task<string> FindDefinition(
+        [Description(
+            "The symbol to look for, e.g. \"OrderService\" or \"UpdateDeliveryNoteStatus\". One name, matched whole and case-sensitively.")]
+        string symbol,
+        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        string? repo = null,
+        [Description(
+            "Only look in files whose qualified path matches; comma-separated terms are OR-ed. Same syntax as grep.")]
+        string? path = null,
+        [Description(
+            "Skip files whose qualified path matches any of these comma-separated terms, e.g. \"*.g.cs,/tests/\".")]
+        string? exclude = null,
+        [Description("Only look in files with this extension, without the dot, e.g. \"pas\".")]
+        string? ext = null,
+        CancellationToken cancellationToken = default)
+    {
+        var project = BoundProject.Get(httpContextAccessor);
+        var request = new DefinitionRequest(symbol, new FileFilter(repo, path, exclude, ext));
+
+        var outcome = await definitions.FindAsync(project.Slug, request, cancellationToken);
+        if (outcome is SearchProblem problem) return problem.Explanation;
+        var result = (DefinitionResult)outcome;
+        return result.Sites.Count == 0
+            ? NoDefinition(symbol.Trim(), result)
+            : ToolReply.Cap(FormatDefinitions(symbol.Trim(), result), "Narrow with repo/path/ext/exclude.");
+    }
+
+    /// <summary>
+    ///     What to say when nothing declared it. Never an empty list: "no declaration" and "no such
+    ///     name" are different answers and send an agent to different tools, and a declaration search
+    ///     that knows only the forms its profiles know must say which of the two this is.
+    /// </summary>
+    private static string NoDefinition(string symbol, DefinitionResult result)
+    {
+        var text = new StringBuilder();
+        if (result.FilesNamingIt == 0)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"Nothing in this project spells \"{symbol}\". ");
+            text.Append(result.FilesNamingItWithoutFilters > 0
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"It does appear in {ToolReply.HiddenByFilters(result.FilesNamingItWithoutFilters.Value)}")
+                : "The name is matched whole and case-sensitively, so check the spelling and the case. grep with regex=true finds a partial name.");
+            return text.ToString();
+        }
+
+        text.Append(CultureInfo.InvariantCulture,
+            $"No declaration of \"{symbol}\" was recognised, though the name appears in {result.FilesNamingIt} {ToolReply.Plural(result.FilesNamingIt, "file")}. ");
+        if (result.FilesNamingItWithoutFilters > result.FilesNamingIt)
+            text.Append(CultureInfo.InvariantCulture,
+                $"Your filters hid {result.FilesNamingItWithoutFilters.Value - result.FilesNamingIt} further matching {ToolReply.Plural(result.FilesNamingItWithoutFilters.Value - result.FilesNamingIt, "file")}, and the declaration may be in one of them. ");
+        text.Append(CultureInfo.InvariantCulture,
+            $"This reads the declaration forms it knows, so a form it does not know is a miss and not proof there is none — the symbol may also be declared in a language this indexes without profiling, or generated rather than written. Run find_references(symbol=\"{symbol}\") and read its DECLARATIONS section, or grep for it.");
+        return text.ToString();
+    }
+
+    private static string FormatDefinitions(string symbol, DefinitionResult result)
+    {
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture,
+            $"\"{symbol}\" is declared in {result.TotalSites} {ToolReply.Plural(result.TotalSites, "place")}");
+        text.Append(result.TotalSites > result.Sites.Count
+            ? string.Create(CultureInfo.InvariantCulture,
+                $"; showing the first {result.Sites.Count}. The name is declared too often to enumerate — narrow with repo/path/ext/exclude.\n")
+            : ".\n");
+
+        var implementations = result.Sites.Where(site => site.Role == DeclarationRole.Implementation).ToList();
+        var rest = result.Sites.Where(site => site.Role != DeclarationRole.Implementation).ToList();
+        bool split = implementations.Count > 0 && rest.Any(site => site.Role == DeclarationRole.Declaration);
+        if (split)
+            text.Append(
+                "This language announces a routine and writes it elsewhere; the body comes first below.\n");
+
+        // Headings only where the language draws the distinction they name. Where it does not — C#,
+        // X#, TypeScript, JavaScript, and a Delphi line the scan could not place — an "IMPLEMENTATIONS
+        // / DECLARATIONS" pair would be a split invented for the sake of a heading, and the ticket's
+        // own words are that such an answer "simply reports one site of one kind".
+        Section(split ? "IMPLEMENTATIONS" : null, implementations);
+        Section(split ? "DECLARATIONS" : null, rest);
+
+        text.Append(
+            "\nDeclaration forms are read from line shape, not from a compiler, so an unrelated symbol of the same name is included and a form this does not know is missing. Strong evidence, not proof.\n");
+        return text.ToString();
+
+        void Section(string? title, IReadOnlyList<DefinitionSite> sites)
+        {
+            if (sites.Count == 0) return;
+            text.Append(title is null
+                ? "\n"
+                : string.Create(CultureInfo.InvariantCulture, $"\n{title}  ({sites.Count})\n"));
+            foreach (var group in sites.GroupBy(site => site.QualifiedPath))
+            {
+                text.Append("  ").Append(group.Key).Append('\n');
+                int width = group.Max(site => site.LineNumber.ToString(CultureInfo.InvariantCulture).Length);
+                foreach (var site in group)
+                    text.Append("  ")
+                        .Append(site.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
+                        .Append(": ")
+                        // The type only where it is not the thing being declared, so a class does not
+                        // read as declaring itself.
+                        .Append(site.Type is null || site.Type == symbol ? "" : $"[{site.Type}] ")
+                        .Append(ToolReply.Clip(site.Text).TrimStart())
                         .Append('\n');
             }
         }

@@ -91,12 +91,13 @@ public sealed class TelemetryTests
     }
 
     /// <summary>
-    ///     The two heuristic searches (#11) are searches and report as ones: same instrument, same
+    ///     The three heuristic searches (#11, #54) are searches and report as ones: same instrument, same
     ///     tags, and an engine name of their own so a dashboard can tell a reference scan from a grep
     ///     rather than seeing one undivided search rate.
     /// </summary>
     [Theory]
     [InlineData("find_references", "symbol", "Widget", ReferenceSearch.Engine, "tele-references")]
+    [InlineData("find_definition", "symbol", "Widget", DefinitionSearch.Engine, "tele-definitions")]
     [InlineData("list_matches", "query", "class (\\w+)", MatchList.Engine, "tele-matches")]
     public async Task The_heuristic_searches_record_under_their_own_engine_names(
         string tool, string argument, string value, string engine, string slug)
@@ -126,6 +127,7 @@ public sealed class TelemetryTests
     [Theory]
     [InlineData(typeof(GrepSearch), nameof(GrepSearch.SearchAsync))]
     [InlineData(typeof(ReferenceSearch), nameof(ReferenceSearch.FindAsync))]
+    [InlineData(typeof(DefinitionSearch), nameof(DefinitionSearch.FindAsync))]
     [InlineData(typeof(MatchList), nameof(MatchList.ListAsync))]
     [InlineData(typeof(IndexBuilder), nameof(IndexBuilder.FillAsync))]
     public void The_recorded_method_is_the_services_only_way_in(Type service, string only)
@@ -139,14 +141,14 @@ public sealed class TelemetryTests
     /// <summary>
     ///     And the recording is started in that one method: the instruments are private to
     ///     <see cref="Telemetry" />, so this is about which file holds the call, which only the source
-    ///     shows. A search recording may be started in each of the three search services and nowhere
-    ///     else — it is the recording type that fixes the tag set, so three services cannot report
-    ///     different attributes, but a fourth file appearing here would be an entry point that
+    ///     shows. A search recording may be started in each of the four search services and nowhere
+    ///     else — it is the recording type that fixes the tag set, so four services cannot report
+    ///     different attributes, but a fifth file appearing here would be an entry point that
     ///     measured a search without being one.
     /// </summary>
     [Theory]
-    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "GrepSearch.cs", "MatchList.cs",
-        "ReferenceSearch.cs")]
+    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "DefinitionSearch.cs", "GrepSearch.cs",
+        "MatchList.cs", "ReferenceSearch.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.IndexBuild)}(", "IndexBuilder.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.DurableCopy)}(", "DurableIndex.cs")]
     public void Only_the_recording_services_start_a_recording(string call, params string[] files) =>
