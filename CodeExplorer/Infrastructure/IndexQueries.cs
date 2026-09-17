@@ -3,16 +3,59 @@ using DuckDB.NET.Data;
 namespace CodeExplorer;
 
 /// <summary>
-///     The churn ranking (CONTEXT.md, Churn) as two statements over a connection, with no lease and no
-///     project attached behind them. It is spelled out here rather than only on
-///     <see cref="IndexReader" /> because the index build ranks a project's churn too, into the
-///     overview it stores — and a build holds a shadow index, which is a catalog no reader can be
-///     opened on. Two copies of this ranking would be two definitions of what a project is busy with,
-///     and the one on the overview page is the one nobody would think to check against the tool.
-///     Both callers therefore ask this; neither writes the SQL.
+///     The reads an index answers that both a reader and a build make, as statements over a bare
+///     connection with no lease and no project attached behind them.
+///     They live here because the two callers cannot share an <see cref="IndexReader" />: a reader is
+///     opened on an attached project, and a build holds a shadow index, which is a catalog nothing can
+///     be opened on. A reader cannot serve the build for a second reason — it answers
+///     <see cref="IndexReader.PathsAsync" /> from <c>index_info</c>, and a build writes that row last,
+///     so mid-build the shape it would report is the wrong one. Hence the explicit
+///     <see cref="ProjectPaths" /> parameter below rather than a reader that looks it up.
+///     What matters is that neither caller writes this SQL. Two copies of the churn ranking would be
+///     two definitions of what a project is busy with, and two copies of the extension counts would let
+///     <c>list_extensions</c> and an overview describe one index differently — the worst case for an
+///     agent that calls both.
 /// </summary>
-internal static class HistoryQueries
+internal static class IndexQueries
 {
+    /// <summary>
+    ///     What each extension accounts for, unordered: the caller ranks it, because a tool listing
+    ///     extensions and an overview grouping them into languages sort on different things.
+    /// </summary>
+    /// <param name="connection">Bound to the index being counted: a live project, or a shadow being built.</param>
+    /// <param name="repositorySlug">One repository, or null for every one in the project.</param>
+    /// <param name="cancellationToken">Threaded through to the command.</param>
+    public static async Task<IReadOnlyList<ExtensionCount>> ExtensionCountsAsync(DuckDBConnection connection,
+        string? repositorySlug, CancellationToken cancellationToken)
+    {
+        var parameters = new List<DuckDBParameter>();
+        // The join is paid for only when there is a repository to scope to: every other caller counts
+        // the whole project, and files.repo_id is the only thing repositories would contribute.
+        string scope = "";
+        if (repositorySlug is not null)
+        {
+            scope = " JOIN repositories r USING (repo_id) WHERE r.slug = $r";
+            parameters.Add(new DuckDBParameter("r", repositorySlug));
+        }
+
+        using var command = connection.Query($"""
+                                              SELECT f.extension,
+                                                     count(*)::INTEGER AS files,
+                                                     -- Cast because DuckDB widens sum of an INTEGER to
+                                                     -- HUGEINT, which the driver hands back as a BigInteger.
+                                                     sum(f.line_count)::BIGINT AS lines,
+                                                     count(f.skip_reason)::INTEGER AS skipped
+                                              FROM files f{scope}
+                                              GROUP BY f.extension
+                                              """, parameters);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var counts = new List<ExtensionCount>();
+        while (await reader.ReadAsync(cancellationToken))
+            counts.Add(new ExtensionCount(reader.Text("extension"), reader.Int32("files"), reader.Int64("lines"),
+                reader.Int32("skipped")));
+        return counts;
+    }
+
     /// <summary>
     ///     The window reaching <paramref name="days" /> back from the newest commit recorded in scope,
     ///     or null when the scope holds no commit at all — a repository whose history could not be
@@ -121,8 +164,13 @@ internal static class HistoryQueries
         return files;
     }
 
-    /// <summary>The WHERE clause and its parameter for one repository's commits, or neither for the project's.</summary>
-    private static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug) =>
+    /// <summary>
+    ///     The WHERE clause and its parameter for one repository's commits, or neither for the
+    ///     project's. Public because every read of the commit tables narrows the same way — the change
+    ///     log and the commit count as much as the ranking — and two spellings of one clause is one of
+    ///     them eventually being wrong.
+    /// </summary>
+    public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug) =>
         repositorySlug is null
             ? ("", [])
             : ("WHERE repo_slug = $r", [new DuckDBParameter("r", repositorySlug)]);

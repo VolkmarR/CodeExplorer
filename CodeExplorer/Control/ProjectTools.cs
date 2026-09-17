@@ -89,12 +89,10 @@ internal sealed class ProjectTools(
         if (open is IndexOpen.Refused refused) return refused.Explanation;
         using var index = ((IndexOpen.Opened)open).Reader;
 
-        var overview = await index.OverviewAsync(cancellationToken);
-        if (overview is null) return IndexReader.NoOverview(project.Slug);
-
         // The repositories come from the index's own table rather than from the stored row: they are
         // already one join-free read, and a second copy inside the overview would be a second
         // definition of what this project holds (IndexOverview says the same).
-        return OverviewReply.Render(project, await index.RepositoriesAsync(cancellationToken), overview);
+        return OverviewReply.Render(project, await index.RepositoriesAsync(cancellationToken),
+            await index.OverviewAsync(cancellationToken));
     }
 }

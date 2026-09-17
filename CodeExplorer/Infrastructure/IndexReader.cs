@@ -316,16 +316,6 @@ public sealed class IndexReader : IDisposable
         $"Project '{projectSlug}' has no index to read from right now: it was never built, or a refresh is still building the first one. "
         + $"Ask the operator to refresh it with POST /api/projects/{projectSlug}/refresh, or retry shortly.";
 
-    /// <summary>
-    ///     The one explanation every reader gives for a built index that carries no overview (#51). It
-    ///     sits beside <see cref="NoIndex" /> because it is the same kind of sentence — nothing to read
-    ///     and what to do about it — and because the tool and the operator's page must not word it
-    ///     differently when they are looking at the same index.
-    /// </summary>
-    public static string NoOverview(string projectSlug) =>
-        $"The index of project '{projectSlug}' holds no overview: it was built before overviews existed, or its row was removed. "
-        + $"Ask the operator to refresh it with POST /api/projects/{projectSlug}/refresh; the rest of the index is readable meanwhile.";
-
     /// <summary>What the last build read, in build order, which is what a path may name.</summary>
     public async Task<IReadOnlyList<IndexedRepository>> RepositoriesAsync(CancellationToken cancellationToken)
     {
@@ -535,7 +525,7 @@ public sealed class IndexReader : IDisposable
     /// <summary>How many commits are recorded, for a repository or for the whole project, so a page can say how many there are.</summary>
     public async Task<long> CommitCountAsync(string? repositorySlug, CancellationToken cancellationToken)
     {
-        var (scope, parameters) = CommitScope(repositorySlug);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
         using var command = Connection.Query($"SELECT count(*) FROM commits {scope}", parameters);
         return (long)(await command.ExecuteScalarAsync(cancellationToken) ?? 0L);
     }
@@ -549,7 +539,7 @@ public sealed class IndexReader : IDisposable
     public async Task<IReadOnlyList<LoggedCommit>> ChangeLogAsync(string? repositorySlug, int limit, int skip,
         CancellationToken cancellationToken)
     {
-        var (scope, parameters) = CommitScope(repositorySlug);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
         using var command = Connection.Query($"""
                                               SELECT c.sha, c.repo_slug, c.author_name, c.author_email, c.authored_at,
                                                      c.subject, c.body,
@@ -646,7 +636,7 @@ public sealed class IndexReader : IDisposable
     /// </summary>
     public Task<HistoryWindow?> WindowAsync(int days, string? repositorySlug,
         CancellationToken cancellationToken) =>
-        HistoryQueries.WindowAsync(Connection, days, repositorySlug, cancellationToken);
+        IndexQueries.WindowAsync(Connection, days, repositorySlug, cancellationToken);
 
     /// <summary>
     ///     The files a window's commits touched, most commits first: the first read of the commit
@@ -666,32 +656,28 @@ public sealed class IndexReader : IDisposable
     /// <param name="cancellationToken">Threaded through to the command.</param>
     public async Task<IReadOnlyList<ChurnedFile>> ChurnAsync(HistoryWindow window, string? repositorySlug,
         string? directoryInRepository, int limit, CancellationToken cancellationToken) =>
-        await HistoryQueries.RankAsync(Connection, await PathsAsync(cancellationToken), window, repositorySlug,
+        await IndexQueries.RankAsync(Connection, await PathsAsync(cancellationToken), window, repositorySlug,
             directoryInRepository, limit, cancellationToken);
 
     /// <summary>
     ///     The overview the build stored with this index (#51): one row, no joins and no aggregates, so
     ///     a caller orienting itself pays a row read rather than five passes over <c>files</c> and the
     ///     commit tables.
-    ///     Null where the row is missing, which the schema version means only an index this process
-    ///     built and then had its <c>project_overview</c> emptied can be. It is still answered rather
-    ///     than thrown, because the caller's move — ask for a refresh — is the same one every "this
-    ///     index predates the question" answer ends with.
+    ///     Always there for an index a reader can be opened on: the build writes the row before
+    ///     <c>index_info</c>, and a durable copy from a schema without it is rebuilt rather than
+    ///     restored. A missing row is therefore an index this build cannot read, which is the same
+    ///     infrastructure failure an unreadable document is and throws the same way — not a state the
+    ///     callers branch on.
     /// </summary>
-    public async Task<IndexOverview?> OverviewAsync(CancellationToken cancellationToken)
+    public async Task<IndexOverview> OverviewAsync(CancellationToken cancellationToken)
     {
         using var command = Connection.Query("SELECT document FROM project_overview LIMIT 1", []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken)
-            ? IndexOverview.FromDocument(reader.Text("document"))
-            : null;
-    }
+        if (!await reader.ReadAsync(cancellationToken))
+            throw IndexOverview.Unreadable($"the index of project '{ProjectSlug}' holds no overview row");
 
-    /// <summary>The WHERE clause and its parameter for one repository's commits, or neither for the project's.</summary>
-    private static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug) =>
-        repositorySlug is null
-            ? ("", [])
-            : ("WHERE repo_slug = $r", [new DuckDBParameter("r", repositorySlug)]);
+        return IndexOverview.FromDocument(reader.Text("document"));
+    }
 
     private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
         CancellationToken cancellationToken)
@@ -892,34 +878,17 @@ public sealed class IndexReader : IDisposable
         return entries;
     }
 
-    /// <summary>Extensions in the project, or in <see cref="Repository" /> when one was resolved, most files first.</summary>
-    public async Task<IReadOnlyList<ExtensionCount>> ExtensionsAsync(CancellationToken cancellationToken)
-    {
-        var parameters = new List<DuckDBParameter>();
-        string scope = "";
-        if (Repository is not null)
-        {
-            scope = " WHERE r.slug = $r";
-            parameters.Add(new DuckDBParameter("r", Repository.Slug));
-        }
-
-        using var command = Connection.Query($"""
-                                              SELECT f.extension,
-                                                     count(*) AS files,
-                                                     sum(f.line_count)::BIGINT AS lines,
-                                                     count(f.skip_reason) AS skipped
-                                              FROM files f JOIN repositories r USING (repo_id){scope}
-                                              GROUP BY f.extension
-                                              ORDER BY count(*) DESC, f.extension
-                                              """, parameters);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var result = new List<ExtensionCount>();
-        while (await reader.ReadAsync(cancellationToken))
-            result.Add(new ExtensionCount(reader.Text("extension"), (int)reader.Int64("files"),
-                // sum() yields a HUGEINT, which the reader surfaces as BigInteger; the cast above keeps it a long.
-                reader.Int64("lines"), (int)reader.Int64("skipped")));
-        return result;
-    }
+    /// <summary>
+    ///     Extensions in the project, or in <see cref="Repository" /> when one was resolved, most files
+    ///     first. What an extension counts as is <see cref="IndexQueries" />'s, so a build grouping the
+    ///     same numbers into languages cannot come to a different total; the order is this tool's, which
+    ///     lists extensions rather than ranking languages.
+    /// </summary>
+    public async Task<IReadOnlyList<ExtensionCount>> ExtensionsAsync(CancellationToken cancellationToken) =>
+        (await IndexQueries.ExtensionCountsAsync(Connection, Repository?.Slug, cancellationToken))
+        .OrderByDescending(e => e.Files)
+        .ThenBy(e => e.Extension, StringComparer.Ordinal)
+        .ToList();
 
     /// <summary>
     ///     The root of a project: its repositories, which are what qualified paths begin with. The file

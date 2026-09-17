@@ -26,7 +26,20 @@ public sealed record ProjectPaths(bool SingleRepository, string RepositorySlug)
     ///     but which keeps every message readable.
     /// </summary>
     public static ProjectPaths For(Project project, IReadOnlyList<ProjectRepository> repositories) =>
-        new(project.SingleRepository, repositories.Count > 0 ? repositories[0].Slug : project.Slug);
+        For(project.SingleRepository, repositories.Select(r => r.Slug), project.Slug);
+
+    /// <summary>
+    ///     The same rule from the slugs alone, for the callers that have no <see cref="Project" /> to
+    ///     hand: the index reader, which knows only what the build recorded, and the build itself, which
+    ///     writes qualified paths into the overview before there is an index to read. Written once
+    ///     because the build's anchor and the reader's must agree — a path stored under one rule and
+    ///     parsed under another is a disagreement baked into the index rather than a failing read.
+    /// </summary>
+    /// <param name="singleRepository">Whether the project names its files without a repository slug (ADR-0006).</param>
+    /// <param name="repositorySlugs">The repositories in the order the build numbered them.</param>
+    /// <param name="projectSlug">Stands in where there are none, matching nothing and reading cleanly.</param>
+    public static ProjectPaths For(bool singleRepository, IEnumerable<string> repositorySlugs, string projectSlug) =>
+        new(singleRepository, repositorySlugs.FirstOrDefault() ?? projectSlug);
 
     /// <summary>
     ///     Null means the repository level: the root of a multi-repository project, which names no file

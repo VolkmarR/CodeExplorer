@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using ModelContextProtocol;
 
 namespace CodeExplorer;
@@ -18,7 +17,6 @@ public sealed record LanguageShare(string Name, bool Mapped, int Files, long Lin
 /// </summary>
 public sealed record OverviewEntry(
     string QualifiedPath,
-    string RepositorySlug,
     bool IsDirectory,
     int Files,
     long Lines,
@@ -29,7 +27,7 @@ public sealed record OverviewEntry(
 ///     read costs, and a file the build skipped for its size has no lines at all — which makes it
 ///     exactly the file a caller most needs warning about.
 /// </summary>
-public sealed record OverviewFile(string QualifiedPath, string RepositorySlug, int LineCount, long SizeBytes);
+public sealed record OverviewFile(string QualifiedPath, int LineCount, long SizeBytes);
 
 /// <summary>
 ///     The churn section of an overview: the ranking and the window it was taken over.
@@ -46,9 +44,14 @@ public sealed record OverviewChurn(
     /// <summary>What a project with no imported history has instead of a ranking.</summary>
     public static OverviewChurn None(int days) => new(days, null, null, []);
 
-    /// <summary>Whether any history was there to rank. False is "nothing was imported", never "nothing changed".</summary>
-    [JsonIgnore]
-    public bool HasHistory => Until is not null;
+    /// <summary>
+    ///     The window the ranking was taken over, or null where no history was imported to rank. The
+    ///     two dates are stored flat because that is the shape the browser reads them in, and put back
+    ///     together here so that a reply says what it covered in <see cref="HistoryWindow.Describe" />'s
+    ///     words rather than a second phrasing of the same three fields.
+    /// </summary>
+    public HistoryWindow? Window() =>
+        Since is { } since && Until is { } until ? new HistoryWindow(since, until, Days) : null;
 }
 
 /// <summary>
@@ -114,10 +117,18 @@ public sealed record IndexOverview(
         }
         catch (JsonException exception)
         {
-            throw new McpException(
-                "This project's stored overview cannot be read by this build, which means its index was "
-                + "written by a different one. Ask the operator to refresh the project; every other tool "
-                + "still answers from the index meanwhile.", exception);
+            throw Unreadable("its stored overview is not a document this build understands", exception);
         }
     }
+
+    /// <summary>
+    ///     The one way an overview that should be there is reported missing. Both callers reach it for
+    ///     the same underlying cause — an index written by a build this one is not — so both say so in
+    ///     the same words and end with the same move.
+    /// </summary>
+    /// <param name="cause">What was found instead, in a clause that follows "because".</param>
+    /// <param name="inner">The parse failure, where there was one.</param>
+    public static McpException Unreadable(string cause, Exception? inner = null) =>
+        new($"This project's overview cannot be read, because {cause}. Ask the operator to refresh the "
+            + "project; every other tool still answers from the index meanwhile.", inner);
 }
