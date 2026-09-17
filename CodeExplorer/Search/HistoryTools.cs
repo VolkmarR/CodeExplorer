@@ -176,17 +176,19 @@ internal sealed class HistoryTools(
     }
 
     /// <summary>
-    ///     A screenful. A churn ranking is read from the top down and the tail of one is noise: the
-    ///     twentieth busiest file of a quarter is rarely what anybody was looking for.
+    ///     A screenful. Both rankings here are read from the top down and the tail of one is noise: the
+    ///     twentieth busiest file of a quarter, and the twentieth file a path shares one commit with,
+    ///     are equally rarely what anybody was looking for. One number because the two tools also tell
+    ///     an agent the same range in their own prose, and two would eventually disagree.
     /// </summary>
-    private const int DefaultHotFiles = 20;
+    private const int DefaultRankedFiles = 20;
 
     /// <summary>
     ///     A hundred files is already more than anybody reads off a ranking, and the reply cap would
     ///     bite around there anyway. High enough that an agent wanting the whole picture of a small
     ///     project gets it in one call.
     /// </summary>
-    private const int MaxHotFiles = 100;
+    private const int MaxRankedFiles = 100;
 
     [McpServerTool(Name = "hot_files", ReadOnly = true, Idempotent = true, Title = "Rank files by how much they changed")]
     [Description("""
@@ -204,7 +206,7 @@ internal sealed class HistoryTools(
             "Qualified path of a directory to rank within, e.g. \"main/src/Api\", or a repository slug alone for one repository. Default: the whole project.")]
         string? directory = null,
         [Description("Files to return, 1-100. Default 20.")]
-        int limit = DefaultHotFiles,
+        int limit = DefaultRankedFiles,
         CancellationToken cancellationToken = default)
     {
         var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
@@ -220,16 +222,14 @@ internal sealed class HistoryTools(
         // The project has history and this scope has none: a repository whose walk found nothing, which
         // reads as "nobody has changed it" unless it is said outright. This answer names the scope it
         // is about, so the coverage caveat below would only repeat it — and is not paid for here.
-        if (window is null)
-            return $"No commit is recorded for {scope.Spelled}, although project '{index.ProjectSlug}' has history "
-                   + "for other repositories. Its history could not be walked; git_log without a scope shows what was imported.";
+        if (window is null) return NoCommitsIn(scope.Spelled, index.ProjectSlug);
 
         // Read before the answer branches, because an empty ranking needs the caveat as much as a full
         // one does, and more: a reader shown nothing is the one most likely to conclude nothing changed.
         string? coverage = await CoverageAsync(index, scope.RepositorySlug, cancellationToken);
 
         var ranked = await index.ChurnAsync(window, scope.RepositorySlug, scope.DirectoryInRepository,
-            Math.Clamp(limit, 1, MaxHotFiles), cancellationToken);
+            Math.Clamp(limit, 1, MaxRankedFiles), cancellationToken);
         if (ranked.Count == 0)
             return $"No commit changed a file in {scope.Spelled} between {window.Describe()}. "
                    + $"The newest recorded commit there is {window.Until:yyyy-MM-dd}; raise days to look further back."
@@ -249,15 +249,6 @@ internal sealed class HistoryTools(
         if (coverage is not null) text.Append(CultureInfo.InvariantCulture, $"\n{coverage}\n");
         return ToolReply.Cap(text.ToString(), "Lower limit, or narrow with directory.");
     }
-
-    /// <summary>
-    ///     A screenful, for the reason a churn ranking is one: a coupling list is read from the top and
-    ///     the twentieth file a path shares one commit with is noise.
-    /// </summary>
-    private const int DefaultCoChanged = 20;
-
-    /// <summary>The ceiling <see cref="MaxHotFiles" /> is, and for the same reasons.</summary>
-    private const int MaxCoChanged = 100;
 
     /// <summary>
     ///     Default for <c>History:MaxCommitPaths</c>, the most paths a commit may touch and still be
@@ -289,7 +280,7 @@ internal sealed class HistoryTools(
         [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
         int days = HistoryWindow.DefaultDays,
         [Description("Files to return, 1-100. Default 20.")]
-        int limit = DefaultCoChanged,
+        int limit = DefaultRankedFiles,
         CancellationToken cancellationToken = default)
     {
         var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
@@ -304,13 +295,10 @@ internal sealed class HistoryTools(
         // Scoped to the anchor's own repository, because that is the only one whose commits could have
         // carried it — and so the window is that repository's newest commit, not another's.
         var window = await index.WindowAsync(days, located.RepositorySlug, cancellationToken);
-        if (window is null)
-            return $"No commit is recorded for repository '{located.RepositorySlug}', although project "
-                   + $"'{index.ProjectSlug}' has history. Its history could not be walked; git_log without a "
-                   + "scope shows what was imported.";
+        if (window is null) return NoCommitsIn($"repository '{located.RepositorySlug}'", index.ProjectSlug);
 
         var coupling = await index.CoChangedAsync(window, located.RepositorySlug!, located.PathInRepository!,
-            _maxCommitPaths, Math.Clamp(limit, 1, MaxCoChanged), cancellationToken);
+            _maxCommitPaths, Math.Clamp(limit, 1, MaxRankedFiles), cancellationToken);
 
         // Read before the answer branches: a window that reached none of the file's commits is not a
         // file that moves alone, and an agent shown the wrong one of those two learns a wrong fact.
@@ -320,21 +308,21 @@ internal sealed class HistoryTools(
             return $"No commit changed {located.Spelled} between {window.Describe()}, so there is nothing it "
                    + "could have changed alongside; raise days to look further back.";
 
-        string excluded = ExcludedNote(coupling);
         if (coupling.Files.Count == 0)
             return $"No other file was changed by any of the {coupling.Paired} "
                    + $"{ToolReply.Plural(coupling.Paired, "commit")} that touched {located.Spelled} between "
                    + $"{window.Describe()}. It moves alone in the history that was imported, which is evidence "
-                   + $"and not proof: that history begins where the file was last renamed." + excluded;
+                   + $"and not proof: that history begins where the file was last renamed."
+                   + (coupling.Excluded == 0 ? "" : " " + ExcludedNote(coupling));
 
+        string files = ToolReply.Plural(coupling.Files.Count, "file");
+        string commits = ToolReply.Plural(coupling.Paired, "commit");
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{coupling.Files.Count} {ToolReply.Plural(coupling.Files.Count, "file")} changed alongside {located.Spelled}, ");
-        text.Append(CultureInfo.InvariantCulture,
-            $"out of the {coupling.Paired} {ToolReply.Plural(coupling.Paired, "commit")} that touched it, {window.Describe()}.\n");
+            $"{coupling.Files.Count} {files} changed alongside {located.Spelled}, out of the {coupling.Paired} {commits} that touched it, {window.Describe()}.\n");
         // Above the ranking and not below it: a full ranking is exactly where the reply cap bites, and
         // it is also exactly where knowing that a third of the file's commits were left out matters.
-        if (excluded.Length > 0) text.Append(CultureInfo.InvariantCulture, $"{excluded.TrimStart()}\n");
+        if (coupling.Excluded > 0) text.Append(CultureInfo.InvariantCulture, $"{ExcludedNote(coupling)}\n");
         text.Append('\n');
 
         foreach (var file in coupling.Files)
@@ -360,24 +348,35 @@ internal sealed class HistoryTools(
     }
 
     /// <summary>
-    ///     What the ceiling kept out, as a sentence to append, or empty when it kept nothing out. Said
-    ///     rather than dropped: a ranking drawn from a third of a file's commits without saying so is
-    ///     the one that misleads, and the number is also how a caller learns the ceiling is wrong for
-    ///     their repository.
+    ///     What the ceiling kept out, in one sentence, for a caller that has already established there
+    ///     was something. Said rather than dropped: a ranking drawn from a third of a file's commits
+    ///     without saying so is the one that misleads, and the number is also how a caller learns the
+    ///     ceiling is wrong for their repository.
+    ///     The sentence carries no leading separator, because the two callers want different ones.
     /// </summary>
     private string ExcludedNote(CoChanges coupling)
     {
-        if (coupling.Excluded == 0) return "";
-
         // Built in one piece and only then concatenated: an interpolated string joined to another with
         // `+` is a string, not a handler, and the culture-aware overloads bind to char* instead.
         string counted = string.Create(CultureInfo.InvariantCulture,
-            $" {coupling.Excluded} of its {coupling.Commits} commits touched more than {_maxCommitPaths} paths");
+            $"{coupling.Excluded} of its {coupling.Commits} commits touched more than {_maxCommitPaths} paths");
         return counted
                + $" and {ToolReply.Plural(coupling.Excluded, "was", "were")} left out of the pairing: a commit "
                + "that size pairs every path it touched with every other, which is one commit and not coupling. "
                + "An operator can raise History:MaxCommitPaths where a repository really does land changes that wide.";
     }
+
+    /// <summary>
+    ///     What a scope with no commit at all is answered with, when the project around it has history.
+    ///     That is a repository whose walk found nothing, and it reads as "nobody has changed it" unless
+    ///     it is said outright (CONTEXT.md, History) — so both rankings say it, and say it the same way,
+    ///     because two spellings of one fact are two facts to keep in step.
+    /// </summary>
+    /// <param name="spelled">What the reply calls the scope, so the answer and the question match.</param>
+    /// <param name="projectSlug">The project the scope belongs to.</param>
+    private static string NoCommitsIn(string spelled, string projectSlug) =>
+        $"No commit is recorded for {spelled}, although project '{projectSlug}' has history for other "
+        + "repositories. Its history could not be walked; git_log without a scope shows what was imported.";
 
     /// <summary>
     ///     The caveat naming the repositories a ranking cannot speak for, or null when there are none.
