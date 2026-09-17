@@ -30,3 +30,12 @@ export function validateSearch(search: Record<string, unknown>): SearchParameter
     regex: search.regex === true || search.regex === 'true',
   }
 }
+
+/**
+ * The URL of an empty search. Written here rather than spelled out at each link, for the reason
+ * `treeSearch` gives in `browseParams.ts`: four fields with no obvious defaults, written out by
+ * hand at every link to the view, is four chances to link to a search nobody asked for.
+ */
+export function searchSearch(q = ''): SearchParameters {
+  return { caseSensitive: false, page: 1, q, regex: false }
+}

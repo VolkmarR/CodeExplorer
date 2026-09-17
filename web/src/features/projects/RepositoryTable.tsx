@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import { MoreHorizontal, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import type { ProjectDetail } from '@/lib/api'
 import { api } from '@/lib/api'
@@ -11,6 +11,12 @@ import { NewRepositoryForm } from '@/features/projects/NewRepositoryForm'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Table,
   TableBody,
@@ -39,6 +45,10 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
   const queryClient = useQueryClient()
   const { slug, repositories, singleRepository } = project
   const [adding, setAdding] = useState(false)
+
+  // Which repository the confirm dialog is asking about, or none. The slug and not a boolean: the
+  // dialog names the repository, and one dialog serves every row.
+  const [removing, setRemoving] = useState<string | null>(null)
 
   const remove = useMutation({
     mutationFn: (repository: string) => api.removeRepository(slug, repository),
@@ -142,20 +152,53 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
                       : `${formatCount(repository.fileCount)} files, ${formatCount(repository.lineCount ?? 0)} lines`}
                   </TableCell>
                   <TableCell className="text-right">
-                    <ConfirmDialog
-                      trigger="Remove"
-                      title={`Remove ${repository.slug}?`}
-                      description="The repository leaves the project and its local copy is deleted. Its files stay searchable until the next refresh rebuilds the index without them."
-                      action="Remove repository"
-                      disabled={remove.isPending}
-                      onConfirm={() => remove.mutate(repository.slug)}
-                    />
+                    {/* A menu rather than the bare Remove button this used to be: the row already
+                        carries six columns, and a destructive control sitting open at the end of
+                        each of them is the one thing on this page a slip of the hand should not
+                        reach. What it opens still asks first. */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        className="rounded-sm p-1 text-muted-foreground hover:text-foreground"
+                        // Named as a repository, because a single-repository project's slug and its
+                        // repository's are the same string: two controls labelled "Actions for
+                        // edilverso" on one page is two controls a screen reader cannot tell apart.
+                        aria-label={`Actions for the ${repository.slug} repository`}
+                      >
+                        <MoreHorizontal className="size-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          variant="destructive"
+                          disabled={remove.isPending}
+                          onClick={() => setRemoving(repository.slug)}
+                        >
+                          <Trash2 />
+                          Remove repository
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
+        {/* One dialog for the table rather than one per row, and controlled: it is opened from a
+            menu item, and a menu closes when clicked — a dialog nested inside it would be unmounted
+            on the way to being shown. */}
+        <ConfirmDialog
+          open={removing !== null}
+          onOpenChange={(open) => setRemoving(open ? removing : null)}
+          title={`Remove ${removing}?`}
+          description="The repository leaves the project and its local copy is deleted. Its files stay searchable until the next refresh rebuilds the index without them."
+          action="Remove repository"
+          disabled={remove.isPending}
+          onConfirm={() => {
+            if (removing) remove.mutate(removing)
+            setRemoving(null)
+          }}
+        />
+
         {remove.error ? <ErrorPanel error={remove.error} /> : null}
         {full ? (
           <p className="text-sm text-muted-foreground">

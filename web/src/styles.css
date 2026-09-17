@@ -9,49 +9,79 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Both themes are one palette at two lightnesses: every neutral sits on hue 265 and every accent
+   keeps its hue across the pair, so a component that reads a token looks like itself in either.
+   The dark set is the mockup's, converted from its hex values; the light set is the same hues
+   inverted, not a second design. */
+
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.21 0.03 264);
+  --background: oklch(0.985 0.003 265);
+  --foreground: oklch(0.23 0.025 265);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.03 264);
+  --card-foreground: oklch(0.23 0.025 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.03 264);
-  --primary: oklch(0.55 0.16 245);
-  --primary-foreground: oklch(0.99 0.01 245);
-  --secondary: oklch(0.97 0.01 264);
-  --secondary-foreground: oklch(0.28 0.03 264);
-  --muted: oklch(0.97 0.01 264);
-  --muted-foreground: oklch(0.55 0.02 264);
-  --accent: oklch(0.96 0.02 245);
-  --accent-foreground: oklch(0.28 0.03 264);
-  --destructive: oklch(0.58 0.22 27);
+  --popover-foreground: oklch(0.23 0.025 265);
+  --primary: oklch(0.55 0.15 251);
+  --primary-foreground: oklch(0.99 0.01 251);
+  --secondary: oklch(0.96 0.008 265);
+  --secondary-foreground: oklch(0.3 0.025 265);
+  --muted: oklch(0.96 0.008 265);
+  --muted-foreground: oklch(0.52 0.03 265);
+  --accent: oklch(0.95 0.02 251);
+  --accent-foreground: oklch(0.3 0.025 265);
+  --destructive: oklch(0.55 0.2 27);
   --destructive-foreground: oklch(0.99 0.01 27);
-  --border: oklch(0.92 0.01 264);
-  --input: oklch(0.92 0.01 264);
-  --ring: oklch(0.55 0.16 245);
+  /* State that is not a failure and not the primary action: an index that is fresh, a run that
+     succeeded. Named for what it means rather than for the green it happens to be, because the two
+     themes reach it from different lightnesses. */
+  --success: oklch(0.6 0.12 181);
+  --warning: oklch(0.65 0.13 71);
+  --border: oklch(0.91 0.01 265);
+  --input: oklch(0.91 0.01 265);
+  --ring: oklch(0.55 0.15 251);
+  /* The sidebar is a surface of its own rather than the page's: it stands off the content in both
+     themes, and the shadcn sidebar reads these names and no others. */
+  --sidebar: oklch(0.97 0.006 265);
+  --sidebar-foreground: oklch(0.23 0.025 265);
+  --sidebar-primary: oklch(0.55 0.15 251);
+  --sidebar-primary-foreground: oklch(0.99 0.01 251);
+  --sidebar-accent: oklch(0.93 0.012 265);
+  --sidebar-accent-foreground: oklch(0.23 0.025 265);
+  --sidebar-border: oklch(0.9 0.01 265);
+  --sidebar-ring: oklch(0.55 0.15 251);
 }
 
 .dark {
-  --background: oklch(0.18 0.02 264);
-  --foreground: oklch(0.96 0.01 264);
-  --card: oklch(0.22 0.02 264);
-  --card-foreground: oklch(0.96 0.01 264);
-  --popover: oklch(0.22 0.02 264);
-  --popover-foreground: oklch(0.96 0.01 264);
-  --primary: oklch(0.72 0.13 232);
-  --primary-foreground: oklch(0.19 0.04 245);
-  --secondary: oklch(0.28 0.02 264);
-  --secondary-foreground: oklch(0.96 0.01 264);
-  --muted: oklch(0.28 0.02 264);
-  --muted-foreground: oklch(0.71 0.02 264);
-  --accent: oklch(0.31 0.03 245);
-  --accent-foreground: oklch(0.96 0.01 264);
-  --destructive: oklch(0.66 0.19 25);
-  --destructive-foreground: oklch(0.18 0.02 264);
-  --border: oklch(1 0 0 / 12%);
-  --input: oklch(1 0 0 / 16%);
-  --ring: oklch(0.6 0.11 232);
+  --background: oklch(0.183 0.02 266);
+  --foreground: oklch(0.945 0.012 265);
+  --card: oklch(0.223 0.027 265);
+  --card-foreground: oklch(0.945 0.012 265);
+  --popover: oklch(0.223 0.027 265);
+  --popover-foreground: oklch(0.945 0.012 265);
+  --primary: oklch(0.685 0.146 251);
+  --primary-foreground: oklch(0.183 0.02 266);
+  --secondary: oklch(0.256 0.033 264);
+  --secondary-foreground: oklch(0.945 0.012 265);
+  --muted: oklch(0.256 0.033 264);
+  --muted-foreground: oklch(0.676 0.036 267);
+  --accent: oklch(0.269 0.032 264);
+  --accent-foreground: oklch(0.945 0.012 265);
+  --destructive: oklch(0.681 0.172 26);
+  --destructive-foreground: oklch(0.183 0.02 266);
+  --success: oklch(0.784 0.133 181);
+  --warning: oklch(0.768 0.131 71);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.685 0.146 251);
+  --sidebar: oklch(0.21 0.025 267);
+  --sidebar-foreground: oklch(0.945 0.012 265);
+  --sidebar-primary: oklch(0.685 0.146 251);
+  --sidebar-primary-foreground: oklch(0.183 0.02 266);
+  --sidebar-accent: oklch(0.269 0.032 264);
+  --sidebar-accent-foreground: oklch(0.945 0.012 265);
+  --sidebar-border: oklch(1 0 0 / 9%);
+  --sidebar-ring: oklch(0.685 0.146 251);
 }
 
 @theme inline {
@@ -75,16 +105,26 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* The header's loading bar: a third-width block crossing the full width and back to the start.
+/* The top bar's loading bar: a third-width block crossing the full width and back to the start.
    Defined here because a keyframe has no utility-class form; the element names it with `animate-[…]`. */
 @keyframes slide {
   from {
@@ -106,18 +146,20 @@
 }
 
 /* Token classes @tanstack/highlight emits. It ships markup and no colours, so the palette is here,
-   in the one stylesheet, rather than as inline styles on every token. */
+   in the one stylesheet, rather than as inline styles on every token. Each token is a pair: the
+   hues are the same in both themes and only the lightness moves, because a single set legible on
+   the dark ground washes out on the light one. */
 @layer components {
   .th-keyword {
-    @apply text-sky-400;
+    @apply text-sky-700 dark:text-sky-400;
   }
 
   .th-type {
-    @apply text-teal-300;
+    @apply text-teal-700 dark:text-teal-300;
   }
 
   .th-string {
-    @apply text-amber-300;
+    @apply text-amber-700 dark:text-amber-300;
   }
 
   .th-comment {
@@ -125,15 +167,15 @@
   }
 
   .th-number {
-    @apply text-fuchsia-300;
+    @apply text-fuchsia-700 dark:text-fuchsia-300;
   }
 
   .th-literal {
-    @apply text-fuchsia-300;
+    @apply text-fuchsia-700 dark:text-fuchsia-300;
   }
 
   .th-function {
-    @apply text-violet-300;
+    @apply text-violet-700 dark:text-violet-300;
   }
 
   .th-property {
@@ -141,7 +183,7 @@
   }
 
   .th-meta {
-    @apply text-emerald-300;
+    @apply text-emerald-700 dark:text-emerald-300;
   }
 
   .th-operator,
