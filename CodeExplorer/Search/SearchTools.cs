@@ -274,7 +274,7 @@ internal sealed class SearchTools(
         int hiddenFiles = (result.FilesMatchingWithoutFilters ?? result.TotalFiles) - result.TotalFiles;
         if (hiddenFiles > 0)
             text.Append(CultureInfo.InvariantCulture,
-                $"  NOTE: your filters hid {hiddenFiles} further matching {ToolReply.Plural(hiddenFiles, "file")}. A declaration you cannot see below may be in one of them. Re-run without them to check.\n");
+                $"  NOTE: {ToolReply.PartlyHiddenByFilters(hiddenFiles)}\n");
 
         Section("DECLARATIONS", ReferenceKind.Definition);
         Section("WRITES", ReferenceKind.Write);
@@ -326,19 +326,8 @@ internal sealed class SearchTools(
             // The heading counts the references, but the same line is printed once however many of
             // them it holds: two type uses on one line are two references and one thing to read.
             text.Append(CultureInfo.InvariantCulture, $"\n{title}  ({items.Count})\n");
-            foreach (var group in items.DistinctBy(r => (r.QualifiedPath, r.LineNumber))
-                         .GroupBy(r => r.QualifiedPath))
-            {
-                text.Append("  ").Append(group.Key).Append('\n');
-                int width = group.Max(r => r.LineNumber.ToString(CultureInfo.InvariantCulture).Length);
-                foreach (var reference in group)
-                    text.Append("  ")
-                        .Append(reference.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
-                        .Append(": ")
-                        .Append(reference.Scope is null ? "" : $"[{reference.Scope}] ")
-                        .Append(ToolReply.Clip(reference.Text).TrimStart())
-                        .Append('\n');
-            }
+            AppendHits(text, items.DistinctBy(r => (r.QualifiedPath, r.LineNumber))
+                .Select(r => (r.QualifiedPath, r.LineNumber, r.Scope, r.Text)));
         }
     }
 
@@ -402,7 +391,7 @@ internal sealed class SearchTools(
             $"No declaration of \"{symbol}\" was recognised, though the name appears in {result.FilesNamingIt} {ToolReply.Plural(result.FilesNamingIt, "file")}. ");
         if (result.FilesNamingItWithoutFilters > result.FilesNamingIt)
             text.Append(CultureInfo.InvariantCulture,
-                $"Your filters hid {result.FilesNamingItWithoutFilters.Value - result.FilesNamingIt} further matching {ToolReply.Plural(result.FilesNamingItWithoutFilters.Value - result.FilesNamingIt, "file")}, and the declaration may be in one of them. ");
+                $"{ToolReply.PartlyHiddenByFilters(result.FilesNamingItWithoutFilters.Value - result.FilesNamingIt)} ");
         text.Append(CultureInfo.InvariantCulture,
             $"This reads the declaration forms it knows, so a form it does not know is a miss and not proof there is none — the symbol may also be declared in a language this indexes without profiling, or generated rather than written. Run find_references(symbol=\"{symbol}\") and read its DECLARATIONS section, or grep for it.");
         return text.ToString();
@@ -418,44 +407,66 @@ internal sealed class SearchTools(
                 $"; showing the first {result.Sites.Count}. The name is declared too often to enumerate — narrow with repo/path/ext/exclude.\n")
             : ".\n");
 
-        var implementations = result.Sites.Where(site => site.Role == DeclarationRole.Implementation).ToList();
-        var rest = result.Sites.Where(site => site.Role != DeclarationRole.Implementation).ToList();
-        bool split = implementations.Count > 0 && rest.Any(site => site.Role == DeclarationRole.Declaration);
-        if (split)
+        // Headings where the language draws the distinction they name, and none where it does not.
+        // Whether this ANSWER holds both kinds decides nothing: a Delphi routine found only in its
+        // implementation section is still an implementation, and printing it unlabelled because
+        // nothing else turned up would make one language answer two ways. For C#, X#, TypeScript and
+        // JavaScript the two coincide, and a pair of headings there would be a split invented for the
+        // sake of one.
+        if (result.Separated)
+        {
             text.Append(
                 "This language announces a routine and writes it elsewhere; the body comes first below.\n");
-
-        // Headings only where the language draws the distinction they name. Where it does not — C#,
-        // X#, TypeScript, JavaScript, and a Delphi line the scan could not place — an "IMPLEMENTATIONS
-        // / DECLARATIONS" pair would be a split invented for the sake of a heading, and the ticket's
-        // own words are that such an answer "simply reports one site of one kind".
-        Section(split ? "IMPLEMENTATIONS" : null, implementations);
-        Section(split ? "DECLARATIONS" : null, rest);
+            Section("IMPLEMENTATIONS", DeclarationRole.Implementation);
+            Section("DECLARATIONS", DeclarationRole.Declaration);
+            // Not folded into DECLARATIONS: a line the scan could not place is exactly what the
+            // analyser refuses to call a declaration, and a heading would restore the guess it refused.
+            Section("SECTION UNKNOWN", null);
+        }
+        else
+        {
+            Section(null, null);
+        }
 
         text.Append(
             "\nDeclaration forms are read from line shape, not from a compiler, so an unrelated symbol of the same name is included and a form this does not know is missing. Strong evidence, not proof.\n");
         return text.ToString();
 
-        void Section(string? title, IReadOnlyList<DefinitionSite> sites)
+        void Section(string? title, DeclarationRole? role)
         {
+            var sites = title is null ? result.Sites : result.Sites.Where(site => site.Role == role).ToList();
             if (sites.Count == 0) return;
-            text.Append(title is null
-                ? "\n"
-                : string.Create(CultureInfo.InvariantCulture, $"\n{title}  ({sites.Count})\n"));
-            foreach (var group in sites.GroupBy(site => site.QualifiedPath))
-            {
-                text.Append("  ").Append(group.Key).Append('\n');
-                int width = group.Max(site => site.LineNumber.ToString(CultureInfo.InvariantCulture).Length);
-                foreach (var site in group)
-                    text.Append("  ")
-                        .Append(site.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
-                        .Append(": ")
-                        // The type only where it is not the thing being declared, so a class does not
-                        // read as declaring itself.
-                        .Append(site.Type is null || site.Type == symbol ? "" : $"[{site.Type}] ")
-                        .Append(ToolReply.Clip(site.Text).TrimStart())
-                        .Append('\n');
-            }
+            if (title is not null)
+                text.Append(CultureInfo.InvariantCulture, $"\n{title}  ({sites.Count})\n");
+            else text.Append('\n');
+            // The type only where it is not the thing being declared, so a class does not read as
+            // declaring itself.
+            AppendHits(text,
+                sites.Select(site => (site.QualifiedPath, site.LineNumber,
+                    site.Type is null || site.Type == symbol ? null : site.Type, site.Text)));
+        }
+    }
+
+    /// <summary>
+    ///     The lines a search is showing, grouped by file under a two-space gutter, each with its line
+    ///     number right-aligned within its file and an optional bracketed label. One copy, because two
+    ///     tools printing hits two ways is the drift <see cref="ToolReply" /> exists to stop — a change
+    ///     to the gutter or the clip must not reach one tool and not the other.
+    /// </summary>
+    private static void AppendHits(StringBuilder text,
+        IEnumerable<(string Path, int LineNumber, string? Label, string Text)> hits)
+    {
+        foreach (var file in hits.GroupBy(hit => hit.Path))
+        {
+            text.Append("  ").Append(file.Key).Append('\n');
+            int width = file.Max(hit => hit.LineNumber.ToString(CultureInfo.InvariantCulture).Length);
+            foreach (var hit in file)
+                text.Append("  ")
+                    .Append(hit.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
+                    .Append(": ")
+                    .Append(hit.Label is null ? "" : $"[{hit.Label}] ")
+                    .Append(ToolReply.Clip(hit.Text).TrimStart())
+                    .Append('\n');
         }
     }
 

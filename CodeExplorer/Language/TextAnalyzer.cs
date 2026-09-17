@@ -58,7 +58,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     private readonly Regex _keywordDeclaration;
     private readonly Regex _memberDeclaration;
     private readonly LanguageProfile _profile;
-    private readonly Regex _precedingTypeDeclaration;
+    private readonly Regex? _precedingTypeDeclaration;
     private readonly Regex _typeDeclaration;
     private readonly Regex _typedDeclarationTail;
 
@@ -173,11 +173,15 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         // is how every language that splits declaration from implementation writes the second half:
         // `procedure TCustomer.Save;` and `create package body app.orders` name the type they belong
         // to, and reading only as far as the dot found no declaration on the line at all.
-        // `as` and `is` are terminators here beside the punctuation, because the SQL family opens a
-        // body with a word where the others open it with a bracket.
+        // What opens the body comes from the profile where it is a word, because that is a language
+        // fact; the brackets beside it are the shape of a declaration head in every language that has
+        // one.
+        string openers = Alternation(profile.DeclarationBodyOpeners) is { } words
+            ? $@"|\s(?:{words})\b"
+            : "";
         string keywordPattern = modifiers is null || !profile.DeclarationNamesFollowKeyword
             ? MatchesNothing
-            : $@"^\s*(?:(?:{modifiers})\s+)+(?:(\w+)\s*\.\s*)?(\w+)\s*(?:[\(<{{=;:]|\s(?:as|is)\b)";
+            : $@"^\s*(?:(?:{modifiers})\s+)+(?:(\w+)\s*\.\s*)?(\w+)\s*(?:[\(<{{=;:]{openers})";
         string? typeKeywords = Alternation(profile.DeclarationKeywords);
         string typePattern = typeKeywords is null
             ? MatchesNothing
@@ -187,12 +191,16 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         // alternation covering both would match a line that is neither.
         string precedingTypePattern = typeKeywords is null || !profile.TypeNamesPrecedeKeyword
             ? MatchesNothing
-            : $@"^\s*(\w+)\s*=\s*(?:packed\s+)?(?:{typeKeywords})\b";
+            : $@"^\s*(\w+)\s*=\s*(?:{typeKeywords})\b";
 
         _memberDeclaration = new Regex(flag + memberPattern, RegexOptions.CultureInvariant);
         _keywordDeclaration = new Regex(flag + keywordPattern, RegexOptions.CultureInvariant);
         _typeDeclaration = new Regex(flag + typePattern, RegexOptions.CultureInvariant);
-        _precedingTypeDeclaration = new Regex(flag + precedingTypePattern, RegexOptions.CultureInvariant);
+        // Null rather than a pattern that matches nothing: this is asked of every line of every file
+        // a reference search reads, and the languages that write this shape are the minority.
+        _precedingTypeDeclaration = precedingTypePattern == MatchesNothing
+            ? null
+            : new Regex(flag + precedingTypePattern, RegexOptions.CultureInvariant);
         // Only the shapes this language actually writes. A language that declares nothing this can
         // read asks the engine for no lines at all, rather than for the lines a pattern that matches
         // nothing would return.
@@ -618,7 +626,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             // `procedure TCustomer.Save;` names both, and the type it names is the one the member
             // belongs to — which is what a caller looking for the enclosing scope of a line in that
             // routine needs, since a Delphi implementation section nests nothing by indentation.
-            if (type is null && k.Groups[1].Success && k.Groups[1].Value.Length > 0) type = k.Groups[1].Value;
+            if (type is null && k.Groups[1].Success) type = k.Groups[1].Value;
         }
 
         return new Answer<Declared?>(
@@ -635,7 +643,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     private string? TypeOn(string line)
     {
         if (_typeDeclaration.Match(line) is { Success: true } named) return named.Groups[1].Value;
-        return _precedingTypeDeclaration.Match(line) is { Success: true } preceding
+        return _precedingTypeDeclaration?.Match(line) is { Success: true } preceding
             ? preceding.Groups[1].Value
             : null;
     }

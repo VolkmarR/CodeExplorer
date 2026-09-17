@@ -141,10 +141,20 @@ reported as a right one. A doubtful form is left out.
 - **A declaration head is a shape per language and not one shape.** The C family writes the return
   type before the name, the xBase and SQL families after it, Delphi writes its type as
   `TCustomer = class(TBase)` and its implementation head as `procedure TCustomer.Save;`, and the SQL
-  family opens a body with a word where the others open one with a bracket. Each is a shape a
-  profile turns on, and the combined pattern is what `DeclarationCandidates` publishes, so a shape
-  added for one language costs the others nothing and the engine narrows every file with its own
-  language's.
+  family opens a body with a word — `as`, `is` — where the others open one with a bracket. Each is a
+  shape a profile turns on and each word is a word the profile lists, for the reason `new` is: a
+  keyword welded into the shared pattern is a language fact the profile author cannot see, and this
+  module has absorbed that one twice already. The combined pattern is what `DeclarationCandidates`
+  publishes, so a shape added for one language costs the others nothing and the engine narrows every
+  file with its own language's.
+- **The per-language narrowing is built from the extensions the project holds, not from the
+  language table.** `find_definition` needs one query covering every language at once, and the
+  obvious way to write it — walk the registrations, emit a branch per language, and a `NOT IN` for
+  the remainder — would have put the extension-to-language table into `Search/` as SQL. Asking the
+  index for its own distinct extensions and resolving each through `LanguageRegistry.For` gives the
+  same query, narrower (the nine extensions in the project, not the forty that could be) and with no
+  remainder to name: an extension no profile covers resolves to the fallback like any other, and the
+  table stays on its own side of the seam.
 - **A comment or a literal stays open across lines, and a bounded scan says where it stopped (#53).**
   Classifying a line on its own reported the second line of a commented-out block as a call, which is
   a deleted call under the heading an agent trusts most. The position is built by walking a file's
