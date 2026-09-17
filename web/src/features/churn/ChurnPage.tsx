@@ -5,6 +5,8 @@ import { CHURN_WINDOWS, describeWindow } from '@/features/churn/churnParams'
 import { churnQuery } from '@/features/churn/queries'
 import { projectQuery } from '@/features/projects/queries'
 import { RepositorySelect } from '@/features/projects/RepositorySelect'
+import { PageCard } from '@/components/PageCard'
+import { WindowNote } from '@/components/WindowNote'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -34,91 +36,99 @@ export function ChurnPage() {
   const filterable = detail.repositories.length > 1
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <p className="text-sm text-muted-foreground">
-          {/* The dates, not just the window asked for: it ends at the newest commit the index holds
-              rather than today, so an index nobody has refreshed shows as one (CONTEXT.md, Window). */}
-          {ranking.since && ranking.until
-            ? `Files by how much they changed, ${formatDate(ranking.since)} to ${formatDate(ranking.until)}, most commits first.`
-            : 'No history is recorded yet.'}
-        </p>
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Label htmlFor="churn-window" className="text-muted-foreground">
-              Window
-            </Label>
-            <Select
-              value={String(search.days)}
-              onValueChange={(next) =>
-                void navigate({
-                  params: { project },
-                  search: { ...search, days: Number(next) },
-                  to: '/projects/$project/churn',
-                })
-              }
-            >
-              <SelectTrigger id="churn-window" className="w-40">
-                <SelectValue>{describeWindow(search.days)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {/* A hand-written `days` outside the offered set still shows as itself rather than
-                    snapping the select to a value the URL does not carry. */}
-                {(CHURN_WINDOWS.includes(search.days as (typeof CHURN_WINDOWS)[number])
-                  ? CHURN_WINDOWS
-                  : [...CHURN_WINDOWS, search.days].toSorted((a, b) => a - b)
-                ).map((days) => (
-                  <SelectItem key={days} value={String(days)}>
-                    {describeWindow(days)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {filterable ? (
+    <>
+      {/* The dates, not just the window asked for: it ends at the newest commit the index holds
+          rather than today, so an index nobody has refreshed shows as one. */}
+      {ranking.since && ranking.until ? (
+        <WindowNote>
+          Counted over <b>{formatDate(ranking.since)}</b> to <b>{formatDate(ranking.until)}</b> —
+          the window ends at the newest commit imported, not at today.
+        </WindowNote>
+      ) : null}
+
+      <PageCard
+        title="Churn"
+        hint="files by how much they changed, most commits first"
+        actions={
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <Label htmlFor="churn-repository" className="text-muted-foreground">
-                Repository
+              <Label htmlFor="churn-window" className="text-xs text-muted-foreground">
+                Window
               </Label>
-              <div className="w-56">
-                <RepositorySelect
-                  id="churn-repository"
-                  repositories={detail.repositories}
-                  value={search.repository ?? ''}
-                  onChange={(repository) =>
-                    void navigate({
-                      params: { project },
-                      search: {
-                        ...search,
-                        repository: repository === '' ? undefined : repository,
-                      },
-                      to: '/projects/$project/churn',
-                    })
-                  }
-                />
-              </div>
+              <Select
+                value={String(search.days)}
+                onValueChange={(next) =>
+                  void navigate({
+                    params: { project },
+                    search: { ...search, days: Number(next) },
+                    to: '/projects/$project/churn',
+                  })
+                }
+              >
+                <SelectTrigger id="churn-window" className="w-36">
+                  <SelectValue>{describeWindow(search.days)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {/* A hand-written `days` outside the offered set still shows as itself rather than
+                      snapping the select to a value the URL does not carry. */}
+                  {(CHURN_WINDOWS.includes(search.days as (typeof CHURN_WINDOWS)[number])
+                    ? CHURN_WINDOWS
+                    : [...CHURN_WINDOWS, search.days].toSorted((a, b) => a - b)
+                  ).map((days) => (
+                    <SelectItem key={days} value={String(days)}>
+                      {describeWindow(days)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+            {filterable ? (
+              <div className="flex items-center gap-2">
+                <Label htmlFor="churn-repository" className="text-xs text-muted-foreground">
+                  Repository
+                </Label>
+                <div className="w-48">
+                  <RepositorySelect
+                    id="churn-repository"
+                    repositories={detail.repositories}
+                    value={search.repository ?? ''}
+                    onChange={(repository) =>
+                      void navigate({
+                        params: { project },
+                        search: {
+                          ...search,
+                          repository: repository === '' ? undefined : repository,
+                        },
+                        to: '/projects/$project/churn',
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          {ranking.files.length > 0 ? (
+            <ChurnList project={project} files={ranking.files} />
+          ) : (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              {ranking.since
+                ? 'No commit in this window changed a file. Widen the window to look further back.'
+                : 'Churn is read from imported history, which arrives with a refresh. If the project has been refreshed and this is still empty, its repositories’ history could not be walked.'}
+            </p>
+          )}
+
+          {ranking.withoutHistory.length > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No history was imported for {ranking.withoutHistory.join(', ')}, so nothing from{' '}
+              {ranking.withoutHistory.length === 1 ? 'it' : 'those'} can appear here however much{' '}
+              {ranking.withoutHistory.length === 1 ? 'it' : 'they'} changed.
+            </p>
           ) : null}
         </div>
-      </div>
-
-      {ranking.files.length > 0 ? (
-        <ChurnList project={project} files={ranking.files} />
-      ) : (
-        <p className="rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground">
-          {ranking.since
-            ? 'No commit in this window changed a file. Widen the window to look further back.'
-            : 'Churn is read from imported history, which arrives with a refresh. If the project has been refreshed and this is still empty, its repositories’ history could not be walked.'}
-        </p>
-      )}
-
-      {ranking.withoutHistory.length > 0 ? (
-        <p className="text-xs text-muted-foreground">
-          No history was imported for {ranking.withoutHistory.join(', ')}, so nothing from{' '}
-          {ranking.withoutHistory.length === 1 ? 'it' : 'those'} can appear here however much{' '}
-          {ranking.withoutHistory.length === 1 ? 'it' : 'they'} changed.
-        </p>
-      ) : null}
-    </div>
+      </PageCard>
+    </>
   )
 }

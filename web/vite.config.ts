@@ -4,6 +4,7 @@ import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite-plus'
 import { reactDoctorRules } from './lint.rules'
+import pkg from './package.json' with { type: 'json' }
 
 // The one configuration file for the whole toolchain (ADR-0004): dev server and build, oxlint and
 // oxfmt. `vp dev` serves the UI on 5173 and proxies /api to the server `dotnet run` starts; `vp
@@ -11,6 +12,9 @@ import { reactDoctorRules } from './lint.rules'
 // together. The router plugin must come before the React plugin: it generates routeTree.gen.ts from
 // src/routes, and React Fast Refresh has to see the generated file.
 export default defineConfig({
+  // The sidebar names the bundle the browser is running. Taken from package.json so there is one
+  // place the number is written, and inlined so no request is spent on a constant.
+  define: { APP_VERSION: JSON.stringify(pkg.version) },
   plugins: [
     tanstackRouter({ target: 'react', autoCodeSplitting: true }),
     // React Compiler through `oxc-transform-react`, the Rust port, rather than the Babel plugin:

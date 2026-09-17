@@ -1,4 +1,5 @@
 import { useParams, useSearch } from '@tanstack/react-router'
+import { PageCard } from '@/components/PageCard'
 import { SearchForm } from '@/features/search/SearchForm'
 import { SearchResults } from '@/features/search/SearchResults'
 
@@ -11,13 +12,17 @@ export function SearchPage() {
   const search = useSearch({ from: '/projects/$project/search' })
 
   return (
-    <div className="space-y-6">
-      {/* The header bar already names the project and lights this view; a heading here would say it
-          a second time. */}
-      <SearchForm project={project} search={search} />
-
-      {/* The form already says how a query is read, next to the box; nothing to add here. */}
-      {search.q === '' ? null : <SearchResults project={project} search={search} />}
-    </div>
+    <PageCard title="Search" hint="answered from the index, never from a working copy">
+      <div className="space-y-5">
+        <SearchForm project={project} search={search} />
+        {search.q === '' ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            Type a query. Text matches whole identifiers; the regex switch reads it as a pattern.
+          </p>
+        ) : (
+          <SearchResults project={project} search={search} />
+        )}
+      </div>
+    </PageCard>
   )
 }

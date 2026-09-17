@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useLocation } from '@tanstack/react-router'
 import { LogIn, LogOut } from 'lucide-react'
 import { signInHref, signOutAction } from '@/lib/api'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { authQuery } from './queries'
 
 const ACTION =
@@ -29,7 +30,7 @@ export function AccountBar() {
 
   if (!data.signedIn) {
     return (
-      <a href={signInHref(href)} className={`ml-auto ${ACTION}`}>
+      <a href={signInHref(href)} className={ACTION}>
         <LogIn className="size-4" />
         Sign in
       </a>
@@ -37,14 +38,34 @@ export function AccountBar() {
   }
 
   return (
-    <div className="ml-auto flex items-center gap-3">
-      <span className="text-sm text-muted-foreground">{data.name}</span>
+    <div className="flex items-center gap-2">
+      <Avatar size="sm">
+        {/* No image: the server answers with a name and nothing else, and it is the tenant rather
+            than this app that holds a picture. So the fallback is the whole avatar, and it is
+            there for the mark beside the name, not in place of it. */}
+        <AvatarFallback aria-hidden="true">{initials(data.name)}</AvatarFallback>
+      </Avatar>
+      <span className="hidden text-sm text-muted-foreground sm:inline">{data.name}</span>
       <form method="post" action={signOutAction}>
         <button type="submit" className={ACTION}>
           <LogOut className="size-4" />
-          Sign out
+          <span className="sr-only sm:not-sr-only">Sign out</span>
         </button>
       </form>
     </div>
   )
+}
+
+/**
+ * At most two letters from the name the tenant gave. It is a display name and not a structured
+ * one — "Volkmar Rigo", "rigo.volkmar", a UPN — so this takes the first letter of the first two
+ * words and gives up gracefully rather than pretending to parse a person.
+ */
+function initials(name: string | null): string {
+  if (!name) return '?'
+  const words = name.split(/[\s.@_-]+/).filter(Boolean)
+  return words
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase() ?? '')
+    .join('')
 }

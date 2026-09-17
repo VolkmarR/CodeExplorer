@@ -1,122 +1,49 @@
-import { Link, useLocation, useParams, useRouterState } from '@tanstack/react-router'
-import { ChevronRight } from 'lucide-react'
-import { AccountBar } from '@/features/auth/AccountBar'
-import { DEFAULT_CHURN_DAYS } from '@/features/churn/churnParams'
-import { treeSearch } from '@/features/files/browseParams'
+import { useLocation, useParams, useRouterState, useSearch } from '@tanstack/react-router'
+import { AppSidebar } from '@/components/AppSidebar'
+import { TopBar } from '@/components/TopBar'
+import { activeView } from '@/components/appNavigation'
+import { validateProjectSearch } from '@/features/projects/projectParams'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
-/** Same treatment for every nav link; the lit one adds the second class. */
-const NAV_LINK = 'rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-foreground'
-const NAV_LINK_ACTIVE = 'bg-muted text-foreground'
-
 /**
- * Which tab is lit, decided from the path rather than by `activeProps`, because reading a file is
- * part of Files and lives at its own route (`/file`, not under `/files`) — a link's own active state
- * cannot know that, and would leave the reader of a file standing on no tab at all.
- *
- * A function rather than a chain inside the component: it is the one part of the bar that grows with
- * every view added, and it needs none of the component's state to decide.
- */
-function activeView(pathname: string): string {
-  if (pathname.endsWith('/search')) return 'search'
-  if (pathname.endsWith('/history')) return 'history'
-  if (pathname.endsWith('/churn')) return 'churn'
-  if (pathname.endsWith('/files') || pathname.endsWith('/file')) return 'files'
-  return 'settings'
-}
-
-/**
- * The frame every page sits in, and the only navigation there is: where you are, and the views of a
- * project. It takes its content as children rather than rendering an `Outlet` itself, so the root
- * route's error and not-found components can reuse it outside the matched tree.
+ * The frame every page sits in: a sidebar that is the whole of the navigation, and a top bar that
+ * says where you are and offers the endpoint, the theme and the account. It takes its content as
+ * children rather than rendering an `Outlet` itself, so the root route's error and not-found
+ * components can reuse it outside the matched tree.
  */
 export function RootLayout({ children }: { children: React.ReactNode }) {
-  // Not every page is inside a project — the list and the new-project page are not — so the param is
-  // read loosely and the project half of the bar simply does not render when there is none.
+  // Not every page is inside a project — the list and the new-project page are not — so the param
+  // is read loosely and the project half of the frame simply does not render when there is none.
   const { project } = useParams({ strict: false })
 
+  // Loosely for the same reason, and because only one route has a `tab` at all: reading it strictly
+  // would throw on the five that do not. It goes back through the route's own validator rather than
+  // being re-read here, so the default lives in one place (`projectParams.ts`).
+  const search: Record<string, unknown> = useSearch({ strict: false })
   const { pathname } = useLocation()
-  const view = activeView(pathname)
+  const view = activeView(pathname, validateProjectSearch(search).tab)
 
-  // Code and search results are wide; the project list and settings are prose and forms. The reading
-  // views drop the column so a long line of code is not folded at 1152px on a wide screen.
+  // Code and search results are wide; the overview, the settings and the forms are prose and
+  // tables. The reading views drop the column so a long line of code is not folded on a wide screen.
   const wide = view === 'files' || view === 'search'
 
   // The bar is the one place a pending navigation shows before the pending component takes over,
-  // so a click on a tab answers within a frame rather than after the loader's delay.
+  // so a click on a sidebar item answers within a frame rather than after the loader's delay.
   const loading = useRouterState({ select: (state) => state.isLoading })
 
   return (
-    <div className="min-h-dvh">
-      <header className="relative border-b">
-        <div className="mx-auto flex max-w-(--breakpoint-2xl) flex-wrap items-center gap-2 px-6 py-3">
-          <Link to="/" className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-            <span
-              aria-hidden="true"
-              className="size-4 rounded-sm bg-linear-to-br from-primary to-primary/50"
-            />
-            CodeExplorer
-          </Link>
-          {project ? (
-            <>
-              <ChevronRight className="size-4 text-muted-foreground/60" />
-              <span className="font-mono text-sm">{project}</span>
-              <nav className="ml-4 flex items-center gap-1">
-                <Link
-                  to="/projects/$project/files"
-                  params={{ project }}
-                  search={treeSearch()}
-                  className={cn(NAV_LINK, view === 'files' && NAV_LINK_ACTIVE)}
-                >
-                  Files
-                </Link>
-                <Link
-                  to="/projects/$project/search"
-                  params={{ project }}
-                  search={{ caseSensitive: false, page: 1, q: '', regex: false }}
-                  className={cn(NAV_LINK, view === 'search' && NAV_LINK_ACTIVE)}
-                >
-                  Search
-                </Link>
-                <Link
-                  to="/projects/$project/history"
-                  params={{ project }}
-                  search={{ page: 1 }}
-                  className={cn(NAV_LINK, view === 'history' && NAV_LINK_ACTIVE)}
-                >
-                  History
-                </Link>
-                <Link
-                  to="/projects/$project/churn"
-                  params={{ project }}
-                  search={{ days: DEFAULT_CHURN_DAYS }}
-                  className={cn(NAV_LINK, view === 'churn' && NAV_LINK_ACTIVE)}
-                >
-                  Churn
-                </Link>
-                <Link
-                  to="/projects/$project"
-                  params={{ project }}
-                  className={cn(NAV_LINK, view === 'settings' && NAV_LINK_ACTIVE)}
-                >
-                  Settings
-                </Link>
-              </nav>
-            </>
-          ) : null}
-          <AccountBar />
-        </div>
-        {/* Decorative: the pending component below already announces the wait with `aria-busy`, so
-            this is hidden from readers rather than made a second progress announcement. */}
-        {loading ? (
-          <div aria-hidden="true" className="absolute inset-x-0 -bottom-px h-0.5 overflow-hidden">
-            <div className="h-full w-1/3 bg-primary motion-safe:animate-[slide_1s_ease-in-out_infinite]" />
-          </div>
-        ) : null}
-      </header>
-      <main className={cn('mx-auto px-6 py-8', wide ? 'max-w-(--breakpoint-2xl)' : 'max-w-6xl')}>
-        {children}
-      </main>
-    </div>
+    <TooltipProvider>
+      <SidebarProvider>
+        <AppSidebar project={project} view={view} />
+        <SidebarInset className="min-w-0">
+          <TopBar project={project} view={view} loading={loading} />
+          <main className={cn('w-full flex-1 px-4 py-5', wide ? '' : 'mx-auto max-w-6xl')}>
+            {children}
+          </main>
+        </SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
   )
 }
