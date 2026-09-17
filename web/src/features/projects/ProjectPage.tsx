@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
 import { invalidateProject, projectQuery, projectsQuery } from '@/features/projects/queries'
-import { refreshStatusQuery } from '@/features/refresh/queries'
+import { isRefreshRunning, refreshStatusQuery } from '@/features/refresh/queries'
 import { useRefreshProject } from '@/features/refresh/useRefreshProject'
 
 /**
@@ -34,10 +34,8 @@ export function ProjectPage() {
   const { data: project } = useSuspenseQuery(projectQuery(slug))
   const { data: status } = useSuspenseQuery(refreshStatusQuery(slug))
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
 
-  const running = status.state === 'Queued' || status.state === 'Running'
-
+  const running = isRefreshRunning(status)
   const refresh = useRefreshProject(slug)
 
   // The index only changes when a refresh finishes, and the status is the only thing that says so.
@@ -46,17 +44,6 @@ export function ProjectPage() {
   useEffect(() => {
     if (status.state === 'Succeeded') void invalidateProject(queryClient, slug)
   }, [status.state, queryClient, slug])
-
-  const remove = useMutation({
-    mutationFn: () => api.removeProject(slug),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries(projectsQuery())
-      // The toast outlives the page, which is the point: the list this lands on shows the project
-      // gone and nothing else, so the toast is what says it was this click that did it.
-      toast.add({ title: `Deleted ${project.name}`, type: 'success' })
-      await navigate({ to: '/' })
-    },
-  })
 
   return (
     <PageCard
@@ -124,33 +111,38 @@ export function ProjectPage() {
         {tab === 'overview' ? (
           <ProjectOverview project={slug} />
         ) : (
-          <SettingsTab
-            project={project}
-            removing={remove.isPending}
-            error={remove.error}
-            onRemove={() => remove.mutate()}
-          />
+          <SettingsTab project={project} />
         )}
       </div>
     </PageCard>
   )
 }
 
-/** How the project is configured: which repositories it is built from, and how to unmake it. */
-function SettingsTab({
-  project,
-  removing,
-  error,
-  onRemove,
-}: {
-  project: ProjectDetail
-  removing: boolean
-  error: Error | null
-  onRemove: () => void
-}) {
+/**
+ * How the project is configured: which repositories it is built from, and how to unmake it.
+ *
+ * It owns the deletion rather than taking it apart into four props: nothing on the overview half
+ * uses it, and passing `isPending`, `error` and a callback separately spread one mutation across
+ * two components.
+ */
+function SettingsTab({ project }: { project: ProjectDetail }) {
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+
+  const remove = useMutation({
+    mutationFn: () => api.removeProject(project.slug),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries(projectsQuery())
+      // The toast outlives the page, which is the point: the list this lands on shows the project
+      // gone and nothing else, so the toast is what says it was this click that did it.
+      toast.add({ title: `Deleted ${project.name}`, type: 'success' })
+      await navigate({ to: '/' })
+    },
+  })
+
   return (
     <div className="space-y-6">
-      {error ? <ErrorPanel error={error} /> : null}
+      {remove.error ? <ErrorPanel error={remove.error} /> : null}
       <RepositoryTable project={project} />
 
       <section
@@ -179,8 +171,8 @@ function SettingsTab({
             </>
           }
           action="Delete project"
-          disabled={removing}
-          onConfirm={onRemove}
+          disabled={remove.isPending}
+          onConfirm={() => remove.mutate()}
         />
       </section>
     </div>

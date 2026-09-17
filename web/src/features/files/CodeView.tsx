@@ -3,6 +3,7 @@ import { renderTokens } from '@tanstack/highlight'
 import { Link } from '@tanstack/react-router'
 import { useCallback, useMemo } from 'react'
 import { highlighter, languageFor } from '@/highlight/highlighter'
+import { fileSearch } from '@/features/files/fileParams'
 import type { BlameRun } from '@/lib/api'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { formatDate, shortSha } from '@/lib/format'
@@ -133,7 +134,7 @@ export function CodeView({
                   <Link
                     to="/projects/$project/file"
                     params={{ project }}
-                    search={{ line: number, path }}
+                    search={fileSearch(path, number)}
                     replace
                     className="hover:text-primary hover:underline"
                   >

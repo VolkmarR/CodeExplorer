@@ -15,10 +15,19 @@ export type ThemePreference = 'light' | 'dark' | 'system'
 export type Theme = 'light' | 'dark'
 
 /** The `localStorage` key. The inline script in `index.html` spells the same string. */
-export const THEME_KEY = 'codeexplorer.theme'
+const THEME_KEY = 'codeexplorer.theme'
 
-const DARK_QUERY = '(prefers-color-scheme: dark)'
 const PREFERENCES = new Set(['light', 'dark', 'system'])
+
+/**
+ * One `MediaQueryList`, lazily made and kept. Each call to `matchMedia` allocates another, and this
+ * is read on every render of the toggle as well as on every change of the system's preference.
+ */
+let darkQuery: MediaQueryList | undefined
+function systemPrefersDark() {
+  darkQuery ??= globalThis.matchMedia('(prefers-color-scheme: dark)')
+  return darkQuery.matches
+}
 
 /**
  * Makes sense of whatever was stored. Anything unrecognised is the system's choice rather than an
@@ -54,43 +63,16 @@ export function resolveTheme(preference: ThemePreference, prefersDark: boolean):
  * cannot say which of them it is in, and the browser's own setting is where "follow the system"
  * belongs.
  */
-export function nextPreference(preference: ThemePreference, prefersDark: boolean): ThemePreference {
+export function nextPreference(preference: ThemePreference, prefersDark: boolean): Theme {
   return resolveTheme(preference, prefersDark) === 'dark' ? 'light' : 'dark'
 }
 
 /**
  * The theme on screen, read off the document. `useSyncExternalStore` in the toggle calls this, so
- * the browser globals are touched from a subscription rather than from a render — which is also
- * what keeps a reader who never chose a theme following their system when it changes at dusk.
+ * the browser globals are touched from a subscription rather than from a render.
  */
 export function currentTheme(): Theme {
   return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
-}
-
-/**
- * Who to tell when the theme changes. Two things move it — a click on the toggle and, for a reader
- * who has chosen neither theme, the system itself at dusk — and both go through here, so a
- * component reading `currentTheme` sees either.
- */
-const listeners = new Set<() => void>()
-
-export function subscribeToTheme(onChange: () => void) {
-  const query = globalThis.matchMedia(DARK_QUERY)
-  const handle = () => {
-    // Only a reader following the system is moved by this; an explicit choice stands.
-    if (storedPreference() === 'system') applyTheme(currentSystemTheme())
-    onChange()
-  }
-  query.addEventListener('change', handle)
-  listeners.add(onChange)
-  return () => {
-    query.removeEventListener('change', handle)
-    listeners.delete(onChange)
-  }
-}
-
-function currentSystemTheme(): Theme {
-  return globalThis.matchMedia(DARK_QUERY).matches ? 'dark' : 'light'
 }
 
 /**
@@ -98,20 +80,54 @@ function currentSystemTheme(): Theme {
  * on `<html>` rather than a wrapper so that a portalled popup — a dropdown, a tooltip, the mobile
  * sidebar sheet — is inside it too.
  */
-export function applyTheme(theme: Theme) {
+function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle('dark', theme === 'dark')
+}
+
+/**
+ * Who to tell when the theme changes.
+ *
+ * One path, not two: the theme moves for two reasons — a click on the toggle, and, for a reader who
+ * has chosen neither theme, the system itself at dusk — and both end here. The system listener is
+ * attached once for the module rather than once per subscriber, because it *writes* the theme as
+ * well as announcing it, and with two subscribers a per-subscriber listener would write twice.
+ */
+const listeners = new Set<() => void>()
+
+function announce() {
+  for (const listener of listeners) listener()
+}
+
+function onSystemChange() {
+  // Only a reader following the system is moved by this; an explicit choice stands.
+  if (storedPreference() === 'system') applyTheme(systemPrefersDark() ? 'dark' : 'light')
+  announce()
+}
+
+export function subscribeToTheme(onChange: () => void) {
+  if (listeners.size === 0) {
+    systemPrefersDark()
+    darkQuery?.addEventListener('change', onSystemChange)
+  }
+  listeners.add(onChange)
+
+  return () => {
+    listeners.delete(onChange)
+    if (listeners.size === 0) darkQuery?.removeEventListener('change', onSystemChange)
+  }
 }
 
 /** What the toggle does: decide, apply, and remember for the next visit. */
 export function chooseNextTheme() {
-  const prefersDark = globalThis.matchMedia(DARK_QUERY).matches
-  const next = nextPreference(storedPreference(), prefersDark)
-  applyTheme(resolveTheme(next, prefersDark))
+  // `nextPreference` answers with a theme and never with `system`, so there is nothing left to
+  // resolve before applying it.
+  const next = nextPreference(storedPreference(), systemPrefersDark())
+  applyTheme(next)
   try {
     globalThis.localStorage.setItem(THEME_KEY, next)
   } catch {
     // Storage is full or blocked in a locked-down browser. The theme still changed for this page,
     // which is what the click asked for; only outliving the tab is lost.
   }
-  for (const listener of listeners) listener()
+  announce()
 }

@@ -1,4 +1,5 @@
 import { allLanguages, createHighlighter } from '@tanstack/highlight'
+import { splitFileName } from '@/lib/format'
 import { csharp } from './csharp'
 import { xsharp } from './xsharp'
 
@@ -56,10 +57,13 @@ const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   yml: 'yaml',
 }
 
+/**
+ * Which language definition to tokenize a file with, from its name. The extension rule itself is
+ * `lib/format.ts`'s, shared with the file rail so the two cannot disagree about what an extension is.
+ */
 export function languageFor(qualifiedPath: string): string {
-  const name = qualifiedPath.slice(qualifiedPath.lastIndexOf('/') + 1)
-  const dot = name.lastIndexOf('.')
-  // A dotfile such as `.gitignore` has no extension; so does `Dockerfile`, which the whole name names.
-  const key = dot > 0 ? name.slice(dot + 1).toLowerCase() : name.toLowerCase()
-  return LANGUAGE_BY_EXTENSION[key] ?? 'plaintext'
+  // A file with no extension is looked up by its whole name, which is what `Dockerfile` and
+  // `.gitignore` need. `splitFileName` is where the rule for which is which lives.
+  const { extension, stem } = splitFileName(qualifiedPath)
+  return LANGUAGE_BY_EXTENSION[(extension || stem).toLowerCase()] ?? 'plaintext'
 }

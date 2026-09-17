@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { FileCode } from 'lucide-react'
+import { fileSearch } from '@/features/files/fileParams'
 import { MatchedLine } from '@/features/search/MatchedLine'
 import { matchRanges } from '@/features/search/matchRanges'
 import { languageFor } from '@/highlight/highlighter'
@@ -35,7 +36,7 @@ export function SearchResultGroup({
         <Link
           to="/projects/$project/file"
           params={{ project }}
-          search={{ path: file.qualifiedPath }}
+          search={fileSearch(file.qualifiedPath)}
           className="min-w-0 font-mono text-sm hover:underline"
         >
           {/* The directory is dimmed and the name is not: a page of results is scanned by file
@@ -56,7 +57,7 @@ export function SearchResultGroup({
                 <Link
                   to="/projects/$project/file"
                   params={{ project }}
-                  search={{ line: line.lineNumber, path: file.qualifiedPath }}
+                  search={fileSearch(file.qualifiedPath, line.lineNumber)}
                   className="hover:text-primary hover:underline"
                 >
                   {line.lineNumber}
