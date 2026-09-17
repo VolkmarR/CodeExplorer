@@ -325,39 +325,60 @@ public sealed class SearchEndpointTests
     }
 
     /// <summary>
-    ///     The churn panel beside the change log. It ranks over the window the page it is showing
-    ///     covers, so it is asked for with the same page arguments and never with dates of its own —
-    ///     a panel and a list that disagreed about which commits they were describing would be worse
-    ///     than no panel.
+    ///     The churn page. It ranks over a window of days rather than a page of commits, and answers
+    ///     with the dates that window resolved to — which end at the newest recorded commit and not at
+    ///     today, so a caller can see that an index is stale rather than read an empty ranking as
+    ///     "nothing changed" (CONTEXT.md, Window).
     /// </summary>
     [Fact]
-    public async Task The_hot_files_panel_ranks_over_the_window_the_change_log_page_covers()
+    public async Task The_churn_page_ranks_over_a_window_of_days_and_says_which_dates_it_covered()
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        var all = await GetAsync<HotFilesResponse>(host, "/api/projects/alpha/hot-files");
+        var all = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn");
         Assert.NotNull(all.Since);
+        // The fixture's commits are at the Unix epoch, decades before today: a window measured from
+        // the clock would rank nothing at all, and this is the assertion that says which it is.
+        Assert.Equal(DateTimeOffset.UnixEpoch, all.Until);
         // Both root commits, so all three files of the fixture are ranked and each is still at HEAD.
         Assert.Equal(["one/docs/Widget.md", "one/src/Widget.cs", "two/src/Widget.cs"],
             all.Files.Select(f => f.QualifiedPath).Order());
         Assert.All(all.Files, f => Assert.Equal(1, f.Commits));
+        Assert.All(all.Files, f => Assert.True(f.AtHead));
 
-        // Scoped to one repository, the panel covers only that repository's page of commits.
-        var scoped = await GetAsync<HotFilesResponse>(host, "/api/projects/alpha/hot-files?repository=two");
+        // Scoped to one repository, the ranking covers only that repository.
+        var scoped = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?repository=two");
         Assert.Equal("two/src/Widget.cs", Assert.Single(scoped.Files).QualifiedPath);
 
-        // A page past the end covers no commits, which is no dates and no ranking rather than an error.
-        var past = await GetAsync<HotFilesResponse>(host, "/api/projects/alpha/hot-files?page=9");
-        Assert.Null(past.Since);
-        Assert.Empty(past.Files);
+        // A one-day window still reaches the newest commit, because it ends there rather than today.
+        var narrow = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?days=1");
+        Assert.NotEmpty(narrow.Files);
+        Assert.Equal(all.Until, narrow.Until);
 
         // Both fixture repositories were walked, so there is nothing to caveat. A repository the walk
         // found nothing in has to be named, or half a project's churn reads as all of it.
         Assert.Empty(all.WithoutHistory);
         await host.ExecuteAsync("alpha", "DELETE FROM commits WHERE repo_slug = 'two'");
-        var partial = await GetAsync<HotFilesResponse>(host, "/api/projects/alpha/hot-files");
+        var partial = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn");
         Assert.Equal("two", Assert.Single(partial.WithoutHistory));
         Assert.DoesNotContain(partial.Files, f => f.RepositorySlug == "two");
+    }
+
+    /// <summary>
+    ///     A project whose history was never imported answers with no dates and no ranking, rather
+    ///     than a failure: the page draws that as its own starting state.
+    /// </summary>
+    [Fact]
+    public async Task The_churn_page_of_a_project_without_history_answers_with_no_window()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+        await host.ExecuteAsync("alpha", "DELETE FROM commits");
+
+        var churn = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn");
+
+        Assert.Null(churn.Since);
+        Assert.Null(churn.Until);
+        Assert.Empty(churn.Files);
     }
 
     private static async Task<T> GetAsync<T>(TestHost host, string url)

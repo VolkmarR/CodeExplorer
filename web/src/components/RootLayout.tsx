@@ -1,6 +1,7 @@
 import { Link, useLocation, useParams, useRouterState } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
 import { AccountBar } from '@/features/auth/AccountBar'
+import { DEFAULT_CHURN_DAYS } from '@/features/churn/churnParams'
 import { treeSearch } from '@/features/files/browseParams'
 import { cn } from '@/lib/utils'
 
@@ -9,8 +10,24 @@ const NAV_LINK = 'rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-
 const NAV_LINK_ACTIVE = 'bg-muted text-foreground'
 
 /**
- * The frame every page sits in, and the only navigation there is: where you are, and the three views
- * of a project. It takes its content as children rather than rendering an `Outlet` itself, so the root
+ * Which tab is lit, decided from the path rather than by `activeProps`, because reading a file is
+ * part of Files and lives at its own route (`/file`, not under `/files`) — a link's own active state
+ * cannot know that, and would leave the reader of a file standing on no tab at all.
+ *
+ * A function rather than a chain inside the component: it is the one part of the bar that grows with
+ * every view added, and it needs none of the component's state to decide.
+ */
+function activeView(pathname: string): string {
+  if (pathname.endsWith('/search')) return 'search'
+  if (pathname.endsWith('/history')) return 'history'
+  if (pathname.endsWith('/churn')) return 'churn'
+  if (pathname.endsWith('/files') || pathname.endsWith('/file')) return 'files'
+  return 'settings'
+}
+
+/**
+ * The frame every page sits in, and the only navigation there is: where you are, and the views of a
+ * project. It takes its content as children rather than rendering an `Outlet` itself, so the root
  * route's error and not-found components can reuse it outside the matched tree.
  */
 export function RootLayout({ children }: { children: React.ReactNode }) {
@@ -18,17 +35,8 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
   // read loosely and the project half of the bar simply does not render when there is none.
   const { project } = useParams({ strict: false })
 
-  // Which tab is lit is decided here rather than by `activeProps`, because reading a file is part of
-  // Files and lives at its own route (`/file`, not under `/files`) — a link's own active state cannot
-  // know that, and would leave the reader of a file standing on no tab at all.
   const { pathname } = useLocation()
-  const view = pathname.endsWith('/search')
-    ? 'search'
-    : pathname.endsWith('/history')
-      ? 'history'
-      : pathname.endsWith('/files') || pathname.endsWith('/file')
-        ? 'files'
-        : 'settings'
+  const view = activeView(pathname)
 
   // Code and search results are wide; the project list and settings are prose and forms. The reading
   // views drop the column so a long line of code is not folded at 1152px on a wide screen.
@@ -77,6 +85,14 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
                   className={cn(NAV_LINK, view === 'history' && NAV_LINK_ACTIVE)}
                 >
                   History
+                </Link>
+                <Link
+                  to="/projects/$project/churn"
+                  params={{ project }}
+                  search={{ days: DEFAULT_CHURN_DAYS }}
+                  className={cn(NAV_LINK, view === 'churn' && NAV_LINK_ACTIVE)}
+                >
+                  Churn
                 </Link>
                 <Link
                   to="/projects/$project"
