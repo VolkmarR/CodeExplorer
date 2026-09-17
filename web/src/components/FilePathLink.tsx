@@ -12,12 +12,15 @@ export function FilePathLink({
   qualifiedPath,
   atHead,
   label,
+  line,
 }: {
   project: string
   qualifiedPath: string
   atHead: boolean
   /** What to show, when that is shorter than the qualified path — a commit lists paths within itself. */
   label?: string
+  /** Where in the file to land, for a link that points at one line of it rather than at the file. */
+  line?: number
 }) {
   if (!atHead) {
     return (
@@ -31,7 +34,7 @@ export function FilePathLink({
     <Link
       to="/projects/$project/file"
       params={{ project }}
-      search={fileSearch(qualifiedPath)}
+      search={fileSearch(qualifiedPath, line)}
       className="truncate hover:text-primary hover:underline"
     >
       {label ?? qualifiedPath}
