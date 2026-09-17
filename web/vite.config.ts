@@ -59,6 +59,11 @@ export default defineConfig({
     },
   },
   fmt: {
+    // Excluded for the reason the lint list excludes it, and because the file itself asks to be:
+    // the router plugin rewrites it on every run, so oxfmt and the generator disagree permanently —
+    // `vp check` reported it unformatted and `vp check --fix` then rewrote it to the same bytes,
+    // which is a gate no commit could ever pass.
+    ignorePatterns: ['src/routeTree.gen.ts'],
     semi: false,
     singleQuote: true,
   },
