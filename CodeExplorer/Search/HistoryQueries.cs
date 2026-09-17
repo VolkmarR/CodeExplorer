@@ -143,7 +143,6 @@ public sealed record ChurnRequest(string? Directory, int Days, int Limit);
 /// </summary>
 public sealed record ChurnAnswer(
     string ScopeSpelled,
-    string? RepositorySlug,
     bool HasHistory,
     HistoryWindow? Window,
     IReadOnlyList<ChurnedFile> Files,
@@ -187,27 +186,27 @@ public sealed record CommitFilesAnswer(string Sha, IReadOnlyList<CommitFile> Fil
 public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration configuration)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell a history read apart from a scan.</summary>
-    public const string Engine = "history";
+    private const string Engine = "history";
 
     /// <summary>
     ///     The most commits one read may return, whoever asks. Both surfaces had settled on the same
     ///     number from opposite directions — a page of the change log and a tool reply are both read
     ///     top-down — so it is one ceiling here rather than two that can drift.
     /// </summary>
-    public const int MaxCommits = 200;
+    private const int MaxCommits = 200;
 
     /// <summary>
     ///     The most files either ranking may return. A hundred is already more than anybody reads off a
     ///     ranking, and past it the reply cap or the page's own scroll is what would bite.
     /// </summary>
-    public const int MaxRankedFiles = 100;
+    private const int MaxRankedFiles = 100;
 
     /// <summary>
     ///     The most lines one blame may cover. The index refuses files over <c>Index:MaxFileBytes</c>
     ///     (4 MiB by default), which bounds this well below it; a caller that protects an agent's
     ///     context caps the runs it prints, and this one protects the server.
     /// </summary>
-    public const int MaxLinesPerFile = 100_000;
+    private const int MaxLinesPerFile = 100_000;
 
     /// <summary>
     ///     Default for <c>History:MaxCommitPaths</c>, the most paths a commit may touch and still be
@@ -240,7 +239,8 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                 : [];
             return new LogAnswer(hasHistory, index.Repository, page, limit, commits);
         }, cancellationToken);
-        Record(recording, outcome, o => o is LogAnswer answer ? answer.Commits.Count : 0);
+        if (outcome is LogAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
+        else recording.Problem();
         return outcome;
     }
 
@@ -261,7 +261,8 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
             var commits = await LoggedAsync(index, scope, pageSize, (page - 1) * pageSize, token);
             return new ChangeLogAnswer(total, page, pageSize, commits);
         }, cancellationToken);
-        Record(recording, outcome, o => o is ChangeLogAnswer answer ? answer.Commits.Count : 0);
+        if (outcome is ChangeLogAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
+        else recording.Problem();
         return outcome;
     }
 
@@ -278,12 +279,13 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
             {
                 bool hasHistory = await HasHistoryAsync(index, token);
                 var commits = hasHistory
-                    ? await FileCommitsAsync(index, file.RepositorySlug, file.PathInRepository,
+                    ? await PathCommitsAsync(index, file.RepositorySlug, file.PathInRepository,
                         Math.Clamp(request.Limit, 1, MaxCommits), token)
                     : [];
                 return new FileHistoryAnswer(file, hasHistory, commits);
             }, cancellationToken);
-        Record(recording, outcome, o => o is FileHistoryAnswer answer ? answer.Commits.Count : 0);
+        if (outcome is FileHistoryAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
+        else recording.Problem();
         return outcome;
     }
 
@@ -309,7 +311,8 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                     : [];
                 return new BlameAnswer(file, hasHistory, first, last, runs);
             }, cancellationToken);
-        Record(recording, outcome, o => o is BlameAnswer answer ? answer.Runs.Count : 0);
+        if (outcome is BlameAnswer answer) recording.Matched(Engine, answer.Runs.Count, 0);
+        else recording.Problem();
         return outcome;
     }
 
@@ -341,9 +344,10 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                     ? []
                     : await IndexQueries.RankAsync(index.Connection, await index.PathsAsync(token), window,
                         repositorySlug, directoryInRepository, Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
-                return new ChurnAnswer(spelled, repositorySlug, hasHistory, window, ranked, coverage);
+                return new ChurnAnswer(spelled, hasHistory, window, ranked, coverage);
             }, cancellationToken);
-        Record(recording, outcome, o => o is ChurnAnswer answer ? answer.Files.Count : 0);
+        if (outcome is ChurnAnswer answer) recording.Matched(Engine, answer.Files.Count, 0);
+        else recording.Problem();
         return outcome;
     }
 
@@ -369,7 +373,8 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                         Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
                 return new CoChangeAnswer(file, hasHistory, window, coupling, _maxCommitPaths);
             }, cancellationToken);
-        Record(recording, outcome, o => o is CoChangeAnswer answer ? answer.Coupling.Files.Count : 0);
+        if (outcome is CoChangeAnswer answer) recording.Matched(Engine, answer.Coupling.Files.Count, 0);
+        else recording.Problem();
         return outcome;
     }
 
@@ -389,19 +394,9 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                 ? new Problem($"No commit '{request.Sha}' in the history of project '{slug}'.", ProblemKind.Missing)
                 : (Outcome)new CommitFilesAnswer(request.Sha, files);
         }, cancellationToken);
-        Record(recording, outcome, o => o is CommitFilesAnswer answer ? answer.Files.Count : 0);
+        if (outcome is CommitFilesAnswer answer) recording.Matched(Engine, answer.Files.Count, 0);
+        else recording.Problem();
         return outcome;
-    }
-
-    /// <summary>
-    ///     Records the read the way every search here records it: how many rows the caller got, or that
-    ///     the question was refused. One helper because seven members would otherwise spell the same
-    ///     three lines out, and one of them would eventually forget the refusal.
-    /// </summary>
-    private static void Record(Telemetry.SearchRecording recording, Outcome outcome, Func<Outcome, int> rows)
-    {
-        if (outcome is Problem) recording.Problem();
-        else recording.Matched(Engine, rows(outcome), 0);
     }
 
     /// <summary>
@@ -459,7 +454,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     commit recorded it, so history stops where the file was last renamed — which is the half of
     ///     rename-following ADR-0007 does not pay for, and which the reply says out loud.
     /// </summary>
-    private static async Task<IReadOnlyList<RecordedChange>> FileCommitsAsync(IndexReader index,
+    private static async Task<IReadOnlyList<RecordedChange>> PathCommitsAsync(IndexReader index,
         string repositorySlug, string path, int limit, CancellationToken cancellationToken)
     {
         using var command = index.Connection.Query($"""
