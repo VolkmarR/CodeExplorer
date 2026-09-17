@@ -418,6 +418,61 @@ public sealed class SearchEndpointTests
     ///     back in one list, each carrying what it turned out to be, because the panel shows both and
     ///     an edge dropped for not resolving would read as a dependency the file does not have.
     /// </summary>
+    /// <summary>
+    ///     The blame gutter. The runs are what the gutter draws, so they must cover the file and name
+    ///     the commit the change log lists for it — the two pages are read together and must agree.
+    /// </summary>
+    [Fact]
+    public async Task The_blame_page_covers_the_file_with_runs_naming_the_commit_the_change_log_lists()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        var log = await GetAsync<CommitListResponse>(host, "/api/projects/alpha/commits?repository=one");
+        var commit = Assert.Single(log.Commits);
+
+        var blame = await GetAsync<BlameResponse>(host,
+            "/api/projects/alpha/file/blame?path=" + Uri.EscapeDataString("one/src/Widget.cs"));
+
+        Assert.Equal("one/src/Widget.cs", blame.QualifiedPath);
+        // One root commit wrote every line, so the whole file is one run.
+        var run = Assert.Single(blame.Runs);
+        Assert.Equal(1, run.StartLine);
+        Assert.Equal(4, run.EndLine);
+        Assert.NotNull(run.By);
+        Assert.Equal(commit.Sha, run.By.Sha);
+        Assert.Equal(commit.AuthorName, run.By.AuthorName);
+    }
+
+    [Fact]
+    public async Task The_blame_page_of_a_file_without_lines_has_no_runs_to_draw()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            // A NUL byte makes libgit2 classify the blob as binary, so the index keeps the row without lines.
+            ["one"] = new() { ["assets/logo.bin"] = "\0\0binary", ["src/A.cs"] = "class A { }\n" }
+        });
+
+        var blame = await GetAsync<BlameResponse>(host,
+            "/api/projects/alpha/file/blame?path=" + Uri.EscapeDataString("one/assets/logo.bin"));
+
+        // The file is in the index and its page renders; only the gutter has nothing to fill.
+        Assert.Equal("one/assets/logo.bin", blame.QualifiedPath);
+        Assert.Empty(blame.Runs);
+    }
+
+    [Fact]
+    public async Task The_blame_page_of_an_unknown_file_is_a_not_found()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        using var http = host.CreateClient();
+        using var response = await http.GetAsync("/api/projects/alpha/file/blame?path=one/src/Missing.cs", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("one/src/Missing.cs", await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task The_file_page_reads_both_directions_of_the_import_graph()
     {
