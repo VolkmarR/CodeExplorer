@@ -107,7 +107,7 @@ public sealed class ProjectIndexes : IDisposable
     ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 5;
+    public const int SchemaVersion = 6;
 
     /// <summary>
     ///     The tables a new shadow inherits from the live index instead of rebuilding. They are the
@@ -167,7 +167,14 @@ public sealed class ProjectIndexes : IDisposable
                                       -- Null where history was not imported for the repository, which
                                       -- is a different answer from "never changed" and must stay so.
                                       first_commit   INTEGER,
-                                      last_commit    INTEGER);
+                                      last_commit    INTEGER,
+                                      -- What this file declares itself to be: a C# namespace, a
+                                      -- Delphi unit. It is the other end of an import edge — a name
+                                      -- with nothing to resolve against resolves to nothing — and it
+                                      -- is a column here rather than a table because it is one value
+                                      -- per file and every read of it is already reading this row.
+                                      -- Null where the file declares none, which is most languages.
+                                      module         VARCHAR);
                                   CREATE TABLE lines (
                                       line_id     BIGINT PRIMARY KEY,
                                       file_id     BIGINT NOT NULL,
@@ -219,6 +226,33 @@ public sealed class ProjectIndexes : IDisposable
                                       start_line INTEGER NOT NULL,
                                       end_line   INTEGER NOT NULL,
                                       commit_id  INTEGER NOT NULL);
+                                  CREATE TABLE imports (
+                                      -- One row per name one file imports (#55), read from the line
+                                      -- walk the build already performs. The name is kept as it was
+                                      -- written, whatever it resolved to: an edge reported only when
+                                      -- it resolves would tell a reader the file depends on nothing
+                                      -- when it depends on something this could not place.
+                                      import_id   BIGINT PRIMARY KEY,
+                                      file_id     BIGINT NOT NULL,
+                                      line_number INTEGER NOT NULL,
+                                      name        VARCHAR NOT NULL,
+                                      -- What kind of name it is, and so how it was resolved: a module
+                                      -- against what a file declares itself to be, a path against the
+                                      -- importing file's own directory.
+                                      shape       VARCHAR NOT NULL,
+                                      -- The file it turned out to name, or null. A resolved edge is
+                                      -- what makes the reverse direction answerable at all, which is
+                                      -- the half of this that cannot be got by reading the file.
+                                      target_file BIGINT,
+                                      -- Why it names no file here, or null where it does. The two
+                                      -- are exclusive and both are filled by the resolution pass, so
+                                      -- a row with neither is a row that pass never reached.
+                                      unresolved  VARCHAR,
+                                      -- How the line was read: from its text, or by a parser for the
+                                      -- language (ADR-0008). Recorded rather than assumed, so that
+                                      -- the day a parser-backed analyser is registered the reply
+                                      -- stops understating what it knows without a schema change.
+                                      evidence    VARCHAR NOT NULL);
                                   CREATE TABLE project_overview (
                                       -- Exactly one row, written by the build that produced the index
                                       -- (#51), so a caller orienting itself reads a row instead of
@@ -364,7 +398,7 @@ public sealed class ProjectIndexes : IDisposable
             try
             {
                 await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
-                await ExecuteAsync(connection, $"USE {Quote(slug)}", cancellationToken);
+                await connection.ExecuteAsync($"USE {Quote(slug)}", cancellationToken);
                 return new IndexLease(connection, FtsAvailable, gate.Leave);
             }
             catch
@@ -415,15 +449,15 @@ public sealed class ProjectIndexes : IDisposable
                 {
                     // Whatever an abandoned restore left is worthless, for the reason an abandoned
                     // shadow is: the file is written from the Parquet from scratch every time.
-                    await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+                    await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
                     _attached.Remove(catalog);
                     DeleteIndexFile(path);
-                    await ExecuteAsync(connection, $"ATTACH {Literal(path)} AS {Quote(catalog)}", cancellationToken);
+                    await connection.ExecuteAsync($"ATTACH {Literal(path)} AS {Quote(catalog)}", cancellationToken);
                     _attached.Add(catalog);
                 }, cancellationToken);
 
-                await ExecuteAsync(connection, $"USE {Quote(catalog)}", cancellationToken);
-                await ExecuteAsync(connection, Schema, cancellationToken);
+                await connection.ExecuteAsync($"USE {Quote(catalog)}", cancellationToken);
+                await connection.ExecuteAsync(Schema, cancellationToken);
                 await _durable.LoadAsync(connection, copy, FtsAvailable, cancellationToken);
             }
 
@@ -431,9 +465,9 @@ public sealed class ProjectIndexes : IDisposable
             // it twice would deadlock on a semaphore that is deliberately not reentrant.
             await ReplaceFileAsync(slug, "the restored index was put in place anyway", async connection =>
             {
-                await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
                 _attached.Remove(catalog);
-                await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
+                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
                 _attached.Remove(slug);
                 File.Move(path, FilePath(slug), true);
                 File.Delete(FilePath(slug) + ".wal");
@@ -465,16 +499,16 @@ public sealed class ProjectIndexes : IDisposable
             {
                 // Whatever a previous refresh left behind is worthless: the shadow is written from
                 // scratch every time, and an abandoned one is only a file in the way.
-                await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
                 _attached.Remove(catalog);
                 DeleteIndexFile(ShadowPath(slug));
-                await ExecuteAsync(connection, $"ATTACH {Literal(ShadowPath(slug))} AS {Quote(catalog)}",
+                await connection.ExecuteAsync($"ATTACH {Literal(ShadowPath(slug))} AS {Quote(catalog)}",
                     cancellationToken);
                 _attached.Add(catalog);
             }, cancellationToken);
 
-            await ExecuteAsync(connection, $"USE {Quote(catalog)}", cancellationToken);
-            await ExecuteAsync(connection, Schema, cancellationToken);
+            await connection.ExecuteAsync($"USE {Quote(catalog)}", cancellationToken);
+            await connection.ExecuteAsync(Schema, cancellationToken);
             await CarryHistoryAsync(connection, slug, cancellationToken);
             return new ShadowIndex(connection, catalog, slug, FtsAvailable);
         }
@@ -508,7 +542,7 @@ public sealed class ProjectIndexes : IDisposable
                 $"SELECT count(*) FROM duckdb_tables() WHERE database_name = '{slug.Replace("'", "''")}' "
                 + $"AND schema_name = 'main' AND table_name = '{table}'";
             if (await exists.ExecuteScalarAsync(cancellationToken) is not > 0L) continue;
-            await ExecuteAsync(connection,
+            await connection.ExecuteAsync(
                 $"INSERT INTO {table} SELECT * FROM {Quote(slug)}.main.{table}", cancellationToken);
         }
     }
@@ -528,9 +562,9 @@ public sealed class ProjectIndexes : IDisposable
                 string catalog = ShadowCatalog(slug);
                 // Both catalogs go first: DETACH is what closes the file handles, and neither file can
                 // be deleted or moved while the instance holds one.
-                await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
                 _attached.Remove(catalog);
-                await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
+                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
                 _attached.Remove(slug);
                 // One overwriting move, never delete-then-move: a move that fails after the old file was
                 // deleted would leave the project with no index at all, and the caller's cleanup would
@@ -555,7 +589,7 @@ public sealed class ProjectIndexes : IDisposable
         await UnderAttachGateAsync(async () =>
         {
             string catalog = ShadowCatalog(slug);
-            await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+            await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
             _attached.Remove(catalog);
             DeleteIndexFile(ShadowPath(slug));
         }, cancellationToken);
@@ -572,7 +606,7 @@ public sealed class ProjectIndexes : IDisposable
             "the project was deleted anyway",
             async connection =>
             {
-                await ExecuteAsync(connection, $"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
+                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
                 _attached.Remove(slug);
                 DeleteIndexFile(FilePath(slug));
             }, cancellationToken);
@@ -692,7 +726,7 @@ public sealed class ProjectIndexes : IDisposable
         UnderAttachGateAsync(async () =>
         {
             if (_attached.Contains(catalog)) return;
-            await ExecuteAsync(connection, $"ATTACH IF NOT EXISTS {Literal(path)} AS {Quote(catalog)}",
+            await connection.ExecuteAsync($"ATTACH IF NOT EXISTS {Literal(path)} AS {Quote(catalog)}",
                 cancellationToken);
             _attached.Add(catalog);
         }, cancellationToken);

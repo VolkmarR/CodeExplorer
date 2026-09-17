@@ -6,7 +6,9 @@ namespace CodeExplorer;
 
 /// <summary>
 ///     A row of <c>files</c>. <see cref="SkipReason" /> is set when the file is committed but has no lines in the
-///     index.
+///     index. <see cref="Module" /> is what the file declares itself to be — a C# namespace, a Delphi
+///     unit — or null where it declares none (#55); it is on this row rather than fetched when wanted,
+///     because every caller that wants it has already read this row to find the file at all.
 /// </summary>
 public sealed record IndexedFile(
     long FileId,
@@ -14,7 +16,8 @@ public sealed record IndexedFile(
     string RepositorySlug,
     int LineCount,
     long SizeBytes,
-    string? SkipReason);
+    string? SkipReason,
+    string? Module);
 
 /// <summary>A row of <c>repositories</c>: what the last build read and where it stood.</summary>
 /// <summary>
@@ -213,7 +216,7 @@ public sealed class IndexReader : IDisposable
     // The join is for the slug only; qualified_path already carries it as a prefix, but splitting a
     // string to recover what a column holds would be the worse choice.
     private const string FileColumns =
-        "SELECT f.file_id, f.qualified_path, r.slug, f.line_count, f.size_bytes, f.skip_reason";
+        "SELECT f.file_id, f.qualified_path, r.slug, f.line_count, f.size_bytes, f.skip_reason, f.module";
 
     private const string FileSource = "FROM files f JOIN repositories r USING (repo_id)";
 
@@ -401,6 +404,56 @@ public sealed class IndexReader : IDisposable
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadFile(reader) : null;
     }
+
+    /// <summary>
+    ///     The file a qualified path names, or the sentence saying why it names none. A path cannot
+    ///     be read without knowing how the project names its files (ADR-0006), and an agent that got
+    ///     it wrong needs the rule rather than an empty answer — so the misses are answers here and
+    ///     not exceptions, the way CODING_STANDARDS asks.
+    ///     It is on the reader rather than in each tool because three tools were resolving a path by
+    ///     spelling this sequence out, and the three refusal sentences an agent reads had begun to
+    ///     drift apart. The explanation is a string and not a <c>SearchProblem</c>: that type is
+    ///     declared in <c>Search/</c>, which <c>Infrastructure/</c> may not name (ADR-0005), and each
+    ///     caller wraps it in whatever its own answer shape is.
+    /// </summary>
+    /// <param name="path">The qualified path an agent wrote.</param>
+    /// <param name="suggestions">
+    ///     Whether a miss should offer the files elsewhere in the project with the same leaf name.
+    ///     Worth it where the agent chose the path, and noise where it came from a list this
+    ///     produced.
+    /// </param>
+    /// <param name="cancellationToken">Threaded to every command this runs.</param>
+    public async Task<(IndexedFile? File, string? Explanation)> LocateAsync(string path, bool suggestions,
+        CancellationToken cancellationToken)
+    {
+        var paths = await PathsAsync(cancellationToken);
+        var qualified = paths.Parse(path);
+        if (qualified is null || qualified.PathInRepository.Length == 0)
+            return (null,
+                $"'{path}' names no file: {await PathRuleAsync(cancellationToken)} Write it like `{paths.Example()}`.");
+
+        var repository = await FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
+        if (repository is null)
+            return (null,
+                $"{await UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these.");
+
+        string spelled = paths.Format(qualified with { RepositorySlug = repository.Slug });
+        if (await FindFileAsync(spelled, cancellationToken) is { } file) return (file, null);
+
+        string explanation = $"No indexed file '{spelled}' in repository '{repository.Slug}' of project "
+                             + $"'{ProjectSlug}'. ";
+        if (!suggestions)
+            return (null, explanation + "Use glob or list_tree to locate it.");
+
+        string name = qualified.PathInRepository[(qualified.PathInRepository.LastIndexOf('/') + 1)..];
+        var similar = await FilesNamedAsync(name, MaxSuggestions, cancellationToken);
+        return (null, explanation + (similar.Count > 0
+            ? $"Did you mean {string.Join(" or ", similar)}? Otherwise use glob or list_tree to locate it."
+            : "Use glob or list_tree to locate it; the path is case-insensitive here but must otherwise match the committed path."));
+    }
+
+    /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
+    private const int MaxSuggestions = 5;
 
     /// <summary>
     ///     Whether this index holds any history at all. An index built before ADR-0007, or one whose
@@ -1130,5 +1183,6 @@ public sealed class IndexReader : IDisposable
     /// </summary>
     private static IndexedFile ReadFile(DbDataReader reader) => new(
         reader.Int64("file_id"), reader.Text("qualified_path"), reader.Text("slug"),
-        reader.Int32("line_count"), reader.Int64("size_bytes"), reader.TextOrNull("skip_reason"));
+        reader.Int32("line_count"), reader.Int64("size_bytes"), reader.TextOrNull("skip_reason"),
+        reader.TextOrNull("module"));
 }
