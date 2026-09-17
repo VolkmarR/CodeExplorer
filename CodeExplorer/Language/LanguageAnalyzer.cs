@@ -25,7 +25,43 @@ public enum Lexical
     Comment,
 
     /// <summary>Inside a string literal, which is a mention too — though the one that often matters.</summary>
-    Literal
+    Literal,
+
+    /// <summary>
+    ///     Not established. The lines before this one were not all read — a file scanned only to a
+    ///     bound, a line handed over on its own — so whether a comment or a literal is open cannot be
+    ///     said. It is its own answer and not <see cref="Code" />, because "this is live code" is the
+    ///     claim an agent acts on and a guess wearing it is the failure this module is written around.
+    /// </summary>
+    Unknown
+}
+
+/// <summary>
+///     Where a file stands at the start of a line: what the lines above it left open. Opaque to
+///     callers — an analyser makes one with <see cref="ILanguageAnalyzer.Start" /> and moves it on
+///     with <see cref="ILanguageAnalyzer.After" />, and nothing outside the analyser that produced it
+///     can read what is in it.
+///     Opaque because the state is the implementation's: a text profile carries the comments and
+///     literals still open, and a parser-backed analyser would carry a node. Both answer the same
+///     questions about the line in front of them, which is what lets one be swapped for the other
+///     (ADR-0008).
+///     It is also where a second kind of file-level position goes. Telling a Delphi <c>interface</c>
+///     section from its <c>implementation</c>, or a PL/SQL package spec from its body, is one more
+///     field on the analyser's own record: the signatures that carry it do not change when it is
+///     added.
+/// </summary>
+public abstract record FilePosition
+{
+    protected FilePosition() { }
+
+    /// <summary>
+    ///     Nothing is known about what the lines above left open. Every position on a line read from
+    ///     here is <see cref="Lexical.Unknown" />, so the references on it are kept and reported as
+    ///     unplaced rather than guessed either way.
+    /// </summary>
+    public static FilePosition Unknown { get; } = new Unplaced();
+
+    private sealed record Unplaced : FilePosition;
 }
 
 /// <summary>
@@ -164,8 +200,27 @@ public interface ILanguageAnalyzer
     /// </summary>
     CandidateLines DeclarationCandidates { get; }
 
-    /// <summary>What the position at <paramref name="index" /> on this line sits in.</summary>
-    Answer<Lexical> StateAt(string line, int index);
+    /// <summary>
+    ///     Where a file begins: nothing open, nothing entered. The first line of a file is read from
+    ///     here, and every line after it from what <see cref="After" /> returned for the one above.
+    /// </summary>
+    FilePosition Start { get; }
+
+    /// <summary>
+    ///     Where the file stands after this line, given where it stood before it. A block comment or a
+    ///     literal opened here and not closed is what the next line inherits.
+    ///     This is the whole of the file-level scan, and it is a walk of the file's lines in order —
+    ///     which is what makes the cost one walk per file rather than one per match on it. A caller
+    ///     that cannot read the lines above a match passes <see cref="FilePosition.Unknown" /> and is
+    ///     told so in the answer, rather than being handed a guess.
+    /// </summary>
+    FilePosition After(FilePosition position, string line);
+
+    /// <summary>
+    ///     What the position at <paramref name="index" /> on this line sits in, given where the file
+    ///     stood at the start of the line.
+    /// </summary>
+    Answer<Lexical> StateAt(FilePosition position, string line, int index);
 
     /// <summary>What this line declares, or null when it turns out to declare nothing.</summary>
     Answer<Declared?> Declares(string line);
@@ -190,5 +245,5 @@ public interface ILanguageAnalyzer
     ///     once. Asked per position, a line naming a common identifier a thousand times cost a
     ///     thousand walks of it; asked this way it costs one.
     /// </summary>
-    IReadOnlyList<Answer<ReferenceKind>> Occurrences(string line, string symbol);
+    IReadOnlyList<Answer<ReferenceKind>> Occurrences(FilePosition position, string line, string symbol);
 }
