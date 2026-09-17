@@ -12,10 +12,15 @@ namespace CodeExplorer;
 internal sealed record DeclarationLine(int LineNumber, int Indent, Declared Declared);
 
 /// <summary>
-///     Which declaration a reference sits inside, worked out from indentation. It is the one piece of
-///     structure available without a parser, so it lives on the search side of the language seam
-///     (ADR-0008): what a line declares is a language question and belongs to the analyser, but how
-///     far a line is indented is the same question in every language.
+///     Which declaration a reference sits inside, worked out from indentation. What a line declares
+///     is a language question and comes from the analyser (ADR-0008); how the declarations above a
+///     line nest is one this cannot ask yet, so it assumes the C-family convention that indentation
+///     shows nesting.
+///     That assumption is false for the SQL and PL/SQL profiles registered here, for Delphi's
+///     <c>begin</c>/<c>end</c>, and for legacy X# written flat — where it costs a wrong label on a
+///     line, never a wrong kind. It sits on the search side rather than behind the seam because
+///     <c>find_definition</c> (#54) needs the same structure and will be what moves it there, at
+///     which point a Delphi profile or a parser can answer it properly.
 /// </summary>
 internal static class DeclarationScope
 {

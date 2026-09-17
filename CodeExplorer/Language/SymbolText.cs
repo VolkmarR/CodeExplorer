@@ -1,13 +1,35 @@
 namespace CodeExplorer;
 
 /// <summary>
-///     Reading identifiers out of a line, in the ways that hold in every language this indexes. Where
-///     a word ends and how far a line is indented are not language facts, so they sit beside the
-///     language seam rather than inside a profile — a second copy of either in a caller is how two
-///     answers about one line start to disagree.
+///     Reading an identifier out of a line, and writing one into a pattern. Where a word ends, how
+///     far a line is indented and how a literal is spelled for RE2 are the same in every language
+///     this indexes today, so they sit beside the language seam rather than inside a profile — a
+///     second copy of any of them in a caller is how two answers about one line start to disagree.
+///     They live in <c>Language/</c> and not in <c>Search/</c> because what counts as a word is a
+///     language fact in waiting: <c>$</c> is one in JavaScript and <c>-</c> is one in CSS, and when
+///     that matters the answer will come from a profile.
 /// </summary>
 public static class SymbolText
 {
+    /// <summary>
+    ///     The characters RE2 and .NET both read as pattern syntax. Not <see cref="System.Text.RegularExpressions.Regex.Escape" />,
+    ///     which also escapes whitespace and <c>#</c> in ways RE2 rejects — and a literal here may be
+    ///     a phrase with a space in it, which would fail inside DuckDB rather than at the call site.
+    /// </summary>
+    private const string Metacharacters = @"\.+*?()|[]{}^$";
+
+    /// <summary>
+    ///     This text as an RE2 pattern matching it literally. One copy, because both halves of a
+    ///     reference search hand a pattern built this way to the same <c>regexp_matches</c>: the
+    ///     symbol the caller asked for, and the declaration shapes a language declares.
+    /// </summary>
+    public static string Re2Literal(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return string.Concat(text.Select(c =>
+            Metacharacters.Contains(c, StringComparison.Ordinal) ? $"\\{c}" : c.ToString()));
+    }
+
     /// <summary>
     ///     Where <paramref name="symbol" /> sits on this line, on word boundaries, every time it does.
     ///     Every one is classified and not only the first: <c>return Foo.Create(Foo.Default)</c> is a
@@ -25,21 +47,12 @@ public static class SymbolText
     ///     than with a per-call <c>\b…\b</c> regex because the symbol is caller text: escaping it into
     ///     a pattern to find something that is not a pattern buys nothing and can only go wrong.
     /// </summary>
-    public static int IndexOf(string line, string symbol, int from = 0,
-        StringComparison comparison = StringComparison.Ordinal)
+    public static int IndexOf(string line, string symbol, int from = 0)
     {
-        if (symbol.Length == 0 || from > line.Length) return -1;
-        for (int i = line.IndexOf(symbol, from, comparison);
-             i >= 0;
-             i = line.IndexOf(symbol, i + 1, comparison))
-        {
-            bool startsClean = !IsWord(symbol[0]) || i == 0 || !IsWord(line[i - 1]);
-            int after = i + symbol.Length;
-            bool endsClean = !IsWord(symbol[^1]) || after >= line.Length || !IsWord(line[after]);
-            if (startsClean && endsClean) return i;
-        }
-
-        return -1;
+        ArgumentNullException.ThrowIfNull(line);
+        if (from > line.Length) return -1;
+        int at = IndexOfWord(line.AsSpan(from), symbol, StringComparison.Ordinal);
+        return at < 0 ? -1 : at + from;
     }
 
     /// <summary>
@@ -48,24 +61,36 @@ public static class SymbolText
     ///     ordinally on a language that shouts its keywords answers "no declaration here" for every
     ///     <c>CREATE PROCEDURE</c> in the project.
     /// </summary>
-    public static bool ContainsWord(ReadOnlySpan<char> text, string word, StringComparison comparison)
-    {
-        // A span and not a string, because the caller holds one side of a line it must not copy to
-        // ask this: the lines here are whatever the index holds, and one of them can be a whole
-        // minified bundle.
-        for (int i = text.IndexOf(word, comparison); i >= 0;)
-        {
-            bool startsClean = i == 0 || !IsWord(text[i - 1]);
-            int after = i + word.Length;
-            bool endsClean = after >= text.Length || !IsWord(text[after]);
-            if (startsClean && endsClean) return true;
+    public static bool ContainsWord(ReadOnlySpan<char> text, string word, StringComparison comparison) =>
+        IndexOfWord(text, word, comparison) >= 0;
 
-            int next = text[(i + 1)..].IndexOf(word, comparison);
-            if (next < 0) return false;
-            i += 1 + next;
+    /// <summary>Whether this character can sit inside an identifier.</summary>
+    public static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    /// <summary>
+    ///     Where the word first sits whole in the text, or -1. A span, because a caller holding one
+    ///     side of a line must not copy it to ask: the lines here are whatever the index holds, and
+    ///     one of them can be a whole minified bundle.
+    ///     A boundary is only required at an end the word itself has a word character at — a <c>\b</c>
+    ///     against punctuation means the opposite of what it means against a letter.
+    /// </summary>
+    private static int IndexOfWord(ReadOnlySpan<char> text, string word, StringComparison comparison)
+    {
+        if (word.Length == 0) return -1;
+        for (int i = 0; i < text.Length;)
+        {
+            int next = text[i..].IndexOf(word, comparison);
+            if (next < 0) return -1;
+            i += next;
+
+            bool startsClean = !IsWordChar(word[0]) || i == 0 || !IsWordChar(text[i - 1]);
+            int after = i + word.Length;
+            bool endsClean = !IsWordChar(word[^1]) || after >= text.Length || !IsWordChar(text[after]);
+            if (startsClean && endsClean) return i;
+            i++;
         }
 
-        return false;
+        return -1;
     }
 
     /// <summary>Columns of leading whitespace, a tab counted as four — the width most source is written to.</summary>
@@ -78,6 +103,4 @@ public static class SymbolText
             else break;
         return columns;
     }
-
-    private static bool IsWord(char c) => char.IsLetterOrDigit(c) || c == '_';
 }

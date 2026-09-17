@@ -83,6 +83,14 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     /// </summary>
     public IReadOnlyList<string> TypePrefixOperators { get; init; } = [];
 
+    /// <summary>
+    ///     Words which, immediately before a type, construct one: <c>new</c> in the C family. A word
+    ///     and not an operator, so it is matched on a word boundary and under this profile's own case
+    ///     rule — <c>renew(</c> constructs nothing. Empty for the languages that build an object some
+    ///     other way, which is what X#'s <c>Foo{...}</c>, SQL and CSS mean.
+    /// </summary>
+    public IReadOnlyList<string> InstantiationKeywords { get; init; } = [];
+
     /// <summary>How an import line begins, matched against the trimmed line.</summary>
     public IReadOnlyList<string> ImportPrefixes { get; init; } = [];
 
