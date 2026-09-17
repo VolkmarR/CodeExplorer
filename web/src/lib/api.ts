@@ -246,7 +246,7 @@ export interface CommitFiles {
  * One file of the churn ranking. `qualifiedPath` is always set — a window ranks paths a later commit
  * removed, and those are named too — and `atHead` says whether there is still a file there to open.
  */
-export interface HotFile {
+export interface ChurnFile {
   qualifiedPath: string
   repositorySlug: string
   atHead: boolean
@@ -256,13 +256,16 @@ export interface HotFile {
 }
 
 /**
- * The most-changed files of the span the change log's page covers. `since` and `until` are null
- * together when the page holds no commit, which is a project without imported history.
+ * A churn ranking and the window it covers. `since` and `until` are null together when the scope
+ * holds no commit at all, which is a project without imported history.
+ *
+ * They are part of the answer rather than an echo of the request: the window ends at the newest
+ * commit the index holds, not today, so a stale index shows as one.
  */
-export interface HotFiles {
+export interface Churn {
   since: string | null
   until: string | null
-  files: HotFile[]
+  files: ChurnFile[]
   /**
    * The repositories the ranking cannot speak for, so half a project's churn is not read as all of
    * it. Empty where the question does not arise: one repository, or a view narrowed to one.
@@ -340,11 +343,11 @@ const http = ky.create({
 })
 
 /**
- * Which page of history, and of which repository. Omitted rather than sent empty when there is no
- * repository, because the server reads a blank `repository` as a request to scope to one named "".
+ * Adds the repository to a request that has one, and leaves it off entirely when there is none:
+ * the server reads a blank `repository` as a request to scope to one named "".
  */
-function historyPage(page: number, repository?: string): Record<string, string> {
-  return repository ? { page: String(page), repository } : { page: String(page) }
+function scoped(params: Record<string, string>, repository?: string): Record<string, string> {
+  return repository ? { ...params, repository } : params
 }
 
 export const api = {
@@ -377,16 +380,19 @@ export const api = {
 
   commits: (project: string, page: number, repository?: string) =>
     http
-      .get(`projects/${project}/commits`, { searchParams: historyPage(page, repository) })
+      .get(`projects/${project}/commits`, {
+        searchParams: scoped({ page: String(page) }, repository),
+      })
       .json<CommitList>(),
 
-  // Built from the same arguments as the commit list and carrying no dates: the server derives the
-  // window from that page, so the panel cannot end up describing a different set of commits. The two
-  // therefore have to be asked for identically, which is what sharing the builder enforces.
-  hotFiles: (project: string, page: number, repository?: string) =>
+  // Days rather than a pair of dates: the window ends at the newest commit the index holds, and only
+  // the index knows where that is — a client sending dates would be guessing at it.
+  churn: (project: string, days: number, repository?: string) =>
     http
-      .get(`projects/${project}/hot-files`, { searchParams: historyPage(page, repository) })
-      .json<HotFiles>(),
+      .get(`projects/${project}/churn`, {
+        searchParams: scoped({ days: String(days) }, repository),
+      })
+      .json<Churn>(),
 
   commitFiles: (project: string, sha: string) =>
     http.get(`projects/${project}/commits/${sha}/files`).json<CommitFiles>(),

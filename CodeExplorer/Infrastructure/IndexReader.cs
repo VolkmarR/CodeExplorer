@@ -648,30 +648,6 @@ public sealed class IndexReader : IDisposable
     }
 
     /// <summary>
-    ///     The span one page of the change log covers, so a ranking can be shown for the window the
-    ///     page is already displaying. Null when the page holds no commit.
-    ///     The page is taken by the same ordering <see cref="ChangeLogAsync" /> pages with, and its
-    ///     dates with min and max rather than from its ends: an author date does not ascend with
-    ///     history (ADR-0007), so the newest commit on a page is not always the latest authored one.
-    /// </summary>
-    public async Task<HistoryWindow?> CommitPageWindowAsync(string? repositorySlug, int limit, int skip,
-        CancellationToken cancellationToken)
-    {
-        var (scope, parameters) = CommitScope(repositorySlug);
-        using var command = Connection.Query($"""
-                                              SELECT epoch(min(authored_at)) AS oldest,
-                                                     epoch(max(authored_at)) AS newest
-                                              FROM (SELECT authored_at FROM commits {scope}
-                                                    ORDER BY commit_id DESC
-                                                    LIMIT {limit} OFFSET {skip})
-                                              """, parameters);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken) || reader.IsNull("newest")) return null;
-        return new HistoryWindow(DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("oldest")),
-            DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("newest")));
-    }
-
-    /// <summary>
     ///     The files a window's commits touched, most commits first: the first read of the commit
     ///     tables that is about more than one file's history.
     ///     The paths come back spelled the way the project spells them, rather than each caller

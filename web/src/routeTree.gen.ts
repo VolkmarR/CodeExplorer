@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ProjectsProjectIndexRouteImport } from './routes/projects.$project.index'
+import { Route as ProjectsProjectChurnRouteImport } from './routes/projects.$project.churn'
 import { Route as ProjectsProjectFileRouteImport } from './routes/projects.$project.file'
 import { Route as ProjectsProjectFilesRouteImport } from './routes/projects.$project.files'
 import { Route as ProjectsProjectHistoryRouteImport } from './routes/projects.$project.history'
@@ -30,6 +31,11 @@ const ProjectsNewRoute = ProjectsNewRouteImport.update({
 const ProjectsProjectIndexRoute = ProjectsProjectIndexRouteImport.update({
   id: '/projects/$project/',
   path: '/projects/$project/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsProjectChurnRoute = ProjectsProjectChurnRouteImport.update({
+  id: '/projects/$project/churn',
+  path: '/projects/$project/churn',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsProjectFileRoute = ProjectsProjectFileRouteImport.update({
@@ -56,6 +62,7 @@ const ProjectsProjectSearchRoute = ProjectsProjectSearchRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/projects/$project/churn': typeof ProjectsProjectChurnRoute
   '/projects/$project/file': typeof ProjectsProjectFileRoute
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
@@ -65,6 +72,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/projects/$project/churn': typeof ProjectsProjectChurnRoute
   '/projects/$project/file': typeof ProjectsProjectFileRoute
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
@@ -75,6 +83,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/projects/$project/churn': typeof ProjectsProjectChurnRoute
   '/projects/$project/file': typeof ProjectsProjectFileRoute
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
@@ -86,6 +95,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/projects/new'
+    | '/projects/$project/churn'
     | '/projects/$project/file'
     | '/projects/$project/files'
     | '/projects/$project/history'
@@ -95,6 +105,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/projects/new'
+    | '/projects/$project/churn'
     | '/projects/$project/file'
     | '/projects/$project/files'
     | '/projects/$project/history'
@@ -104,6 +115,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/projects/new'
+    | '/projects/$project/churn'
     | '/projects/$project/file'
     | '/projects/$project/files'
     | '/projects/$project/history'
@@ -114,6 +126,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ProjectsNewRoute: typeof ProjectsNewRoute
+  ProjectsProjectChurnRoute: typeof ProjectsProjectChurnRoute
   ProjectsProjectFileRoute: typeof ProjectsProjectFileRoute
   ProjectsProjectFilesRoute: typeof ProjectsProjectFilesRoute
   ProjectsProjectHistoryRoute: typeof ProjectsProjectHistoryRoute
@@ -142,6 +155,13 @@ declare module '@tanstack/react-router' {
       path: '/projects/$project'
       fullPath: '/projects/$project/'
       preLoaderRoute: typeof ProjectsProjectIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$project/churn': {
+      id: '/projects/$project/churn'
+      path: '/projects/$project/churn'
+      fullPath: '/projects/$project/churn'
+      preLoaderRoute: typeof ProjectsProjectChurnRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$project/file': {
@@ -178,6 +198,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ProjectsNewRoute: ProjectsNewRoute,
+  ProjectsProjectChurnRoute: ProjectsProjectChurnRoute,
   ProjectsProjectFileRoute: ProjectsProjectFileRoute,
   ProjectsProjectFilesRoute: ProjectsProjectFilesRoute,
   ProjectsProjectHistoryRoute: ProjectsProjectHistoryRoute,
