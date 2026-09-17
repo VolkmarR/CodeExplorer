@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import { ImportPanels } from '@/features/files/ImportPanels'
 import { blameQuery } from '@/features/files/queries'
+import { RailPanel, RailPending } from '@/features/files/RailPanel'
 import { searchSearch } from '@/features/search/searchParams'
 import { CommitLine } from '@/components/CommitLine'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
 import type { CommitRef, FileContent } from '@/lib/api'
 import { splitFileName } from '@/lib/format'
 
@@ -21,23 +21,23 @@ const RECENT_COMMITS = 6
  *
  * It exists because the page answered less than the MCP tools over the same index do, and because
  * the panels of #54 and #56 had nowhere to go — a single-column file page has no room for them.
- * Two of the three panels say so plainly rather than being left out: an operator comparing this
- * page with what an agent is told should be able to see which questions this server cannot answer
- * yet, and where the answers will appear.
+ * The two panels still to come say so plainly rather than being left out: an operator comparing
+ * this page with what an agent is told should be able to see which questions this server cannot
+ * answer yet, and where the answers will appear.
  */
 export function FileRail({ project, file }: { project: string; file: FileContent }) {
   const symbol = symbolName(file.qualifiedPath)
 
   return (
     <aside className="flex w-full shrink-0 flex-col gap-4 xl:w-80">
-      <Panel title="Declarations">
+      <RailPanel title="Declarations">
         <p className="text-sm text-muted-foreground">
           What this file declares, read from its lines. It arrives with `find_definition` (#54),
           which is what teaches the index to answer it.
         </p>
-      </Panel>
+      </RailPanel>
 
-      <Panel title="References">
+      <RailPanel title="References">
         <p className="text-sm text-muted-foreground">
           What names this file elsewhere in the project. Until #54, the nearest answer is a search:{' '}
           <Link
@@ -50,7 +50,9 @@ export function FileRail({ project, file }: { project: string; file: FileContent
           </Link>
           .
         </p>
-      </Panel>
+      </RailPanel>
+
+      <ImportPanels project={project} path={file.qualifiedPath} />
 
       <RecentCommits project={project} file={file} />
     </aside>
@@ -71,24 +73,21 @@ function RecentCommits({ project, file }: { project: string; file: FileContent }
 
   if (!hasHistory) {
     return (
-      <Panel title="Recent commits">
+      <RailPanel title="Recent commits">
         {/* Not "nobody changed it": history arrives with a refresh and may not reach the beginning
             of the repository (CONTEXT.md), and the two mean opposite things. */}
         <p className="text-sm text-muted-foreground">
           No history is imported for this repository, so nothing can be said about what changed this
           file.
         </p>
-      </Panel>
+      </RailPanel>
     )
   }
 
   return (
-    <Panel title="Recent commits">
+    <RailPanel title="Recent commits">
       {blame.isPending ? (
-        <div className="space-y-2">
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-2/3" />
-        </div>
+        <RailPending />
       ) : (
         <ul className="space-y-2.5">
           {distinctCommits(blame.data?.runs ?? []).map((commit) => (
@@ -99,7 +98,7 @@ function RecentCommits({ project, file }: { project: string; file: FileContent }
           ))}
         </ul>
       )}
-    </Panel>
+    </RailPanel>
   )
 }
 
@@ -110,17 +109,6 @@ function distinctCommits(runs: { by: CommitRef | null }[]): CommitRef[] {
   return [...bySha.values()]
     .toSorted((a, b) => b.authoredAt.localeCompare(a.authoredAt))
     .slice(0, RECENT_COMMITS)
-}
-
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
-  )
 }
 
 /**

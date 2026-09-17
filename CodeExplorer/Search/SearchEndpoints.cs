@@ -34,6 +34,49 @@ internal sealed record BlameRunResponse(int StartLine, int EndLine, FileCommitRe
 /// </summary>
 internal sealed record BlameResponse(string QualifiedPath, IReadOnlyList<BlameRunResponse> Runs);
 
+/// <summary>
+///     One name a file imports. <paramref name="TargetPath" /> and <paramref name="Unresolved" /> are
+///     exclusive: the first is a qualified path the file route opens, the second the server's own
+///     prose saying why there is no path to open. The raw <paramref name="Name" /> is there either
+///     way, because an edge shown only when it resolves would read as a dependency the file does not
+///     have (CONTEXT.md, Import).
+/// </summary>
+internal sealed record ImportEdgeResponse(string Name, int LineNumber, string? TargetPath, string? Unresolved);
+
+/// <summary>
+///     What a file imports, and what the server was able to say about the question at all.
+///     <paramref name="Profiled" /> and <paramref name="HasImports" /> are the two ways an empty list
+///     means something other than "this file imports nothing" — an extension no profile covers was
+///     never read, and a language with no import concept has none to read — and the panel draws the
+///     three apart. <paramref name="Capped" /> says the list stopped at the ceiling rather than at the
+///     end of the file.
+/// </summary>
+internal sealed record FileImportsResponse(
+    string QualifiedPath,
+    string LanguageName,
+    bool Profiled,
+    bool HasImports,
+    string? Module,
+    bool Capped,
+    IReadOnlyList<ImportEdgeResponse> Imports);
+
+/// <summary>One file that imports the file asked about, and the line that does it.</summary>
+internal sealed record DependentResponse(string QualifiedPath, string Name, int LineNumber);
+
+/// <summary>
+///     What imports a file. <paramref name="ShareTheModule" /> and <paramref name="Unplaced" /> are
+///     why an empty list is not the sentence "nothing depends on this": a module several files declare
+///     resolves to none of them, and an unresolved edge spelling this file's name may be a dependency
+///     the index could not place. Both are zero where the question does not arise.
+/// </summary>
+internal sealed record FileDependentsResponse(
+    string QualifiedPath,
+    string? Module,
+    int ShareTheModule,
+    int Unplaced,
+    bool Capped,
+    IReadOnlyList<DependentResponse> Dependents);
+
 /// <summary>One commit of the change log, with the message body and what it did to the tree in sums.</summary>
 internal sealed record CommitResponse(
     string Sha,
@@ -154,16 +197,9 @@ internal static class SearchEndpoints
                 Project project, string q, GrepSearch search, CancellationToken ct,
                 bool regex = false, bool caseSensitive = false, string? path = null,
                 string? extension = null, int page = 1, int pageSize = 20) =>
-            await search.SearchAsync(project.Slug,
+            Answer(await search.SearchAsync(project.Slug,
                 new GrepRequest(q, regex, caseSensitive, path, Extension: extension, Page: page,
-                    PageSize: pageSize), ct) switch
-            {
-                GrepResult result => Results.Ok(result),
-                SearchProblem problem => Results.BadRequest(new { error = problem.Explanation }),
-                // Unreachable while grep answers with two outcome cases, and a 500 rather than a cast that
-                // throws if a third is ever added.
-                _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
-            });
+                    PageSize: pageSize), ct)));
 
         project.MapGet("/files",
             async (Project project, ProjectIndexes indexes, CancellationToken ct, string glob = "*",
@@ -183,6 +219,18 @@ internal static class SearchEndpoints
         project.MapGet("/file/blame",
             async (Project project, string path, ProjectIndexes indexes, CancellationToken ct) =>
                 await BlameAsync(indexes, project.Slug, path, ct));
+
+        // The two directions of the import graph, a route each rather than one that answers both:
+        // they are two reads, the panels draw as each arrives, and a file page that had to wait for
+        // the reverse lookup of a hub before showing what the file itself imports would be slower
+        // than either answer is.
+        project.MapGet("/file/imports",
+            async (Project project, string path, ImportGraph graph, CancellationToken ct) =>
+                Answer(await graph.ImportsAsync(project.Slug, path, ct)));
+
+        project.MapGet("/file/dependents",
+            async (Project project, string path, ImportGraph graph, CancellationToken ct) =>
+                Answer(await graph.DependentsAsync(project.Slug, path, ct)));
 
         // The change log, paged. The files a commit touched are their own route, like blame is: a
         // page of fifty commits touching a few hundred paths each would be mostly paths nobody opens.
@@ -375,6 +423,32 @@ internal static class SearchEndpoints
         return Results.Ok(new BlameResponse(file.QualifiedPath,
             runs.Select(r => new BlameRunResponse(r.StartLine, r.EndLine, Commit(r.By))).ToList()));
     }
+
+    /// <summary>
+    ///     A search outcome as JSON. A problem is a 400 whichever kind it is, where the browsing routes
+    ///     split 404 from 400: these routes are reached with a file already open or a query already
+    ///     typed, so a refusal is a page gone stale rather than a state the view draws differently, and
+    ///     the prose is the whole of what it shows. Written once because three routes answer with the
+    ///     same outcome type, and three copies of the mapping would agree only until one was edited.
+    /// </summary>
+    private static IResult Answer(SearchOutcome outcome) => outcome switch
+    {
+        GrepResult result => Results.Ok(result),
+        ImportsResult result => Results.Ok(new FileImportsResponse(result.QualifiedPath, result.LanguageName,
+            result.Profiled, result.HasImports, result.Module, result.Capped,
+            result.Imports
+                .Select(i => new ImportEdgeResponse(i.Name, i.LineNumber, i.TargetPath, i.Unresolved))
+                .ToList())),
+        DependentsResult result => Results.Ok(new FileDependentsResponse(result.QualifiedPath, result.Module,
+            result.ShareTheModule, result.Unplaced, result.Capped,
+            result.Dependents
+                .Select(d => new DependentResponse(d.QualifiedPath, d.Name, d.LineNumber))
+                .ToList())),
+        SearchProblem problem => Results.BadRequest(new { error = problem.Explanation }),
+        // Unreachable while these are the outcomes grep and the graph answer with, and a 500 rather
+        // than a cast that throws if another is ever added.
+        _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
+    };
 
     private static FileCommitResponse? Commit(AttributedBy? by) =>
         by is null ? null : new FileCommitResponse(by.Sha, by.AuthorName, by.AuthoredAt, by.Subject);

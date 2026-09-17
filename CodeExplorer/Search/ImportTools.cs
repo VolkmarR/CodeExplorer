@@ -109,7 +109,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
             return Finish(text.Append(
                 "\nNo import line was read in it. In a language that has them, that means the file imports nothing — not that nothing was looked for.\n"), Textual);
 
-        if (result.Imports.Count >= ImportGraph.MaxEdges)
+        if (result.Capped)
             text.Append(CultureInfo.InvariantCulture,
                 $"NOTE: the first {ImportGraph.MaxEdges} import lines are listed and the file has more. Read it directly for the rest.\n");
 
@@ -159,7 +159,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
 
         // A list that stopped at the ceiling reads as the whole answer unless it says otherwise,
         // and "42 files depend on this" is a number an agent acts on.
-        if (result.Dependents.Count >= ImportGraph.MaxEdges)
+        if (result.Capped)
             text.Append(CultureInfo.InvariantCulture,
                 $"NOTE: the first {ImportGraph.MaxEdges} are listed and there are more. A file this widely depended on is a hub; ask about something more specific.\n");
 

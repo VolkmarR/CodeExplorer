@@ -381,6 +381,159 @@ public sealed class SearchEndpointTests
         Assert.Empty(churn.Files);
     }
 
+    /// <summary>
+    ///     A project whose import edges cover the three answers the rail has to keep apart: a name
+    ///     that resolved, a name that could not be, and a file whose language has no imports at all.
+    /// </summary>
+    private static async Task<TestHost> ImportingProjectAsync()
+    {
+        var host = new TestHost(SearchEngine.Substring);
+        try
+        {
+            await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+            {
+                ["one"] = new()
+                {
+                    // Two files declare Orders.Storage, so an import of it names neither.
+                    ["src/Orders.cs"] =
+                        "namespace Orders.Domain;\n\nusing System.Text;\nusing Orders.Storage;\n\npublic class OrderService;\n",
+                    ["src/Report.cs"] = "namespace Orders.Reports;\n\nusing Orders.Domain;\n\npublic class Report;\n",
+                    ["src/Storage.cs"] = "namespace Orders.Storage;\n\npublic class Store;\n",
+                    ["src/Storage.Extra.cs"] = "namespace Orders.Storage;\n\npublic class Extra;\n",
+                    ["db/install.sql"] = "create table orders (id integer);\n",
+                    ["build/notes.rst"] = ".. include:: other.rst\n"
+                }
+            });
+            return host;
+        }
+        catch
+        {
+            host.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     The two directions the file page draws beside the code. Resolved and unresolved edges come
+    ///     back in one list, each carrying what it turned out to be, because the panel shows both and
+    ///     an edge dropped for not resolving would read as a dependency the file does not have.
+    /// </summary>
+    [Fact]
+    public async Task The_file_page_reads_both_directions_of_the_import_graph()
+    {
+        using var host = await ImportingProjectAsync();
+
+        var imports = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/Orders.cs"));
+
+        Assert.True(imports.Profiled);
+        Assert.True(imports.HasImports);
+        Assert.Equal("C#", imports.LanguageName);
+        Assert.Equal("Orders.Domain", imports.Module);
+        Assert.False(imports.Capped);
+        // Nothing here is System.Text, and Orders.Storage is two files: neither resolves, and both
+        // are in the answer as the names they were.
+        Assert.Equal(["Orders.Storage", "System.Text"], imports.Imports.Select(i => i.Name).Order());
+        Assert.All(imports.Imports, i => Assert.Null(i.TargetPath));
+        Assert.All(imports.Imports, i => Assert.NotNull(i.Unresolved));
+
+        var resolved = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/Report.cs"));
+        var edge = Assert.Single(resolved.Imports);
+        // The link the panel draws: a qualified path the file route accepts, not the name as written.
+        Assert.Equal("one/src/Orders.cs", edge.TargetPath);
+        Assert.Equal("Orders.Domain", edge.Name);
+        Assert.Equal(3, edge.LineNumber);
+
+        var dependents = await GetAsync<FileDependentsResponse>(host, Route("dependents", "one/src/Orders.cs"));
+        var dependent = Assert.Single(dependents.Dependents);
+        Assert.Equal("one/src/Report.cs", dependent.QualifiedPath);
+        Assert.Equal(3, dependent.LineNumber);
+        Assert.Equal(0, dependents.ShareTheModule);
+        Assert.False(dependents.Capped);
+    }
+
+    /// <summary>
+    ///     The three ways an empty panel can mean something other than "nothing here", each answered
+    ///     with the field that says which it is. A panel that drew them the same would tell a reader
+    ///     a file depends on nothing when the truth is that nothing read it.
+    /// </summary>
+    [Fact]
+    public async Task An_empty_answer_says_which_kind_of_empty_it_is()
+    {
+        using var host = await ImportingProjectAsync();
+
+        // A language with imports, and a file that writes none.
+        var none = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/Storage.cs"));
+        Assert.True(none.Profiled);
+        Assert.True(none.HasImports);
+        Assert.Empty(none.Imports);
+
+        // A language with no import concept at all.
+        var sql = await GetAsync<FileImportsResponse>(host, Route("imports", "one/db/install.sql"));
+        Assert.True(sql.Profiled);
+        Assert.False(sql.HasImports);
+        Assert.Equal("SQL", sql.LanguageName);
+
+        // An extension no profile covers: its import lines were never read.
+        var uncovered = await GetAsync<FileImportsResponse>(host, Route("imports", "one/build/notes.rst"));
+        Assert.False(uncovered.Profiled);
+        Assert.Empty(uncovered.Imports);
+
+        // And the reverse direction's own kind of empty: a namespace two files declare resolves to
+        // neither, so no edge could ever have pointed here.
+        var shared = await GetAsync<FileDependentsResponse>(host, Route("dependents", "one/src/Storage.cs"));
+        Assert.Empty(shared.Dependents);
+        Assert.Equal("Orders.Storage", shared.Module);
+        Assert.Equal(1, shared.ShareTheModule);
+    }
+
+    /// <summary>
+    ///     The boundary the panel prints as "500+": a file with exactly as many imports as the ceiling
+    ///     holds is complete, and one with a single import more is not. The two are a row apart and the
+    ///     answers are opposite, which is why the read asks for one row past what it reports.
+    /// </summary>
+    [Fact]
+    public async Task A_list_that_fills_the_ceiling_is_told_apart_from_one_the_ceiling_cut_short()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Exactly.cs"] = Usings(ImportGraph.MaxEdges),
+                ["src/OneMore.cs"] = Usings(ImportGraph.MaxEdges + 1)
+            }
+        });
+
+        var exactly = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/Exactly.cs"));
+        Assert.Equal(ImportGraph.MaxEdges, exactly.Imports.Count);
+        Assert.False(exactly.Capped);
+
+        var more = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/OneMore.cs"));
+        // Still only the ceiling is reported, and now the reply says the list is short of the answer.
+        Assert.Equal(ImportGraph.MaxEdges, more.Imports.Count);
+        Assert.True(more.Capped);
+    }
+
+    /// <summary>A C# file importing <paramref name="count" /> distinct names none of which resolve.</summary>
+    private static string Usings(int count) =>
+        string.Concat(Enumerable.Range(0, count).Select(i => $"using Outside.Package{i};\n"));
+
+    [Fact]
+    public async Task A_path_that_names_no_file_is_explained_rather_than_answered_with_an_empty_panel()
+    {
+        using var host = await ImportingProjectAsync();
+
+        using var http = host.CreateClient();
+        using var response = await http.GetAsync(Route("imports", "one/src/Nowhere.cs"), Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("No indexed file 'one/src/Nowhere.cs'", await response.Content.ReadAsStringAsync(Ct),
+            StringComparison.Ordinal);
+    }
+
+    private static string Route(string direction, string path) =>
+        $"/api/projects/alpha/file/{direction}?path={Uri.EscapeDataString(path)}";
+
     private static async Task<T> GetAsync<T>(TestHost host, string url)
     {
         using var http = host.CreateClient();
