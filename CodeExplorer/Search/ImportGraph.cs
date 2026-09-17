@@ -23,6 +23,9 @@ public sealed record ImportedFrom(
 ///     something other than "this file imports nothing": an extension no profile covers was never
 ///     read for imports, and a language with no import concept has none to read. Three answers, kept
 ///     apart, because they send an agent to three different places.
+///     <see cref="Capped" /> says the list stopped at <see cref="ImportGraph.MaxEdges" /> rather than
+///     at the end of the file. It is decided where the query runs, because the ceiling is that
+///     query's, and every reader of the answer would otherwise re-derive the same comparison.
 /// </summary>
 public sealed record ImportsResult(
     string QualifiedPath,
@@ -30,6 +33,7 @@ public sealed record ImportsResult(
     bool Profiled,
     bool HasImports,
     string? Module,
+    bool Capped,
     IReadOnlyList<ImportedFrom> Imports) : SearchOutcome;
 
 /// <summary>One file that imports the file asked about, and the line that does it.</summary>
@@ -46,6 +50,7 @@ public sealed record DependentsResult(
     string? Module,
     int ShareTheModule,
     int Unplaced,
+    bool Capped,
     IReadOnlyList<Dependent> Dependents) : SearchOutcome;
 
 /// <summary>
@@ -66,7 +71,8 @@ public sealed class ImportGraph(ProjectIndexes indexes)
     /// <summary>
     ///     How many edges one answer carries. A file with more imports than this is generated or is a
     ///     barrel that re-exports a package, and past the first few hundred the list has stopped being
-    ///     the answer to "what does this depend on".
+    ///     the answer to "what does this depend on". Both queries read one row past it, which is what
+    ///     tells a list that ends here from one that was cut short — see <see cref="Trim{T}" />.
     /// </summary>
     public const int MaxEdges = 500;
 
@@ -106,7 +112,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
                                                         LEFT JOIN files t ON t.file_id = i.target_file
                                                         WHERE i.file_id = $f
                                                         ORDER BY i.line_number, i.import_id
-                                                        LIMIT {MaxEdges}
+                                                        LIMIT {MaxEdges + 1}
                                                         """, [new DuckDBParameter("f", file.FileId)]);
             using var reader = await command.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token))
@@ -114,8 +120,9 @@ public sealed class ImportGraph(ProjectIndexes indexes)
                     reader.Int32("line_number"), reader.TextOrNull("target_path"),
                     reader.TextOrNull("unresolved"), ImportBuilder.Strength(reader.Text("evidence"))));
 
+            bool capped = Trim(edges);
             return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, file.Module,
-                edges);
+                capped, edges);
         }, cancellationToken);
 
     private Task<SearchOutcome> ReadDependentsAsync(string slug, string path,
@@ -128,7 +135,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
                                                          FROM imports i JOIN files f USING (file_id)
                                                          WHERE i.target_file = $f
                                                          ORDER BY f.qualified_path, i.line_number
-                                                         LIMIT {MaxEdges}
+                                                         LIMIT {MaxEdges + 1}
                                                          """, [new DuckDBParameter("f", file.FileId)]))
             using (var reader = await command.ExecuteReaderAsync(token))
             {
@@ -164,7 +171,9 @@ public sealed class ImportGraph(ProjectIndexes indexes)
                         new DuckDBParameter("leaf", Leaf(file.QualifiedPath))
                     ], token);
 
-            return new DependentsResult(file.QualifiedPath, file.Module, sharing, unplaced, dependents);
+            bool capped = Trim(dependents);
+            return new DependentsResult(file.QualifiedPath, file.Module, sharing, unplaced, capped,
+                dependents);
         }, cancellationToken);
 
     /// <summary>
@@ -184,6 +193,19 @@ public sealed class ImportGraph(ProjectIndexes indexes)
         return file is null
             ? new SearchProblem(explanation!)
             : await read(index, file, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Cuts a list back to <see cref="MaxEdges" /> and says whether there was anything to cut.
+    ///     Both queries ask for one row more than they report, because a list that merely reaches the
+    ///     ceiling is indistinguishable from one the ceiling cut short: a file with exactly
+    ///     <see cref="MaxEdges" /> imports would otherwise be told there are more.
+    /// </summary>
+    private static bool Trim<T>(List<T> rows)
+    {
+        if (rows.Count <= MaxEdges) return false;
+        rows.RemoveRange(MaxEdges, rows.Count - MaxEdges);
+        return true;
     }
 
     /// <summary>The file's own name, which is the last thing an unresolved path would have spelled.</summary>

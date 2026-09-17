@@ -28,6 +28,27 @@ export function blameQuery(project: string, path: string) {
   })
 }
 
+/**
+ * The two directions of the import graph, a query each because they are two requests: the rail draws
+ * what a file imports as soon as that arrives rather than waiting on the reverse lookup of a hub.
+ * Both are fixed under a given index, like the content and the blame beside them.
+ */
+export function importsQuery(project: string, path: string) {
+  return queryOptions({
+    queryFn: () => api.imports(project, path),
+    queryKey: [...projectKey(project), 'imports', path],
+    staleTime: Infinity,
+  })
+}
+
+export function dependentsQuery(project: string, path: string) {
+  return queryOptions({
+    queryFn: () => api.dependents(project, path),
+    queryKey: [...projectKey(project), 'dependents', path],
+    staleTime: Infinity,
+  })
+}
+
 /** One level of the tree. Keyed by the level, so walking back up is already in the cache. */
 export function treeQuery(project: string, path: string) {
   return queryOptions({

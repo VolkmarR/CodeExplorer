@@ -210,6 +210,55 @@ export interface Blame {
   runs: BlameRun[]
 }
 
+/**
+ * One name a file imports. `targetPath` and `unresolved` are exclusive: the first is a qualified
+ * path the file view opens, the second the server's prose saying why there is none. The `name` is
+ * there either way — an edge shown only when it resolves would read as a dependency the file does
+ * not have.
+ */
+export interface ImportEdge {
+  name: string
+  lineNumber: number
+  targetPath: string | null
+  unresolved: string | null
+}
+
+/**
+ * What a file imports. `profiled` and `hasImports` are why an empty list is not the sentence "this
+ * file imports nothing": an extension no profile covers was never read for imports, and a language
+ * with no import concept has none to read. `capped` says the list stopped at the server's ceiling.
+ */
+export interface FileImports {
+  qualifiedPath: string
+  languageName: string
+  profiled: boolean
+  hasImports: boolean
+  module: string | null
+  capped: boolean
+  imports: ImportEdge[]
+}
+
+/** One file that imports the file being looked at, and the line that does it. */
+export interface Dependent {
+  qualifiedPath: string
+  name: string
+  lineNumber: number
+}
+
+/**
+ * What imports a file. `shareTheModule` and `unplaced` are why an empty list is not "nothing depends
+ * on this": a module several files declare resolves to none of them, and an unresolved edge spelling
+ * this file's name may be a dependency the index could not place.
+ */
+export interface FileDependents {
+  qualifiedPath: string
+  module: string | null
+  shareTheModule: number
+  unplaced: number
+  capped: boolean
+  dependents: Dependent[]
+}
+
 /** One commit of the change log: who, when, what it said, and what it did to the tree in sums. */
 export interface CommitEntry extends CommitRef {
   repositorySlug: string
@@ -449,6 +498,16 @@ export const api = {
 
   blame: (project: string, path: string) =>
     http.get(`projects/${project}/file/blame`, { searchParams: { path } }).json<Blame>(),
+
+  imports: (project: string, path: string) =>
+    http.get(`projects/${project}/file/imports`, { searchParams: { path } }).json<FileImports>(),
+
+  // The direction a codebase cannot be read for: every import line in the project, resolved at index
+  // time and looked up backwards.
+  dependents: (project: string, path: string) =>
+    http
+      .get(`projects/${project}/file/dependents`, { searchParams: { path } })
+      .json<FileDependents>(),
 
   commits: (project: string, page: number, repository?: string) =>
     http
