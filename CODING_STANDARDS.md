@@ -25,7 +25,8 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
   file.
 - **Modular monolith (ADR-0005).** Inside the host, one folder per module, named after the concept
   in `CONTEXT.md` it owns: `Control/` (projects, repositories, credentials), `Git/` (local copies),
-  `Index/`, `Search/`, `Refresh/`, `Operator/`. Folders follow the module boundary, never the
+  `Index/`, `Search/`, `Refresh/`, `Operator/`, `Language/` (what a file is written in, and
+  everything that follows from it — ADR-0008). Folders follow the module boundary, never the
   ticket or the endpoint; a refresh touches `Refresh/`, not a folder per endpoint. Everything stays
   in the single `CodeExplorer` namespace, so a folder is navigation and a boundary, not a `using`.
   A module reaches another only through its public types; `Search/` never opens `control.duckdb`.
