@@ -13,6 +13,22 @@ public enum StringEscape
     Doubled
 }
 
+/// <summary>
+///     A hole of live code inside a string literal: <c>{…}</c> in a C# interpolated string,
+///     <c>${…}</c> in a JavaScript template literal.
+///     A literal that does not name its holes reports every call written inside one as a string
+///     mention, which loses real calls — the reason the template literal was left out of the profiles
+///     until the scan could carry the state a hole needs.
+/// </summary>
+/// <param name="Open">What opens one. Doubled it stands for itself, which is how C# writes a literal brace.</param>
+/// <param name="Close">What closes one.</param>
+/// <param name="Nest">
+///     What a brace nested inside the hole looks like, so that the <c>}</c> of a collection expression
+///     in it does not end it. Spelled out rather than taken from the last character of
+///     <paramref name="Open" />: that is true of both forms here and is a guess about the next one.
+/// </param>
+public sealed record Hole(string Open, string Close, string Nest);
+
 /// <summary>One kind of string literal: what opens it, what closes it, and how it escapes.</summary>
 public sealed record StringDelimiter(string Open, string Close, StringEscape Escape)
 {
@@ -26,19 +42,8 @@ public sealed record StringDelimiter(string Open, string Close, StringEscape Esc
     /// </summary>
     public bool SpansLines { get; init; }
 
-    /// <summary>
-    ///     What opens a hole of live code inside the literal, and what closes it: <c>{</c> and
-    ///     <c>}</c> in a C# interpolated string, <c>${</c> and <c>}</c> in a JavaScript template
-    ///     literal. Null where the literal has none.
-    ///     A delimiter that does not know its holes reports every call made inside one as a string
-    ///     mention, which loses real calls — the reason the template literal was left out of the
-    ///     profiles until the scan could carry the state a hole needs. Braces nest inside a hole, and
-    ///     <see cref="HoleOpen" /> doubled stands for itself, which is how C# writes a literal brace.
-    /// </summary>
-    public string? HoleOpen { get; init; }
-
-    /// <inheritdoc cref="HoleOpen" />
-    public string? HoleClose { get; init; }
+    /// <summary>The holes of live code this literal may carry, or null where it has none.</summary>
+    public Hole? Hole { get; init; }
 }
 
 /// <summary>
