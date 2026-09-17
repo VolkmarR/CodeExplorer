@@ -36,16 +36,22 @@ public sealed record HistoryWindow(DateTimeOffset Since, DateTimeOffset Until, i
     public const int MaxDays = 3650;
 
     /// <summary>The window reaching <paramref name="days" /> back from the newest recorded commit.</summary>
-    public static HistoryWindow Ending(DateTimeOffset newest, int days) =>
-        new(newest.AddDays(-Math.Clamp(days, 1, MaxDays)), newest, Math.Clamp(days, 1, MaxDays));
+    public static HistoryWindow Ending(DateTimeOffset newest, int days)
+    {
+        int span = Math.Clamp(days, 1, MaxDays);
+        return new HistoryWindow(newest.AddDays(-span), newest, span);
+    }
 
     /// <summary>
     ///     The window in one phrase, for a reply that has to say what it covered. The anchor is named
     ///     where there is one: a reader who asked for 30 days and is shown a window ending two months
     ///     ago has learned that the index is stale, which is worth more than the ranking.
     /// </summary>
-    public string Describe() => Days is { } days
-        ? string.Create(CultureInfo.InvariantCulture,
-            $"{Since:yyyy-MM-dd} to {Until:yyyy-MM-dd}, the {days} days to the newest recorded commit")
-        : string.Create(CultureInfo.InvariantCulture, $"{Since:yyyy-MM-dd} to {Until:yyyy-MM-dd}");
+    public string Describe()
+    {
+        string span = string.Create(CultureInfo.InvariantCulture, $"{Since:yyyy-MM-dd} to {Until:yyyy-MM-dd}");
+        return Days is { } days
+            ? string.Create(CultureInfo.InvariantCulture, $"{span}, the {days} days to the newest recorded commit")
+            : span;
+    }
 }

@@ -213,17 +213,17 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, Pro
         var scope = await ScopeAsync(index, directory, cancellationToken);
         if (scope.Problem is not null) return scope.Problem;
 
-        // Which repositories the ranking can speak for, decided before the answer branches: an empty
-        // ranking needs it as much as a full one does, and more — a reader shown nothing is the one
-        // most likely to conclude that nothing changed.
-        string? coverage = await HistoryCoverageAsync(index, scope.RepositorySlug, cancellationToken);
-
         var window = await index.WindowAsync(days, scope.RepositorySlug, cancellationToken);
         // The project has history and this scope has none: a repository whose walk found nothing, which
-        // reads as "nobody has changed it" unless it is said outright.
+        // reads as "nobody has changed it" unless it is said outright. This answer names the scope it
+        // is about, so the coverage caveat below would only repeat it — and is not paid for here.
         if (window is null)
             return $"No commit is recorded for {scope.Spelled}, although project '{index.ProjectSlug}' has history "
                    + "for other repositories. Its history could not be walked; git_log without a scope shows what was imported.";
+
+        // Read before the answer branches, because an empty ranking needs the caveat as much as a full
+        // one does, and more: a reader shown nothing is the one most likely to conclude nothing changed.
+        string? coverage = await CoverageAsync(index, scope.RepositorySlug, cancellationToken);
 
         var ranked = await index.ChurnAsync(window, scope.RepositorySlug, scope.DirectoryInRepository,
             Math.Clamp(limit, 1, MaxHotFiles), cancellationToken);
@@ -249,24 +249,19 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, Pro
     }
 
     /// <summary>
-    ///     Which repositories of the project have imported history and which have none, or null when
-    ///     the question does not arise — one repository, or a call already scoped to one. A ranking
-    ///     that silently omits a repository whose walk failed is a ranking an agent reads as a complete
-    ///     picture of the project (CONTEXT.md, History).
+    ///     The caveat naming the repositories a ranking cannot speak for, or null when there are none.
+    ///     Which repositories those are is <see cref="IndexReader.HistoryCoverageAsync" />'s to decide;
+    ///     this only says it in the words a tool reply uses.
     /// </summary>
-    private static async Task<string?> HistoryCoverageAsync(IndexReader index, string? scopedTo,
+    private static async Task<string?> CoverageAsync(IndexReader index, string? scopedTo,
         CancellationToken cancellationToken)
     {
-        if (scopedTo is not null) return null;
-        var counts = await index.CommitCountsAsync(cancellationToken);
-        if (counts.Count < 2) return null;
-
-        var without = counts.Where(r => r.Commits == 0).Select(r => r.Slug).ToList();
-        if (without.Count == 0) return null;
-
-        var with = counts.Where(r => r.Commits > 0).Select(r => r.Slug).ToList();
-        return $"History was imported for {string.Join(", ", with)} and for none of {string.Join(", ", without)}, "
-               + "so nothing from those can appear above however much they changed.";
+        var coverage = await index.HistoryCoverageAsync(scopedTo, cancellationToken);
+        return coverage.Without.Count == 0
+            ? null
+            : $"History was imported for {string.Join(", ", coverage.With)} and for none of "
+              + $"{string.Join(", ", coverage.Without)}, so nothing from those can appear above however "
+              + "much they changed.";
     }
 
     /// <summary>
@@ -295,12 +290,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, Pro
                 $"{await index.UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these.",
                 null, null, "");
 
-        string spelled = paths.Format(repository.Slug, qualified.PathInRepository);
-        return new ChurnScope(null, repository.Slug,
-            qualified.PathInRepository.Length == 0 ? null : qualified.PathInRepository,
-            qualified.PathInRepository.Length == 0
+        // Null rather than an empty path: the repository's own root is the whole repository, which the
+        // ranking scopes with the slug alone and names as such.
+        string? directoryInRepository =
+            qualified.PathInRepository.Length == 0 ? null : qualified.PathInRepository;
+        return new ChurnScope(null, repository.Slug, directoryInRepository,
+            directoryInRepository is null
                 ? $"repository '{repository.Slug}' of {project}"
-                : $"'{spelled}' in {project}");
+                : $"'{paths.Format(repository.Slug, directoryInRepository)}' in {project}");
     }
 
     /// <summary>What a ranking covers, or the sentence to answer with instead. Never both.</summary>

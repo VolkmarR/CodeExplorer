@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { useNavigate } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
 import { useState } from 'react'
 import type { HistoryParameters } from '@/features/history/historyParams'
 import { commitFilesQuery } from '@/features/history/queries'
 import type { CommitEntry, CommitList as CommitPage } from '@/lib/api'
+import { DiffStat } from '@/components/DiffStat'
 import { ErrorPanel } from '@/components/ErrorPanel'
+import { FilePathLink } from '@/components/FilePathLink'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -134,13 +136,8 @@ function CommitRow({
             <span>{formatDate(commit.authoredAt)}</span>
             <span title={commit.authorEmail}>{commit.authorName}</span>
             <span className="tabular-nums">
-              <span className="text-emerald-600 dark:text-emerald-400">
-                +{formatCount(commit.added)}
-              </span>{' '}
-              <span className="text-rose-600 dark:text-rose-400">
-                −{formatCount(commit.deleted)}
-              </span>{' '}
-              in {formatCount(commit.filesChanged)} {commit.filesChanged === 1 ? 'file' : 'files'}
+              <DiffStat added={commit.added} deleted={commit.deleted} /> in{' '}
+              {formatCount(commit.filesChanged)} {commit.filesChanged === 1 ? 'file' : 'files'}
             </span>
           </span>
         </span>
@@ -162,22 +159,14 @@ function CommitRow({
                   <span className="w-24 shrink-0 tabular-nums text-muted-foreground">
                     +{file.added} −{file.deleted}
                   </span>
-                  {/* A path still at HEAD opens the file; one the commit deleted, or a later commit
-                      moved, is named and not linked — there is nothing at that path to open. */}
-                  {file.qualifiedPath ? (
-                    <Link
-                      to="/projects/$project/file"
-                      params={{ project }}
-                      search={{ path: file.qualifiedPath }}
-                      className="truncate hover:text-primary hover:underline"
-                    >
-                      {file.path}
-                    </Link>
-                  ) : (
-                    <span className="truncate text-muted-foreground line-through decoration-muted-foreground/50">
-                      {file.path}
-                    </span>
-                  )}
+                  {/* Labelled with the path inside the repository: a commit's own file list is
+                      already under one repository, so the slug would repeat on every row. */}
+                  <FilePathLink
+                    project={project}
+                    qualifiedPath={file.qualifiedPath ?? file.path}
+                    atHead={file.qualifiedPath !== null}
+                    label={file.path}
+                  />
                 </li>
               ))}
             </ul>
