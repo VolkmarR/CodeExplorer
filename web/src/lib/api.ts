@@ -274,6 +274,80 @@ export interface Churn {
 }
 
 /**
+ * How much of a project one language accounts for. `mapped` is false when no language profile covers
+ * the extension, in which case `name` is the extension itself — a weaker claim than a language name,
+ * and shown as one.
+ */
+export interface LanguageShare {
+  name: string
+  mapped: boolean
+  files: number
+  lines: number
+  /** Of `files`, how many are in the index without lines: binary or over the size ceiling. */
+  skipped: number
+}
+
+/** One entry at the top level of a repository. `files` counts everything beneath a directory. */
+export interface OverviewEntry {
+  qualifiedPath: string
+  repositorySlug: string
+  isDirectory: boolean
+  files: number
+  lines: number
+  sizeBytes: number
+}
+
+export interface OverviewFile {
+  qualifiedPath: string
+  repositorySlug: string
+  lineCount: number
+  sizeBytes: number
+}
+
+/**
+ * The churn section of an overview. `since` and `until` are null together when the project had no
+ * imported history when it was built, which is a different answer from a project nobody changed.
+ */
+export interface OverviewChurn {
+  days: number
+  since: string | null
+  until: string | null
+  files: ChurnFile[]
+}
+
+/** Who has touched the project most. Who to ask, never who wrote it (CONTEXT.md, Attribution). */
+export interface OverviewAuthor {
+  name: string
+  email: string
+  commits: number
+  lastCommit: string
+}
+
+/**
+ * What the build computed about the project as a whole and stored with the index, so this page shows
+ * what an agent calling `project_overview` is told rather than a second opinion about it.
+ */
+export interface IndexOverview {
+  languages: LanguageShare[]
+  otherLanguages: number
+  tree: OverviewEntry[]
+  otherEntries: number
+  largestFiles: OverviewFile[]
+  churn: OverviewChurn
+  authors: OverviewAuthor[]
+}
+
+/**
+ * Exactly one of the two is set. `unavailable` is the server's own prose saying why there is nothing
+ * to show — a project never built, or one whose first build is still running — so the page says what
+ * an agent asking the same question is told, rather than leaving a gap the reader has to interpret.
+ */
+export interface ProjectOverviewDetail {
+  overview: IndexOverview | null
+  unavailable: string | null
+}
+
+/**
  * A failed request reaches the UI as ky's own `HTTPError`, re-exported under the name the components
  * use. `beforeError` below has already replaced its message with the server's prose, so a component
  * renders `error.message` and says nothing of its own.
@@ -402,6 +476,9 @@ export const api = {
   refreshStatus: (project: string) => http.get(`projects/${project}/refresh`).json<RefreshStatus>(),
 
   project: (slug: string) => http.get(`projects/${slug}`).json<ProjectDetail>(),
+
+  projectOverview: (slug: string) =>
+    http.get(`projects/${slug}/overview`).json<ProjectOverviewDetail>(),
 
   projects: () => http.get('projects').json<ProjectSummary[]>(),
 

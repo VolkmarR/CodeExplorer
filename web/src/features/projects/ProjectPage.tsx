@@ -5,6 +5,7 @@ import { api } from '@/lib/api'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { IndexStatus } from '@/features/projects/IndexStatus'
+import { ProjectOverview } from '@/features/projects/ProjectOverview'
 import { RefreshProgress } from '@/features/refresh/RefreshProgress'
 import { RepositoryTable } from '@/features/projects/RepositoryTable'
 import { Badge } from '@/components/ui/badge'
@@ -85,6 +86,10 @@ export function ProjectPage() {
       <RefreshProgress status={status} />
 
       <RepositoryTable project={project} />
+
+      {/* Below the repositories, because it is what those repositories turned out to hold: a reader
+          arrives knowing which remotes this project is, and then learns what is in them. */}
+      <ProjectOverview project={slug} />
 
       <section
         aria-labelledby="danger-title"

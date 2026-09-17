@@ -71,4 +71,30 @@ internal sealed class ProjectTools(
 
         return text.ToString();
     }
+
+    [McpServerTool(Name = "project_overview", ReadOnly = true, Idempotent = true,
+        Title = "Describe the whole project in one call")]
+    [Description("""
+                 Describes the shape of this project in one call: its repositories and the commit each is at, how much of it is written in which language, the top level of each repository with sizes, the largest files, the files that changed most recently, and the people who have touched it most. Call it first, before any list_tree or glob, when you do not yet know what this project is.
+
+                 - It answers from the index as the last refresh built it, not from a live scan, so it costs one read however large the project is.
+                 - Counts are by language where a file's extension is one this server knows, and by extension where it is not. An extension standing for itself is a weaker claim than a language name, and is printed as one.
+                 - The most-changed section covers a window ending at the newest commit in the index, not at today, and says which dates those are. A project whose history was never imported says so instead of showing nothing.
+                 - Authors are who touched the code last, never who wrote it: a reformat is a change and it becomes the answer.
+                 """)]
+    public async Task<string> ProjectOverview(CancellationToken cancellationToken = default)
+    {
+        var project = BoundProject.Get(httpContextAccessor);
+        var open = await IndexReader.OpenAsync(indexes, project.Slug, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return refused.Explanation;
+        using var index = ((IndexOpen.Opened)open).Reader;
+
+        var overview = await index.OverviewAsync(cancellationToken);
+        if (overview is null) return IndexReader.NoOverview(project.Slug);
+
+        // The repositories come from the index's own table rather than from the stored row: they are
+        // already one join-free read, and a second copy inside the overview would be a second
+        // definition of what this project holds (IndexOverview says the same).
+        return OverviewReply.Render(project, await index.RepositoriesAsync(cancellationToken), overview);
+    }
 }

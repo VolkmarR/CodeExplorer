@@ -40,6 +40,7 @@ builder.Services.AddSingleton<GitClones>();
 builder.Services.AddSingleton<DurableIndex>();
 builder.Services.AddSingleton<ProjectIndexes>();
 builder.Services.AddSingleton<HistoryBuilder>();
+builder.Services.AddSingleton<OverviewBuilder>();
 builder.Services.AddSingleton<IndexBuilder>();
 builder.Services.AddSingleton<ProjectRefresh>();
 builder.Services.AddSingleton<RefreshService>();

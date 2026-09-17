@@ -107,7 +107,7 @@ public sealed class ProjectIndexes : IDisposable
     ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 4;
+    public const int SchemaVersion = 5;
 
     /// <summary>
     ///     The tables a new shadow inherits from the live index instead of rebuilding. They are the
@@ -219,6 +219,15 @@ public sealed class ProjectIndexes : IDisposable
                                       start_line INTEGER NOT NULL,
                                       end_line   INTEGER NOT NULL,
                                       commit_id  INTEGER NOT NULL);
+                                  CREATE TABLE project_overview (
+                                      -- Exactly one row, written by the build that produced the index
+                                      -- (#51), so a caller orienting itself reads a row instead of
+                                      -- running five aggregates over the largest tables here.
+                                      -- One JSON column rather than a set of LIST(STRUCT) columns: the
+                                      -- document is read whole and never queried into, so nested
+                                      -- columns would buy a queryability nothing uses and cost every
+                                      -- read a nested-value reader. IndexOverview says the same.
+                                      document VARCHAR NOT NULL);
                                   """;
 
     // Attached databases and loaded extensions belong to the instance, and DuckDB.NET disposes the

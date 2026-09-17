@@ -39,6 +39,18 @@ public sealed record RepositoryDetail(
 /// </summary>
 public sealed record RepositoryCommit(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
 
+/// <summary>
+///     What the project page draws beside its repositories: the same overview an agent is given, from
+///     the same row, so an operator looking at a project sees what an agent sees.
+///     Exactly one of the two is set. <see cref="Unavailable" /> is the reader's own prose saying why
+///     there is nothing to show — a project never built, or one whose first build is still running —
+///     and it is carried rather than collapsed to null so that the page says what an agent asking the
+///     same question is told, instead of showing an operator a blank where there is an explanation.
+///     It is its own response rather than a field on <see cref="ProjectDetail" /> because it is the
+///     one read on this page that restores a durable copy, and the page's header must not wait behind it.
+/// </summary>
+public sealed record ProjectOverviewDetail(IndexOverview? Overview, string? Unavailable);
+
 /// <summary>A project as its own page shows it.</summary>
 public sealed record ProjectDetail(
     string Slug,
@@ -98,6 +110,25 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
                 : new RepositoryDetail(r.Slug, r.Url, r.HasCredential, null, null, null))
             .ToList();
         return new ProjectDetail(project.Slug, project.Name, project.SingleRepository, status, repositories);
+    }
+
+    /// <summary>
+    ///     The overview stored with one project's index (#51). A project with no index is not a failure
+    ///     here — every project passes through that state — so the reader's refusal is carried through
+    ///     as prose rather than raised, which is the same answer <c>project_overview</c> gives an agent.
+    /// </summary>
+    public async Task<ProjectOverviewDetail> OverviewAsync(Project project, CancellationToken cancellationToken)
+    {
+        var open = await IndexReader.OpenAsync(indexes, project.Slug, null, cancellationToken);
+        if (open is IndexOpen.Refused refused) return new ProjectOverviewDetail(null, refused.Explanation);
+
+        using var index = ((IndexOpen.Opened)open).Reader;
+        var overview = await index.OverviewAsync(cancellationToken);
+        // A built index with no overview row is the one case neither side can explain from what it
+        // holds, so it is named here in the words the tool uses: the index came from another build.
+        return overview is null
+            ? new ProjectOverviewDetail(null, IndexReader.NoOverview(project.Slug))
+            : new ProjectOverviewDetail(overview, null);
     }
 
     /// <summary>

@@ -18,6 +18,9 @@ internal static class OperatorEndpoints
         project.MapGet("", (Project project, ProjectOverview overview, CancellationToken ct) =>
             overview.FindAsync(project, ct));
 
+        project.MapGet("/overview", (Project project, ProjectOverview overview, CancellationToken ct) =>
+            overview.OverviewAsync(project, ct));
+
         project.MapDelete("", (Project project, ProjectOverview overview, CancellationToken ct) =>
             NoContentAfter(overview.DeleteAsync(project, ct)));
 
