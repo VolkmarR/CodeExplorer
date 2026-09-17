@@ -128,11 +128,14 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         string symbol = request.Symbol.Trim();
         if (SearchQuery.Unusable(symbol, "find_references") is { } unusable) return new Problem(unusable);
 
-        var open = await IndexReader.OpenAsync(indexes, slug, request.Filter.Repository, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new Problem(refused.Explanation, refused.Kind);
-        using var index = ((IndexOpen.Opened)open).Reader;
-        var connection = index.Connection;
+        return await IndexReader.OverIndexAsync(indexes, slug, request.Filter.Repository,
+            (index, token) => QueryAsync(index, request, symbol, token), cancellationToken);
+    }
 
+    private static async Task<Outcome> QueryAsync(IndexReader index, ReferenceRequest request, string symbol,
+        CancellationToken cancellationToken)
+    {
+        var connection = index.Connection;
         // The slug the index holds, not the one the caller typed: the filter's subquery matches it exactly.
         var filter = request.Filter with { Repository = index.Repository?.Slug };
         int maxFiles = Math.Clamp(request.MaxFiles, 1, MaxFiles);

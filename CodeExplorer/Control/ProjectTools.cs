@@ -85,14 +85,12 @@ internal sealed class ProjectTools(
     public async Task<string> ProjectOverview(CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
-        var open = await IndexReader.OpenAsync(indexes, project.Slug, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
-
         // The repositories come from the index's own table rather than from the stored row: they are
         // already one join-free read, and a second copy inside the overview would be a second
         // definition of what this project holds (IndexOverview says the same).
-        return OverviewReply.Render(project, await index.RepositoriesAsync(cancellationToken),
-            await index.OverviewAsync(cancellationToken));
+        return await IndexReader.OverIndexAsync(indexes, project.Slug, null,
+            async (index, token) => OverviewReply.Render(project, await index.RepositoriesAsync(token),
+                await index.OverviewAsync(token)),
+            problem => problem.Explanation, cancellationToken);
     }
 }

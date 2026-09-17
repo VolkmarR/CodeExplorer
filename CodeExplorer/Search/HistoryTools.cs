@@ -58,10 +58,14 @@ internal sealed class HistoryTools(
         int page = 1,
         CancellationToken cancellationToken = default)
     {
-        var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, repository,
+        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, repository,
+            (index, token) => ReadLogAsync(index, limit, page, token), problem => problem.Explanation,
             cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
+    }
+
+    private static async Task<string> ReadLogAsync(IndexReader index, int limit, int page,
+        CancellationToken cancellationToken)
+    {
         if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
 
         limit = Math.Clamp(limit, 1, MaxCommits);
@@ -95,10 +99,14 @@ internal sealed class HistoryTools(
         int limit = DefaultCommits,
         CancellationToken cancellationToken = default)
     {
-        var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+            (index, token) => ReadFileHistoryAsync(index, path, limit, token), problem => problem.Explanation,
             cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
+    }
+
+    private static async Task<string> ReadFileHistoryAsync(IndexReader index, string path, int limit,
+        CancellationToken cancellationToken)
+    {
         if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
 
         var located = await LocateAsync(index, path, cancellationToken);
@@ -135,10 +143,14 @@ internal sealed class HistoryTools(
         int? endLine = null,
         CancellationToken cancellationToken = default)
     {
-        var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+            (index, token) => ReadBlameAsync(index, path, startLine, endLine, token), problem => problem.Explanation,
             cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
+    }
+
+    private static async Task<string> ReadBlameAsync(IndexReader index, string path, int startLine, int? endLine,
+        CancellationToken cancellationToken)
+    {
         if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
 
         var located = await LocateAsync(index, path, cancellationToken);
@@ -209,10 +221,14 @@ internal sealed class HistoryTools(
         int limit = DefaultRankedFiles,
         CancellationToken cancellationToken = default)
     {
-        var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+            (index, token) => ReadHotFilesAsync(index, directory, days, limit, token), problem => problem.Explanation,
             cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
+    }
+
+    private static async Task<string> ReadHotFilesAsync(IndexReader index, string? directory, int days, int limit,
+        CancellationToken cancellationToken)
+    {
         if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
 
         var scope = await ScopeAsync(index, directory, cancellationToken);
@@ -283,10 +299,14 @@ internal sealed class HistoryTools(
         int limit = DefaultRankedFiles,
         CancellationToken cancellationToken = default)
     {
-        var open = await IndexReader.OpenAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+        return await IndexReader.OverIndexAsync(indexes, BoundProject.Get(httpContextAccessor).Slug, null,
+            (index, token) => ReadCoChangedAsync(index, path, days, limit, token), problem => problem.Explanation,
             cancellationToken);
-        if (open is IndexOpen.Refused refused) return refused.Explanation;
-        using var index = ((IndexOpen.Opened)open).Reader;
+    }
+
+    private async Task<string> ReadCoChangedAsync(IndexReader index, string path, int days, int limit,
+        CancellationToken cancellationToken)
+    {
         if (!await index.HasHistoryAsync(cancellationToken)) return NoHistory;
 
         var located = await LocateAsync(index, path, cancellationToken);
@@ -404,30 +424,17 @@ internal sealed class HistoryTools(
         CancellationToken cancellationToken)
     {
         string project = $"project '{index.ProjectSlug}'";
-        if (string.IsNullOrWhiteSpace(directory)) return new ChurnScope(null, null, null, project);
-
-        var paths = await index.PathsAsync(cancellationToken);
-        // Null is the repository level, which only a multi-repository project has and which a non-empty
-        // argument cannot parse to; a blank one was answered above.
-        var qualified = paths.Parse(directory);
-        if (qualified is null)
-            return new ChurnScope(
-                $"'{directory}' names no directory: {await index.PathRuleAsync(cancellationToken)}", null, null, "");
-
-        var repository = await index.FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
-        if (repository is null)
-            return new ChurnScope(
-                $"{await index.UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these.",
-                null, null, "");
+        var (located, problem) = await index.LocateDirectoryAsync(directory, cancellationToken);
+        if (located is null) return new ChurnScope(problem!.Explanation, null, null, "");
+        if (located.Repository is null) return new ChurnScope(null, null, null, project);
 
         // Null rather than an empty path: the repository's own root is the whole repository, which the
         // ranking scopes with the slug alone and names as such.
-        string? directoryInRepository =
-            qualified.PathInRepository.Length == 0 ? null : qualified.PathInRepository;
-        return new ChurnScope(null, repository.Slug, directoryInRepository,
+        string? directoryInRepository = located.PathInRepository.Length == 0 ? null : located.PathInRepository;
+        return new ChurnScope(null, located.Repository.Slug, directoryInRepository,
             directoryInRepository is null
-                ? $"repository '{repository.Slug}' of {project}"
-                : $"'{paths.Format(repository.Slug, directoryInRepository)}' in {project}");
+                ? $"repository '{located.Repository.Slug}' of {project}"
+                : $"'{located.QualifiedPath}' in {project}");
     }
 
     /// <summary>What a ranking covers, or the sentence to answer with instead. Never both.</summary>
@@ -462,12 +469,10 @@ internal sealed class HistoryTools(
         // the same question and an agent that got the path wrong must be told the same thing
         // whichever tool it asked. What stays here is the two pieces this file's callers need beside
         // the row: which repository it landed in, and the path inside it.
-        var (file, explanation) = await index.LocateAsync(path, false, cancellationToken);
-        if (file is null) return new LocatedFile(explanation);
+        var (file, problem) = await index.LocateAsync(path, false, cancellationToken);
+        if (file is null) return new LocatedFile(problem!.Explanation);
 
-        var paths = await index.PathsAsync(cancellationToken);
-        return new LocatedFile(null, file, file.RepositorySlug,
-            paths.Parse(file.QualifiedPath)!.PathInRepository, file.QualifiedPath);
+        return new LocatedFile(null, file, file.RepositorySlug, file.PathInRepository, file.QualifiedPath);
     }
 
     /// <summary>A resolved file, or the sentence to answer with instead. Never both.</summary>
