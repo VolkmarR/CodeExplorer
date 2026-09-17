@@ -165,18 +165,32 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     /// </summary>
     public bool TypeNamesPrecedeKeyword { get; init; }
 
+    /// <summary>
+    ///     Words that open what a declaration declares, where the language opens it with a word rather
+    ///     than with a bracket: the SQL family's <c>create procedure foo is</c>, X#'s
+    ///     <c>access Status as string</c>. The brackets are the shape of a declaration head and are the
+    ///     same everywhere; these are the language's own, which is why they are here and not welded
+    ///     into the shared pattern beside them.
+    /// </summary>
+    public IReadOnlyList<string> DeclarationBodyOpeners { get; init; } = [];
+
     /// <summary>Whether the language's keywords are case-insensitive, as X#, Delphi and SQL's are.</summary>
     public bool CaseInsensitiveKeywords { get; init; }
 
-    /// <summary>See <see cref="ILanguageAnalyzer.SeparatesDeclarationFromImplementation" />.</summary>
-    public bool SeparatesDeclarationFromImplementation { get; init; }
-
     /// <summary>
-    ///     What moves a file from one side of that split to the other, or empty where the language has
-    ///     no split at all. A profile that separates the two and names no marker says every
-    ///     declaration's role is unknown, which is the honest answer and not a useful one.
+    ///     What moves a file from one side of the declaration/implementation split to the other, or
+    ///     empty where the language has no split at all.
     /// </summary>
     public IReadOnlyList<SectionMarker> SectionMarkers { get; init; } = [];
+
+    /// <summary>
+    ///     See <see cref="ILanguageAnalyzer.SeparatesDeclarationFromImplementation" />. Read off
+    ///     <see cref="SectionMarkers" /> rather than declared beside them: a profile that named the
+    ///     phrases and forgot the flag would answer that its language has no split while reporting
+    ///     which half every line is in, and the two could only ever disagree by mistake. (An analyser
+    ///     with a parser behind it has no marker table and answers the question directly.)
+    /// </summary>
+    public bool SeparatesDeclarationFromImplementation => SectionMarkers.Count > 0;
 
     /// <summary>
     ///     Qualified paths that mean a generated file, as globs where <c>*</c> crosses <c>/</c> — the

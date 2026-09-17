@@ -112,6 +112,10 @@ public sealed class DefinitionTests : IDisposable
                                           Store(Self);
                                         end;
 
+                                        procedure TCustomer.Reload;
+                                        begin
+                                        end;
+
                                         end.
                                         """
             }
@@ -128,6 +132,14 @@ public sealed class DefinitionTests : IDisposable
         Assert.True(text.IndexOf("procedure TCustomer.Save;", StringComparison.Ordinal)
                     < text.IndexOf("procedure Save;", StringComparison.Ordinal));
         Assert.Contains("[TCustomer] procedure TCustomer.Save;", text);
+
+        // A routine written but never announced is still an implementation. Whether the label is
+        // printed is a fact about Delphi and not about what this particular answer happened to hold,
+        // so the heading is there for the one site as it is for two.
+        string reload = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Reload" });
+        Assert.Contains("declared in 1 place", reload);
+        Assert.Contains("IMPLEMENTATIONS  (1)", reload);
+        Assert.DoesNotContain("DECLARATIONS", reload);
 
         // And the class it belongs to is declared the way Delphi declares one, which no C-family
         // pattern reads.
@@ -277,7 +289,7 @@ public sealed class DefinitionTests : IDisposable
         string hidden = await FindAsync(client,
             new Dictionary<string, object?> { ["symbol"] = "Advance", ["path"] = "src/Report" });
         Assert.Contains("No declaration of \"Advance\" was recognised", hidden);
-        Assert.Contains("Your filters hid 1 further matching file", hidden);
+        Assert.Contains("your filters hid 1 further matching file", hidden);
     }
 
     [Fact]

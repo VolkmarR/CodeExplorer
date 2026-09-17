@@ -28,10 +28,17 @@ public sealed record DefinitionSite(
 ///     <see cref="FilesNamingIt" /> is filled only when there are no sites: "nothing declares this"
 ///     and "nothing spells this" send an agent to different places, and the second is a question about
 ///     the whole index that a declaration search has no reason to answer when it found something.
+///     <see cref="Separated" /> is whether any of these sites came from a language that announces a
+///     routine in one place and writes it in another. It is a fact about the languages read and not
+///     about the sites found, which is the difference between "Delphi draws this distinction" and
+///     "this particular answer happened to contain both" — a routine found only in an implementation
+///     section is still an implementation, and a caller inferring the split from the sites would print
+///     it unlabelled.
 /// </summary>
 public sealed record DefinitionResult(
     IReadOnlyList<DefinitionSite> Sites,
     int TotalSites,
+    bool Separated,
     int FilesNamingIt,
     int? FilesNamingItWithoutFilters) : SearchOutcome;
 
@@ -99,7 +106,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
         var filter = request.Filter with { Repository = index.Repository?.Slug };
         var symbolPattern = new DuckDBParameter("q", SymbolText.WholeWordPattern(symbol));
         var parameters = new List<DuckDBParameter> { symbolPattern };
-        string declarationShapes = Shapes(parameters);
+        string declarationShapes = await ShapesAsync(connection, parameters, cancellationToken);
         string fileFilter = filter.Sql(parameters);
 
         var candidates = new List<Candidate>();
@@ -126,6 +133,9 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
             candidates.Select(line => (line.FileId, line.Analyzer, line.LineNumber)), cancellationToken);
 
         var sites = new List<DefinitionSite>();
+        // Whether the languages these sites were read from draw the split at all, which is what says
+        // the answer may be labelled — not whether both labels happen to appear in it.
+        bool separated = false;
         foreach (var candidate in candidates)
         {
             var position = positions.GetValueOrDefault((candidate.FileId, candidate.LineNumber),
@@ -136,6 +146,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
             if (declared.Value is not { } what) continue;
             if (!Names(what, symbol)) continue;
             if (InProse(candidate, position, symbol)) continue;
+            separated |= candidate.Analyzer.SeparatesDeclarationFromImplementation;
             sites.Add(new DefinitionSite(candidate.Path, candidate.LineNumber, candidate.Content,
                 what.Type, what.Member, what.Role, declared.Evidence));
         }
@@ -160,18 +171,27 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
         int? namingWithoutFilters = null;
         if (ranked.Count == 0)
         {
-            naming = (int)await connection.CountAsync(
+            // Both counts in one pass. The unfiltered one is a superset of the filtered one, so asking
+            // twice is two scans of `lines` for one answer — and the second is only wanted at all
+            // because a declaration hidden by a filter reads exactly like one that does not exist.
+            using var command = connection.Query(
                 $"""
-                 SELECT count(DISTINCT l.file_id) FROM lines l JOIN files f USING (file_id)
-                 WHERE regexp_matches(l.content, $q, ''){fileFilter}
-                 """, parameters, cancellationToken);
-            if (filter.Any)
-                namingWithoutFilters = (int)await connection.CountAsync(
-                    "SELECT count(DISTINCT l.file_id) FROM lines l WHERE regexp_matches(l.content, $q, '')",
-                    [symbolPattern], cancellationToken);
+                 SELECT count(DISTINCT l.file_id) FILTER (WHERE f.file_id IS NOT NULL) AS filtered,
+                        count(DISTINCT l.file_id) AS every_file
+                 FROM lines l LEFT JOIN (SELECT f.file_id FROM files f WHERE true{fileFilter}) f
+                   USING (file_id)
+                 WHERE regexp_matches(l.content, $q, '')
+                 """, parameters);
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                naming = (int)reader.Int64("filtered");
+                if (filter.Any) namingWithoutFilters = (int)reader.Int64("every_file");
+            }
         }
 
-        return new DefinitionResult([.. ranked.Take(MaxSites)], ranked.Count, naming, namingWithoutFilters);
+        return new DefinitionResult([.. ranked.Take(MaxSites)], ranked.Count, separated, naming,
+            namingWithoutFilters);
     }
 
     /// <summary>One line the engine offered, before the file's language says what it declares.</summary>
@@ -191,57 +211,59 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
     /// </summary>
     private static bool InProse(Candidate candidate, FilePosition position, string symbol)
     {
-        bool found = false;
+        // Asked once for the whole line rather than once per appearance. Asked per appearance — which
+        // is what `StateAt` is — a line naming the symbol N times costs N walks of it, and the lines
+        // here are whatever the index holds: the cost the analyser's own cursor exists to avoid.
+        var appearances = candidate.Analyzer.Occurrences(position, candidate.Content, symbol);
         // Every appearance and not the first: a line that names the symbol in a trailing comment and
         // then declares it is a declaration, and reading only the first would lose it.
-        foreach (int at in SymbolText.Occurrences(candidate.Content, symbol))
-        {
-            found = true;
-            if (candidate.Analyzer.StateAt(position, candidate.Content, at).Value
-                is not (Lexical.Comment or Lexical.Literal))
-                return false;
-        }
-
-        return found;
+        return appearances.Count > 0
+               && appearances.All(a => a.Value is ReferenceKind.Comment or ReferenceKind.StringLiteral);
     }
 
     /// <summary>
-    ///     What a declaration looks like, per language, as one <c>WHERE</c> clause. A branch per
-    ///     analyser rather than one pattern for all of them: what could be a declaration is the
-    ///     analyser's question (ADR-0008), a Delphi unit and a C# file do not share an answer, and a
-    ///     language that declares nothing this can read contributes no branch at all rather than lines
-    ///     that would be thrown away.
-    ///     The extensions are the registry's own constants and never a caller's, which is why they are
-    ///     inlined where every value from a request is bound.
+    ///     What a declaration looks like in each language this project is written in, as one
+    ///     <c>WHERE</c> clause. A branch per analyser rather than one pattern for all of them: what
+    ///     could be a declaration is the analyser's question (ADR-0008), a Delphi unit and a C# file do
+    ///     not share an answer, and a language that declares nothing this can read contributes no
+    ///     branch at all rather than lines that would be thrown away.
+    ///     The extensions come from the index and not from the language table, so this asks about the
+    ///     nine that are in the project rather than the forty that could be, and never has to name the
+    ///     remainder that no profile covers — <see cref="LanguageRegistry.For" /> answers for those
+    ///     like any other, which is what keeps the extension-to-language table on its own side of the
+    ///     seam.
     /// </summary>
-    private static string Shapes(List<DuckDBParameter> parameters)
+    private static async Task<string> ShapesAsync(DuckDBConnection connection, List<DuckDBParameter> parameters,
+        CancellationToken cancellationToken)
     {
-        var branches = new List<string>();
-        var claimed = new List<string>();
-        foreach (var claim in Languages.Default.Claims)
+        var extensions = new List<string>();
+        using (var command = connection.Query("SELECT DISTINCT extension FROM files", []))
+        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
-            claimed.AddRange(claim.Extensions);
-            if (SearchQuery.Narrowing(claim.Analyzer.DeclarationCandidates, $"d{parameters.Count}", parameters) is { } narrowing)
-                branches.Add($"(f.extension IN ({List(claim.Extensions)}){narrowing})");
+            while (await reader.ReadAsync(cancellationToken)) extensions.Add(reader.Text("extension"));
         }
 
-        // Everything no profile covers, read by the fallback exactly as it was before any of this
-        // existed. Left out, a project written in a language nobody declared would answer that nothing
-        // in it is declared anywhere.
-        if (SearchQuery.Narrowing(Languages.Default.Fallback.DeclarationCandidates, $"d{parameters.Count}", parameters) is { } rest)
-            branches.Add($"(f.extension NOT IN ({List(claimed)}){rest})");
+        var branches = new List<string>();
+        foreach (var language in extensions.GroupBy(Languages.Default.For))
+        {
+            if (SearchQuery.Narrowing(language.Key.DeclarationCandidates, $"d{parameters.Count}", parameters)
+                is not { } narrowing)
+                continue;
+            var names = new List<string>();
+            foreach (string extension in language)
+            {
+                // Bound and not inlined: an extension is a value out of the index, whatever the table
+                // that named its language says.
+                string name = $"e{parameters.Count}";
+                parameters.Add(new DuckDBParameter(name, extension));
+                names.Add($"${name}");
+            }
 
-        // A build whose every analyser declares it can read no declarations answers nothing rather
-        // than everything, which is what an empty alternation would have meant.
+            branches.Add($"(f.extension IN ({string.Join(", ", names)}){narrowing})");
+        }
+
+        // An empty project, or one whose every language declares it can read no declarations, answers
+        // nothing rather than everything — which is what an empty alternation would have meant.
         return branches.Count == 0 ? "false" : string.Join(" OR ", branches);
-
-        // Quoted rather than bound: an extension list is the registry's own constants, and binding one
-        // parameter per extension of every language would be forty parameters for a clause that never
-        // varies. The quote is doubled all the same — a registration is one `With` away from carrying
-        // a caller's string, and the comment above would then be the only thing protecting the query.
-        static string List(IEnumerable<string> extensions) =>
-            string.Join(", ", extensions.Select(extension => "'" + Quoted(extension) + "'"));
     }
-
-    private static string Quoted(string value) => value.Replace("'", "''", StringComparison.Ordinal);
 }
