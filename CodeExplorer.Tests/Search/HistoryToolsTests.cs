@@ -1,3 +1,4 @@
+using System.Globalization;
 using ModelContextProtocol.Client;
 using Xunit;
 
@@ -269,6 +270,190 @@ public sealed class HistoryToolsTests : IDisposable
 
         Assert.Contains("holds no history", reply, StringComparison.Ordinal);
         Assert.Contains("Ask the operator to refresh", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The coupling itself: the files a window's commits kept changing alongside one file, most
+    ///     shared commits first. The fixture couples Api.cs to Store.cs more often than to Dto.cs and
+    ///     never to Lonely.cs, so a ranking that counted the window's commits rather than the shared
+    ///     ones would fail rather than happen to agree.
+    /// </summary>
+    [Fact]
+    public async Task Co_changed_ranks_the_files_that_keep_moving_with_a_file()
+    {
+        await BuildCoupledProjectAsync(_host, "coupled");
+        await using var client = await _host.ConnectAsync("coupled");
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Api.cs", ["days"] = 30 });
+
+        // Three commits changed Store.cs with Api.cs, two Dto.cs, one Old.cs, and the order must be that.
+        Assert.True(reply.IndexOf("one/src/Store.cs", StringComparison.Ordinal)
+                    < reply.IndexOf("one/src/Dto.cs", StringComparison.Ordinal));
+        Assert.True(reply.IndexOf("one/src/Dto.cs", StringComparison.Ordinal)
+                    < reply.IndexOf("one/src/Old.cs", StringComparison.Ordinal));
+        Assert.Contains("3 shared commits", reply, StringComparison.Ordinal);
+        // Lonely.cs was committed on its own, so no commit of Api.cs's could have carried it.
+        Assert.DoesNotContain("Lonely.cs", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A path the window changed and HEAD no longer holds is ranked here for the reason it is ranked
+    ///     in hot_files: it is coupling that happened, and an agent sent to read a file that is not
+    ///     there has been told something false.
+    /// </summary>
+    [Fact]
+    public async Task Co_changed_marks_a_path_that_is_no_longer_at_head()
+    {
+        await BuildCoupledProjectAsync(_host, "gone");
+        await using var client = await _host.ConnectAsync("gone");
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Api.cs", ["days"] = 30 });
+
+        Assert.Contains("one/src/Old.cs  (no longer at HEAD)", reply, StringComparison.Ordinal);
+        Assert.Contains("one/src/Store.cs\n", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The whole risk in this ranking. One reformat, vendor drop or initial import pairs every path
+    ///     it touched with every other, and those pairs are not coupling — they are one commit. The
+    ///     ceiling keeps them out, and because what counts as a mass commit differs between a repository
+    ///     of two hundred files and one of eighty thousand, it is a setting: the same fixture answers
+    ///     differently on a host that was told a dozen paths is a mass commit.
+    /// </summary>
+    [Fact]
+    public async Task Co_changed_leaves_a_mass_commit_out_of_the_pairing_and_says_it_did()
+    {
+        await BuildCoupledProjectAsync(_host, "bulk");
+        await using var wide = await _host.ConnectAsync("bulk");
+        string included = await TestHost.CallAsync(wide, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Api.cs", ["days"] = 30 });
+        // Under the shipped ceiling the reformat is an ordinary commit, and every path it touched
+        // is coupled to Api.cs once — which is what swamps the ranking and what the ceiling is for.
+        Assert.Contains("vendor/Bulk01.cs", included, StringComparison.Ordinal);
+        Assert.DoesNotContain("left out of the pairing", included, StringComparison.Ordinal);
+
+        using var tight = new TestHost(SearchEngine.Substring, maxCommitPaths: 5);
+        await BuildCoupledProjectAsync(tight, "bulk");
+        await using var client = await tight.ConnectAsync("bulk");
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Api.cs", ["days"] = 30 });
+
+        Assert.DoesNotContain("vendor/Bulk", reply, StringComparison.Ordinal);
+        Assert.Contains("left out of the pairing", reply, StringComparison.Ordinal);
+        Assert.Contains("History:MaxCommitPaths", reply, StringComparison.Ordinal);
+        // The coupling that is real survives the exclusion.
+        Assert.Contains("one/src/Store.cs", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A file nothing moves with must say so. An empty list reads as "this file has no couplings
+    ///     worth knowing", which is a finding, and it must not be what a caller gets from a file whose
+    ///     history simply has not been imported (CODING_STANDARDS, Errors).
+    /// </summary>
+    [Fact]
+    public async Task Co_changed_says_a_file_moves_alone_rather_than_answering_nothing()
+    {
+        await BuildCoupledProjectAsync(_host, "alone");
+        await using var client = await _host.ConnectAsync("alone");
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Lonely.cs", ["days"] = 30 });
+
+        Assert.Contains("No other file", reply, StringComparison.Ordinal);
+        Assert.Contains("one/src/Lonely.cs", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A window that reaches none of a file's commits is not a file that moves alone, and the two
+    ///     answers have to read differently or the shorter window teaches the agent a wrong fact.
+    /// </summary>
+    [Fact]
+    public async Task Co_changed_says_when_the_window_reached_none_of_a_files_commits()
+    {
+        await BuildCoupledProjectAsync(_host, "narrow");
+        await using var client = await _host.ConnectAsync("narrow");
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/old/Ancient.cs", ["days"] = 1 });
+
+        Assert.Contains("No commit", reply, StringComparison.Ordinal);
+        Assert.Contains("raise days", reply, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Co_changed_on_a_project_without_history_says_so_rather_than_pairing_nothing()
+    {
+        await _host.IndexedProjectAsync("epsilon",
+            new Dictionary<string, Dictionary<string, string>>
+            {
+                ["only"] = new() { ["a.cs"] = "class A;\n" }
+            });
+        await _host.ExecuteAsync("epsilon", "DELETE FROM commits");
+
+        await using var client = await _host.ConnectAsync("epsilon");
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "only/a.cs" });
+
+        Assert.Contains("holds no history", reply, StringComparison.Ordinal);
+        Assert.Contains("Ask the operator to refresh", reply, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Co_changed_on_an_unknown_path_is_an_answer_and_not_an_empty_ranking()
+    {
+        var client = await StartAsync();
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Missing.cs" });
+
+        Assert.Contains("No indexed file", reply, StringComparison.Ordinal);
+        Assert.Contains("glob or list_tree", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A repository with coupling to find. Api.cs moves with Store.cs three times, with Dto.cs
+    ///     twice and with Old.cs once before that file is deleted; Lonely.cs moves on its own; and one
+    ///     reformat touches Api.cs and a dozen vendored paths at once, which is the mass commit the
+    ///     ceiling exists for. Ancient.cs sits ten days before the rest so a narrow window can miss it.
+    /// </summary>
+    private static async Task BuildCoupledProjectAsync(TestHost host, string project)
+    {
+        const int tenDays = 10 * 24 * 60;
+        string name = project + "-one";
+        string source = host.CreateEmptyGitRepository(name);
+        host.CommitToGitRepositoryAs(name,
+            new Dictionary<string, string> { ["old/Ancient.cs"] = "one\n" },
+            "Import the old code", "Ada", "ada@example.invalid", 0);
+        host.CommitToGitRepositoryAs(name,
+            new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = "a\n",
+                ["src/Dto.cs"] = "d\n",
+                ["src/Old.cs"] = "o\n",
+                ["src/Store.cs"] = "s\n"
+            },
+            "Add the feature", "Ada", "ada@example.invalid", tenDays);
+        host.CommitToGitRepositoryAs(name,
+            new Dictionary<string, string> { ["src/Api.cs"] = "a2\n", ["src/Store.cs"] = "s2\n" },
+            "Extend the feature", "Grace", "grace@example.invalid", tenDays + 1);
+        host.CommitToGitRepositoryAs(name,
+            new Dictionary<string, string> { ["src/Api.cs"] = "a3\n", ["src/Store.cs"] = "s3\n" },
+            "Extend it again", "Grace", "grace@example.invalid", tenDays + 2);
+        host.CommitToGitRepositoryAs(name,
+            new Dictionary<string, string> { ["src/Api.cs"] = "a4\n", ["src/Dto.cs"] = "d2\n" },
+            "Reshape the payload", "Grace", "grace@example.invalid", tenDays + 3);
+        host.CommitToGitRepositoryAs(name,
+            new Dictionary<string, string> { ["src/Lonely.cs"] = "l\n" },
+            "Add a file nothing moves with", "Ada", "ada@example.invalid", tenDays + 4);
+
+        var reformat = new Dictionary<string, string> { ["src/Api.cs"] = "a5\n" };
+        for (int i = 1; i <= 12; i++)
+            reformat[string.Create(CultureInfo.InvariantCulture, $"vendor/Bulk{i:00}.cs")] = $"bulk {i}\n";
+        host.CommitToGitRepositoryAs(name, reformat, "Reformat everything", "Ada", "ada@example.invalid",
+            tenDays + 5);
+        host.RemoveInGitRepositoryAs(name, ["src/Old.cs"], "Drop the old file", "Grace",
+            "grace@example.invalid", tenDays + 6);
+
+        await host.CreateProjectAsync(project);
+        await host.AddRepositoryAsync(project, "one", source);
+        await host.RefreshAsync(project);
     }
 
     /// <summary>Routes an inline array argument through a parameter so CA1861 does not ask for a static field per call.</summary>
