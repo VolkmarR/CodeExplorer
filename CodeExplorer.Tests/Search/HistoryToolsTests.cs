@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net.Http.Json;
 using ModelContextProtocol.Client;
 using Xunit;
 
@@ -211,6 +212,60 @@ public sealed class HistoryToolsTests : IDisposable
 
         Assert.Contains("one/src/Gone.cs  (no longer at HEAD)", reply, StringComparison.Ordinal);
         Assert.Contains("one/src/Hot.cs\n", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The overview's ranking and <c>hot_files</c>' are the same rows, mark and all. An agent reads
+    ///     the overview to orient itself and then calls the tool for more, so a row that changed shape
+    ///     between the two reads as a different fact — and the mark is the half that matters: one
+    ///     surface forgetting it sends the agent to open a file that is not there.
+    /// </summary>
+    [Fact]
+    public async Task The_overview_ranks_in_the_rows_hot_files_prints_down_to_the_mark_on_a_deleted_path()
+    {
+        await using var client = await ChurnAsync();
+
+        string overview = await TestHost.CallAsync(client, "project_overview", []);
+        string hot = await TestHost.CallAsync(client, "hot_files", []);
+
+        // The overview indents its sections; the rows are otherwise drawn by the same helper, which is
+        // what this compares. Taken from the overview because it is the shorter of the two rankings.
+        var rows = overview[overview.IndexOf("Most changed", StringComparison.Ordinal)..]
+            .Split('\n')
+            .Skip(1)
+            .TakeWhile(line => line.StartsWith("  ", StringComparison.Ordinal))
+            .Select(line => line[2..])
+            .ToList();
+
+        Assert.Contains(rows, row => row.EndsWith("one/src/Gone.cs  (no longer at HEAD)", StringComparison.Ordinal));
+        foreach (string row in rows) Assert.Contains(row + "\n", hot, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The tool and the page read one history. They page it differently — the page counts what it
+    ///     has not shown, the tool does not — but a caller comparing the two is comparing one scope, and
+    ///     a scope that meant different things on the two surfaces is the drift this pins.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_and_the_change_log_page_agree_about_a_repository()
+    {
+        await BuildChurnProjectAsync("agree", true);
+        await using var client = await _host.ConnectAsync("agree");
+
+        using var http = _host.CreateClient();
+        var page = await http.GetFromJsonAsync<CommitListResponse>("/api/projects/agree/commits?repository=one", TestContext.Current.CancellationToken);
+        Assert.NotNull(page);
+
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["repository"] = "one" });
+
+        // Five commits in the fixture's first repository and one in its second: a tool that dropped the
+        // scope, or a page that kept it, would disagree here rather than both saying five.
+        Assert.Equal(5, page.Total);
+        Assert.Contains($"{page.Total} commits in repository 'one'", reply, StringComparison.Ordinal);
+        // Both are newest first, so the same commit heads each.
+        Assert.Contains(page.Commits[0].Sha[..8], reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/Other.cs", reply, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 
 namespace CodeExplorer;
 
@@ -22,6 +23,78 @@ internal static class ToolReply
     ///     which would otherwise spend the whole reply budget on one hit.
     /// </summary>
     public const int MaxLineChars = 500;
+
+    /// <summary>
+    ///     What every index-backed tool returns: the sentence a <see cref="Problem" /> already is, or
+    ///     what the tool makes of its result, capped.
+    ///     One chokepoint because the two halves were being spelled out at each of fifteen tool exits,
+    ///     and the half that gets forgotten is the cap — a reply that overruns is not a worse answer,
+    ///     it is an agent's whole context spent on one call. Going through here, a tool cannot return
+    ///     without having decided on the advice for what it would cut.
+    ///     The cast is safe while every query module answers with its one result type or a problem, and
+    ///     throws rather than lies if one ever answers with something else.
+    /// </summary>
+    /// <param name="outcome">What the query module answered.</param>
+    /// <param name="answer">What this tool makes of its result.</param>
+    /// <param name="advice">How the caller gets the rest, said only if the cap bites.</param>
+    public static string Render<T>(Outcome outcome, Func<T, string> answer, string advice) where T : Outcome =>
+        Render(outcome, answer, _ => advice);
+
+    /// <summary>
+    ///     The same where the advice names something the answer knows — the page a caller has reached,
+    ///     the limit it asked for. A separate overload rather than a lambda at every call site: four
+    ///     tools in five have nothing to say that the result could tell them.
+    /// </summary>
+    public static string Render<T>(Outcome outcome, Func<T, string> answer, Func<T, string> advice)
+        where T : Outcome
+    {
+        if (outcome is Problem problem) return problem.Explanation;
+        var result = (T)outcome;
+        return Cap(answer(result), advice(result));
+    }
+
+    /// <summary>
+    ///     What every reply drawn from history says when there is none. Distinguishing this from
+    ///     "nothing matched" is the whole point: an empty answer to "who changed this" reads as
+    ///     "nobody", which is a fact, and this is the absence of one (CONTEXT.md, History). One
+    ///     sentence and not one per surface, because two spellings of an absence are two facts to keep
+    ///     in step and the overview and the history tools are read in the same session.
+    /// </summary>
+    public const string NoHistory =
+        "This project's index holds no history, so no commit, author or date can be reported for it and "
+        + "no file can be ranked by how much it changed. That is the case for an index built before "
+        + "history was imported, and for one whose repositories could not be walked. Ask the operator to "
+        + "refresh the project; the code itself is searchable meanwhile.";
+
+    /// <summary>
+    ///     One row of a churn ranking: the counts, then the path, then the mark saying there is nothing
+    ///     at it to read any more. The overview and <c>hot_files</c> rank the same files over the same
+    ///     window and a reader compares the two, so the row is drawn once — and the mark most of all,
+    ///     because one surface forgetting it is an agent sent to open a file that is not there.
+    /// </summary>
+    /// <param name="text">The reply being built.</param>
+    /// <param name="indent">What the surface puts before a row; the overview indents its sections.</param>
+    /// <param name="file">The ranked file.</param>
+    public static void ChurnRow(StringBuilder text, string indent, ChurnedFile file)
+    {
+        text.Append(indent);
+        text.Append(CultureInfo.InvariantCulture,
+            $"{file.Commits,4} {Plural(file.Commits, "commit"),-8} +{file.Added,-7:N0} -{file.Deleted,-7:N0} ");
+        RankedPath(text, file.QualifiedPath, file.AtHead);
+    }
+
+    /// <summary>
+    ///     Ends a ranked row: the path, and the mark saying there is nothing at it to read any more.
+    ///     Every ranking drawn from history ranks paths a later commit deleted or renamed away, and two
+    ///     spellings of that mark would be one of them eventually sending an agent to open a file that
+    ///     is not there.
+    /// </summary>
+    public static void RankedPath(StringBuilder text, string qualifiedPath, bool atHead)
+    {
+        text.Append(qualifiedPath);
+        if (!atHead) text.Append("  (no longer at HEAD)");
+        text.Append('\n');
+    }
 
     /// <summary>Trims a reply to the ceiling at a line boundary, saying how much was cut and how to get the rest.</summary>
     public static string Cap(string text, string advice)
