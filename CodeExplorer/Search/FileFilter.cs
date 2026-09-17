@@ -9,7 +9,7 @@ namespace CodeExplorer;
 ///     service: three services spelling "skip generated files" three ways would answer the same
 ///     <c>exclude="*.g.cs"</c> differently, which is the kind of drift an agent cannot see.
 ///     <see cref="Repository" /> is a slug already resolved against the index by
-///     <see cref="IndexReader.OpenAsync" />; an unresolved one never reaches the SQL, because an
+///     <see cref="IndexReader.OverIndexAsync{T}" />; an unresolved one never reaches the SQL, because an
 ///     unknown repository must be explained rather than answered with an empty result.
 /// </summary>
 public sealed record FileFilter(

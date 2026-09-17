@@ -121,11 +121,14 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         if (regex && Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
         if (regex && request.WholeWord) query = $@"\b(?:{query})\b";
 
-        var open = await IndexReader.OpenAsync(indexes, slug, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new Problem(refused.Explanation, refused.Kind);
-        using var index = ((IndexOpen.Opened)open).Reader;
-        var connection = index.Connection;
+        return await IndexReader.OverIndexAsync(indexes, slug, null,
+            (index, token) => QueryAsync(index, request, query, regex, token), cancellationToken);
+    }
 
+    private static async Task<Outcome> QueryAsync(IndexReader index, GrepRequest request, string query, bool regex,
+        CancellationToken cancellationToken)
+    {
+        var connection = index.Connection;
         var bounds = Bounds.From(request);
         try
         {

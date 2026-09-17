@@ -96,7 +96,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
     }
 
     private Task<Outcome> ReadImportsAsync(string slug, string path, CancellationToken cancellationToken) =>
-        OverFileAsync(slug, path, async (index, file, token) =>
+        IndexReader.OverFileAsync(indexes, slug, path, true, async (index, file, token) =>
         {
             string extension = Languages.ExtensionOf(file.QualifiedPath);
             var analyzer = Languages.Default.For(extension);
@@ -127,7 +127,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
 
     private Task<Outcome> ReadDependentsAsync(string slug, string path,
         CancellationToken cancellationToken) =>
-        OverFileAsync(slug, path, async (index, file, token) =>
+        IndexReader.OverFileAsync(indexes, slug, path, true, async (index, file, token) =>
         {
             var dependents = new List<Dependent>();
             using (var command = index.Connection.Query($"""
@@ -175,25 +175,6 @@ public sealed class ImportGraph(ProjectIndexes indexes)
             return new DependentsResult(file.QualifiedPath, file.Module, sharing, unplaced, capped,
                 dependents);
         }, cancellationToken);
-
-    /// <summary>
-    ///     Opens the project, resolves the path, and hands the read what it asked for. Both
-    ///     directions begin this way, and a second copy of it is a second place for the
-    ///     open/refuse/dispose contract to be got wrong.
-    /// </summary>
-    private async Task<Outcome> OverFileAsync(string slug, string path,
-        Func<IndexReader, IndexedFile, CancellationToken, Task<Outcome>> read,
-        CancellationToken cancellationToken)
-    {
-        var open = await IndexReader.OpenAsync(indexes, slug, null, cancellationToken);
-        if (open is IndexOpen.Refused refused) return new Problem(refused.Explanation, refused.Kind);
-        using var index = ((IndexOpen.Opened)open).Reader;
-
-        var (file, explanation) = await index.LocateAsync(path, true, cancellationToken);
-        return file is null
-            ? new Problem(explanation!)
-            : await read(index, file, cancellationToken);
-    }
 
     /// <summary>
     ///     Cuts a list back to <see cref="MaxEdges" /> and says whether there was anything to cut.
