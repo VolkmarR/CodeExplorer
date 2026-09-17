@@ -10,7 +10,7 @@ namespace CodeExplorer;
 ///     <c>files.qualified_path</c> and the per-line attribution follow — the read path stays free of
 ///     joins, and a caller orienting itself pays a single row read rather than five aggregates over
 ///     the largest tables in the index.
-///     The churn section is <see cref="HistoryQueries" />'s ranking, called rather than reimplemented, so
+///     The churn section is <see cref="IndexQueries" />'s ranking, called rather than reimplemented, so
 ///     the overview page and <c>hot_files</c> cannot come to disagree about what a project is busy with.
 /// </summary>
 public sealed class OverviewBuilder
@@ -58,10 +58,12 @@ public sealed class OverviewBuilder
         CancellationToken cancellationToken)
     {
         var connection = shadow.Connection;
-        // Anchored to the first repository of the build, which is the one a single-repository project
-        // names its files after; a project with no repositories at all has no paths to format anyway.
-        string anchor = await AnchorSlugAsync(connection, shadow.Slug, cancellationToken);
-        var paths = new ProjectPaths(singleRepository, anchor);
+        // The naming rule is ProjectPaths', including which repository anchors it: the build writes
+        // qualified paths into the stored row and every read parses them back, so an anchor chosen here
+        // that disagreed with the reader's would bake the disagreement into the index until the next
+        // full rebuild rather than fail a read.
+        var paths = ProjectPaths.For(singleRepository, await SlugsAsync(connection, cancellationToken),
+            shadow.Slug);
 
         var (languages, others) = await LanguagesAsync(connection, cancellationToken);
         var (tree, otherEntries) = await TreeAsync(connection, paths, cancellationToken);
@@ -79,54 +81,41 @@ public sealed class OverviewBuilder
     }
 
     /// <summary>
-    ///     The repository a single-repository project names its files after. It is the first by
-    ///     <c>repo_id</c>, which is the order the build numbered them in, so it is the same repository
-    ///     <c>ProjectPaths.For</c> picks on the read side. The project slug stands in for a project with
-    ///     no repositories, which matches nothing and keeps every path readable.
+    ///     The repositories this build read, in the order it numbered them, which is the order
+    ///     <see cref="ProjectPaths.For(bool,IEnumerable{string},string)" /> takes the anchor from.
     /// </summary>
-    private static async Task<string> AnchorSlugAsync(DuckDBConnection connection, string slug,
+    private static async Task<List<string>> SlugsAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
     {
-        using var command = connection.Query("SELECT slug FROM repositories ORDER BY repo_id LIMIT 1", []);
+        using var command = connection.Query("SELECT slug FROM repositories ORDER BY repo_id", []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? reader.Text("slug") : slug;
+        var slugs = new List<string>();
+        while (await reader.ReadAsync(cancellationToken)) slugs.Add(reader.Text("slug"));
+        return slugs;
     }
 
     /// <summary>
-    ///     Counts by language, with every extension no profile covers standing for itself. The grouping
-    ///     is done here and not in SQL because the extension-to-language table is
-    ///     <see cref="Languages" />'s and a <c>CASE</c> in this statement would be a second copy of it.
+    ///     Counts by language. What an extension counts as is <see cref="IndexQueries" />'s, so this and
+    ///     <c>list_extensions</c> cannot come to different totals for one index; the folding into
+    ///     languages is done here and not in SQL because the extension-to-language table is
+    ///     <see cref="Languages" />'s and a <c>CASE</c> in that statement would be a second copy of it.
     /// </summary>
     private static async Task<(IReadOnlyList<LanguageShare> Shown, int Others)> LanguagesAsync(
         DuckDBConnection connection, CancellationToken cancellationToken)
     {
-        using var command = connection.Query("""
-                                             SELECT extension,
-                                                    count(*)::INTEGER AS files,
-                                                    sum(line_count)::BIGINT AS lines,
-                                                    count(skip_reason)::INTEGER AS skipped
-                                             FROM files
-                                             GROUP BY extension
-                                             """, []);
         var byName = new Dictionary<string, LanguageShare>(StringComparer.Ordinal);
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        foreach (var count in await IndexQueries.ExtensionCountsAsync(connection, null, cancellationToken))
         {
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                var (name, mapped) = Languages.Name(reader.Text("extension"));
-                int files = reader.Int32("files");
-                long lines = reader.Int64("lines");
-                int skipped = reader.Int32("skipped");
-                // Several extensions fold into one language, so the row is accumulated rather than
-                // added: X# counts its headers with its sources.
-                byName[name] = byName.TryGetValue(name, out var running)
-                    ? running with
-                    {
-                        Files = running.Files + files, Lines = running.Lines + lines,
-                        Skipped = running.Skipped + skipped
-                    }
-                    : new LanguageShare(name, mapped, files, lines, skipped);
-            }
+            var (name, mapped) = Languages.Name(count.Extension);
+            // Several extensions fold into one language, so the row is accumulated rather than added:
+            // X# counts its headers with its sources.
+            byName[name] = byName.TryGetValue(name, out var running)
+                ? running with
+                {
+                    Files = running.Files + count.Files, Lines = running.Lines + count.Lines,
+                    Skipped = running.Skipped + count.Skipped
+                }
+                : new LanguageShare(name, mapped, count.Files, count.Lines, count.Skipped);
         }
 
         var ordered = byName.Values
@@ -145,23 +134,25 @@ public sealed class OverviewBuilder
     private static async Task<(IReadOnlyList<OverviewEntry> Shown, int Others)> TreeAsync(
         DuckDBConnection connection, ProjectPaths paths, CancellationToken cancellationToken)
     {
+        // Grouped before the join, not after: the aggregate reduces every file in the project to a few
+        // dozen top-level rows, and joining repositories onto those costs a lookup per row instead of
+        // one per source file.
         using var command = connection.Query("""
                                              WITH tops AS (
-                                                 SELECT r.slug AS repo_slug,
-                                                        split_part(f.path, '/', 1) AS segment,
-                                                        f.path, f.line_count, f.size_bytes
-                                                 FROM files f JOIN repositories r USING (repo_id))
-                                             SELECT repo_slug, segment,
-                                                    -- A file directly at the root is its own first
-                                                    -- segment; anything else is a directory, and git
-                                                    -- cannot hold both names at one level.
-                                                    bool_and(path = segment) AS is_file,
-                                                    count(*)::INTEGER AS files,
-                                                    sum(line_count)::BIGINT AS lines,
-                                                    sum(size_bytes)::BIGINT AS bytes
-                                             FROM tops
-                                             GROUP BY repo_slug, segment
-                                             ORDER BY repo_slug, is_file, segment
+                                                 SELECT repo_id,
+                                                        split_part(path, '/', 1) AS segment,
+                                                        -- A file directly at the root is its own first
+                                                        -- segment; anything else is a directory, and
+                                                        -- git cannot hold both names at one level.
+                                                        bool_and(path = split_part(path, '/', 1)) AS is_file,
+                                                        count(*)::INTEGER AS files,
+                                                        sum(line_count)::BIGINT AS lines,
+                                                        sum(size_bytes)::BIGINT AS bytes
+                                                 FROM files
+                                                 GROUP BY repo_id, segment)
+                                             SELECT r.slug AS repo_slug, tops.*
+                                             FROM tops JOIN repositories r USING (repo_id)
+                                             ORDER BY r.repo_id, is_file, segment
                                              """, []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var entries = new List<OverviewEntry>();
@@ -181,8 +172,8 @@ public sealed class OverviewBuilder
             }
 
             kept[slug] = taken + 1;
-            entries.Add(new OverviewEntry(paths.Format(slug, reader.Text("segment")), slug,
-                !reader.Flag("is_file"), reader.Int32("files"), reader.Int64("lines"), reader.Int64("bytes")));
+            entries.Add(new OverviewEntry(paths.Format(slug, reader.Text("segment")), !reader.Flag("is_file"),
+                reader.Int32("files"), reader.Int64("lines"), reader.Int64("bytes")));
         }
 
         return (entries, others);
@@ -196,17 +187,19 @@ public sealed class OverviewBuilder
     private static async Task<IReadOnlyList<OverviewFile>> LargestFilesAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
     {
+        // No join: qualified_path already names the repository wherever the project's naming puts one
+        // there (ADR-0006), so repositories has nothing to add to a row of this section.
         using var command = connection.Query($"""
-                                              SELECT f.qualified_path, r.slug, f.line_count, f.size_bytes
-                                              FROM files f JOIN repositories r USING (repo_id)
-                                              ORDER BY f.size_bytes DESC, f.qualified_path
+                                              SELECT qualified_path, line_count, size_bytes
+                                              FROM files
+                                              ORDER BY size_bytes DESC, qualified_path
                                               LIMIT {LargestFilesShown}
                                               """, []);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var files = new List<OverviewFile>();
         while (await reader.ReadAsync(cancellationToken))
-            files.Add(new OverviewFile(reader.Text("qualified_path"), reader.Text("slug"),
-                reader.Int32("line_count"), reader.Int64("size_bytes")));
+            files.Add(new OverviewFile(reader.Text("qualified_path"), reader.Int32("line_count"),
+                reader.Int64("size_bytes")));
         return files;
     }
 
@@ -219,10 +212,10 @@ public sealed class OverviewBuilder
     private static async Task<OverviewChurn> ChurnAsync(DuckDBConnection connection, ProjectPaths paths,
         CancellationToken cancellationToken)
     {
-        var window = await HistoryQueries.WindowAsync(connection, HistoryWindow.DefaultDays, null, cancellationToken);
+        var window = await IndexQueries.WindowAsync(connection, HistoryWindow.DefaultDays, null, cancellationToken);
         if (window is null) return OverviewChurn.None(HistoryWindow.DefaultDays);
 
-        var ranked = await HistoryQueries.RankAsync(connection, paths, window, null, null, ChurnFilesShown,
+        var ranked = await IndexQueries.RankAsync(connection, paths, window, null, null, ChurnFilesShown,
             cancellationToken);
         return new OverviewChurn(window.Days, window.Since, window.Until, ranked);
     }

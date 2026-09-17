@@ -1,8 +1,7 @@
 import { Link } from '@tanstack/react-router'
-import { DiffStat } from '@/components/DiffStat'
-import { FilePathLink } from '@/components/FilePathLink'
+import { ChurnList } from '@/features/churn/ChurnList'
 import type { IndexOverview } from '@/lib/api'
-import { formatCount, formatDate } from '@/lib/format'
+import { formatDate } from '@/lib/format'
 import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -43,23 +42,8 @@ export function MostChangedCard({
                 See the whole ranking
               </Link>
             </p>
-            <ol className="space-y-1 font-mono text-xs">
-              {churn.files.map((file) => (
-                <li key={file.qualifiedPath} className="flex min-w-0 items-baseline gap-3">
-                  <span className="w-10 shrink-0 text-right tabular-nums text-muted-foreground">
-                    {formatCount(file.commits)}&times;
-                  </span>
-                  <span className="w-24 shrink-0 tabular-nums">
-                    <DiffStat added={file.added} deleted={file.deleted} />
-                  </span>
-                  <FilePathLink
-                    project={project}
-                    qualifiedPath={file.qualifiedPath}
-                    atHead={file.atHead}
-                  />
-                </li>
-              ))}
-            </ol>
+            {/* The churn page's own list, so the same ranking reads the same in both places. */}
+            <ChurnList project={project} files={churn.files} />
           </>
         )}
       </CardContent>
