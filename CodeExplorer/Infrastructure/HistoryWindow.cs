@@ -17,10 +17,12 @@ namespace CodeExplorer;
 /// <param name="Since">The oldest authored date in the window.</param>
 /// <param name="Until">The newest, which is the newest commit the window was anchored to.</param>
 /// <param name="Days">
-///     Set when the window was asked for as a number of days, so a reply can say so; null when the
-///     caller named a span of its own, as the change log does with the page it is showing.
+///     How many days the window was asked for, so a reply can say which question it is answering.
+///     Redundant with the two dates by construction, and kept because it is the number the caller
+///     passed: a reader comparing "ninety days" against a window that ends in July learns something
+///     the subtraction would not have told them.
 /// </param>
-public sealed record HistoryWindow(DateTimeOffset Since, DateTimeOffset Until, int? Days = null)
+public sealed record HistoryWindow(DateTimeOffset Since, DateTimeOffset Until, int Days)
 {
     /// <summary>
     ///     A quarter. Long enough that an ordinary sprint's churn does not read as one file, short
@@ -47,11 +49,6 @@ public sealed record HistoryWindow(DateTimeOffset Since, DateTimeOffset Until, i
     ///     where there is one: a reader who asked for 30 days and is shown a window ending two months
     ///     ago has learned that the index is stale, which is worth more than the ranking.
     /// </summary>
-    public string Describe()
-    {
-        string span = string.Create(CultureInfo.InvariantCulture, $"{Since:yyyy-MM-dd} to {Until:yyyy-MM-dd}");
-        return Days is { } days
-            ? string.Create(CultureInfo.InvariantCulture, $"{span}, the {days} days to the newest recorded commit")
-            : span;
-    }
+    public string Describe() => string.Create(CultureInfo.InvariantCulture,
+        $"{Since:yyyy-MM-dd} to {Until:yyyy-MM-dd}, the {Days} days to the newest recorded commit");
 }

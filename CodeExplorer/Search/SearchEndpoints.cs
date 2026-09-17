@@ -63,7 +63,7 @@ internal sealed record CommitFilesResponse(string Sha, IReadOnlyList<CommitFileR
 ///     (ADR-0006) and is always set, because a window ranks paths that are no longer at HEAD and those
 ///     have to be named too; <see cref="AtHead" /> is what says whether there is a file there to open.
 /// </summary>
-internal sealed record HotFileResponse(
+internal sealed record ChurnFileResponse(
     string QualifiedPath,
     string RepositorySlug,
     bool AtHead,
@@ -72,17 +72,20 @@ internal sealed record HotFileResponse(
     long Deleted);
 
 /// <summary>
-///     The churn ranking for the span a page of the change log covers. <see cref="Since" /> and
-///     <see cref="Until" /> are null together when the page holds no commit, which is a project or a
-///     repository without imported history rather than an error.
+///     A churn ranking and the window it covers. <see cref="Since" /> and <see cref="Until" /> are
+///     null together when the scope holds no commit at all, which is a project or a repository without
+///     imported history rather than an error.
+///     The window ends at the newest recorded commit rather than today (CONTEXT.md, Window), so the
+///     dates are part of the answer and not an echo of the request: a reader who asked for ninety days
+///     and is shown a window ending two months ago has learned that the index is stale.
 ///     <see cref="WithoutHistory" /> names the repositories the ranking cannot speak for, so that a
 ///     ranking covering half a project is not read as covering all of it (CONTEXT.md, History). Empty
 ///     where the question does not arise: a project of one repository, or a scoped request.
 /// </summary>
-internal sealed record HotFilesResponse(
+internal sealed record ChurnResponse(
     DateTimeOffset? Since,
     DateTimeOffset? Until,
-    IReadOnlyList<HotFileResponse> Files,
+    IReadOnlyList<ChurnFileResponse> Files,
     IReadOnlyList<string> WithoutHistory);
 
 /// <summary>One file in a listing. The index's internal file id is deliberately not in it.</summary>
@@ -188,13 +191,18 @@ internal static class SearchEndpoints
                     int page = 1, int pageSize = DefaultCommitPage) =>
                 await CommitsAsync(indexes, project.Slug, repository, page, pageSize, ct));
 
-        // The churn ranking for the window the change log's page is showing. It takes the page
-        // arguments rather than dates so that a caller asking both routes the same thing gets a
-        // ranking and a list describing the same commits; only the page decides the window.
-        project.MapGet("/hot-files",
+        // The churn ranking (CONTEXT.md, Churn), over a window of days rather than a page of commits:
+        // it is a view of its own now, with nothing beside it to agree with. `days` and not a pair of
+        // dates, because the window is anchored to the newest recorded commit and only the index knows
+        // where that is — a client sending dates would be guessing at it.
+        //
+        // The route is named for the concept and the MCP tool is named `hot_files`, which is not an
+        // oversight: a tool name is agent-facing and trades on the shell verbs a model already knows
+        // (CODING_STANDARDS, Comments), where a URL the UI holds follows the vocabulary.
+        project.MapGet("/churn",
             async (Project project, ProjectIndexes indexes, CancellationToken ct, string? repository = null,
-                    int page = 1, int pageSize = DefaultCommitPage) =>
-                await HotFilesAsync(indexes, project.Slug, repository, page, pageSize, ct));
+                    int days = HistoryWindow.DefaultDays, int limit = ChurnFilesShown) =>
+                await ChurnAsync(indexes, project.Slug, repository, days, limit, ct));
 
         project.MapGet("/commits/{sha}/files",
             async (Project project, string sha, ProjectIndexes indexes, CancellationToken ct) =>
@@ -225,39 +233,39 @@ internal static class SearchEndpoints
     }
 
     /// <summary>
-    ///     Files in one churn panel. A panel beside a page of commits and not a page of its own, so it
-    ///     is as long as a reader glances at rather than as long as the ranking goes. Fixed rather than
-    ///     a parameter: nothing on the page offers to change it, and an unused knob on a route is one
-    ///     nothing proves the behaviour of.
+    ///     Files in a churn ranking when the caller does not say. A screenful: the ranking is read from
+    ///     the top down, and its tail is noise.
     /// </summary>
-    private const int HotFilesShown = 10;
+    private const int ChurnFilesShown = 25;
+
+    /// <summary>The ceiling <c>hot_files</c> has, for the same reason: past it a ranking is not read.</summary>
+    private const int MaxChurnFiles = 100;
 
     /// <summary>
-    ///     The most-changed files of the span one page of the change log covers. A page with no
-    ///     commits answers with an empty ranking and no dates rather than a failure: that is a project
-    ///     whose history has not been imported, which the page already says in its own words.
+    ///     The most-changed files of a window. A scope with no commits at all answers with an empty
+    ///     ranking and no dates rather than a failure: that is a project whose history has not been
+    ///     imported, which the page says in its own words.
     /// </summary>
-    private static async Task<IResult> HotFilesAsync(ProjectIndexes indexes, string project, string? repository,
-        int page, int pageSize, CancellationToken cancellationToken)
+    private static async Task<IResult> ChurnAsync(ProjectIndexes indexes, string project, string? repository,
+        int days, int limit, CancellationToken cancellationToken)
     {
         var open = await IndexReader.OpenAsync(indexes, project, repository, cancellationToken);
         if (open is IndexOpen.Refused refused) return Refuse(refused);
         using var index = ((IndexOpen.Opened)open).Reader;
 
-        pageSize = Math.Clamp(pageSize, 1, MaxCommitPage);
-        page = Math.Max(1, page);
         string? scope = index.Repository?.Slug;
-        // Read whether or not there is a ranking: the empty panel is where a reader is most likely to
+        // Read whether or not there is a ranking: an empty page is where a reader is most likely to
         // conclude that nothing changed. Which repositories these are is the reader's rule, not this
         // route's — the tool reply draws the same answer from the same place.
         var coverage = await index.HistoryCoverageAsync(scope, cancellationToken);
 
-        var window = await index.CommitPageWindowAsync(scope, pageSize, (page - 1) * pageSize, cancellationToken);
-        if (window is null) return Results.Ok(new HotFilesResponse(null, null, [], coverage.Without));
+        var window = await index.WindowAsync(days, scope, cancellationToken);
+        if (window is null) return Results.Ok(new ChurnResponse(null, null, [], coverage.Without));
 
-        var ranked = await index.ChurnAsync(window, scope, null, HotFilesShown, cancellationToken);
-        return Results.Ok(new HotFilesResponse(window.Since, window.Until,
-            ranked.Select(f => new HotFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits, f.Added,
+        var ranked = await index.ChurnAsync(window, scope, null, Math.Clamp(limit, 1, MaxChurnFiles),
+            cancellationToken);
+        return Results.Ok(new ChurnResponse(window.Since, window.Until,
+            ranked.Select(f => new ChurnFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits, f.Added,
                 f.Deleted)).ToList(), coverage.Without));
     }
 
