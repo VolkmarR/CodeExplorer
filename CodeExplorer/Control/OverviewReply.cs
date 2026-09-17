@@ -94,7 +94,7 @@ internal static class OverviewReply
         var churn = overview.Churn;
         if (churn.Window() is not { } window)
         {
-            text.Append("\nMost changed\n  ").Append(NoHistory).Append('\n');
+            text.Append("\nMost changed\n  ").Append(ToolReply.NoHistory).Append('\n');
             return;
         }
 
@@ -106,13 +106,9 @@ internal static class OverviewReply
             return;
         }
 
-        foreach (var file in churn.Files)
-        {
-            text.Append(CultureInfo.InvariantCulture,
-                $"  {file.Commits,4} {ToolReply.Plural(file.Commits, "commit"),-8} +{file.Added,-7:N0} -{file.Deleted,-7:N0} {file.QualifiedPath}");
-            if (!file.AtHead) text.Append("  (no longer at HEAD)");
-            text.Append('\n');
-        }
+        // Drawn by the same helper hot_files draws its ranking with, because the two rank the same
+        // files over the same window and a reader compares them line for line.
+        foreach (var file in churn.Files) ToolReply.ChurnRow(text, "  ", file);
     }
 
     private static void AppendAuthors(StringBuilder text, IndexOverview overview)
@@ -122,7 +118,7 @@ internal static class OverviewReply
         {
             // Said and not left out, for the reason the ranking above says it: a section that simply
             // vanishes reads as a project nobody has worked on, which is the opposite claim.
-            text.Append("  ").Append(NoHistory).Append('\n');
+            text.Append("  ").Append(ToolReply.NoHistory).Append('\n');
             return;
         }
 
@@ -131,13 +127,4 @@ internal static class OverviewReply
                 $"  {author.Commits,6} {ToolReply.Plural(author.Commits, "commit"),-8} {author.Name} <{author.Email}>, last on {author.LastCommit:yyyy-MM-dd}\n");
     }
 
-    /// <summary>
-    ///     What both history-derived sections say when there was none to derive from. The one thing
-    ///     history must never say by accident is "nothing changed" (CONTEXT.md, History), and an empty
-    ///     section says exactly that — so the absence is spelled out where the answer would have been,
-    ///     in both places, from one sentence.
-    /// </summary>
-    private const string NoHistory =
-        "This project's index holds no history, so no file can be ranked by how much it changed and no "
-        + "author can be named. Ask the operator to refresh the project; the code itself is searchable meanwhile.";
 }

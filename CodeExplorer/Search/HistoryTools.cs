@@ -30,16 +30,6 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     /// </summary>
     private const int MaxBlameRuns = 400;
 
-    /// <summary>
-    ///     What every tool here says when the project has no history. Distinguishing this from "nothing
-    ///     matched" is the whole point: an empty answer to "who changed this" reads as "nobody", which is
-    ///     a fact, and this is the absence of one.
-    /// </summary>
-    private const string NoHistory =
-        "This project's index holds no history, so no commit, author or date can be reported for it. "
-        + "That is the case for an index built before history was imported, and for one whose repositories "
-        + "could not be walked. Ask the operator to refresh the project; the code itself is searchable meanwhile.";
-
     private string Project => BoundProject.Get(httpContextAccessor).Slug;
 
     [McpServerTool(Name = "git_log", ReadOnly = true, Idempotent = true, Title = "List the project's commits")]
@@ -59,13 +49,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         int page = 1,
         CancellationToken cancellationToken = default)
     {
-        return Reply<LogAnswer>(
-            await history.LogAsync(Project, new LogRequest(repository, limit, page), cancellationToken), Log);
+        return ToolReply.Render<LogAnswer>(
+            await history.LogAsync(Project, new LogRequest(repository, limit, page), cancellationToken), Log,
+            answer => $"Narrow with repository, or raise page past {answer.Page}.");
     }
 
     private static string Log(LogAnswer answer)
     {
-        if (!answer.HasHistory) return NoHistory;
+        if (!answer.HasHistory) return ToolReply.NoHistory;
 
         int skip = (answer.Page - 1) * answer.Limit;
         if (answer.Commits.Count == 0)
@@ -77,7 +68,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         text.Append(CultureInfo.InvariantCulture,
             $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{Scope(answer.Repository)}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null);
-        return ToolReply.Cap(text.ToString(), $"Narrow with repository, or raise page past {answer.Page}.");
+        return text.ToString();
     }
 
     [McpServerTool(Name = "file_history", ReadOnly = true, Idempotent = true,
@@ -96,14 +87,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         int limit = DefaultCommits,
         CancellationToken cancellationToken = default)
     {
-        return Reply<FileHistoryAnswer>(
+        return ToolReply.Render<FileHistoryAnswer>(
             await history.FileHistoryAsync(Project, new FileHistoryRequest(path, limit), cancellationToken),
-            Changes);
+            Changes, "Lower limit to see fewer.");
     }
 
     private static string Changes(FileHistoryAnswer answer)
     {
-        if (!answer.HasHistory) return NoHistory;
+        if (!answer.HasHistory) return ToolReply.NoHistory;
 
         string spelled = answer.File.QualifiedPath;
         if (answer.Commits.Count == 0)
@@ -115,7 +106,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         text.Append(CultureInfo.InvariantCulture,
             $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")} changed {spelled}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, false);
-        return ToolReply.Cap(text.ToString(), "Lower limit to see fewer.");
+        return text.ToString();
     }
 
     [McpServerTool(Name = "blame", ReadOnly = true, Idempotent = true, Title = "Show which commit last changed each line")]
@@ -135,14 +126,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         int? endLine = null,
         CancellationToken cancellationToken = default)
     {
-        return Reply<BlameAnswer>(
+        return ToolReply.Render<BlameAnswer>(
             await history.BlameAsync(Project, new BlameRequest(path, startLine, endLine), cancellationToken),
-            Attribution);
+            Attribution, "Narrow with startLine and endLine.");
     }
 
     private static string Attribution(BlameAnswer answer)
     {
-        if (!answer.HasHistory) return NoHistory;
+        if (!answer.HasHistory) return ToolReply.NoHistory;
 
         string spelled = answer.File.QualifiedPath;
         if (answer.File.SkipReason is { } reason)
@@ -170,7 +161,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         if (answer.Runs.Count > MaxBlameRuns)
             text.Append(CultureInfo.InvariantCulture,
                 $"\n{answer.Runs.Count - MaxBlameRuns} further {ToolReply.Plural(answer.Runs.Count - MaxBlameRuns, "run")} not shown; narrow with startLine and endLine.\n");
-        return ToolReply.Cap(text.ToString(), "Narrow with startLine and endLine.");
+        return text.ToString();
     }
 
     /// <summary>
@@ -201,14 +192,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         CancellationToken cancellationToken = default)
     {
         string project = Project;
-        return Reply<ChurnAnswer>(
+        return ToolReply.Render<ChurnAnswer>(
             await history.ChurnAsync(project, new ChurnRequest(directory, days, limit), cancellationToken),
-            answer => Ranking(answer, project));
+            answer => Ranking(answer, project), "Lower limit, or narrow with directory.");
     }
 
     private static string Ranking(ChurnAnswer answer, string projectSlug)
     {
-        if (!answer.HasHistory) return NoHistory;
+        if (!answer.HasHistory) return ToolReply.NoHistory;
         // The project has history and this scope has none: a repository whose walk found nothing, which
         // reads as "nobody has changed it" unless it is said outright. This answer names the scope it
         // is about, so the coverage caveat below would only repeat it — and is not paid for here.
@@ -227,15 +218,10 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         text.Append(CultureInfo.InvariantCulture,
             $"{answer.Files.Count} most-changed {ToolReply.Plural(answer.Files.Count, "file")} in {answer.ScopeSpelled}, {window.Describe()}:\n\n");
 
-        foreach (var file in answer.Files)
-        {
-            text.Append(CultureInfo.InvariantCulture,
-                $"{file.Commits,4} {ToolReply.Plural(file.Commits, "commit"),-8} +{file.Added,-7:N0} -{file.Deleted,-7:N0} ");
-            AppendPath(text, file.QualifiedPath, file.AtHead);
-        }
+        foreach (var file in answer.Files) ToolReply.ChurnRow(text, "", file);
 
         if (coverage is not null) text.Append(CultureInfo.InvariantCulture, $"\n{coverage}\n");
-        return ToolReply.Cap(text.ToString(), "Lower limit, or narrow with directory.");
+        return text.ToString();
     }
 
     [McpServerTool(Name = "co_changed", ReadOnly = true, Idempotent = true,
@@ -259,14 +245,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         CancellationToken cancellationToken = default)
     {
         string project = Project;
-        return Reply<CoChangeAnswer>(
+        return ToolReply.Render<CoChangeAnswer>(
             await history.CoChangedAsync(project, new CoChangeRequest(path, days, limit), cancellationToken),
-            answer => Coupling(answer, project));
+            answer => Coupling(answer, project), "Lower limit to see fewer.");
     }
 
     private static string Coupling(CoChangeAnswer answer, string projectSlug)
     {
-        if (!answer.HasHistory) return NoHistory;
+        if (!answer.HasHistory) return ToolReply.NoHistory;
 
         string spelled = answer.File.QualifiedPath;
         if (answer.Window is not { } window) return NoCommitsIn($"repository '{answer.File.RepositorySlug}'", projectSlug);
@@ -302,30 +288,10 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         {
             text.Append(CultureInfo.InvariantCulture,
                 $"{file.SharedCommits,4} shared {ToolReply.Plural(file.SharedCommits, "commit"),-8} ");
-            AppendPath(text, file.QualifiedPath, file.AtHead);
+            ToolReply.RankedPath(text, file.QualifiedPath, file.AtHead);
         }
 
-        return ToolReply.Cap(text.ToString(), "Lower limit to see fewer.");
-    }
-
-    /// <summary>
-    ///     A tool reply from an answer: the sentence a problem already is, or what this file makes of a
-    ///     result. The cast is safe while every query member answers with its one result type or a
-    ///     problem, and throws rather than lies if one ever answers with something else.
-    /// </summary>
-    private static string Reply<T>(Outcome outcome, Func<T, string> render) where T : Outcome =>
-        outcome is Problem problem ? problem.Explanation : render((T)outcome);
-
-    /// <summary>
-    ///     Ends a ranked row: the path, and the mark saying there is nothing at it to read any more.
-    ///     Both rankings here rank paths a later commit deleted, and two spellings of that mark would be
-    ///     one of them eventually sending an agent to open a file that is not there.
-    /// </summary>
-    private static void AppendPath(StringBuilder text, string qualifiedPath, bool atHead)
-    {
-        text.Append(qualifiedPath);
-        if (!atHead) text.Append("  (no longer at HEAD)");
-        text.Append('\n');
+        return text.ToString();
     }
 
     /// <summary>

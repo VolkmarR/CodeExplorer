@@ -738,13 +738,6 @@ public sealed class ProjectIndexes : IDisposable
         return connection;
     }
 
-    private static async Task ExecuteAsync(DuckDBConnection connection, string sql, CancellationToken cancellationToken)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
     /// <summary>The database file and the write-ahead log beside it, which outlives it after an unclean stop.</summary>
     private static void DeleteIndexFile(string path)
     {
