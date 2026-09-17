@@ -52,6 +52,48 @@ public static class Languages
 
     private static readonly StringDelimiter RawSingle = new("'", "'", StringEscape.None);
 
+    /// <summary>
+    ///     What opens and closes a hole of live code in an interpolated literal. One pair for C#,
+    ///     another for the template literal, because the languages spell the opener differently and
+    ///     both nest on the brace.
+    /// </summary>
+    private const string CSharpHoleOpen = "{";
+
+    private const string TemplateHoleOpen = "${";
+    private const string HoleClose = "}";
+
+    /// <summary>
+    ///     The C# literals that carry on past the end of a line, which is what makes them #53's: a
+    ///     verbatim or raw literal holds newlines, and an identifier on its second line is a mention
+    ///     and not a use. The interpolated forms name their holes, so a call written inside one is
+    ///     still read as a call — a literal that swallowed its holes would lose real calls, which is
+    ///     the worse of the two errors.
+    ///     Written longest opener first for a reader; the analyser orders them itself.
+    /// </summary>
+    private static readonly StringDelimiter[] CSharpLiterals =
+    [
+        new StringDelimiter("$\"\"\"", "\"\"\"", StringEscape.None)
+            { SpansLines = true, HoleOpen = CSharpHoleOpen, HoleClose = HoleClose },
+        new StringDelimiter("\"\"\"", "\"\"\"", StringEscape.None) { SpansLines = true },
+        new StringDelimiter("$@\"", "\"", StringEscape.Doubled)
+            { SpansLines = true, HoleOpen = CSharpHoleOpen, HoleClose = HoleClose },
+        new StringDelimiter("@$\"", "\"", StringEscape.Doubled)
+            { SpansLines = true, HoleOpen = CSharpHoleOpen, HoleClose = HoleClose },
+        new StringDelimiter("@\"", "\"", StringEscape.Doubled) { SpansLines = true },
+        new StringDelimiter("$\"", "\"", StringEscape.Backslash)
+            { HoleOpen = CSharpHoleOpen, HoleClose = HoleClose },
+        DoubleQuoted
+    ];
+
+    /// <summary>
+    ///     The JavaScript and TypeScript template literal. It was left out of both profiles until now
+    ///     because it spans lines and holds <c>${…}</c> holes that are code, and a delimiter that knew
+    ///     neither reported every call made inside one as a string mention.
+    /// </summary>
+    private static readonly StringDelimiter Template =
+        new("`", "`", StringEscape.Backslash)
+            { SpansLines = true, HoleOpen = TemplateHoleOpen, HoleClose = HoleClose };
+
     /// <summary>The C family builds an object with a word in front of the type.</summary>
     private static readonly string[] New = ["new"];
 
@@ -119,7 +161,7 @@ public static class Languages
             LineComments = ["//"],
             LineStartComments = ["*"],
             BlockComments = [CBlockComment],
-            Strings = [DoubleQuoted],
+            Strings = CSharpLiterals,
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", "<", ","],
@@ -137,12 +179,7 @@ public static class Languages
             BlockComments = [CBlockComment],
             // `--` is a decrement here, not a comment: treating it as one hid the rest of every line
             // a trimmed `--i` started.
-            // The backtick is deliberately absent. A template literal holds `${…}` holes that are
-            // code, and a delimiter that does not know that turns every call made inside one into a
-            // string mention — losing real calls, which is worse than the unplaced reference an
-            // unknown form costs. Interpolated literals are #53's, along with the rest of the
-            // multi-line string state.
-            Strings = [DoubleQuoted, SingleQuotedEscaped],
+            Strings = [Template, DoubleQuoted, SingleQuotedEscaped],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", "<", ","],
@@ -156,8 +193,7 @@ public static class Languages
             LineComments = ["//"],
             LineStartComments = ["*"],
             BlockComments = [CBlockComment],
-            // No backtick, for the reason the TypeScript profile above gives.
-            Strings = [DoubleQuoted, SingleQuotedEscaped],
+            Strings = [Template, DoubleQuoted, SingleQuotedEscaped],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = ["<", ","],
@@ -193,6 +229,10 @@ public static class Languages
         new LanguageProfile("HTML", ["html", "htm"])
         {
             BlockComments = [new StringDelimiter("<!--", "-->", StringEscape.None)],
+            // An attribute value may hold a newline and is still not marked as spanning one, for the
+            // reason SQL's literal is not: an unclosed quote in markup is far likelier to be a typo,
+            // a stray apostrophe or a tag this does not parse than a genuine multi-line value, and a
+            // literal read as spanning takes every line below it with it.
             Strings = [RawDouble, RawSingle],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
@@ -215,6 +255,11 @@ public static class Languages
         {
             LineComments = ["--"],
             BlockComments = [CBlockComment],
+            // A SQL literal may legally hold a newline, and it is not marked as spanning one anyway.
+            // A literal that spans is read as open until its closing quote, so one odd quote — in a
+            // dialect this does not know, in a string this misreads — would turn the rest of the file
+            // into a string. The multi-line literal is rare in this code and the cost of getting it
+            // wrong is every line below it.
             Strings = [SingleQuoted],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],

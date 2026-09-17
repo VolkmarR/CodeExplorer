@@ -14,12 +14,34 @@ public sealed class LanguageAnalyzerTests
     private static ReferenceKind Kind(string extension, string line, string symbol) =>
         Kind(Languages.Default.For(extension), line, symbol);
 
-    /// <summary>The first appearance of the symbol on the line, as this analyser places it.</summary>
+    /// <summary>
+    ///     The first appearance of the symbol on the line, as this analyser places it. The line is read
+    ///     as the first line of a file, which is what a one-line test means.
+    /// </summary>
     private static ReferenceKind Kind(ILanguageAnalyzer analyzer, string line, string symbol)
     {
-        var placed = analyzer.Occurrences(line, symbol);
+        var placed = analyzer.Occurrences(analyzer.Start, line, symbol);
         Assert.NotEmpty(placed);
         return placed[0].Value;
+    }
+
+    /// <summary>
+    ///     Every appearance of the symbol in this file, in order, each placed from what the lines above
+    ///     it left open — the walk <c>find_references</c> does over a file it read, and the only way to
+    ///     ask about anything below the first line of a block comment or a multi-line literal.
+    /// </summary>
+    private static List<ReferenceKind> KindsIn(string extension, string file, string symbol)
+    {
+        var analyzer = Languages.Default.For(extension);
+        var position = analyzer.Start;
+        var kinds = new List<ReferenceKind>();
+        foreach (string line in file.Split('\n'))
+        {
+            kinds.AddRange(analyzer.Occurrences(position, line, symbol).Select(placed => placed.Value));
+            position = analyzer.After(position, line);
+        }
+
+        return kinds;
     }
 
     [Theory]
@@ -139,11 +161,106 @@ public sealed class LanguageAnalyzerTests
         Assert.Null(Languages.Default.For("pas").Declares("  var Total: Integer;").Value);
     }
 
+    [Theory]
+    // The second and later lines of a commented-out block. Read one line at a time, the first is a
+    // comment and every line under it is whatever it looks like — a call, a write, an instantiation —
+    // so find_references answered "who calls this?" with code deleted months ago, under the heading an
+    // agent trusts most.
+    [InlineData("cs", "/*\nadvance(1);\n*/")]
+    [InlineData("pas", "{\nadvance(1);\n}")]
+    [InlineData("pas", "(*\nadvance(1);\n*)")]
+    [InlineData("html", "<!--\n<b onclick=advance(1)>\n-->")]
+    [InlineData("css", "/*\n.a { color: advance(1) }\n*/")]
+    [InlineData("sql", "/*\nadvance(1);\n*/")]
+    [InlineData("pkb", "/*\nadvance(1);\n*/")]
+    [InlineData("prg", "/*\nadvance(1)\n*/")]
+    [InlineData("ts", "/*\nadvance(1);\n*/")]
+    public void A_line_inside_a_block_comment_is_a_comment_wherever_the_block_opened(string extension, string file) =>
+        Assert.Equal([ReferenceKind.Comment], KindsIn(extension, file, "advance"));
+
+    [Theory]
+    // A literal opened on an earlier line leaves every line after it reading as code, which is the
+    // same hole in the other direction: an invented reference rather than a dropped one.
+    [InlineData("cs", "var sql = @\"\nadvance(1)\n\";")]
+    [InlineData("cs", "var sql = \"\"\"\nadvance(1)\n\"\"\";")]
+    [InlineData("cs", "var sql = $@\"\nadvance(1)\n\";")]
+    [InlineData("ts", "const q = `\nadvance(1)\n`;")]
+    public void A_literal_that_spans_lines_is_a_string_mention(string extension, string file) =>
+        Assert.Equal([ReferenceKind.StringLiteral], KindsIn(extension, file, "advance"));
+
     [Fact]
-    public void A_call_inside_a_template_literal_is_still_a_call() =>
-        // A backtick delimiter that does not know `${…}` is code turns every call made inside one
-        // into a string mention, which loses real calls. Interpolated literals are #53's.
+    public void An_interpolated_literal_that_spans_lines_is_text_around_its_holes()
+    {
+        // Both halves on one file: the text of a raw interpolated literal is a mention on its second
+        // line, and the hole in it is still live code there.
+        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.Call],
+            KindsIn("cs", "var s = $\"\"\"\n  advance is {advance(1)}\n  \"\"\";", "advance"));
+        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.Call],
+            KindsIn("cs", "var s = $@\"\n  advance is {advance(1)}\n  \";", "advance"));
+    }
+
+    [Fact]
+    public void A_closer_ends_it_and_the_code_after_it_on_that_line_is_code()
+    {
+        // The line holding the closer is not itself inside the thing it closes, and what follows it is
+        // ordinary code: a state machine that reset only at the next line would lose a whole line of it.
+        Assert.Equal([ReferenceKind.Comment, ReferenceKind.Call],
+            KindsIn("cs", "/*\nadvance(1);\n*/ advance(2);", "advance"));
+        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.Call],
+            KindsIn("cs", "var sql = @\"\nadvance(1)\n\"; advance(2);", "advance"));
+        // And a block that opens after code on its line leaves that code alone.
+        Assert.Equal([ReferenceKind.Call, ReferenceKind.Comment],
+            KindsIn("cs", "advance(1); /* advance(2)\n*/", "advance"));
+    }
+
+    [Fact]
+    public void An_unterminated_ordinary_literal_does_not_swallow_the_file()
+    {
+        // `"` does not span lines in C#, so an odd one is a typo or a quote in prose the profile does
+        // not know — not a claim about every line below it. Reading it as open would turn the rest of
+        // the file into a string, which is the loudest way this could be wrong.
+        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.Call],
+            KindsIn("cs", "Log(\"advance(1)\nadvance(2);", "advance"));
+        // And at any depth, not only the outermost. What carries to the next line is the run of spans
+        // from the outside in that all carry, so an ordinary quote left open inside a template
+        // literal's hole ends with its line while the template around it goes on.
+        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.Call],
+            KindsIn("ts", "const q = `${ parse(\"advance(1)\nadvance(2)} a`;", "advance"));
+    }
+
+    [Fact]
+    public void A_reference_the_scan_never_reached_is_kept_and_left_unplaced()
+    {
+        // What a caller that could not read the lines above a match is handed. Every shape below the
+        // lexical state — a call, a write, a declaration — asserts that the line is live code, and
+        // that is exactly what is not known here.
+        var analyzer = Languages.Default.For("cs");
+        var placed = analyzer.Occurrences(FilePosition.Unknown, "        advance(1);", "advance");
+        Assert.Equal(ReferenceKind.Other, Assert.Single(placed).Value);
+        Assert.Equal(Lexical.Unknown, analyzer.StateAt(FilePosition.Unknown, "        advance(1);", 8).Value);
+        // A position another analyser made says nothing about this one's tables, so it is unknown too
+        // rather than read as whatever those indexes happen to point at.
+        Assert.Equal(Lexical.Unknown,
+            analyzer.StateAt(Languages.Default.For("pas").Start, "        advance(1);", 8).Value);
+    }
+
+    [Fact]
+    public void A_call_inside_an_interpolation_hole_is_still_a_call()
+    {
+        // A delimiter that does not know `${…}` and `{…}` are code turns every call made inside one
+        // into a string mention, which loses real calls — the reason both were left out of the
+        // profiles until the scan could carry what a hole needs.
         Assert.Equal(ReferenceKind.Call, Kind("ts", "const label = `a ${advance(1)} b`;", "advance"));
+        Assert.Equal(ReferenceKind.Call, Kind("cs", "var label = $\"a {advance(1)} b\";", "advance"));
+        Assert.Equal(ReferenceKind.Call, Kind("cs", "var label = $@\"a {advance(1)} b\";", "advance"));
+        // The text around a hole is still text, and a doubled brace is text rather than a hole.
+        Assert.Equal(ReferenceKind.StringLiteral, Kind("cs", "var label = $\"{{advance(1)}} {x}\";", "advance"));
+        // A brace nested inside a hole does not end it a character early.
+        Assert.Equal(ReferenceKind.Call,
+            Kind("cs", "var label = $\"{string.Join(\",\", new[] { 1 })} {advance(1)}\";", "advance"));
+        // And a hole in a literal that spans lines is code on the line below too.
+        Assert.Equal([ReferenceKind.Call], KindsIn("ts", "const q = `a\n${advance(1)}\n`;", "advance"));
+    }
 
     [Fact]
     public void A_long_line_is_scanned_once_and_not_once_per_question()
@@ -158,7 +275,7 @@ public sealed class LanguageAnalyzerTests
         var analyzer = Languages.Default.For("ts");
 
         var started = System.Diagnostics.Stopwatch.StartNew();
-        int calls = analyzer.Occurrences(line, "advance").Count(k => k.Value == ReferenceKind.Call);
+        int calls = analyzer.Occurrences(analyzer.Start, line, "advance").Count(k => k.Value == ReferenceKind.Call);
         started.Stop();
 
         Assert.Equal(20_000, calls);
@@ -212,13 +329,14 @@ public sealed class LanguageAnalyzerTests
         var analyzer = registry.For("cs");
         // The caller asks the same questions of the same interface and gets a parsed answer.
         Assert.Equal("C# (parsed)", analyzer.Language);
-        Assert.Equal(Evidence.Parsed, analyzer.Occurrences("Status = next;", "Status")[0].Evidence);
+        Assert.Equal(Evidence.Parsed, analyzer.Occurrences(analyzer.Start, "Status = next;", "Status")[0].Evidence);
         Assert.Equal(ReferenceKind.Definition, Kind(analyzer, "Status = next;", "Status"));
         // The text analyser is still there for everything the stub did not claim — including `.csx`,
         // which the C# profile claims and the stub does not.
         Assert.Equal("X#", registry.For("prg").Language);
         Assert.Equal("C#", registry.For("csx").Language);
-        Assert.Equal(Evidence.Text, registry.For("prg").Occurrences("oOrder:Status := 1", "Status")[0].Evidence);
+        var xbase = registry.For("prg");
+        Assert.Equal(Evidence.Text, xbase.Occurrences(xbase.Start, "oOrder:Status := 1", "Status")[0].Evidence);
     }
 
     [Fact]
@@ -240,11 +358,11 @@ public sealed class LanguageAnalyzerTests
     public void Every_answer_says_how_it_was_reached()
     {
         var analyzer = Languages.Default.For("cs");
-        Assert.Equal(Evidence.Text, analyzer.StateAt("// x", 3).Evidence);
+        Assert.Equal(Evidence.Text, analyzer.StateAt(analyzer.Start, "// x", 3).Evidence);
         Assert.Equal(Evidence.Text, analyzer.Declares("public class Order").Evidence);
         Assert.Equal(Evidence.Text, analyzer.ImportOn("using System;").Evidence);
         Assert.Equal(Evidence.Text, analyzer.IsGenerated("src/Order.g.cs").Evidence);
-        Assert.Equal(Evidence.Text, analyzer.Occurrences("Order x;", "Order")[0].Evidence);
+        Assert.Equal(Evidence.Text, analyzer.Occurrences(analyzer.Start, "Order x;", "Order")[0].Evidence);
     }
 
     [Fact]
@@ -311,7 +429,12 @@ public sealed class LanguageAnalyzerTests
         public bool SeparatesDeclarationFromImplementation => false;
         public CandidateLines DeclarationCandidates => CandidateLines.All;
 
-        public Answer<Lexical> StateAt(string line, int index) => new(Lexical.Code, Evidence.Parsed);
+        public FilePosition Start { get; } = new ParsedPosition();
+
+        public FilePosition After(FilePosition position, string line) => position;
+
+        public Answer<Lexical> StateAt(FilePosition position, string line, int index) =>
+            new(Lexical.Code, Evidence.Parsed);
 
         public Answer<Declared?> Declares(string line) =>
             new(new Declared("Order", "Advance", DeclarationRole.Declaration), Evidence.Parsed);
@@ -320,7 +443,14 @@ public sealed class LanguageAnalyzerTests
 
         public Answer<bool> IsGenerated(string qualifiedPath) => new(false, Evidence.Parsed);
 
-        public IReadOnlyList<Answer<ReferenceKind>> Occurrences(string line, string symbol) =>
+        public IReadOnlyList<Answer<ReferenceKind>> Occurrences(FilePosition position, string line, string symbol) =>
             [new Answer<ReferenceKind>(ReferenceKind.Definition, Evidence.Parsed)];
+
+        /// <summary>
+        ///     What a parser would carry between lines — a node, a scope — and what this one does not:
+        ///     the point is that the type is the analyser's own, so a caller threading it through knows
+        ///     nothing about what is in it.
+        /// </summary>
+        private sealed record ParsedPosition : FilePosition;
     }
 }

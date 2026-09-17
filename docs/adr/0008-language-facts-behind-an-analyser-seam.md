@@ -6,7 +6,8 @@ and never read its data.
 
 The questions are:
 
-- What is the lexical state at this position — code, comment, or string?
+- Where does a file begin, and where does it stand after this line?
+- What is the lexical state at this position — code, comment, string, or not established?
 - What, if anything, does this line declare, and is it a declaration or an implementation?
 - What does this file import?
 - Is this file generated?
@@ -17,6 +18,14 @@ Every answer is an `Answer<T>`, which carries the value and the `Evidence` it wa
 `Text` for one read from the source, `Parsed` for one a real parser produced. It is on the answer
 and not on the analyser, because an analyser that parses what it can and falls back on the rest
 tells the truth only per answer.
+
+The first is a question about the file and the rest about one line of it, which is the division the
+scan is built on (#53). An analyser hands out an opaque `FilePosition` and takes one back, so a
+caller walks a file's lines in order and asks about the ones it cares about; what is inside a
+position is the implementation's — a text profile keeps the comments and literals still open, and a
+parser would keep a node. A caller that cannot read the lines above a match passes
+`FilePosition.Unknown` and is told `Lexical.Unknown` rather than handed a guess, which is what keeps
+a bounded scan honest about where it stopped.
 
 Each question is asked about as much text as decides it. Classification takes a whole line and
 returns every appearance on it, because most of what decides an appearance — where the line's
@@ -34,12 +43,12 @@ question has to stay.
 
 So `find_references` does not learn that X# sends with `:`. It asks what the appearance of an
 identifier looks like, and an X# file answers `MemberAccess` where a C# file would answer something
-else. A tree-sitter or Roslyn analyser answers the same five questions from a syntax tree, and the
+else. A tree-sitter or Roslyn analyser answers the same questions from a syntax tree, and the
 callers — reference classification, `find_definition`, the import extractor, the file filter — see
 no difference.
 
-The fifth question is the one #57 did not name. The ticket lists four and expects reference
-classification to be a caller of the first, but a lexical state cannot say that `:=` is an
+The last question is the one #57 did not name. The ticket lists four and expects reference
+classification to be a caller of the lexical one, but a lexical state cannot say that `:=` is an
 assignment in X# and a syntax error in C#, and the acceptance criteria require exactly that. The
 resolution is to make "what does this appearance look like" a question of the same kind rather than
 to let the caller reach for the operators: it is answerable from a profile today and answerable
@@ -81,10 +90,13 @@ reported as a right one. A doubtful form is left out.
 
 ## Consequences
 
-- **An extension no profile covers falls back to a profile that is today's behaviour exactly.** A
+- **An extension no profile covers falls back to a profile that was today's behaviour exactly.** A
   project written in a language nobody declared must read no worse after this than before it, and
   the way to be sure is for the fallback to be the old rules unchanged — including the rules that
-  are wrong somewhere, such as a leading `#` opening a comment.
+  are wrong somewhere, such as a leading `#` opening a comment. The file-level scan (#53) is the one
+  thing it gained after the fact, because "a `/* */` stays open until it closes" is not a rule any
+  language it could be covering disagrees with, and leaving it out would have kept the failure the
+  scan exists to fix on exactly the projects nobody declared a profile for.
 - **`find_references` reads X#, Delphi and PL/SQL writes.** `:=` is an assignment where it is one,
   `=` stays a comparison where it is one, and the WRITES section stops being empty on a third of
   the codebases here.
@@ -110,16 +122,27 @@ reported as a right one. A doubtful form is left out.
   SQL, PL/SQL, X# and Delphi are case-insensitive and shout their keywords; an ordinal check beside
   a case-insensitive pattern made one line a declaration for the scope label and a call for the
   counts.
-- **The lexical scan is one vectorised pass and allocates nothing.** The lines this reads are
+- **The lexical scan is one vectorised pass and allocates almost nothing.** The lines this reads are
   whatever the index holds, and a minified bundle within `Index:MaxFileBytes` is a single line of
   millions of characters. Copying the prefix per match and re-walking it per delimiter turned one
   `find_references` into half a minute inside one tool call; it now jumps between the characters
   that can begin a comment or a literal and skips the code between them.
 - **The declaration/implementation split is declared but not yet decided.** A profile says whether
-  its language has one; telling a Delphi `interface` section from its `implementation` needs the
-  file-level position #53 builds, and until then a declaration's role is null. Null and not
+  its language has one; telling a Delphi `interface` section from its `implementation` means reading
+  it off the file-level position, which now exists (#53) but carries only the open comments and
+  literals. A declaration's role stays null until a section is a field on that record. Null and not
   `Declaration`, because either name would be a guess and the null-rather-than-guess rule is the one
   this module is written around.
+- **A comment or a literal stays open across lines, and a bounded scan says where it stopped (#53).**
+  Classifying a line on its own reported the second line of a commented-out block as a call, which is
+  a deleted call under the heading an agent trusts most. The position is built by walking a file's
+  lines from the first, because no line further down can be known to be outside everything; a
+  reference search therefore reads the lines above each match once per file, to
+  `ReferenceSearch.MaxScanLines`, and everything past that bound is unplaced rather than guessed.
+  Which literals span lines and where their interpolation holes are comes from the profile, so
+  C#'s verbatim, raw and interpolated forms and the template literal are read as what they are, and
+  a language with no multi-line literal — SQL's quoted string, which could legally hold a newline —
+  is deliberately not given one: an invented spanning form costs every line below it.
 - **A keyword is a keyword, not punctuation.** `new` comes from the profile like every other operator
   and is matched on a word boundary under the profile's own case rule, so `renew(` constructs
   nothing and a language that builds an object another way — X#'s `Foo{…}` — simply lists none.

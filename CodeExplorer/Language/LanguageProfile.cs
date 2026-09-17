@@ -14,7 +14,32 @@ public enum StringEscape
 }
 
 /// <summary>One kind of string literal: what opens it, what closes it, and how it escapes.</summary>
-public sealed record StringDelimiter(string Open, string Close, StringEscape Escape);
+public sealed record StringDelimiter(string Open, string Close, StringEscape Escape)
+{
+    /// <summary>
+    ///     Whether an unclosed one carries on onto the next line. C#'s verbatim and raw literals and a
+    ///     JavaScript template literal do; an ordinary quoted literal does not, and treating one as
+    ///     though it did would let a single stray quote turn the rest of a file into a string.
+    ///     A form that may span is only ever read as spanning where the profile says so: an unknown
+    ///     multi-line form costs unplaced references on the lines it covers, an invented one costs
+    ///     every line below it.
+    /// </summary>
+    public bool SpansLines { get; init; }
+
+    /// <summary>
+    ///     What opens a hole of live code inside the literal, and what closes it: <c>{</c> and
+    ///     <c>}</c> in a C# interpolated string, <c>${</c> and <c>}</c> in a JavaScript template
+    ///     literal. Null where the literal has none.
+    ///     A delimiter that does not know its holes reports every call made inside one as a string
+    ///     mention, which loses real calls — the reason the template literal was left out of the
+    ///     profiles until the scan could carry the state a hole needs. Braces nest inside a hole, and
+    ///     <see cref="HoleOpen" /> doubled stands for itself, which is how C# writes a literal brace.
+    /// </summary>
+    public string? HoleOpen { get; init; }
+
+    /// <inheritdoc cref="HoleOpen" />
+    public string? HoleClose { get; init; }
+}
 
 /// <summary>
 ///     The text facts about one language, in the shape <see cref="TextAnalyzer" /> reads them. This is
@@ -52,9 +77,9 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     public IReadOnlyList<string> DirectivePrefixes { get; init; } = [];
 
     /// <summary>
-    ///     Block comment pairs. Only an opener at the start of a line is acted on here; a block opened
-    ///     on an earlier line is the file-level state #53 adds, and until it lands such a line is left
-    ///     unplaced rather than guessed at.
+    ///     Block comment pairs. An opener anywhere on a line opens one, and it stays open across the
+    ///     lines below until its closer: the scan carries that between lines, which is what stops the
+    ///     second line of a commented-out block from reading as a call.
     /// </summary>
     public IReadOnlyList<StringDelimiter> BlockComments { get; init; } = [];
 

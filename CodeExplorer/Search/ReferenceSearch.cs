@@ -108,6 +108,18 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     public const int MaxLinesPerFile = 200;
 
     /// <summary>
+    ///     How far into a file the lines above a match are read to find out whether it sits inside a
+    ///     block comment or a literal opened earlier (#53). The scan has to start at line 1 — there is
+    ///     no point further down that can be known to be outside everything — so the only bound
+    ///     available is where it stops.
+    ///     Twenty thousand lines covers every hand-written file and most generated ones, at a read of a
+    ///     few hundred kilobytes for the largest of them. Past it the position is reported as unknown
+    ///     and the references on those lines are kept and listed as unplaced: a file long enough to hit
+    ///     this is one where a guess would be wrong quietly and often.
+    /// </summary>
+    public const int MaxScanLines = 20_000;
+
+    /// <summary>
     ///     Every reference search goes through here, which is what makes this the one place such a
     ///     search is recorded. It is the only public method for the same reason grep has one: a second
     ///     entry point has nothing else to call.
@@ -197,11 +209,15 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                 matchParameters, cancellationToken);
 
         var scopes = await ScopesAsync(connection, matched, cancellationToken);
+        var positions = await PositionsAsync(connection, matched, cancellationToken);
         // Every appearance on the line, not only the first: a line naming the identifier twice is two
         // references, and they are often of different kinds. What each one looks like is the file's
-        // language's question (ADR-0008), so `:=` is a write in an X# file and not in a C# one.
+        // language's question (ADR-0008), so `:=` is a write in an X# file and not in a C# one, and a
+        // line inside a comment opened further up is a mention in every language.
         var references = matched
-            .SelectMany(line => line.Analyzer.Occurrences(line.Content, symbol)
+            .SelectMany(line => line.Analyzer
+                .Occurrences(positions.GetValueOrDefault((line.FileId, line.LineNumber), FilePosition.Unknown),
+                    line.Content, symbol)
                 .Select(kind => new Reference(line.Path, line.LineNumber, line.Content, kind.Value,
                     scopes.TryGetValue(line.FileId, out var declarations)
                         ? DeclarationScope.Enclosing(declarations, line.LineNumber,
@@ -221,6 +237,66 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
     /// </summary>
     private readonly record struct MatchedLine(
         long FileId, string Path, ILanguageAnalyzer Analyzer, int LineNumber, string Content);
+
+    /// <summary>
+    ///     Where each matched line's file stands at the start of it: inside a block comment or a
+    ///     literal opened further up, or outside everything (#53). Without this a commented-out block
+    ///     reads as a comment on its first line and as calls, writes and instantiations on every line
+    ///     after it — under the headings an agent trusts most.
+    ///     One walk per file and not one per match, which is what decides the cost: the lines above a
+    ///     match are read once and the position is recorded for every match in the file as the walk
+    ///     passes it. The whole answer is one query, the lines of every file read in one pass.
+    ///     A line further into a file than <see cref="MaxScanLines" /> is left out of the result and
+    ///     classified from <see cref="FilePosition.Unknown" />, which keeps its references and lists
+    ///     them as unplaced rather than placing them from a scan that never reached them.
+    /// </summary>
+    private static async Task<Dictionary<(long File, int Line), FilePosition>> PositionsAsync(
+        DuckDBConnection connection, List<MatchedLine> matched, CancellationToken cancellationToken)
+    {
+        var positions = new Dictionary<(long, int), FilePosition>();
+        var files = matched.GroupBy(line => line.FileId)
+            // A file whose every match is past the bound is not read at all: scanning the twenty
+            // thousand lines above them would end in the same unknown position it started from.
+            .Where(group => group.Min(line => line.LineNumber) <= MaxScanLines)
+            .ToDictionary(
+                group => group.Key,
+                group => (group.First().Analyzer,
+                    Through: Math.Min(group.Max(line => line.LineNumber), MaxScanLines),
+                    Wanted: group.Select(line => line.LineNumber).ToHashSet()));
+        if (files.Count == 0) return positions;
+
+        // The ids and line numbers came from the query above and never from the request, so inlining
+        // them is safe. One bound per file rather than one for all of them: a file whose last match is
+        // on line 12 must not be read to the end because another file's match is on line 4000.
+        string scope = string.Join(" OR ", files.Select(file => string.Create(CultureInfo.InvariantCulture,
+            $"(file_id = {file.Key} AND line_number <= {file.Value.Through})")));
+        using var command = connection.Query($"""
+                                                 SELECT file_id, line_number, content FROM lines
+                                                 WHERE {scope}
+                                                 ORDER BY file_id, line_number
+                                                 """, []);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+        long walking = -1;
+        FilePosition position = FilePosition.Unknown;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            long fileId = reader.Int64("file_id");
+            var file = files[fileId];
+            // The rows arrive grouped by file and in line order, so a new file id is the top of one.
+            if (fileId != walking)
+            {
+                walking = fileId;
+                position = file.Analyzer.Start;
+            }
+
+            int lineNumber = reader.Int32("line_number");
+            if (file.Wanted.Contains(lineNumber)) positions[(fileId, lineNumber)] = position;
+            position = file.Analyzer.After(position, reader.Text("content"));
+        }
+
+        return positions;
+    }
 
     /// <summary>
     ///     The declaration lines of every file a reference was read from, which is what an enclosing
