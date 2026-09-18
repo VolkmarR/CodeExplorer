@@ -646,40 +646,35 @@ public sealed class IndexReader : IDisposable
     public async Task<IReadOnlyList<TreeItem>> TreeAsync(QualifiedPath? location, int depth,
         CancellationToken cancellationToken)
     {
+        if (location is not null) return await SubtreeAsync(location, depth, cancellationToken);
+
+        // The repository level is not a directory level: its counts are the ones the build recorded,
+        // so it is read on its own and each repository's own subtree hangs below it.
         var entries = new List<TreeItem>();
-        await CollectAsync(location, depth, entries, cancellationToken);
+        foreach (var repository in await RepositoryLevelAsync(cancellationToken))
+        {
+            entries.Add(repository);
+            if (depth > 1)
+                entries.AddRange(
+                    await SubtreeAsync(new QualifiedPath(repository.Name, ""), depth - 1, cancellationToken));
+        }
+
         return entries;
     }
 
     /// <summary>
-    ///     One query per directory visited rather than one recursive query: a listing is bounded by
-    ///     what an agent can read, and DuckDB answers a level on a local file in well under a
-    ///     millisecond, so the simpler shape costs nothing anyone would measure.
+    ///     Everything under one directory down to <paramref name="depth" />, in two statements whatever
+    ///     the depth: the directories with their totals, then the files, assembled into <c>tree</c>
+    ///     order here.
+    ///     It was one query per directory visited until #93, on the grounds that a level costs well
+    ///     under a millisecond and a listing is bounded by what an agent can read. The first half was
+    ///     wrong on a real project — a level of Radix's <c>src</c> measures 7 ms, because
+    ///     <c>directory LIKE 'src/%'</c> is a scan of <c>files</c> and nothing indexes it — and the
+    ///     second half does not follow: the recursion visits every directory in the subtree, not every
+    ///     directory listed. <c>list_tree radix/src 3</c> ran 6,822 queries over 338 million rows and
+    ///     took 39.7 seconds, against 48 milliseconds for the two below.
     /// </summary>
-    private async Task CollectAsync(QualifiedPath? location, int depth, List<TreeItem> entries,
-        CancellationToken cancellationToken)
-    {
-        var level = location is null
-            ? await RepositoryLevelAsync(cancellationToken)
-            : await DirectoryLevelAsync(location, cancellationToken);
-        foreach (var item in level)
-        {
-            entries.Add(item);
-            // A file has no Files count; a repository or directory does, and is what depth descends into.
-            if (depth <= 1 || item.Files is null) continue;
-            var below = location is null
-                ? new QualifiedPath(item.Name, "")
-                : location with
-                {
-                    PathInRepository = location.PathInRepository.Length == 0
-                        ? item.Name
-                        : location.PathInRepository + "/" + item.Name
-                };
-            await CollectAsync(below, depth - 1, entries, cancellationToken);
-        }
-    }
-
-    private async Task<IReadOnlyList<TreeItem>> DirectoryLevelAsync(QualifiedPath location,
+    private async Task<IReadOnlyList<TreeItem>> SubtreeAsync(QualifiedPath location, int depth,
         CancellationToken cancellationToken)
     {
         var paths = await PathsAsync(cancellationToken);
@@ -691,46 +686,93 @@ public sealed class IndexReader : IDisposable
         // because a .NET string counts UTF-16 units and `substr` counts characters, which part ways on
         // any path outside the BMP.
         string prefix = directory.Length == 0 ? "" : directory + "/";
-        var entries = new List<TreeItem>();
+        var scope = new List<DuckDBParameter>
+        {
+            new("r", repositorySlug), new("p", prefix), new("d", directory)
+        };
 
-        using (var command = Connection.Query("""
-                                              SELECT split_part(substr(f.directory, length($p) + 1), '/', 1) AS segment,
-                                                     CAST(count(*) AS BIGINT) AS files,
-                                                     CAST(sum(f.line_count) AS BIGINT) AS lines,
-                                                     CAST(sum(f.size_bytes) AS BIGINT) AS bytes
-                                              FROM files f JOIN repositories r USING (repo_id)
-                                              WHERE r.slug = $r AND f.directory LIKE $p || '%' AND f.directory <> $d
-                                              GROUP BY segment
-                                              ORDER BY segment
-                                              """,
-                   [
-                       new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", prefix),
-                       new DuckDBParameter("d", directory)
-                   ]))
+        // Children of each directory below the location, keyed by the directory they sit in, and the
+        // files likewise. Both are filled in the order the statement returned, which is the order they
+        // are emitted in: ordering by the whole path orders siblings by name, since they share a prefix.
+        var directories = new Dictionary<string, List<(string Path, TreeItem Item)>>(StringComparer.Ordinal);
+        var files = new Dictionary<string, List<TreeItem>>(StringComparer.Ordinal);
+
+        // A file counts towards every ancestor within reach, so its path below the prefix is split once
+        // and joined back at each of its first k segments. `depth` is a bound this code sets, never a
+        // caller's text, so it is inlined; k is filtered rather than bounded per row because a
+        // correlated range() measured three times slower, and an absurd depth costs nothing here —
+        // every extra k is filtered out before the grouping (23 ms at depth 1000, 17 ms at depth 3).
+        using (var command = Connection.Query($"""
+                                               WITH below AS (
+                                                   SELECT str_split(substr(f.directory, length($p) + 1), '/') AS segments,
+                                                          f.line_count, f.size_bytes
+                                                   FROM files f JOIN repositories r USING (repo_id)
+                                                   WHERE r.slug = $r AND f.directory LIKE $p || '%' AND f.directory <> $d)
+                                               SELECT array_to_string(list_slice(segments, 1, k), '/') AS directory,
+                                                      CAST(count(*) AS BIGINT) AS files,
+                                                      CAST(sum(line_count) AS BIGINT) AS lines,
+                                                      CAST(sum(size_bytes) AS BIGINT) AS bytes
+                                               FROM below, range(1, {depth} + 1) AS t(k)
+                                               WHERE len(segments) >= k
+                                               GROUP BY directory
+                                               ORDER BY directory
+                                               """, scope))
         using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
-                string segment = reader.Text("segment");
-                entries.Add(new TreeItem(segment, paths.Format(repositorySlug, prefix + segment),
-                    (int)reader.Int64("files"), reader.Int64("lines"), reader.Int64("bytes"), null));
+                string below = reader.Text("directory");
+                int cut = below.LastIndexOf('/');
+                var item = new TreeItem(cut < 0 ? below : below[(cut + 1)..],
+                    paths.Format(repositorySlug, prefix + below), (int)reader.Int64("files"),
+                    reader.Int64("lines"), reader.Int64("bytes"), null);
+                Under(directories, cut < 0 ? "" : below[..cut]).Add((below, item));
             }
         }
 
-        using (var command = Connection.Query("""
-                                              SELECT f.name, f.qualified_path, f.line_count, f.size_bytes, f.skip_reason
-                                              FROM files f JOIN repositories r USING (repo_id)
-                                              WHERE r.slug = $r AND f.directory = $d
-                                              ORDER BY f.name
-                                              """,
-                   [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("d", directory)]))
+        // The files of every directory the listing reaches: the location's own, and those of the
+        // directories above the last level, which are the ones the recursion used to descend into.
+        using (var command = Connection.Query($"""
+                                               SELECT substr(f.directory, length($p) + 1) AS below,
+                                                      f.name, f.qualified_path, f.line_count, f.size_bytes, f.skip_reason
+                                               FROM files f JOIN repositories r USING (repo_id)
+                                               WHERE r.slug = $r
+                                                 AND (f.directory = $d
+                                                      OR (f.directory LIKE $p || '%' AND f.directory <> $d
+                                                          AND len(str_split(substr(f.directory, length($p) + 1), '/')) <= {depth - 1}))
+                                               ORDER BY f.directory, f.name
+                                               """, scope))
         using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
-                entries.Add(new TreeItem(reader.Text("name"), reader.Text("qualified_path"), null,
-                    reader.Int32("line_count"), reader.Int64("size_bytes"), reader.TextOrNull("skip_reason")));
+                Under(files, reader.Text("below")).Add(new TreeItem(reader.Text("name"),
+                    reader.Text("qualified_path"), null, reader.Int32("line_count"), reader.Int64("size_bytes"),
+                    reader.TextOrNull("skip_reason")));
         }
 
+        var entries = new List<TreeItem>();
+        Emit("");
+        return entries;
+
+        // A directory, then everything under it, then its siblings; files after the directories they
+        // sit beside. Which is what the recursive read did, now over what two statements returned.
+        void Emit(string below)
+        {
+            if (directories.TryGetValue(below, out var children))
+                foreach ((string path, var item) in children)
+                {
+                    entries.Add(item);
+                    Emit(path);
+                }
+
+            if (files.TryGetValue(below, out var here)) entries.AddRange(here);
+        }
+    }
+
+    /// <summary>The list a directory's children go in, made on first use.</summary>
+    private static List<T> Under<T>(Dictionary<string, List<T>> byDirectory, string directory)
+    {
+        if (!byDirectory.TryGetValue(directory, out var entries)) byDirectory[directory] = entries = [];
         return entries;
     }
 
