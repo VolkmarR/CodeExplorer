@@ -61,6 +61,10 @@ builder.Services.AddSingleton<WarmUpService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WarmUpService>());
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMcpServer().WithHttpTransport()
+    // An argument the SDK cannot bind is answered by the tool's own schema rather than by the
+    // transport's one sentence (#85, ToolArguments). Registered once for every tool, present and
+    // future.
+    .WithRequestFilters(filters => filters.AddCallToolFilter(ToolArguments.Filter))
     .WithTools<ProjectTools>()
     .WithTools<SearchTools>()
     .WithTools<FileTools>()
