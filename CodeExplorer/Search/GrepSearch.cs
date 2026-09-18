@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer;
@@ -63,15 +64,25 @@ public sealed record GrepResult(
 
 /// <summary>
 ///     Text and regular-expression search over a project's <c>lines</c>. All matching runs inside
-///     DuckDB (ADR-0004): BM25 narrows a text query when the index has a full-text index, every
-///     token is then verified with <c>contains</c> so the answer is exact; regex is RE2 through
+///     DuckDB (ADR-0004): a text query matches each identifier piece as a whole token and then
+///     verifies it with <c>contains</c> so the answer is exact; regex is RE2 through
 ///     <c>regexp_matches</c>. The substring fallback for text queries is <c>contains</c> rather than
 ///     the <c>regexp_matches</c> ADR-0004 names, because a text query is not a pattern and escaping it
 ///     into one buys nothing. Nothing here opens <c>control.duckdb</c> (ADR-0005).
+///     The whole-token half was BM25 over the full-text index until the plan showed it narrowed
+///     nothing: the exact-verify was pushed into a scan of every line either way, so reading the index
+///     was pure cost — 2,226 ms of CPU and a 32-million-row scan of its own term table on a
+///     9.5-million-line project. The <c>\b…\b</c> tests here are the same rule against the same
+///     tokeniser, which is why the answers are identical and the query is two to three times faster.
 /// </summary>
-public sealed class GrepSearch(ProjectIndexes indexes)
+public sealed partial class GrepSearch(ProjectIndexes indexes)
 {
-    public const string FullTextEngine = "full-text";
+    /// <summary>
+    ///     What a text query is answered by when the project's lines were tokenised: every identifier
+    ///     piece of the query matched as a whole token, then verified with <c>contains</c>. Named for
+    ///     what it does rather than for the index it used to read, because it no longer reads one.
+    /// </summary>
+    public const string TokenEngine = "token scan";
     public const string SubstringEngine = "substring scan";
     public const string RegexEngine = "regex scan";
     public const string MultilineEngine = "multiline regex scan";
@@ -166,15 +177,28 @@ public sealed class GrepSearch(ProjectIndexes indexes)
         {
             string[] tokens = query.Split((char[]?)null,
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            bool useFts = tokens.Any(HasIndexableChars) && await index.HasFullTextAsync(cancellationToken);
-            engine = useFts ? FullTextEngine : SubstringEngine;
+            bool useTokens = tokens.Any(HasIndexableChars) && await index.HasFullTextAsync(cancellationToken);
+            engine = useTokens ? TokenEngine : SubstringEngine;
 
-            if (useFts)
+            if (useTokens)
             {
-                // Conjunctive: every token must be in the line. The index is lower-cased, so this is a
-                // case-insensitive prefilter; the contains() below restores exactness either way.
-                match.Append("fts_main_lines.match_bm25(l.line_id, $q, conjunctive := 1) IS NOT NULL");
-                matchParameters.Add(new DuckDBParameter("q", query));
+                // The same rule BM25 applied, without reading the BM25 index. The index is built with
+                // stemmer='none', stopwords='none' and ignore='[^a-z0-9_]+' (FtsExtension), so a token
+                // is a maximal run of [a-z0-9_] — which is exactly what \b bounds on lower-cased text.
+                // Conjunctive: every piece of the query must be present, in any order, which is why
+                // this is one test per piece and not one \b…\b around the whole string.
+                // Always case-insensitive, as the lower-cased index was, and the contains() below
+                // restores exactness either way.
+                string[] pieces = IdentifierPieces().Split(query.ToLowerInvariant())
+                    .Where(piece => piece.Length > 0).ToArray();
+                for (int i = 0; i < pieces.Length; i++)
+                {
+                    if (match.Length > 0) match.Append(" AND ");
+                    match.Append(CultureInfo.InvariantCulture, $"regexp_matches(lower(l.content), $w{i})");
+                    // No escaping: a piece is [a-z0-9_] by construction, so nothing in it is a
+                    // metacharacter. A piece that could carry one would be a piece the split kept.
+                    matchParameters.Add(new DuckDBParameter($"w{i}", $@"\b{pieces[i]}\b"));
+                }
             }
 
             for (int i = 0; i < tokens.Length; i++)
@@ -551,6 +575,15 @@ public sealed class GrepSearch(ProjectIndexes indexes)
 
     /// <summary>The FTS tokenizer keeps letters, digits and underscore; a token with none of them has no index entry.</summary>
     private static bool HasIndexableChars(string token) => token.Any(c => char.IsLetterOrDigit(c) || c == '_');
+
+    /// <summary>
+    ///     How the full-text index splits text into tokens — <c>ignore = '[^a-z0-9_]+'</c> in
+    ///     <see cref="FtsExtension" /> — applied to the query so the word tests match what BM25 matched.
+    ///     The two have to stay in step: a query split one way and an index built another would answer
+    ///     with lines that do not contain what was asked for.
+    /// </summary>
+    [GeneratedRegex("[^a-z0-9_]+")]
+    private static partial Regex IdentifierPieces();
 
     /// <summary>Request numbers clamped to the ranges the tool description promises.</summary>
     private readonly record struct Bounds(int Page, int PageSize, int Context, int MaxLinesPerFile)
