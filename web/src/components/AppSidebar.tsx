@@ -3,7 +3,6 @@ import { Link } from '@tanstack/react-router'
 import { Boxes, MoreHorizontal, Plus, RefreshCw, Settings, SquareCode } from 'lucide-react'
 import { PROJECT_VIEWS, type View } from '@/components/appNavigation'
 import { StateDot, type IndexState, indexState } from '@/features/projects/IndexStatus'
-import { projectSearch } from '@/features/projects/projectParams'
 import { projectQuery } from '@/features/projects/queries'
 import { isRefreshRunning, refreshStatusQuery } from '@/features/refresh/queries'
 import { useRefreshProject } from '@/features/refresh/useRefreshProject'
@@ -186,11 +185,7 @@ function ProjectBlock({
             </DropdownMenuItem>
             <DropdownMenuItem
               render={
-                <Link
-                  to="/projects/$project"
-                  params={{ project }}
-                  search={projectSearch('settings')}
-                >
+                <Link to="/projects/$project/settings" params={{ project }}>
                   <Settings />
                   Settings and repositories
                 </Link>
@@ -209,7 +204,12 @@ function ProjectBlock({
                 isActive={view === item}
                 tooltip={label}
                 render={
-                  <Link {...link} params={{ project }}>
+                  // `exact`, because which item is lit is decided once from the path above and a
+                  // link's own match would be a second answer to the same question. The router
+                  // matches a prefix by default, so Overview — whose path is every other view's
+                  // first segments — reports itself as the page you are on while you stand on
+                  // Settings, and a reader is told twice where they are, once wrongly.
+                  <Link {...link} params={{ project }} activeOptions={{ exact: true }}>
                     <Icon />
                     <span>{label}</span>
                   </Link>
