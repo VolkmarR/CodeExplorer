@@ -506,7 +506,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
         CancellationToken cancellationToken)
     {
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var changes = new List<RecordedChange>();
         while (await reader.ReadAsync(cancellationToken))
             changes.Add(new RecordedChange(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
@@ -539,7 +539,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                                     ORDER BY c.commit_id DESC
                                                     LIMIT {limit} OFFSET {skip}
                                                     """, parameters);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var commits = new List<LoggedCommit>();
         while (await reader.ReadAsync(cancellationToken)) commits.Add(Logged(reader));
         return commits;
@@ -562,7 +562,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                                     ORDER BY c.commit_id
                                                     LIMIT 1
                                                     """, [new DuckDBParameter("sha", sha)]);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? Logged(reader) : null;
     }
 
@@ -622,7 +622,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                                    ORDER BY start_line
                                                    """,
             [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var runs = new List<AttributedLines>();
         while (await reader.ReadAsync(cancellationToken))
             runs.Add(new AttributedLines(
@@ -651,7 +651,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                                    WHERE c.sha = $sha
                                                    ORDER BY cf.path
                                                    """, [new DuckDBParameter("sha", sha)]);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var files = new List<CommitFile>();
         while (await reader.ReadAsync(cancellationToken))
             files.Add(new CommitFile(reader.Text("path"), reader.Text("change_kind"), reader.Int32("added"),
@@ -745,7 +745,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                                     FROM counts LEFT JOIN ranked ON TRUE
                                                     ORDER BY ranked.shared DESC, ranked.path
                                                     """, parameters);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var paths = await index.PathsAsync(cancellationToken);
         var files = new List<CoChangedFile>();
         int commits = 0, paired = 0;

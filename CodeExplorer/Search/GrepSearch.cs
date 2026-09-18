@@ -266,17 +266,11 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
                ORDER BY p.n DESC, p.qualified_path, p.line_number
                """;
 
-        // Before the query runs, so the plan is of the statement that is about to be timed rather than
-        // of a warmed repeat of it.
-        if (QueryPlan.Enabled)
-            await QueryPlan.DumpAsync(connection, engine, sql, [.. matchParameters, .. fileParameters],
-                cancellationToken);
-
         var files = new List<GrepFile>();
         int totalFiles = 0;
         long totalLines = 0;
         using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             string? currentPath = null;
             int currentCount = 0;
@@ -378,7 +372,7 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
                                                   FROM docs WHERE regexp_matches(content, $q, $flags)
                                                   ORDER BY match_count DESC, qualified_path
                                                   """, [.. matchParameters, .. fileParameters]))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
                 counts.Add((reader.Int64("file_id"), reader.Text("qualified_path"),
@@ -410,7 +404,7 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
                                                   FROM docs
                                                   """,
                    [new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken)) marked[reader.Int64("file_id")] = reader.Text("marked");
         }

@@ -177,7 +177,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         int totalFiles = 0;
         long totalLines = 0;
         using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -265,7 +265,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                                                      WHERE file_id IN ({ids}){narrowing}
                                                      ORDER BY file_id, line_number
                                                      """, parameters);
-            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            using var reader = await command.ReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
                 string content = reader.Text("content");

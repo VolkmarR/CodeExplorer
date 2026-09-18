@@ -300,7 +300,7 @@ public sealed class IndexReader : IDisposable
         // does not depend on whether the ICU extension is loaded to decide the session time zone.
         using var command = lease.Connection.Query(
             "SELECT epoch(built_at) AS built_seconds, fts_indexed, single_repository FROM index_info", []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return null;
 
         var builtAt = DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("built_seconds"));
@@ -373,7 +373,7 @@ public sealed class IndexReader : IDisposable
                                               ORDER BY f.qualified_path = $p DESC
                                               LIMIT 1
                                               """, [new DuckDBParameter("p", qualifiedPath)]);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadFile(reader) : null;
     }
 
@@ -473,7 +473,7 @@ public sealed class IndexReader : IDisposable
                                              LEFT JOIN commits last ON last.commit_id = f.last_commit
                                              WHERE f.file_id = $f
                                              """, [new DuckDBParameter("f", fileId)]);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return new FileCommits(null, null);
         return new FileCommits(Read(reader, "first"), Read(reader, "last"));
 
@@ -514,7 +514,7 @@ public sealed class IndexReader : IDisposable
                                              FROM repositories r
                                              ORDER BY r.repo_id
                                              """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var all = new List<(string Slug, bool Walked)>();
         while (await reader.ReadAsync(cancellationToken)) all.Add((reader.Text("slug"), reader.Flag("walked")));
         // One repository cannot be contrasted with another, so there is nothing to say about it here;
@@ -540,7 +540,7 @@ public sealed class IndexReader : IDisposable
     public async Task<IndexOverview> OverviewAsync(CancellationToken cancellationToken)
     {
         using var command = Connection.Query("SELECT document FROM project_overview LIMIT 1", []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
             throw IndexOverview.Unreadable($"the index of project '{ProjectSlug}' holds no overview row");
 
@@ -554,7 +554,7 @@ public sealed class IndexReader : IDisposable
         using var command = Connection.Query(
             $"SELECT qualified_path FROM files WHERE lower(name) = lower($n) ORDER BY qualified_path LIMIT {limit}",
             [new DuckDBParameter("n", name)]);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var result = new List<string>();
         while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("qualified_path"));
         return result;
@@ -573,7 +573,7 @@ public sealed class IndexReader : IDisposable
                                              ORDER BY line_number
                                              """,
             [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var result = new List<string>();
         while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("content"));
         return result;
@@ -604,7 +604,7 @@ public sealed class IndexReader : IDisposable
                                                ORDER BY f.qualified_path
                                                LIMIT {limit}
                                                """, parameters))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -707,7 +707,7 @@ public sealed class IndexReader : IDisposable
                        new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", prefix),
                        new DuckDBParameter("d", directory)
                    ]))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -724,7 +724,7 @@ public sealed class IndexReader : IDisposable
                                               ORDER BY f.name
                                               """,
                    [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("d", directory)]))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
                 entries.Add(new TreeItem(reader.Text("name"), reader.Text("qualified_path"), null,
@@ -753,7 +753,7 @@ public sealed class IndexReader : IDisposable
                                              GROUP BY r.slug, r.file_count, r.line_count
                                              ORDER BY r.slug
                                              """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var entries = new List<TreeItem>();
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -784,7 +784,7 @@ public sealed class IndexReader : IDisposable
                                              FROM repositories r
                                              ORDER BY r.repo_id
                                              """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var repositories = new List<IndexedRepository>();
         bool singleRepository = false;
         while (await reader.ReadAsync(cancellationToken))
@@ -814,7 +814,7 @@ public sealed class IndexReader : IDisposable
                        FROM commits GROUP BY repo_slug) h ON h.repo_slug = r.slug
             ORDER BY r.repo_id
             """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var result = new List<IndexedRepository>();
         // The history columns are read only here. The other caller, LoadShapeAsync, is the path every
         // tool takes to learn the repository names, and it has no use for a join onto commits.

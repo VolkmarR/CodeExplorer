@@ -65,7 +65,7 @@ internal static class FilePositions
         ArgumentNullException.ThrowIfNull(analyzer);
         ArgumentNullException.ThrowIfNull(visit);
 
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var position = analyzer.Start;
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -129,7 +129,7 @@ internal static class FilePositions
                                                    ON l.file_id = b.file_id AND l.line_number <= b.through
                                                  ORDER BY l.file_id, l.line_number
                                                  """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
 
         long walking = -1;
         // Seeded from any file so the walk's state is definitely assigned; the first row replaces it,
