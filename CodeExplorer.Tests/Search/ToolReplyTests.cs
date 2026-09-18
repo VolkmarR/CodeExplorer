@@ -71,4 +71,33 @@ public sealed class ToolReplyTests
             Assert.StartsWith(expected, reply, StringComparison.Ordinal);
         }
     }
+
+    /// <summary>
+    ///     The three searches that read the same nullable "files matching without filters" must say a
+    ///     miss with no filter on it the same way (#87). Three copies of that reading is how they drifted
+    ///     apart, and an agent that learns the sentence from grep must recognise it from the other two.
+    /// </summary>
+    [Fact]
+    public async Task The_three_searches_say_an_unfiltered_miss_in_the_same_words()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha",
+            new Dictionary<string, Dictionary<string, string>>
+                { ["one"] = new() { ["src/Widget.cs"] = "class Widget\n{\n    int Size;\n}\n" } });
+        await using var client = await host.ConnectAsync("alpha");
+
+        Dictionary<string, Dictionary<string, object?>> misses = new(StringComparer.Ordinal)
+        {
+            ["grep"] = new() { ["query"] = "EKLfsBewKto", ["regex"] = true },
+            ["find_references"] = new() { ["symbol"] = "EKLfsBewKto" },
+            ["list_matches"] = new() { ["query"] = "EKLfsBewKto" }
+        };
+
+        foreach ((string tool, var arguments) in misses)
+        {
+            string reply = await TestHost.CallAsync(client, tool, arguments);
+            Assert.Contains("no filters narrowed the search", reply, StringComparison.Ordinal);
+            Assert.DoesNotContain("outside your filters", reply, StringComparison.Ordinal);
+        }
+    }
 }
