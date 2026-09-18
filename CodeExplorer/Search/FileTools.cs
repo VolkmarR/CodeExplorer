@@ -8,13 +8,17 @@ namespace CodeExplorer;
 
 /// <summary>
 ///     The index-backed MCP tools that are not searches (ADR-0005, <c>Search/</c>): reading a file,
-///     finding files by name shape, and counting extensions. Each is a rendering of a
-///     <see cref="FileQueries" /> answer, the way <see cref="SearchTools" /> renders the searches: the
-///     tool parses what an agent typed and words what came back, and the decisions in between are the
-///     query module's, shared with the operator's pages.
+///     finding files by name shape, counting extensions, and listing what one file declares. Each is
+///     a rendering of a <see cref="FileQueries" /> or <see cref="FileDeclarations" /> answer, the way
+///     <see cref="SearchTools" /> renders the searches: the tool parses what an agent typed and words
+///     what came back, and the decisions in between are the query module's, shared with the
+///     operator's pages.
 /// </summary>
 [McpServerToolType]
-internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor, FileQueries files)
+internal sealed partial class FileTools(
+    IHttpContextAccessor httpContextAccessor,
+    FileQueries files,
+    FileDeclarations declarations)
 {
     /// <summary>
     ///     A whole large class in one read. Higher would let a single default read spend the reply
@@ -31,6 +35,14 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
     ///     monorepo from returning megabytes; the agent is told how to narrow down.
     /// </summary>
     private const int MaxTreeEntries = 2000;
+
+    /// <summary>
+    ///     How far the name column of a declaration listing is padded out. It is what the short names
+    ///     line up against and not a truncation: a name is what the next call is made with, and half
+    ///     of one is worse than a row that overhangs. A generated file's three-hundred-character name
+    ///     therefore pushes its own signature right, and nobody else's.
+    /// </summary>
+    private const int MaxLabelWidth = 40;
 
     [McpServerTool(Name = "read_file", ReadOnly = true, Idempotent = true, Title = "Read files from the index")]
     [Description("""
@@ -329,6 +341,123 @@ internal sealed partial class FileTools(IHttpContextAccessor httpContextAccessor
                 return e.Extension.Length == 0 ? "(none)" : e.Extension;
             }
         }
+    }
+
+    // Named for the concept and not `outline`, though an editor's word for this is exactly that.
+    // CODING_STANDARDS asks that a tool name trade on a shell verb a model already knows, and
+    // `outline` is not one — it is an IDE's noun, and a model that has not met it has nothing to
+    // transfer. `list_declarations` reads beside `list_tree`, `list_extensions` and `list_matches`,
+    // and it spells the word CONTEXT.md defines, so the reply's vocabulary is the name's.
+    [McpServerTool(Name = "list_declarations", ReadOnly = true, Idempotent = true,
+        Title = "List what one file declares")]
+    [Description("""
+                 Lists the types and routines one file declares, in the order they are written, with the line each is on. It is a file's outline: the cheap first move after grep, glob or list_tree lands you on a file you do not know, costing one row per declaration instead of a read of the whole file.
+
+                 - Takes a qualified path exactly as grep, glob, list_tree and read_file print one (`main/src/Api/Orders.cs`).
+                 - Use it to orient, then read_file the line ranges that turn out to matter. find_definition is the other direction: it takes a name and finds the file, this takes a file and lists the names.
+                 - IMPORTANT: declarations are read from the shape of each line in the language the file is written in, not from a compiler. A form no profile knows is one this did not find rather than one that is not there. Strong evidence, not proof.
+                 - An empty answer always says which kind of empty it is: no profile covers the extension, or the language has no declarations that can be read from a line, or the file genuinely declares none. Those are three different facts and are never worded alike.
+                 - Where a language announces a routine in one place and writes it in another — Delphi, a C header beside its source — each entry says which of the two it is.
+                 """)]
+    public async Task<string> ListDeclarations(
+        [Description("Qualified path of the file, e.g. \"main/src/Api/Orders.cs\".")]
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        var project = BoundProject.Get(httpContextAccessor);
+        return ToolReply.Render<DeclarationsResult>(
+            await declarations.ForFileAsync(project.Slug, path, cancellationToken), Format,
+            "Ask about a smaller file, or read the ranges you need with read_file.");
+    }
+
+    /// <summary>
+    ///     The sentence a declaration reply ends with when every entry was read from the text, which
+    ///     is every reply until a parser-backed analyser is registered. It is the same claim the file
+    ///     page makes beside its Declarations panel (<c>declarations.ts</c>), said here too because an
+    ///     agent reads the reply and not the panel, and a list without it reads like a parser's.
+    /// </summary>
+    private const string TextualCaveat =
+        "Read from the shape of each line, not from a compiler. A form no profile knows is one this "
+        + "did not find rather than one that is not there. Strong evidence, not proof.";
+
+    /// <summary>
+    ///     How the declarations were reached, which is what the reply's last line claims (ADR-0008).
+    ///     Derived from the answers rather than written as a fact, and in three branches and not two:
+    ///     a reply that is entirely a parser's must not talk about a textual half that is not there,
+    ///     which is the sentence a two-way check prints the day the first parser is registered.
+    /// </summary>
+    private static string How(IReadOnlyList<FileDeclaration> declarations)
+    {
+        if (declarations.All(d => d.Evidence == Evidence.Text)) return TextualCaveat;
+        return declarations.All(d => d.Evidence == Evidence.Parsed)
+            ? "Parsed by a real parser for this language, so this is what the file declares and not what its lines look like."
+            : "Parsed where the language has a parser here and read from the shape of the line elsewhere; "
+              + "the textual half is strong evidence, not proof.";
+    }
+
+    private static string Format(DeclarationsResult result)
+    {
+        // The three empty answers before anything is counted, because two of them mean nothing was
+        // scanned and a count of zero would be a fact about a scan that never ran.
+        if (result.Coverage == DeclarationCoverage.Unreadable)
+            return string.Create(CultureInfo.InvariantCulture,
+                $"{result.QualifiedPath} is {result.LanguageName}, whose declarations are not something that can be read from a line. Nothing was scanned here, which is a different thing from the file declaring nothing. Read it with read_file, or grep it for what you are after.\n");
+
+        var text = new StringBuilder();
+        if (result.Coverage == DeclarationCoverage.Unprofiled)
+            text.Append(CultureInfo.InvariantCulture,
+                $"NOTE: no language profile covers this extension, so {result.QualifiedPath} was read with the conservative default shapes. What follows is thinner than a covered language's answer would be.\n");
+
+        if (result.Declarations.Count == 0)
+            return text.Append(result.Coverage == DeclarationCoverage.Unprofiled
+                    ? string.Create(CultureInfo.InvariantCulture,
+                        $"Those shapes found no declaration in {result.QualifiedPath}.\n")
+                    : string.Create(CultureInfo.InvariantCulture,
+                        $"{result.QualifiedPath} ({result.LanguageName}) declares nothing its language writes as a type or a routine. Its lines were scanned and none of them is a declaration.\n"))
+                // Nothing was found, so there is no evidence to derive the claim from; what a scan of
+                // line shapes can say is what it would have said had it found something.
+                .Append('\n').Append(TextualCaveat).Append('\n').ToString();
+
+        text.Append(CultureInfo.InvariantCulture,
+            $"{result.QualifiedPath} ({result.LanguageName}) declares {result.Declarations.Count} {ToolReply.Plural(result.Declarations.Count, "name")}, in file order:\n");
+        // A list that stopped at the ceiling reads as the whole outline unless it says otherwise. "Has
+        // more" and not "may have": the scan reads one declaration past what it reports, so a capped
+        // list is one it has actually seen past the end of.
+        if (result.Capped)
+            text.Append(CultureInfo.InvariantCulture,
+                $"NOTE: the first {FileDeclarations.MaxDeclarations} are listed and the file has more. A file declaring that many is generated; read it directly for the rest.\n");
+        text.Append('\n');
+
+        // Labelled once. The column width and the rows ask the same question of the same list, and the
+        // label is a small allocation per declaration in a list that can be five hundred long.
+        string[] labels = result.Declarations.Select(Label).ToArray();
+        int width = Math.Min(MaxLabelWidth, labels.Max(l => l.Length));
+        for (int i = 0; i < labels.Length; i++)
+        {
+            var declaration = result.Declarations[i];
+            text.Append(CultureInfo.InvariantCulture, $"  {declaration.LineNumber,6}: {labels[i].PadRight(width)}  ")
+                .Append(ToolReply.Clip(declaration.Text.Trim()));
+            // Only where the language has the split. A blank marker on every C# line would train an
+            // agent to skip the column on the languages where it carries the answer.
+            if (declaration.Role is { } role)
+                text.Append(role == DeclarationRole.Implementation ? "  (implementation)" : "  (declaration)");
+            text.Append('\n');
+        }
+
+        return text.Append('\n').Append(How(result.Declarations)).Append('\n').ToString();
+    }
+
+    /// <summary>
+    ///     What to call a declaration in the list: the member where there is one, with the type in
+    ///     front of it where the line names both — Delphi's <c>procedure TCustomer.Save;</c> says which
+    ///     type the routine is on, and dropping it would list three <c>Save</c>s that look like one.
+    ///     The same rule as the file page's <c>declarationLabel</c>, because an agent and a reader
+    ///     comparing the two surfaces are looking at one index.
+    /// </summary>
+    private static string Label(FileDeclaration declaration)
+    {
+        if (declaration.Member is not { } member) return declaration.Type ?? "";
+        return declaration.Type is { } type ? $"{type}.{member}" : member;
     }
 
     // "file.cs:1:60" would otherwise parse as the file "file.cs:1" read from line 60, a real-looking

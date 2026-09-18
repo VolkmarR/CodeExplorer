@@ -32,6 +32,27 @@ public sealed class FileToolsTests : IDisposable
         }
     };
 
+    /// <summary>
+    ///     A repository written to exercise <c>list_declarations</c> and nothing else: a covered
+    ///     language that declares names, one that declares none, a covered language whose declarations
+    ///     cannot be read from a line at all, an extension no profile covers, and a unit with the
+    ///     declaration/implementation split. Its own fixture rather than more files in
+    ///     <see cref="TwoRepositories" />, whose counts half the assertions above are written against.
+    /// </summary>
+    private static readonly Dictionary<string, Dictionary<string, string>> Declaring = new()
+    {
+        ["one"] = new Dictionary<string, string>
+        {
+            ["src/Orders.cs"] =
+                "namespace Shop;\n\nclass Orders\n{\n    public void Save() { }\n    // public void Removed() { }\n}\n",
+            ["src/Quiet.cs"] = "// a file of comments\n// and nothing else\n",
+            ["src/site.css"] = ".header { color: red; }\n",
+            ["notes.md"] = "# Title\n\nProse about the orders, not code.\n",
+            ["src/Customers.pas"] =
+                "unit Customers;\n\ninterface\n\ntype\n  TCustomer = class(TObject)\n    procedure Save;\n  end;\n\nimplementation\n\nprocedure TCustomer.Save;\nbegin\nend;\n\nend.\n"
+        }
+    };
+
     private TestHost? _host;
 
     public void Dispose() => _host?.Dispose();
@@ -309,10 +330,89 @@ public sealed class FileToolsTests : IDisposable
         }
     }
 
-    private async Task<McpClient> StartAsync()
+    [Fact]
+    public async Task List_declarations_answers_in_file_order_and_says_which_side_of_a_split_each_is()
+    {
+        await using var client = await DeclaringAsync();
+
+        string orders = await DeclarationsAsync(client, "one/src/Orders.cs");
+        Assert.Contains("one/src/Orders.cs (C#) declares 2 names, in file order:", orders);
+        Assert.Contains("3: Orders", orders);
+        Assert.Contains("5: Save", orders);
+        // The line itself, so the signature is in the reply and the next call can be a read of the
+        // range rather than a second orienting call.
+        Assert.Contains("public void Save() { }", orders);
+        // The commented-out declaration is shaped exactly like the live one, and only where the name
+        // sits tells them apart. It must not be listed, or the outline is fiction.
+        Assert.DoesNotContain("Removed", orders);
+        // C# has no declaration/implementation split, so no entry claims a side.
+        Assert.DoesNotContain("(implementation)", orders);
+        Assert.Contains("Strong evidence, not proof.", orders);
+
+        string customers = await DeclarationsAsync(client, "one/src/Customers.pas");
+        Assert.Contains("(Delphi) declares 3 names", customers);
+        // The announcement and the body are one routine written in two places, and an agent choosing
+        // which to read needs to be told which is which.
+        Assert.Contains("7: Save", customers);
+        Assert.Contains("(declaration)", customers);
+        Assert.Contains("12: TCustomer.Save", customers);
+        Assert.Contains("(implementation)", customers);
+    }
+
+    /// <summary>
+    ///     The three empty answers, which are three different facts: nothing was scanned because no
+    ///     profile covers the extension, nothing was scanned because the language writes no
+    ///     declaration a line can hold, and a scan that ran and found none. An agent told "no
+    ///     declarations" three times in one wording would act on the first two as if they were the
+    ///     third.
+    /// </summary>
+    [Fact]
+    public async Task List_declarations_tells_the_three_kinds_of_empty_apart()
+    {
+        await using var client = await DeclaringAsync();
+
+        string css = await DeclarationsAsync(client, "one/src/site.css");
+        Assert.Contains("CSS, whose declarations are not something that can be read from a line", css);
+        Assert.Contains("Nothing was scanned here", css);
+
+        string notes = await DeclarationsAsync(client, "one/notes.md");
+        Assert.Contains("no language profile covers this extension", notes);
+        Assert.Contains("conservative default shapes", notes);
+        Assert.Contains("found no declaration", notes);
+        // A file nothing looked at properly must not be described as having been scanned and found bare.
+        Assert.DoesNotContain("declares nothing its language writes", notes);
+
+        string quiet = await DeclarationsAsync(client, "one/src/Quiet.cs");
+        Assert.Contains("declares nothing its language writes as a type or a routine", quiet);
+        Assert.Contains("none of them is a declaration", quiet);
+        Assert.Contains("Strong evidence, not proof.", quiet);
+    }
+
+    [Fact]
+    public async Task List_declarations_explains_a_path_that_names_no_file()
+    {
+        await using var client = await DeclaringAsync();
+
+        string text = await DeclarationsAsync(client, "one/src/Nowhere.cs");
+        // The refusal the index reader writes for every file-scoped tool, pinned rather than merely
+        // asserted to be silent about declarations: a bare or wrong sentence naming the path would
+        // pass a negative assertion, and this is the reply an agent reads most often after a typo.
+        Assert.Contains("No indexed file 'one/src/Nowhere.cs' in repository 'one' of project 'alpha'", text);
+        Assert.Contains("glob or list_tree", text);
+        Assert.DoesNotContain("declares", text);
+    }
+
+    private Task<McpClient> DeclaringAsync() => StartAsync(Declaring);
+
+    private static Task<string> DeclarationsAsync(McpClient client, string path) =>
+        CallAsync(client, "list_declarations", new Dictionary<string, object?> { ["path"] = path });
+
+    private Task<McpClient> StartAsync() => StartAsync(TwoRepositories);
+
+    private async Task<McpClient> StartAsync(Dictionary<string, Dictionary<string, string>> repositories)
     {
         _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("alpha", TwoRepositories);
+        await _host.IndexedProjectAsync("alpha", repositories);
         return await _host.ConnectAsync("alpha");
     }
 

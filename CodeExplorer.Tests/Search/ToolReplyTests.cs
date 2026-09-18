@@ -28,6 +28,7 @@ public sealed class ToolReplyTests
         ["grep"] = new() { ["query"] = "Widget" },
         ["hot_files"] = [],
         ["imports"] = new() { ["path"] = "one/src/Widget.cs" },
+        ["list_declarations"] = new() { ["path"] = "one/src/Widget.cs" },
         ["list_extensions"] = [],
         ["list_matches"] = new() { ["query"] = "Widget" },
         ["list_tree"] = [],
