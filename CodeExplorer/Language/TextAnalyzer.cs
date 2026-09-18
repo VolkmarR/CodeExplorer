@@ -51,6 +51,15 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     /// </summary>
     private const int MaxNesting = 8;
 
+    /// <summary>
+    ///     How deeply a type argument list may nest before the member shape stops reading it. A
+    ///     regular expression cannot balance brackets and RE2 has no recursion to fake it with, so the
+    ///     nesting is written out to a bound. Three is <c>Dictionary&lt;string, List&lt;Foo&lt;int&gt;&gt;&gt;</c>,
+    ///     past what these codebases write, and a type nested deeper is a declaration this does not
+    ///     find rather than one reported wrongly.
+    /// </summary>
+    private const int MaxTypeArgumentDepth = 3;
+
     private readonly Regex _assignment;
     private readonly Regex _declarationPrefix;
     private readonly Regex? _generated;
@@ -203,8 +212,26 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         string? nonTypes = Alternation(profile.NonTypeKeywords);
         string typeGuard = nonTypes is null ? "" : $@"(?!(?:{nonTypes})\b)";
 
+        // A type argument list, read as the bracketed group it is rather than as more characters of
+        // the type. It was a character class holding `<` and `>` like any other letter, which meant
+        // it could hold no space — and every formatter there is writes `Dictionary<string, int>`
+        // with one, so a member typed that way was missed however it was written. It also meant the
+        // `<` opening the list was one of the characters that could *close* the shape, so a generic
+        // field was reported under its type's name.
+        //
+        // Nested to a fixed depth because a regular expression cannot balance brackets and RE2 has
+        // no recursion to fake it with. Three is `Dictionary<string, List<Foo<int>>>` — past what
+        // these codebases write — and a type nested deeper is a miss rather than a wrong answer,
+        // which is the direction this module errs in everywhere (CONTEXT.md, Declaration).
+        string arguments = "<[^<>]*>";
+        for (int depth = 1; depth < MaxTypeArgumentDepth; depth++) arguments = $"<(?:[^<>]|{arguments})*>";
+
+        // A name, the argument list where there is one, and the markers that ride after it: `?` for
+        // a nullable, `[]` for an array, and both together.
+        string type = $@"[\w\.]+(?:{arguments})?[\[\]\?]*";
+
         string MemberPattern(string guard) =>
-            $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+{guard}[\w<>,\[\]\?\.]+\s+(\w+)\s*[\(<{{=;]";
+            $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+{guard}{type}\s+(\w+)\s*[\(<{{=;]";
 
         // The wider of the two, and the one published as a candidate predicate.
         string memberPattern = modifiers is null ? MatchesNothing : MemberPattern("");

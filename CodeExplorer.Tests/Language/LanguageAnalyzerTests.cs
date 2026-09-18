@@ -620,9 +620,6 @@ public sealed class LanguageAnalyzerTests
     // was reported as declaring `List` — a false declaration under the heading an agent trusts most,
     // where a bare `int` field was merely a miss. Three lines of this repo were named after their
     // type that way.
-    // The type must still be written without a space inside its arguments: the type class has never
-    // held one, so `Dictionary<string, int> x` is a miss whether or not it is initialised. That is
-    // this pattern's own gap and not this shape's, which is why the case here is written closed up.
     [InlineData("    private List<string>? _names;", "_names")]
     // `event` was not a C-family modifier at all, so this line was found by neither shape.
     [InlineData("    public event EventHandler? Changed;", "Changed")]
@@ -630,6 +627,22 @@ public sealed class LanguageAnalyzerTests
     [InlineData("    private const string Pattern = \"x\";", "Pattern")]
     public void A_C_family_member_declares_whether_or_not_it_was_given_an_initialiser(
         string line, string member) =>
+        Assert.Equal(member, Declares("cs", line).Value?.Member);
+
+    [Theory]
+    // A type argument list is written with spaces after its commas by every formatter there is, and
+    // the type was a character class that held none — so the shape stopped at the first space and
+    // `Dictionary<string, int> _byName;` was a miss, initialised or not. The list is now read as the
+    // bracketed group it is, which is also what lets it nest.
+    [InlineData("    private Dictionary<string, int> _byName;", "_byName")]
+    [InlineData("    private Dictionary<string, int> _byName = new();", "_byName")]
+    [InlineData("    public Dictionary<string, List<Foo>> Grouped { get; set; }", "Grouped")]
+    [InlineData("    private readonly Dictionary<string, Func<int, bool>> _rules = [];", "_rules")]
+    [InlineData("    public Task<IReadOnlyList<Order>> LoadAsync(int id)", "LoadAsync")]
+    // The markers that ride after the closing bracket, which the old class held and this must keep.
+    [InlineData("    private List<string>[] _pages;", "_pages")]
+    [InlineData("    private Dictionary<string, int>? _maybe;", "_maybe")]
+    public void A_type_argument_list_is_read_whole_however_it_is_spaced(string line, string member) =>
         Assert.Equal(member, Declares("cs", line).Value?.Member);
 
     [Fact]
@@ -649,6 +662,12 @@ public sealed class LanguageAnalyzerTests
     [InlineData("        await using var scope = new Thing();")]
     [InlineData("        _bar.Advance(1);")]
     [InlineData("        new Thing();")]
+    // `new` is a C-family modifier, so a constructor call whose type argument list holds a space used
+    // to read as modifier, type, name, `<` — and was reported as declaring `Dictionary`. Twelve lines
+    // of this repo were, every one of them an argument in the middle of a call. Reading the argument
+    // list whole is what ends it: there is no name after the type, so there is no declaration.
+    [InlineData("            new Dictionary<string, Dictionary<string, string>>")]
+    [InlineData("            new Dictionary<string, string> { [\"a\"] = \"b\" });")]
     public void A_statement_is_not_a_declaration_just_because_it_ends_at_a_semicolon(string line) =>
         Assert.Null(Declares("cs", line).Value);
 
