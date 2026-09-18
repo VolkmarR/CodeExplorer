@@ -17,6 +17,16 @@ public sealed class HistoryToolsTests : IDisposable
 {
     private readonly TestHost _host = new(SearchEngine.Substring);
 
+    /// <summary>
+    ///     What a call carrying one name git_log does not have is read with, whatever the answer under
+    ///     it turns out to be. Written once because the point of the assertions below is that the four
+    ///     outcomes are introduced by the same sentence: one that varied with the answer would be
+    ///     telling an agent something about a log that may not be there.
+    /// </summary>
+    private const string Caveat =
+        "`git_log` has no `author` argument; it was ignored and had no effect on what follows. "
+        + "It takes `repo`, `limit` and `page`.";
+
     public void Dispose() => _host.Dispose();
 
     [Fact]
@@ -37,10 +47,11 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
-    ///     The failure this tool is most dangerous at. Every parameter of git_log is optional, so an
-    ///     argument it does not have binds nowhere and the method runs with its defaults — and an
-    ///     unfiltered log answering a filtered question is well-formed, plausible and wrong. The three
-    ///     names here are the ones a real session sent (issue #86).
+    ///     The failure this tool is most dangerous at, and the reason it is asserted here as well as
+    ///     across the surface (ToolReplyTests). Every parameter of git_log is optional, so an argument
+    ///     it does not have binds nowhere and the method runs with its defaults — and an unfiltered log
+    ///     answering a filtered question is well-formed, plausible and wrong. The three names here are
+    ///     the ones a real session sent (issue #86).
     /// </summary>
     [Fact]
     public async Task Git_log_says_which_arguments_it_ignored_rather_than_answering_as_though_it_filtered()
@@ -56,8 +67,8 @@ public sealed class HistoryToolsTests : IDisposable
             });
 
         Assert.StartsWith(
-            "`git_log` has no `author`, `grep` or `commit` argument; they were ignored and nothing below "
-            + "was filtered by them. It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
+            "`git_log` has no `author`, `grep` or `commit` argument; they were ignored and had no effect "
+            + "on what follows. It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
         // The log is still answered: the caveat is what the answer is read with, not a refusal.
         Assert.Contains("2 commits", reply, StringComparison.Ordinal);
     }
@@ -78,16 +89,14 @@ public sealed class HistoryToolsTests : IDisposable
         // A problem: Render returns the explanation instead of an answer, and the caveat still arrives.
         string unknownRepository = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?>(ignoredArgument) { ["repo"] = "nope" });
-        Assert.StartsWith("`git_log` has no `author` argument; it was ignored and nothing below was "
-                          + "filtered by it, beyond the `repo` scope.", unknownRepository, StringComparison.Ordinal);
+        Assert.StartsWith(Caveat, unknownRepository, StringComparison.Ordinal);
         Assert.Contains("Drop `repo` to cover every repository.", unknownRepository, StringComparison.Ordinal);
         Assert.DoesNotContain("unfiltered log", unknownRepository, StringComparison.Ordinal);
 
         // An empty page: there is no log below at all, only a sentence saying how few commits there are.
         string pastTheEnd = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?>(ignoredArgument) { ["page"] = 9 });
-        Assert.StartsWith("`git_log` has no `author` argument; it was ignored and nothing below was "
-                          + "filtered by it. It takes `repo`, `limit` and `page`.", pastTheEnd, StringComparison.Ordinal);
+        Assert.StartsWith(Caveat, pastTheEnd, StringComparison.Ordinal);
         Assert.Contains("No commits on page 9", pastTheEnd, StringComparison.Ordinal);
 
         // No history: the reply is the absence itself, which must not be introduced as a log.
@@ -96,8 +105,7 @@ public sealed class HistoryToolsTests : IDisposable
         await _host.ExecuteAsync("empty", "DELETE FROM commits");
         await using var bare = await _host.ConnectAsync("empty");
         string noHistory = await TestHost.CallAsync(bare, "git_log", ignoredArgument);
-        Assert.StartsWith("`git_log` has no `author` argument; it was ignored and nothing below was "
-                          + "filtered by it. It takes `repo`, `limit` and `page`.", noHistory, StringComparison.Ordinal);
+        Assert.StartsWith(Caveat, noHistory, StringComparison.Ordinal);
         Assert.Contains("holds no history", noHistory, StringComparison.Ordinal);
         Assert.DoesNotContain("unfiltered log", noHistory, StringComparison.Ordinal);
     }
@@ -117,8 +125,8 @@ public sealed class HistoryToolsTests : IDisposable
             new Dictionary<string, object?> { ["repository"] = "one" });
 
         Assert.StartsWith(
-            "`git_log` has no `repository` argument; it was ignored and nothing below was filtered by "
-            + "it. It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
+            "`git_log` has no `repository` argument; it was ignored and had no effect on what follows. "
+            + "It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
         // It bound nowhere, so the answer really does still span the second repository.
         Assert.Contains("[two]", reply, StringComparison.Ordinal);
     }
@@ -147,8 +155,9 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
-    ///     The scope that does exist still scopes, and the caveat says so: a sentence that let a scoped
-    ///     log read as unfiltered would teach the same wrong fact in the other direction.
+    ///     The scope that does exist still scopes while the caveat names the one that does not. The
+    ///     caveat speaks only of what it names, so a scoped log keeps its scope and is not introduced
+    ///     as unfiltered — the same wrong fact in the other direction.
     /// </summary>
     [Fact]
     public async Task Git_log_keeps_its_scope_while_saying_what_it_ignored()
@@ -158,9 +167,7 @@ public sealed class HistoryToolsTests : IDisposable
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["repo"] = "one", ["author"] = "Grace" });
 
-        Assert.StartsWith(
-            "`git_log` has no `author` argument; it was ignored and nothing below was filtered by it, "
-            + "beyond the `repo` scope. It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
+        Assert.StartsWith(Caveat, reply, StringComparison.Ordinal);
         Assert.Contains("5 commits in repository 'one'", reply, StringComparison.Ordinal);
         Assert.DoesNotContain("src/Other.cs", reply, StringComparison.Ordinal);
     }

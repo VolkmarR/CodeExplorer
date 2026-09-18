@@ -213,6 +213,54 @@ public sealed class ToolReplyTests : IDisposable
     }
 
     /// <summary>
+    ///     The third fault, and the one no error surfaces (#86): the call bound, ran and answered, and
+    ///     the stray name did nothing. A tool whose parameters are all optional binds regardless of a
+    ///     name it does not have, so nothing throws and the answer reads as a reply to the question the
+    ///     caller asked. Asserted over the whole surface rather than at `git_log`, where it was found:
+    ///     a tool with a required argument binds the same way once that argument is there, so the
+    ///     silence is not a property of the tools that take nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_stray_name_on_a_call_that_still_ran_is_named_above_the_answer()
+    {
+        await using var client = await UnbuiltProjectAsync();
+
+        // `author` is the name the session in #86 sent, and no tool declares it — asserted below, so
+        // that a tool growing one cannot turn this into a sweep over a name that binds.
+        foreach ((string tool, var arguments) in Tools)
+        {
+            string reply = await TestHost.CallAsync(client, tool,
+                new Dictionary<string, object?>(arguments) { ["author"] = "Holger" });
+
+            Assert.StartsWith($"`{tool}` has no `author` argument; it was ignored and had no effect on "
+                              + "what follows. It takes ", reply, StringComparison.Ordinal);
+            // The tool's own answer is kept: the caveat is what it is read with, not a refusal.
+            Assert.Contains(tool == WithoutIndex ? "unbuilt" : IndexReader.NoIndex("unbuilt"), reply,
+                StringComparison.Ordinal);
+            // A tool that takes nothing says so rather than trailing off after "It takes".
+            Assert.DoesNotContain("It takes .", reply, StringComparison.Ordinal);
+        }
+
+        var listed = (await client.ListToolsAsync(cancellationToken: Ct)).ToList();
+        Assert.All(listed, tool => Assert.DoesNotContain("author", Declared(tool), StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    ///     The other side of it: a call that carried only names its tool has is the reply it was before
+    ///     any of this existed. A caveat on a clean call would be read past within one session, and
+    ///     then read past on the call that needed it.
+    /// </summary>
+    [Fact]
+    public async Task A_clean_call_carries_no_caveat()
+    {
+        await using var client = await UnbuiltProjectAsync();
+
+        foreach ((string tool, var arguments) in Tools)
+            Assert.DoesNotContain($"`{tool}` has no", await TestHost.CallAsync(client, tool, arguments),
+                StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     The near-miss names are named in the reply and nowhere else (#85): accepting one would put
     ///     two spellings on a concept, which CONTEXT.md asks against. Read from the table above rather
     ///     than listed again, so that a name added there cannot be answered nicely and quietly accepted

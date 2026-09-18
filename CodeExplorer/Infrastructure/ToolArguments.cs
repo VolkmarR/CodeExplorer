@@ -7,11 +7,17 @@ using ModelContextProtocol.Server;
 namespace CodeExplorer;
 
 /// <summary>
-///     The reply for a call whose arguments the SDK could not bind. Binding happens before the tool
-///     method runs, so neither <see cref="ToolReply" /> nor a per-tool formatter ever sees such a
-///     call, and what reached the agent instead was the transport's one sentence — "An error occurred
-///     invoking 'glob'." — naming neither the argument that was wrong nor the ones that would have
-///     worked (#85). Measured over two real sessions, every recovery from it was trial and error.
+///     What a tool owes a caller about the arguments it was called with, in the two places the tool
+///     itself cannot say it.
+///     A call the SDK could not bind is the first. Binding happens before the tool method runs, so
+///     neither <see cref="ToolReply" /> nor a per-tool formatter ever sees such a call, and what
+///     reached the agent instead was the transport's one sentence — "An error occurred invoking
+///     'glob'." — naming neither the argument that was wrong nor the ones that would have worked
+///     (#85). Measured over two real sessions, every recovery from it was trial and error.
+///     A call that bound in spite of a name the tool does not have is the second, and the quieter one:
+///     where every parameter is optional there is no failure at all, only a confident answer to a
+///     question nobody asked (#86). Both are read off the same two things — the arguments that arrived
+///     and the schema the agent was given — which is why they are one class.
 ///     A call-tool filter rather than nullable parameters on each tool: one registration covers every
 ///     tool, including the ones no session has mis-called yet, and no tool loses <c>required</c> from
 ///     the schema it advertises.
@@ -41,9 +47,13 @@ internal static class ToolArguments
     ///     is this class's rather than the binder's — <see cref="Accepts" /> could be wrong about what
     ///     binds. So that one is only ever read off a call that has already failed, where the worst a
     ///     wrong guess can do is fail to improve the sentence the caller was getting anyway.
+    ///     A call that bound and ran is where the third fault lives: a tool whose parameters are all
+    ///     optional binds regardless of a name it does not have, runs with its defaults, and answers a
+    ///     question it was never asked (#86). That answer is kept — it is the tool's real answer to the
+    ///     arguments it could read — and the stray name is said in front of it.
     ///     Everything else leaves by the path it came in on: an unreadable index still reaches the
-    ///     agent as the infrastructure failure it is (CODING_STANDARDS), and a call that bound cleanly
-    ///     is byte-for-byte what it was before this existed.
+    ///     agent as the infrastructure failure it is (CODING_STANDARDS), and a call carrying nothing
+    ///     stray is byte-for-byte what it was before this existed.
     /// </summary>
     public static McpRequestHandler<CallToolRequestParams, CallToolResult> Filter(
         McpRequestHandler<CallToolRequestParams, CallToolResult> next) =>
@@ -53,7 +63,7 @@ internal static class ToolArguments
 
             try
             {
-                return await next(request, cancellationToken);
+                return Caveated(await next(request, cancellationToken), request);
             }
             catch (JsonException)
             {
@@ -62,6 +72,70 @@ internal static class ToolArguments
                 return Reply(mistyped);
             }
         };
+
+    /// <summary>
+    ///     The reply a call that ran is read with, when it carried a name the tool does not have.
+    ///     Prepended to the tool's own text rather than added as a second content block, because a
+    ///     caveat an agent might read second is a caveat it acts after.
+    ///     git_log, which built this sentence for itself until this filter took it over, put it inside
+    ///     the answer <see cref="ToolReply.Cap" /> measures, so that a capped reply could not say
+    ///     "truncated at 40 KB" while being larger than that. From out here that is not available: the
+    ///     tool has already rendered and capped, and re-capping would cut the tail, which is exactly
+    ///     where the advice for getting the rest of a truncated answer lives. So the ceiling is
+    ///     exceeded by this one sentence instead — under a percent of it, on the rare call that carries
+    ///     a stray name — which is what the cap is for (a context spent on one reply) rather than what
+    ///     it promises to the byte. The alternative was every tool declaring its own sham parameters to
+    ///     catch the four spellings someone had already seen, which is what #86 is removing.
+    ///     A failed result is left alone. Its text is an infrastructure failure on its way to becoming
+    ///     an <c>McpException</c>, and a stray argument is not why it failed — saying so in front of it
+    ///     would offer a spelling to fix against a project that will not answer either way.
+    /// </summary>
+    private static CallToolResult Caveated(CallToolResult result, RequestContext<CallToolRequestParams> request)
+    {
+        if (result.IsError == true) return result;
+        if (Ignored(request) is not { } caveat) return result;
+
+        int first = -1;
+        for (int i = 0; i < result.Content.Count && first < 0; i++)
+            if (result.Content[i] is TextContentBlock) first = i;
+        if (first < 0) return result;
+
+        // A new list rather than an assignment into the SDK's: nothing promises the one it handed back
+        // is resizable or writable, and an IList that refuses would throw out of a call that had
+        // already succeeded — reaching the agent as the one shape it cannot read an explanation from.
+        var content = result.Content.ToList();
+        content[first] = new TextContentBlock { Text = caveat + ((TextContentBlock)content[first]).Text };
+        result.Content = content;
+        return result;
+    }
+
+    /// <summary>
+    ///     What a call carried that its tool does not have, said in front of the answer, or null when
+    ///     it carried nothing stray.
+    ///     The sentence says only what was ignored and nothing about what follows it, because what
+    ///     follows may be a log, an empty page, a project with no history or an unbuilt index — and a
+    ///     caveat that called one of those "the unfiltered answer" would be an absence dressed as a
+    ///     result, which is the failure this whole filter exists to stop (CODING_STANDARDS, Errors).
+    ///     It names what the tool does take from the schema, so a caller learns the right spelling in
+    ///     the same breath. None of the near misses is accepted anywhere: one spelling per concept
+    ///     (CONTEXT.md).
+    /// </summary>
+    private static string? Ignored(RequestContext<CallToolRequestParams> request)
+    {
+        if (Called(request) is not { } called) return null;
+        (string tool, var schema) = called;
+
+        var declared = Properties(schema).Select(p => p.Name).ToList();
+        var unknown = Unknown(request, declared);
+        if (unknown.Count == 0) return null;
+
+        string them = unknown.Count == 1 ? "it was" : "they were";
+        // A tool that takes nothing declares no properties at all, and it is one of the tools this is
+        // most needed at: there is no name a stray one could have been meant as.
+        string takes = declared.Count == 0 ? "It takes no arguments" : $"It takes {And(declared)}";
+        return $"`{tool}` has no {Or(unknown)} argument; "
+               + $"{them} ignored and had no effect on what follows. {takes}.\n\n";
+    }
 
     /// <summary>
     ///     A normal result and not <c>IsError</c>: a call this server can explain is a semantic failure,
@@ -89,18 +163,14 @@ internal static class ToolArguments
     /// </summary>
     private static string? Explain(RequestContext<CallToolRequestParams> request)
     {
-        if (request.Params?.Name is not { } tool) return null;
-        // Set by the SDK's primitive matching, which runs before this filter; absent only for a call
-        // answered by a handler rather than by one of the registered tool types.
-        if (request.MatchedPrimitive is not McpServerTool matched) return null;
-        var schema = matched.ProtocolTool.InputSchema;
-        if (!schema.TryGetProperty("properties", out var properties)) return null;
+        if (Called(request) is not { } called) return null;
+        (string tool, var schema) = called;
 
-        var declared = properties.EnumerateObject().ToList();
+        var declared = Properties(schema);
         var required = schema.TryGetProperty("required", out var names)
             ? names.EnumerateArray().Select(name => name.GetString()).OfType<string>().ToHashSet(StringComparer.Ordinal)
             : [];
-        var supplied = request.Params.Arguments ?? new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        var supplied = request.Params?.Arguments ?? new Dictionary<string, JsonElement>(StringComparer.Ordinal);
 
         var missing = declared.Where(p => required.Contains(p.Name) && !supplied.ContainsKey(p.Name))
             .Select(p => p.Name).ToList();
@@ -112,8 +182,7 @@ internal static class ToolArguments
         if (missing.Count == 0 && mistyped.Count == 0) return null;
 
         // Below the bail, because an unknown name is named in the reply and never causes one.
-        var unknown = supplied.Keys
-            .Where(name => !declared.Exists(p => string.Equals(p.Name, name, StringComparison.Ordinal))).ToList();
+        var unknown = Unknown(request, declared.Select(p => p.Name).ToList());
 
         var text = new StringBuilder();
         text.Append(Opening(tool, unknown, missing, mistyped)).Append("\n\n");
@@ -157,10 +226,10 @@ internal static class ToolArguments
     {
         var clauses = new List<string>(2 + mistyped.Count);
         if (unknown.Count > 0)
-            clauses.Add($"has no {Names(unknown)} {ToolReply.Plural(unknown.Count, "argument")}");
+            clauses.Add($"has no {Or(unknown)} argument");
         if (missing.Count > 0)
             clauses.Add(
-                $"was called without its required {Names(missing)} {ToolReply.Plural(missing.Count, "argument")}");
+                $"was called without its required {And(missing)} {ToolReply.Plural(missing.Count, "argument")}");
         clauses.AddRange(mistyped);
 
         return $"`{tool}` {Sentence(clauses)}, so it did not run.";
@@ -217,7 +286,49 @@ internal static class ToolArguments
 
     private static string Article(string noun) => $"{(noun.Length > 0 && "aeiou".Contains(noun[0]) ? "an" : "a")} {noun}";
 
-    private static string Names(IEnumerable<string> names) => string.Join(", ", names.Select(Quoted));
+    /// <summary>
+    ///     The tool a call matched and the schema it advertises, or null for a call that matched no
+    ///     registered tool — one answered by a handler rather than by a tool type, which is none of
+    ///     this class's business. <c>MatchedPrimitive</c> is set by the SDK's primitive matching, which
+    ///     runs before this filter.
+    ///     Both replies start here, because the two reading the request differently would be one of
+    ///     them naming a tool or a parameter the other had not seen.
+    /// </summary>
+    private static (string Tool, JsonElement Schema)? Called(RequestContext<CallToolRequestParams> request) =>
+        request.Params?.Name is { } tool && request.MatchedPrimitive is McpServerTool matched
+            ? (tool, matched.ProtocolTool.InputSchema)
+            : null;
+
+    /// <summary>
+    ///     The parameters a schema declares, and none rather than a failure when it declares no
+    ///     <c>properties</c> at all — which is how a tool that takes no arguments is advertised.
+    /// </summary>
+    private static List<JsonProperty> Properties(JsonElement schema) =>
+        schema.TryGetProperty("properties", out var properties) ? properties.EnumerateObject().ToList() : [];
+
+    /// <summary>
+    ///     The names a call carried that its tool does not declare. Read in one place because both
+    ///     replies name them and the two disagreeing about what counts as stray would be one of them
+    ///     offering a spelling the other had just refused.
+    /// </summary>
+    private static List<string> Unknown(RequestContext<CallToolRequestParams> request, List<string> declared) =>
+        (request.Params?.Arguments?.Keys ?? [])
+        .Where(name => !declared.Contains(name, StringComparer.Ordinal)).ToList();
+
+    /// <summary>A list of things the sentence is about together — "`repo`, `limit` and `page`".</summary>
+    private static string And(List<string> names) => Joined(names, "and");
+
+    /// <summary>
+    ///     A list of things the sentence is about severally — "`author`, `grep` or `commit`" — which is
+    ///     what a list of faults is: the reply says what none of them did, not what they did together.
+    /// </summary>
+    private static string Or(List<string> names) => Joined(names, "or");
+
+    private static string Joined(List<string> names, string conjunction)
+    {
+        string commas = string.Join(", ", names.Take(Math.Max(names.Count - 1, 0)).Select(Quoted));
+        return names.Count <= 1 ? string.Join("", names.Select(Quoted)) : $"{commas} {conjunction} {Quoted(names[^1])}";
+    }
 
     private static string Quoted(string name) => $"`{name}`";
 
