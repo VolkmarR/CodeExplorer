@@ -19,6 +19,12 @@ node_modules/
 dist/
 dist-ssr/
 CodeExplorer/wwwroot/
+# Written by the TanStack Router plugin before anything else runs — `vp check`, `vp test`, `vp build`
+# and the dev server all regenerate it, including the container build's `vp build` on a fresh copy.
+# It ships @ts-nocheck and is already excluded from both lint configs (web/vite.config.ts), so it is
+# an artifact like wwwroot and dist. A clone that has run nothing yet has no route tree: the first
+# `vp` command writes it, and until then an editor reports main.tsx's import as unresolved.
+web/src/routeTree.gen.ts
 *.tsbuildinfo
 .pnpm-store/
 .env
