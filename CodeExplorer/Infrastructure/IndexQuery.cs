@@ -26,18 +26,48 @@ internal static class IndexQuery
 
     /// <summary>
     ///     Executes a read and, when <see cref="QueryPlan" /> is switched on, writes its plan first.
-    ///     It stands in for <c>ExecuteReaderAsync</c> at every read of an index so that the diagnostic
-    ///     covers every query rather than the one that was slow the day it was written — the query
-    ///     nobody suspects is exactly the one no hand-placed dump is ever put in front of.
+    ///     It stands in for <c>ExecuteReaderAsync</c> wherever a project's index is read on the way to
+    ///     answering a request, so that the diagnostic covers every such query rather than the one that
+    ///     was slow the day it was written — the query nobody suspects is exactly the one no
+    ///     hand-placed dump is ever put in front of. A build and the control database are not covered
+    ///     and are not meant to be: neither is on the path a slow answer is investigated from.
     ///     The label comes from the compiler rather than the call site for the reason
-    ///     <see cref="QueryPlan.DumpAsync(DuckDBCommand,string,CancellationToken)" /> gives.
+    ///     <see cref="QueryPlan.DumpAsync(DuckDBCommand,string,string,CancellationToken)" /> gives.
+    ///     Nothing is awaited when the diagnostic is off: every read in the system passes through here,
+    ///     and a state machine per read to test one static would be this costing something in the case
+    ///     it is never switched on for.
     /// </summary>
-    public static async Task<DbDataReader> ReaderAsync(this DuckDBCommand command,
+    public static Task<DbDataReader> ReaderAsync(this DuckDBCommand command,
         CancellationToken cancellationToken, [CallerFilePath] string file = "",
-        [CallerMemberName] string member = "")
+        [CallerMemberName] string member = "") =>
+        QueryPlan.Enabled
+            ? ExplainedAsync(command, file, member, cancellationToken)
+            : command.ExecuteReaderAsync(cancellationToken);
+
+    private static async Task<DbDataReader> ExplainedAsync(DuckDBCommand command, string file, string member,
+        CancellationToken cancellationToken)
     {
-        if (QueryPlan.Enabled) await QueryPlan.DumpAsync(command, QueryPlan.Label(file, member), cancellationToken);
+        await QueryPlan.DumpAsync(command, file, member, cancellationToken);
         return await command.ExecuteReaderAsync(cancellationToken);
+    }
+
+    /// <summary>
+    ///     The one value a statement answers with, explained like any other read. Every <c>count(*)</c>
+    ///     and every <c>EXISTS</c> on the query path goes through here for the reason the counts do:
+    ///     a total is one number at the call site and a scan of a whole table underneath, which is the
+    ///     shape that hides from a reader looking for what made an answer slow.
+    /// </summary>
+    public static Task<object?> ScalarAsync(this DuckDBCommand command, CancellationToken cancellationToken,
+        [CallerFilePath] string file = "", [CallerMemberName] string member = "") =>
+        QueryPlan.Enabled
+            ? ExplainedScalarAsync(command, file, member, cancellationToken)
+            : command.ExecuteScalarAsync(cancellationToken);
+
+    private static async Task<object?> ExplainedScalarAsync(DuckDBCommand command, string file, string member,
+        CancellationToken cancellationToken)
+    {
+        await QueryPlan.DumpAsync(command, file, member, cancellationToken);
+        return await command.ExecuteScalarAsync(cancellationToken);
     }
 
     /// <summary>
@@ -64,9 +94,7 @@ internal static class IndexQuery
         [CallerFilePath] string file = "", [CallerMemberName] string member = "")
     {
         using var command = connection.Query(sql, parameters);
-        // A count is a query like any other, and the one that scans the whole table to answer a total
-        // is the kind that hides here: the caller shows one number and reads as cheap.
-        if (QueryPlan.Enabled) await QueryPlan.DumpAsync(command, QueryPlan.Label(file, member), cancellationToken);
-        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+        return Convert.ToInt64(await command.ScalarAsync(cancellationToken, file, member),
+            CultureInfo.InvariantCulture);
     }
 }

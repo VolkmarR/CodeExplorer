@@ -221,10 +221,15 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
         // 123 ms against 157 ms on Radix, same rows. With context there are neighbouring lines that
         // were never read and the join earns its place, and a files-only search wants no text at all.
         bool carried = !request.FilesOnly && bounds.Context == 0;
-        string carriedColumns = carried ? $", l.content{(request.WithHistory ? ", l.commit_id" : "")}" : "";
+
+        // The carried columns, qualified for wherever they are being selected. One spelling, because
+        // the three places that carry them have to carry the same ones or the CTEs stop lining up.
+        string Carried(string alias) =>
+            carried ? $", {alias}content{(request.WithHistory ? $", {alias}commit_id" : "")}" : "";
+
         string common = $"""
                          WITH hits AS (
-                             SELECT l.file_id, l.line_number, f.qualified_path{carriedColumns}
+                             SELECT l.file_id, l.line_number, f.qualified_path{Carried("l.")}
                              FROM lines l JOIN files f USING (file_id)
                              WHERE {match}{fileFilter}),
                          per_file AS (
@@ -237,17 +242,18 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
                              LIMIT {bounds.PageSize} OFFSET {(bounds.Page - 1) * bounds.PageSize})
                          """;
 
-        // The kept lines' own text where `hits` carried it, and nothing where it did not: there the
-        // text comes from `shown` below, which reads it from `lines`.
-        string keptColumns = carried ? $", content{(request.WithHistory ? ", commit_id" : "")}" : "";
-        string keptSource = carried ? $", h.content{(request.WithHistory ? ", h.commit_id" : "")}" : "";
-
-        // The context window, grouped so that overlapping windows collapse into one run of lines. Empty
-        // where the text was carried: at context 0 the window is the matching line and `kept` is it.
-        string shown = carried
-            ? ""
+        // The lines the answer shows: the kept ones and their context window, grouped so that
+        // overlapping windows collapse into one run of lines — or, where the text was carried, the kept
+        // lines themselves, because at context 0 the window is the matching line and every line in it
+        // matched. The whole difference between the two shapes is here, so everything downstream of
+        // `shown` is one query rather than two.
+        string Shown() => carried
+            ? $"""
+               shown AS (
+                   SELECT file_id, line_number{Carried("")}, true AS is_match
+                   FROM kept)
+               """
             : $"""
-               ,
                shown AS (
                    SELECT l.file_id, l.line_number, l.content{(request.WithHistory ? ", l.commit_id" : "")},
                           bool_or(k.line_number = l.line_number) AS is_match
@@ -272,14 +278,15 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
             : $"""
                {common},
                kept AS (
-                   SELECT file_id, line_number{keptColumns} FROM (
-                       SELECT h.file_id, h.line_number{keptSource},
+                   SELECT file_id, line_number{Carried("")} FROM (
+                       SELECT h.file_id, h.line_number{Carried("h.")},
                               row_number() OVER (PARTITION BY h.file_id ORDER BY h.line_number) AS rn
                        FROM hits h JOIN page_files p USING (file_id))
-                   WHERE rn <= {bounds.MaxLinesPerFile}){shown},
+                   WHERE rn <= {bounds.MaxLinesPerFile}),
+               {Shown()},
                page_lines AS (
-                   SELECT p.qualified_path, p.n, s.line_number, s.content, {(carried ? "true AS is_match" : "s.is_match")}{History(request)}
-                   FROM page_files p JOIN {(carried ? "kept" : "shown")} s USING (file_id){HistoryJoin(request)})
+                   SELECT p.qualified_path, p.n, s.line_number, s.content, s.is_match{History(request)}
+                   FROM page_files p JOIN shown s USING (file_id){HistoryJoin(request)})
                SELECT t.total_files, t.total_lines, p.qualified_path, p.n AS match_count,
                       p.line_number, p.content, p.is_match{Columns(request)}
                FROM totals t LEFT JOIN page_lines p ON true

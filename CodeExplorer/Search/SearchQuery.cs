@@ -48,15 +48,15 @@ internal static class SearchQuery
     ///     only measuring the query finds.
     /// </summary>
     /// <param name="symbol">The identifier being looked for, exactly as it is matched: case and all.</param>
-    /// <param name="name">The parameter to bind it to, unique within the caller's command.</param>
     /// <param name="parameters">The command's parameters, appended to.</param>
-    /// <param name="column">The column the caller's statement spells the line's text as.</param>
-    public static string Literally(string symbol, string name, List<DuckDBParameter> parameters,
-        string column = "l.content")
+    public static string Literally(string symbol, List<DuckDBParameter> parameters)
     {
         ArgumentNullException.ThrowIfNull(parameters);
-        parameters.Add(new DuckDBParameter(name, symbol));
-        return $"contains({column}, ${name})";
+        // The parameter name and the column are fixed rather than passed: both callers spell a line's
+        // text `l.content` and neither has a second literal to bind, so a knob for either would be a
+        // choice nothing makes. A third caller that needs one adds it then.
+        parameters.Add(new DuckDBParameter("lit", symbol));
+        return "contains(l.content, $lit)";
     }
 
     /// <summary>

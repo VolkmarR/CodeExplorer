@@ -109,7 +109,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
         var filter = request.Filter with { Repository = index.Repository?.Slug };
         var symbolPattern = new DuckDBParameter("q", SymbolText.WholeWordPattern(symbol));
         var parameters = new List<DuckDBParameter> { symbolPattern };
-        string literally = SearchQuery.Literally(symbol, "lit", parameters);
+        string literally = SearchQuery.Literally(symbol, parameters);
         string declarationShapes = await ShapesAsync(connection, parameters, cancellationToken);
         string fileFilter = filter.Sql(parameters);
 

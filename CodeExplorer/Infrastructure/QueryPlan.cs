@@ -23,24 +23,21 @@ internal static class QueryPlan
     public static bool Enabled => Directory is not null;
 
     /// <summary>
-    ///     The plan of a command that is about to be executed, labelled with the method that built it.
-    ///     This is the overload every read goes through (<see cref="IndexQuery.ReaderAsync" />): a label
-    ///     spelled at the call site would be a second name for the query, free to drift from the method
-    ///     that owns it, and thirty of them would have to be written before any of this measured
-    ///     anything.
+    ///     The plan of a command that is about to be executed, named for the method that built it:
+    ///     <c>IndexReader.FileAsync</c>, from the compiler's own <c>[CallerFilePath]</c> and
+    ///     <c>[CallerMemberName]</c>. A label spelled at the call site would be a second name for the
+    ///     query, free to drift from the method that owns it, and thirty of them would have to be
+    ///     written before any of this measured anything. The file name stands in for the type because
+    ///     the caller is a compiler constant and the type is not, and here a file is one type often
+    ///     enough that the difference only shows where it does not matter.
+    ///     This is the only way in (<see cref="IndexQuery.ReaderAsync" />, <see cref="IndexQuery.ScalarAsync" />),
+    ///     so the statement explained is always the one about to run.
     /// </summary>
-    public static Task DumpAsync(DuckDBCommand command, string label, CancellationToken cancellationToken) =>
-        DumpAsync((DuckDBConnection)command.Connection!, label, command.CommandText,
+    public static Task DumpAsync(DuckDBCommand command, string file, string member,
+        CancellationToken cancellationToken) =>
+        DumpAsync((DuckDBConnection)command.Connection!,
+            $"{Path.GetFileNameWithoutExtension(file)}.{member}", command.CommandText,
             [.. command.Parameters.Cast<DuckDBParameter>()], cancellationToken);
-
-    /// <summary>
-    ///     What to call the plan of a query built in <paramref name="member" /> of <paramref name="file" />:
-    ///     <c>IndexReader.FileAsync</c>. The file name and not the type, because the caller is a compiler
-    ///     constant and the type is not — and in this codebase a file is one type often enough that the
-    ///     difference only shows where it does not matter.
-    /// </summary>
-    public static string Label(string file, string member) =>
-        $"{Path.GetFileNameWithoutExtension(file)}.{member}";
 
     /// <summary>
     ///     Runs <c>EXPLAIN ANALYZE</c> on <paramref name="sql" /> and writes it, with the statement and
@@ -51,7 +48,7 @@ internal static class QueryPlan
     ///     Never throws into the search. A plan that could not be taken is a note in the file, because
     ///     a diagnostic that can fail a request is worse than no diagnostic.
     /// </summary>
-    public static async Task DumpAsync(DuckDBConnection connection, string label, string sql,
+    private static async Task DumpAsync(DuckDBConnection connection, string label, string sql,
         IReadOnlyList<DuckDBParameter> parameters, CancellationToken cancellationToken)
     {
         if (Directory is null) return;
