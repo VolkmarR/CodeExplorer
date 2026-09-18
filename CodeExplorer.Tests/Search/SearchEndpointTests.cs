@@ -653,14 +653,14 @@ public sealed class SearchEndpointTests
 
         Assert.Equal("one/src/Orders.cs", declared.QualifiedPath);
         Assert.Equal("C#", declared.LanguageName);
-        Assert.True(declared.Profiled);
-        Assert.True(declared.ReadsDeclarations);
+        Assert.Equal("read", declared.Coverage);
         Assert.False(declared.Capped);
 
         // The type and its routines, in the order the file writes them. The field on line 5 is not
-        // among them: these profiles read types and routines and not variables, the same way a Delphi
-        // `var` is no declaration (LanguageAnalyzerTests), and a form no profile knows is one this
-        // does not find rather than one that is not there (CONTEXT.md, Declaration).
+        // among them: the C-family member shape requires the name to be followed by `(`, `<`, `{` or
+        // `=`, so an initialised field is a declaration and a bare one is not — #71 asks which way
+        // the two should agree. A form no profile knows is one this does not find rather than one
+        // that is not there (CONTEXT.md, Declaration).
         // Line 6 is the one that matters most: `// public void Removed() { }` is shaped exactly like
         // the live declaration two lines below it, and only the walk of the lines above tells them
         // apart.
@@ -684,23 +684,21 @@ public sealed class SearchEndpointTests
 
         // A language whose declarations are read, and a file that writes none.
         var none = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/src/Empty.cs"));
-        Assert.True(none.Profiled);
-        Assert.True(none.ReadsDeclarations);
+        Assert.Equal("read", none.Coverage);
         Assert.Empty(none.Declarations);
 
         // A language a profile covers and whose declarations this cannot read: it was never scanned,
         // which is not the same as having been scanned and found to declare nothing.
         var css = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/web/site.css"));
         Assert.Equal("CSS", css.LanguageName);
-        Assert.True(css.Profiled);
-        Assert.False(css.ReadsDeclarations);
+        Assert.Equal("unreadable", css.Coverage);
         Assert.Empty(css.Declarations);
 
         // An extension no profile covers: it was read with the conservative default shapes, so the
         // list is thin for a reason the panel has to be able to name.
         var uncovered = await GetAsync<FileDeclarationsResponse>(host,
             Route("declarations", "one/build/notes.rst"));
-        Assert.False(uncovered.Profiled);
+        Assert.Equal("unprofiled", uncovered.Coverage);
         Assert.Equal(".rst", uncovered.LanguageName);
         Assert.Empty(uncovered.Declarations);
     }

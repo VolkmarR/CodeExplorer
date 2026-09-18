@@ -276,16 +276,25 @@ export interface Declaration {
 }
 
 /**
- * What a file declares. `profiled` and `readsDeclarations` are why an empty list is not the sentence "this file
- * declares nothing": an extension no profile covers was read with the conservative default shapes,
- * and a language whose declarations this cannot read was never scanned. `capped` says the list is
- * short of what the file declares.
+ * How much of a file's declarations the server was in a position to read, which is what keeps an
+ * empty list from reading as "this file declares nothing":
+ *
+ * - `unprofiled` — no profile covers the extension, so it was read with the conservative default
+ *   shapes. A list may still come back, thinner than a covered language's would be.
+ * - `unreadable` — the language is covered and its declarations cannot be read from a line (CSS).
+ *   Nothing was scanned, which is not the same as scanning and finding nothing.
+ * - `read` — the language is covered and its declaration shapes were read.
+ *
+ * One field rather than two flags, because only these three of four combinations are reachable and a
+ * fourth would be a state the panel could render the wrong sentence for.
  */
+export type DeclarationCoverage = 'unprofiled' | 'unreadable' | 'read'
+
+/** What a file declares. `capped` says the list is short of what the file declares. */
 export interface FileDeclarations {
   qualifiedPath: string
   languageName: string
-  profiled: boolean
-  readsDeclarations: boolean
+  coverage: DeclarationCoverage
   capped: boolean
   declarations: Declaration[]
 }
