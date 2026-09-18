@@ -102,6 +102,39 @@ public sealed class GrepTests : IDisposable
         string unfiltered = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "unicorn" });
         Assert.StartsWith("No matches", unfiltered);
         Assert.DoesNotContain("outside your", unfiltered);
+        Assert.Contains("no filters narrowed the search", unfiltered);
+    }
+
+    /// <summary>
+    ///     The miss that knows the most: nothing narrowed the search, so the absence is the whole
+    ///     project's and the reply says so before any engine hint (#87). A hint survives only where it
+    ///     names a mechanism that sentence does not.
+    /// </summary>
+    [Fact]
+    public async Task An_unfiltered_miss_says_the_project_holds_no_match_at_all()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string regex = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "EKLfsBewKto", ["regex"] = true });
+        Assert.Contains("Nothing in the project matches this pattern; no filters narrowed the search.", regex);
+        Assert.DoesNotContain("Try a looser pattern", regex);
+        Assert.Contains("try a shorter fragment", regex);
+
+        string wholeWord = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "EKLfsBewKto", ["regex"] = true, ["wholeWord"] = true });
+        Assert.Contains("no filters narrowed the search", wholeWord);
+        Assert.Contains("wholeWord=true", wholeWord);
+
+        string text = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "EKLfsBewKto" });
+        Assert.Contains("no filters narrowed the search", text);
+        Assert.Contains("Retry with regex=true", text);
+
+        // A filtered miss is a different fact and keeps its own sentence: the filters were part of it.
+        string filtered = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "EKLfsBewKto", ["ext"] = "cs" });
+        Assert.Contains("Nothing matches anywhere in the project, with or without your filters", filtered);
+        Assert.DoesNotContain("no filters narrowed the search", filtered);
     }
 
     [Fact]
