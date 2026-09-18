@@ -222,6 +222,19 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     /// </summary>
     public IReadOnlyList<string> DeclarationModifiers { get; init; } = [];
 
+    /// <summary>
+    ///     Words that may follow a modifier and are never the type of a member being declared, so a
+    ///     line carrying one is not a declaration however much it is shaped like one. TypeScript's
+    ///     <c>export default thing;</c> is the case that needs it: <c>export</c> is a modifier, so the
+    ///     line is modifier-word-word-<c>;</c> — the field shape exactly — while it names a binding
+    ///     declared elsewhere.
+    ///     Here and not welded into the shared pattern for the reason <see cref="InstantiationKeywords" />
+    ///     is here (ADR-0008): a keyword in the shared pattern is a language fact the profile author
+    ///     cannot see. Empty for every language that writes no such line, which is most of them, and
+    ///     matched under this profile's own case rule like every other word.
+    /// </summary>
+    public IReadOnlyList<string> NonTypeKeywords { get; init; } = [];
+
     /// <summary>Words that introduce a type declaration: <c>class</c>, <c>record</c>, <c>enum</c>.</summary>
     public IReadOnlyList<string> DeclarationKeywords { get; init; } = [];
 

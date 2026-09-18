@@ -179,10 +179,36 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             : StringComparison.Ordinal;
         string flag = profile.CaseInsensitiveKeywords ? "(?i)" : "";
         string? modifiers = Alternation(profile.DeclarationModifiers);
-        // The C-family shape: modifiers, a return type, the name, then what opens a body.
-        string memberPattern = modifiers is null
-            ? MatchesNothing
-            : $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+[\w<>,\[\]\?\.]+\s+(\w+)\s*[\(<{{=]";
+        // The C-family shape: modifiers, a return type, the name, then what opens a body — or what
+        // ends the line, because a field is a member and a member is a declaration (CONTEXT.md,
+        // Declaration). Without the `;` the class ended at `=`, so the same field appeared or
+        // disappeared according to whether it had been given an initialiser: `private const string
+        // Pattern = "…";` was a declaration and `public int Count;` was not. The keyword shape beside
+        // this one has always closed on `;` and was the half that was right.
+        //
+        // What keeps a statement out is the modifiers, which are required and which no statement
+        // carries: `return count;` and `var total = 0;` match nothing here, `;` or no `;`.
+        //
+        // What the profile says is never a type refuses the line: TypeScript's `export default
+        // thing;` is modifier-word-word-`;` — this shape exactly — while it names a binding declared
+        // elsewhere. The word comes from `NonTypeKeywords` and is not written here, for the reason
+        // `new` is not (ADR-0008): a keyword welded into the shared pattern is a language fact the
+        // profile author cannot see.
+        //
+        // The refusal is a lookahead, so it lives only in the pattern .NET runs. The other is the
+        // candidate predicate DuckDB runs, and RE2 has no lookaround (CODING_STANDARDS) — a
+        // lookahead there is not a narrower filter but a query that throws. Leaving it out costs
+        // nothing, because a candidate set is allowed to be wider than the answer: .NET classifies
+        // every line it returns, which is the division the seam is built on.
+        string? nonTypes = Alternation(profile.NonTypeKeywords);
+        string typeGuard = nonTypes is null ? "" : $@"(?!(?:{nonTypes})\b)";
+
+        string MemberPattern(string guard) =>
+            $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+{guard}[\w<>,\[\]\?\.]+\s+(\w+)\s*[\(<{{=;]";
+
+        // The wider of the two, and the one published as a candidate predicate.
+        string memberPattern = modifiers is null ? MatchesNothing : MemberPattern("");
+        string memberDeclarationPattern = modifiers is null ? MatchesNothing : MemberPattern(typeGuard);
         // The xBase, Delphi and SQL shape: the introducing word and then the name, with the return
         // type — where there is one — after it rather than before. The name may be qualified, which
         // is how every language that splits declaration from implementation writes the second half:
@@ -208,7 +234,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             ? MatchesNothing
             : $@"^\s*(\w+)\s*=\s*(?:{typeKeywords})\b";
 
-        _memberDeclaration = new Regex(flag + memberPattern, RegexOptions.CultureInvariant);
+        _memberDeclaration = new Regex(flag + memberDeclarationPattern, RegexOptions.CultureInvariant);
         _keywordDeclaration = new Regex(flag + keywordPattern, RegexOptions.CultureInvariant);
         _typeDeclaration = new Regex(flag + typePattern, RegexOptions.CultureInvariant);
         // Null rather than a pattern that matches nothing: this is asked of every line of every file
