@@ -461,7 +461,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     private static async Task<bool> HasHistoryAsync(IndexReader index, CancellationToken cancellationToken)
     {
         using var command = index.Connection.Query("SELECT count(*) > 0 FROM commits", []);
-        return await command.ExecuteScalarAsync(cancellationToken) is true;
+        return await command.ScalarAsync(cancellationToken) is true;
     }
 
     /// <summary>
@@ -521,7 +521,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
         using var command = index.Connection.Query($"SELECT count(*) FROM commits {scope}", parameters);
-        return (long)(await command.ExecuteScalarAsync(cancellationToken) ?? 0L);
+        return (long)(await command.ScalarAsync(cancellationToken) ?? 0L);
     }
 
     /// <summary>

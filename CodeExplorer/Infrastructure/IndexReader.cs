@@ -189,7 +189,7 @@ public sealed class IndexReader : IDisposable
     {
         if (!_lease.FullTextLoaded) return false;
         using var command = Connection.Query("SELECT fts_indexed FROM index_info", []);
-        return await command.ExecuteScalarAsync(cancellationToken) is true;
+        return await command.ScalarAsync(cancellationToken) is true;
     }
 
     /// <summary>Releases the lease as well as the connection, which is what lets a swap proceed.</summary>
@@ -618,7 +618,7 @@ public sealed class IndexReader : IDisposable
         {
             using var command = Connection.Query("SELECT count(*) FROM files f WHERE lower(f.qualified_path) GLOB $g",
                 [new DuckDBParameter("g", glob.ToLowerInvariant())]);
-            elsewhere = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken),
+            elsewhere = Convert.ToInt32(await command.ScalarAsync(cancellationToken),
                 CultureInfo.InvariantCulture);
         }
 
@@ -649,7 +649,10 @@ public sealed class IndexReader : IDisposable
         if (location is not null) return await SubtreeAsync(location, depth, cancellationToken);
 
         // The repository level is not a directory level: its counts are the ones the build recorded,
-        // so it is read on its own and each repository's own subtree hangs below it.
+        // so it is read on its own and each repository's own subtree hangs below it. Two statements per
+        // repository and not two for the project, which is the shape #93 argued against — but a project
+        // holds a handful of repositories where a subtree holds thousands of directories, and scoping
+        // both statements to one slug is what keeps them readable.
         var entries = new List<TreeItem>();
         foreach (var repository in await RepositoryLevelAsync(cancellationToken))
         {
@@ -731,15 +734,23 @@ public sealed class IndexReader : IDisposable
         }
 
         // The files of every directory the listing reaches: the location's own, and those of the
-        // directories above the last level, which are the ones the recursion used to descend into.
+        // directories above the last level, which are the ones the recursion used to descend into. At
+        // depth 1 there are no such directories, and the second half is left out rather than written
+        // as a test no row can pass: DuckDB cannot see that `<= 0` is unsatisfiable, so it would read
+        // every file under the subtree — forty thousand of them on Radix — to discard all of them, on
+        // the call the web tree view makes most.
+        string deeper = depth > 1
+            ? $"""
+
+                  OR (f.directory LIKE $p || '%' AND f.directory <> $d
+                      AND len(str_split(substr(f.directory, length($p) + 1), '/')) <= {depth - 1})
+              """
+            : "";
         using (var command = Connection.Query($"""
                                                SELECT substr(f.directory, length($p) + 1) AS below,
                                                       f.name, f.qualified_path, f.line_count, f.size_bytes, f.skip_reason
                                                FROM files f JOIN repositories r USING (repo_id)
-                                               WHERE r.slug = $r
-                                                 AND (f.directory = $d
-                                                      OR (f.directory LIKE $p || '%' AND f.directory <> $d
-                                                          AND len(str_split(substr(f.directory, length($p) + 1), '/')) <= {depth - 1}))
+                                               WHERE r.slug = $r AND (f.directory = $d{deeper})
                                                ORDER BY f.directory, f.name
                                                """, scope))
         using (var reader = await command.ReaderAsync(cancellationToken))

@@ -145,7 +145,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         string fileFilter = filter.Sql(fileParameters);
 
         var matchParameters = new List<DuckDBParameter> { new("q", pattern) };
-        string literally = SearchQuery.Literally(symbol, "lit", matchParameters);
+        string literally = SearchQuery.Literally(symbol, matchParameters);
 
         // totals drives the join so that a symbol matching nothing still returns one row carrying the
         // zero counts, the way grep's page-past-the-end does.
