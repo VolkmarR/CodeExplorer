@@ -31,6 +31,138 @@ public sealed class HistoryToolsTests : IDisposable
         // Newest first: the second commit's subject must precede the first's.
         Assert.True(reply.IndexOf("Tighten the check", StringComparison.Ordinal)
                     < reply.IndexOf("Add the validator", StringComparison.Ordinal));
+        // Nothing was ignored, so nothing is said about it: the caveat below has to stay rare enough
+        // that an agent still reads it.
+        Assert.DoesNotContain("`git_log` has no", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The failure this tool is most dangerous at. Every parameter of git_log is optional, so an
+    ///     argument it does not have binds nowhere and the method runs with its defaults — and an
+    ///     unfiltered log answering a filtered question is well-formed, plausible and wrong. The three
+    ///     names here are the ones a real session sent (issue #86).
+    /// </summary>
+    [Fact]
+    public async Task Git_log_says_which_arguments_it_ignored_rather_than_answering_as_though_it_filtered()
+    {
+        var client = await StartAsync();
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?>
+            {
+                ["author"] = "Holger",
+                ["grep"] = "Holger",
+                ["commit"] = "a41267be",
+                ["limit"] = 3
+            });
+
+        Assert.StartsWith(
+            "`git_log` has no `author`, `grep` or `commit` argument; they were ignored and nothing below "
+            + "was filtered by them. It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
+        // The log is still answered: the caveat is what the answer is read with, not a refusal.
+        Assert.Contains("2 commits", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The caveat says what was ignored and nothing about what follows it, because what follows is
+    ///     not always a log. A sentence calling an unbuilt index, an empty page or a project with no
+    ///     history "the unfiltered log" would be an absence dressed as a result — the very move this
+    ///     change exists to stop (CODING_STANDARDS, Errors). All three outcomes are covered here because
+    ///     the caveat is built outside the answer and would otherwise be asserted only on the happy path.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_says_what_it_ignored_without_claiming_there_is_a_log()
+    {
+        var client = await StartAsync();
+        var ignoredArgument = new Dictionary<string, object?> { ["author"] = "Holger" };
+
+        // A problem: Render returns the explanation instead of an answer, and the caveat still arrives.
+        string unknownRepository = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?>(ignoredArgument) { ["repo"] = "nope" });
+        Assert.StartsWith("`git_log` has no `author` argument; it was ignored and nothing below was "
+                          + "filtered by it, beyond the `repo` scope.", unknownRepository, StringComparison.Ordinal);
+        Assert.Contains("Drop `repo` to cover every repository.", unknownRepository, StringComparison.Ordinal);
+        Assert.DoesNotContain("unfiltered log", unknownRepository, StringComparison.Ordinal);
+
+        // An empty page: there is no log below at all, only a sentence saying how few commits there are.
+        string pastTheEnd = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?>(ignoredArgument) { ["page"] = 9 });
+        Assert.StartsWith("`git_log` has no `author` argument; it was ignored and nothing below was "
+                          + "filtered by it. It takes `repo`, `limit` and `page`.", pastTheEnd, StringComparison.Ordinal);
+        Assert.Contains("No commits on page 9", pastTheEnd, StringComparison.Ordinal);
+
+        // No history: the reply is the absence itself, which must not be introduced as a log.
+        await _host.IndexedProjectAsync("empty",
+            new Dictionary<string, Dictionary<string, string>> { ["only"] = new() { ["a.cs"] = "class A;\n" } });
+        await _host.ExecuteAsync("empty", "DELETE FROM commits");
+        await using var bare = await _host.ConnectAsync("empty");
+        string noHistory = await TestHost.CallAsync(bare, "git_log", ignoredArgument);
+        Assert.StartsWith("`git_log` has no `author` argument; it was ignored and nothing below was "
+                          + "filtered by it. It takes `repo`, `limit` and `page`.", noHistory, StringComparison.Ordinal);
+        Assert.Contains("holds no history", noHistory, StringComparison.Ordinal);
+        Assert.DoesNotContain("unfiltered log", noHistory, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The spelling this tool itself took until the scope was renamed <c>repo</c> to match the other
+    ///     five. It is reported and not accepted: both spellings would leave one concept with two names,
+    ///     which is what caused this. A caller that saved the old spelling therefore learns what to send,
+    ///     instead of being answered for the whole project as though it had been scoped.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_reports_the_old_repository_spelling_instead_of_binding_it()
+    {
+        await BuildChurnProjectAsync("mixed", true);
+        await using var client = await _host.ConnectAsync("mixed");
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["repository"] = "one" });
+
+        Assert.StartsWith(
+            "`git_log` has no `repository` argument; it was ignored and nothing below was filtered by "
+            + "it. It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
+        // It bound nowhere, so the answer really does still span the second repository.
+        Assert.Contains("[two]", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     <c>repo</c> scopes, and the per-line repository tag is the existing signal that it did:
+    ///     <c>Append</c> prints the slug only when an answer spans more than one repository, so the tag's
+    ///     presence in the unscoped reply is what makes its absence in the scoped one evidence rather
+    ///     than a tag nobody prints.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_scopes_to_repo_and_drops_the_per_line_repository_tag()
+    {
+        await BuildChurnProjectAsync("mixed", true);
+        await using var client = await _host.ConnectAsync("mixed");
+
+        string whole = await TestHost.CallAsync(client, "git_log", []);
+        Assert.Contains("[one]", whole, StringComparison.Ordinal);
+        Assert.Contains("[two]", whole, StringComparison.Ordinal);
+
+        string scoped = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["repo"] = "one" });
+        Assert.Contains("5 commits in repository 'one'", scoped, StringComparison.Ordinal);
+        Assert.DoesNotContain("[one]", scoped, StringComparison.Ordinal);
+        Assert.DoesNotContain("[two]", scoped, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The scope that does exist still scopes, and the caveat says so: a sentence that let a scoped
+    ///     log read as unfiltered would teach the same wrong fact in the other direction.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_keeps_its_scope_while_saying_what_it_ignored()
+    {
+        await BuildChurnProjectAsync("mixed", true);
+        await using var client = await _host.ConnectAsync("mixed");
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["repo"] = "one", ["author"] = "Grace" });
+
+        Assert.StartsWith(
+            "`git_log` has no `author` argument; it was ignored and nothing below was filtered by it, "
+            + "beyond the `repo` scope. It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
+        Assert.Contains("5 commits in repository 'one'", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/Other.cs", reply, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -245,6 +377,9 @@ public sealed class HistoryToolsTests : IDisposable
     ///     The tool and the page read one history. They page it differently — the page counts what it
     ///     has not shown, the tool does not — but a caller comparing the two is comparing one scope, and
     ///     a scope that meant different things on the two surfaces is the drift this pins.
+    ///     The two spell the scope differently on purpose: the tool surface settled on <c>repo</c>, the
+    ///     HTTP API keeps <c>repository</c> for the callers it already has, and that is a difference in
+    ///     the query string and not in the scope.
     /// </summary>
     [Fact]
     public async Task Git_log_and_the_change_log_page_agree_about_a_repository()
@@ -257,7 +392,7 @@ public sealed class HistoryToolsTests : IDisposable
         Assert.NotNull(page);
 
         string reply = await TestHost.CallAsync(client, "git_log",
-            new Dictionary<string, object?> { ["repository"] = "one" });
+            new Dictionary<string, object?> { ["repo"] = "one" });
 
         // Five commits in the fixture's first repository and one in its second: a tool that dropped the
         // scope, or a page that kept it, would disagree here rather than both saying five.
