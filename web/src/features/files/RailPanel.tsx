@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -72,14 +72,15 @@ export function RailEntries<T>({
   children: (item: T) => React.ReactNode
 }) {
   const [expanded, setExpanded] = useState(false)
+  // Kept across renders because an opened panel on a generated file holds every declaration the
+  // server would report, and the rail re-renders whenever any panel beside it answers.
+  const shown = useMemo(() => (expanded ? items : items.slice(0, ENTRIES_SHOWN)), [items, expanded])
 
   if (items.length === 0) return null
 
   return (
     <>
-      <ul className="space-y-2.5">
-        {(expanded ? items : items.slice(0, ENTRIES_SHOWN)).map(children)}
-      </ul>
+      <ul className="space-y-2.5">{shown.map(children)}</ul>
       {items.length > ENTRIES_SHOWN ? (
         <Button
           variant="ghost"

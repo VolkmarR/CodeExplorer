@@ -30,6 +30,64 @@ internal static class FilePositions
     public const int MaxScanLines = 20_000;
 
     /// <summary>
+    ///     One line as the walk passes it: where it is, what it says, whether the caller asked about
+    ///     it, and where the file stood at the start of it.
+    /// </summary>
+    public readonly record struct WalkedLine(int LineNumber, string Content, bool Wanted, FilePosition Position);
+
+    /// <summary>
+    ///     Walks one file's lines in order, handing <paramref name="visit" /> each of them with the
+    ///     position the file stood in at the start of it, and stopping early when it says to.
+    ///     This is the other shape the same walk is needed in. <see cref="ReadAsync" /> answers for a
+    ///     set of lines already known — which is what a search across files has — where a caller
+    ///     reading one file cannot know which lines it wants until the rows arrive, because that is
+    ///     what the row says. Rather than query the file twice, once for the candidates and once for
+    ///     the lines above them, it selects every line with a column saying which is which and walks
+    ///     the result. The walk itself is this method and not the caller's, for the reason the class
+    ///     comment gives: a second copy could read one file two ways.
+    ///     Stopping early is what makes it cheaper and not merely tidier — a caller that has filled
+    ///     its answer by line 2000 of a generated file reads no further.
+    /// </summary>
+    /// <param name="command">
+    ///     The caller's own query, selecting <c>line_number</c>, <c>content</c> and a boolean
+    ///     <c>wanted</c>, ordered by <c>line_number</c> ascending, over exactly one file.
+    /// </param>
+    /// <param name="analyzer">The analyser the file's extension resolved to.</param>
+    /// <param name="visit">
+    ///     Called for every line in order; returns false to stop the walk. Called for unwanted lines
+    ///     too, because only the caller knows whether it has seen enough.
+    /// </param>
+    /// <param name="cancellationToken">Threaded to the command, as every async path here is.</param>
+    public static async Task WalkAsync(DuckDBCommand command, ILanguageAnalyzer analyzer,
+        Func<WalkedLine, bool> visit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(analyzer);
+        ArgumentNullException.ThrowIfNull(visit);
+
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var position = analyzer.Start;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            int lineNumber = reader.Int32("line_number");
+            string content = reader.Text("content");
+            // Past the bound the line is still handed over, with its position unknown rather than
+            // guessed — the same policy ReadAsync applies by leaving the line out of its answer, which
+            // a caller reads back as unknown. Dropping the line instead would lose whatever it
+            // declares, which is a quiet wrong answer where an unplaced one is merely a thinner right
+            // one.
+            bool placed = lineNumber <= MaxScanLines;
+            if (!visit(new WalkedLine(lineNumber, content, reader.FlagOrFalse("wanted"),
+                    placed ? position : FilePosition.Unknown)))
+                return;
+
+            // Nothing below the bound is placed, so the walk stops advancing rather than paying for a
+            // state no caller will be given.
+            if (placed) position = analyzer.After(position, content);
+        }
+    }
+
+    /// <summary>
     ///     The position at the start of each wanted line. A line past <see cref="MaxScanLines" /> is
     ///     left out of the result, which is <see cref="FilePosition.Unknown" /> to a caller reading it
     ///     with <c>GetValueOrDefault</c> — the answer that keeps what is on the line rather than

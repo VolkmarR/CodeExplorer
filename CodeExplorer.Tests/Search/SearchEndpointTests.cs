@@ -703,6 +703,42 @@ public sealed class SearchEndpointTests
         Assert.Empty(uncovered.Declarations);
     }
 
+    /// <summary>
+    ///     The boundary the panel prints as "500+", and the one the read is built around: the walk
+    ///     reports what it has and stops one declaration past the ceiling, so a file declaring exactly
+    ///     as many as it holds is complete and one declaring a single name more is not. The two are one
+    ///     declaration apart and the answers are opposite.
+    /// </summary>
+    [Fact]
+    public async Task A_declaration_list_that_fills_the_ceiling_is_told_apart_from_one_it_cut_short()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            // The class itself is a declaration, so one fewer routine reaches the ceiling exactly.
+            ["one"] = new()
+            {
+                ["src/Exactly.cs"] = Routines(FileDeclarations.MaxDeclarations - 1),
+                ["src/OneMore.cs"] = Routines(FileDeclarations.MaxDeclarations)
+            }
+        });
+
+        var exactly = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/src/Exactly.cs"));
+        Assert.Equal(FileDeclarations.MaxDeclarations, exactly.Declarations.Count);
+        Assert.False(exactly.Capped);
+
+        var more = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/src/OneMore.cs"));
+        // Still only the ceiling is reported, and now the reply says the list is short of the answer.
+        Assert.Equal(FileDeclarations.MaxDeclarations, more.Declarations.Count);
+        Assert.True(more.Capped);
+    }
+
+    /// <summary>A C# class declaring <paramref name="count" /> routines, so <c>count + 1</c> names.</summary>
+    private static string Routines(int count) =>
+        "public class Big\n{\n"
+        + string.Concat(Enumerable.Range(0, count).Select(i => $"    public void M{i}() {{ }}\n"))
+        + "}\n";
+
     [Fact]
     public async Task A_path_that_names_no_file_has_no_declarations_page_rather_than_an_empty_one()
     {
