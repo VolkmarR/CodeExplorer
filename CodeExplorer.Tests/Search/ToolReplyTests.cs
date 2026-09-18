@@ -96,7 +96,8 @@ public sealed class ToolReplyTests
         foreach ((string tool, var arguments) in misses)
         {
             string reply = await TestHost.CallAsync(client, tool, arguments);
-            Assert.Contains("no filters narrowed the search", reply, StringComparison.Ordinal);
+            Assert.Contains("no filters narrowed the search, which spanned every file.", reply,
+                StringComparison.Ordinal);
             Assert.DoesNotContain("outside your filters", reply, StringComparison.Ordinal);
         }
     }

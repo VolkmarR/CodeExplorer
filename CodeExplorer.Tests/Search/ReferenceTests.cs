@@ -191,12 +191,16 @@ public sealed class ReferenceTests : IDisposable
 
         string hidden = await FindAsync(client,
             new Dictionary<string, object?> { ["symbol"] = "OrderStatus", ["ext"] = "md" });
-        Assert.StartsWith("Nothing in this project spells", hidden);
+        Assert.StartsWith("No references to", hidden);
         Assert.Contains("outside your filters", hidden);
 
+        // Asserted as the whole sentence, not as an absence: a reply that stopped saying what it
+        // searched would still hold "does not contain 'outside your'" (#87).
         string nowhere = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Unicorn" });
-        Assert.StartsWith("Nothing in this project spells", nowhere);
+        Assert.StartsWith("No references to", nowhere);
         Assert.DoesNotContain("outside your", nowhere);
+        Assert.Contains("Nothing in this project spells it; no filters narrowed the search, which spanned every file.",
+            nowhere);
         Assert.Contains("matched whole and case-sensitively", nowhere);
     }
 
@@ -211,7 +215,7 @@ public sealed class ReferenceTests : IDisposable
         Assert.DoesNotContain("new OrderStatus()", text);
 
         string wrongCase = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "status" });
-        Assert.StartsWith("Nothing in this project spells", wrongCase);
+        Assert.StartsWith("No references to", wrongCase);
     }
 
     [Fact]
@@ -236,7 +240,7 @@ public sealed class ReferenceTests : IDisposable
         string phrase = await FindAsync(client,
             new Dictionary<string, object?> { ["symbol"] = "public OrderStatus" });
         Assert.Contains("is not one identifier", phrase);
-        Assert.DoesNotContain("Nothing in this project spells", phrase);
+        Assert.DoesNotContain("No references to", phrase);
 
         string punctuation = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "=>" });
         Assert.Contains("no identifier characters", punctuation);
