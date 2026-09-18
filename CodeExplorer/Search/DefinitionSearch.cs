@@ -148,7 +148,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
             // shape declares the name asked about, rather than another name on the same line.
             if (declared.Value is not { } what) continue;
             if (!Names(what, symbol)) continue;
-            if (InProse(candidate, position, symbol)) continue;
+            if (SearchQuery.OnlyInProse(candidate.Analyzer, position, candidate.Content, symbol)) continue;
             separated |= candidate.Analyzer.SeparatesDeclarationFromImplementation;
             sites.Add(new DefinitionSite(candidate.Path, candidate.LineNumber, candidate.Content,
                 what.Type, what.Member, what.Role, declared.Evidence));
@@ -205,24 +205,6 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
     private static bool Names(Declared declared, string symbol) =>
         string.Equals(declared.Member, symbol, StringComparison.Ordinal)
         || string.Equals(declared.Type, symbol, StringComparison.Ordinal);
-
-    /// <summary>
-    ///     Whether the name sits in a comment or a string on this line, which the declaration patterns
-    ///     cannot see: a commented-out <c>procedure Advance;</c> is shaped exactly like the live one.
-    ///     A line the scan never reached is kept — unknown is not prose — because the alternative is
-    ///     dropping the declaration of every symbol in a file too long to walk.
-    /// </summary>
-    private static bool InProse(Candidate candidate, FilePosition position, string symbol)
-    {
-        // Asked once for the whole line rather than once per appearance. Asked per appearance — which
-        // is what `StateAt` is — a line naming the symbol N times costs N walks of it, and the lines
-        // here are whatever the index holds: the cost the analyser's own cursor exists to avoid.
-        var appearances = candidate.Analyzer.Occurrences(position, candidate.Content, symbol);
-        // Every appearance and not the first: a line that names the symbol in a trailing comment and
-        // then declares it is a declaration, and reading only the first would lose it.
-        return appearances.Count > 0
-               && appearances.All(a => a.Value is ReferenceKind.Comment or ReferenceKind.StringLiteral);
-    }
 
     /// <summary>
     ///     What a declaration looks like in each language this project is written in, as one

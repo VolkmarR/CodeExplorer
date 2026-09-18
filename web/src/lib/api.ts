@@ -259,6 +259,37 @@ export interface FileDependents {
   dependents: Dependent[]
 }
 
+/**
+ * One name a file introduces. `type` and `member` are what the line declares — either may be null,
+ * and a line that reads as both fills both — and `text` is the line itself, which is what the panel
+ * shows. `role` is which side of a declaration/implementation split the line sits on, for the
+ * languages that have one, and null otherwise. `evidence` is how the reading was reached, so a list
+ * read from line shape cannot read like one a parser produced.
+ */
+export interface Declaration {
+  lineNumber: number
+  text: string
+  type: string | null
+  member: string | null
+  role: 'declaration' | 'implementation' | null
+  evidence: 'text' | 'parsed'
+}
+
+/**
+ * What a file declares. `profiled` and `readsDeclarations` are why an empty list is not the sentence "this file
+ * declares nothing": an extension no profile covers was read with the conservative default shapes,
+ * and a language whose declarations this cannot read was never scanned. `capped` says the list is
+ * short of what the file declares.
+ */
+export interface FileDeclarations {
+  qualifiedPath: string
+  languageName: string
+  profiled: boolean
+  readsDeclarations: boolean
+  capped: boolean
+  declarations: Declaration[]
+}
+
 /** One commit of the change log: who, when, what it said, and what it did to the tree in sums. */
 export interface CommitEntry extends CommitRef {
   repositorySlug: string
@@ -508,6 +539,11 @@ export const api = {
     http
       .get(`projects/${project}/file/dependents`, { searchParams: { path } })
       .json<FileDependents>(),
+
+  declarations: (project: string, path: string) =>
+    http
+      .get(`projects/${project}/file/declarations`, { searchParams: { path } })
+      .json<FileDeclarations>(),
 
   commits: (project: string, page: number, repository?: string) =>
     http

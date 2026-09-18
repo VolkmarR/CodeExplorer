@@ -51,6 +51,7 @@ builder.Services.AddSingleton<HistoryQueries>();
 builder.Services.AddSingleton<ReferenceSearch>();
 builder.Services.AddSingleton<DefinitionSearch>();
 builder.Services.AddSingleton<ImportGraph>();
+builder.Services.AddSingleton<FileDeclarations>();
 builder.Services.AddSingleton<MatchList>();
 builder.Services.AddSingleton<ProjectOverview>();
 builder.Services.AddSingleton<WarmUp>();
