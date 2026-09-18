@@ -16,6 +16,13 @@
 
 :root {
   --radius: 0.625rem;
+  /* How tall a reading column may be before it scrolls on its own: the viewport less the top bar,
+     the card's header and the page's padding. The file page's two columns — the code pane and the
+     rail beside it — are both bounded by it, and they are bounded by the same token because a
+     4900-line file with the two disagreeing is exactly what leaves one of them a blank column.
+     16rem is measured against the deepest header the page draws, which is the file view's: title,
+     path, badges and toolbar. */
+  --reading-pane: calc(100dvh - 16rem);
   --background: oklch(0.985 0.003 265);
   --foreground: oklch(0.23 0.025 265);
   --card: oklch(1 0 0);
