@@ -81,34 +81,48 @@ internal sealed class SearchTools(
     private static string NoMatches(GrepRequest request, GrepResult result)
     {
         var text = new StringBuilder($"No matches for \"{request.Query}\" ({result.Engine} engine). ");
-        switch (result.FilesMatchingWithoutFilters)
-        {
-            case > 0:
-                text.Append(CultureInfo.InvariantCulture,
-                    $"The pattern does match in {ToolReply.HiddenByFilters(result.FilesMatchingWithoutFilters.Value)}");
-                break;
-            case 0:
-                text.Append("Nothing matches anywhere in the project, with or without your filters. ");
-                text.Append(Hint(request));
-                break;
-            default:
-                text.Append(Hint(request));
-                break;
-        }
+        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "pattern"));
+        // Where the pattern does match outside the filters, the filters are the whole answer: an engine
+        // hint there would send the caller to change a pattern that is already right.
+        if (result.FilesMatchingWithoutFilters is not > 0)
+            text.Append(Hint(request, result.FilesMatchingWithoutFilters is null));
 
         return text.ToString();
 
-        static string Hint(GrepRequest request)
+        static string Hint(GrepRequest request, bool unfiltered)
         {
             return request.Regex || request.Multiline
                 ? request.WholeWord
                     ? "Try again without wholeWord=true: the match may be part of a longer identifier."
-                    : "Try a looser pattern."
+                    // "Try a looser pattern" names no mechanism, and once the search has already spanned
+                    // the project there is nothing left to loosen; say what a caller can act on instead (#87).
+                    : unfiltered
+                        ? "If this is a partial name, try a shorter fragment."
+                        : "Try a looser pattern."
                 : request.Query.Any(c => !char.IsLetterOrDigit(c) && c != '_' && !char.IsWhiteSpace(c))
                     ? "Text mode requires every token on one line. Retry with regex=true and escape metacharacters with a backslash, or search a single distinctive token."
                     : "Text mode requires every token on one line, and the token path matches whole identifier tokens. Retry with regex=true for a partial name.";
         }
     }
+
+    /// <summary>
+    ///     What a miss knows about the filters, said once for the three searches whose result carries
+    ///     the same nullable count. The <c>null</c> case — no filter narrowed the search — is the one
+    ///     that knows the most and said the least until #87: the search already spanned the project, so
+    ///     the absence is certain and the reply states it before falling back to any engine hint.
+    /// </summary>
+    /// <param name="filesMatchingWithoutFilters">
+    ///     How many files hold a match once the filters are dropped: zero when nothing matches anywhere,
+    ///     <c>null</c> when there were no filters to drop.
+    /// </param>
+    /// <param name="subject">What the tool searched for, as its own reply names it.</param>
+    private static string FilterVerdict(int? filesMatchingWithoutFilters, string subject) =>
+        filesMatchingWithoutFilters switch
+        {
+            > 0 => $"The {subject} does match in {ToolReply.HiddenByFilters(filesMatchingWithoutFilters.Value)}",
+            0 => "Nothing matches anywhere in the project, with or without your filters. ",
+            _ => $"Nothing in the project matches this {subject}; no filters narrowed the search. "
+        };
 
     private static string Format(GrepRequest request, GrepResult result)
     {
@@ -229,10 +243,10 @@ internal sealed class SearchTools(
     private static string NoReferences(string symbol, ReferenceResult result)
     {
         var text = new StringBuilder($"Nothing in this project spells \"{symbol}\". ");
-        if (result.FilesMatchingWithoutFilters > 0)
-            text.Append(CultureInfo.InvariantCulture,
-                $"It does appear in {ToolReply.HiddenByFilters(result.FilesMatchingWithoutFilters.Value)}");
-        else
+        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "name"));
+        // The spelling hint names a mechanism the verdict does not, so it follows every miss the filters
+        // do not already explain.
+        if (result.FilesMatchingWithoutFilters is not > 0)
             text.Append(
                 "The name is matched whole and case-sensitively, so check the spelling and the case, or search for the interface that declares it. grep with regex=true finds a partial name.");
         return text.ToString();
@@ -518,14 +532,12 @@ internal sealed class SearchTools(
     private static string NoValues(MatchListRequest request, MatchListResult result)
     {
         var text = new StringBuilder($"No matches for \"{request.Query}\". ");
-        if (result.FilesMatchingWithoutFilters > 0)
-            text.Append(CultureInfo.InvariantCulture,
-                $"The pattern does match in {ToolReply.HiddenByFilters(result.FilesMatchingWithoutFilters.Value)}");
-        else
+        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "pattern"));
+        if (result.FilesMatchingWithoutFilters is not > 0)
             // Do not imply the group is at fault: the pattern may simply match nothing, and saying
             // otherwise sends the caller off fixing a parenthesis that was never wrong.
             text.Append(CultureInfo.InvariantCulture,
-                $"The pattern matched nothing{(request.Group > 0 ? $", or matched but capture group {request.Group} was always empty" : "")}. Try the same pattern with grep to see whether it matches at all.");
+                $"{(request.Group > 0 ? $"It may also have matched with capture group {request.Group} always empty. " : "")}Try the same pattern with grep to see whether it matches at all.");
         return text.ToString();
     }
 
