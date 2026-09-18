@@ -53,6 +53,17 @@ public sealed class FileToolsTests : IDisposable
         }
     };
 
+    /// <summary>
+    ///     One repository with more files than <see cref="IndexReader.MaxFiles" />, in three directories,
+    ///     so a glob can be run past the page both within reach of a higher <c>limit</c> and far beyond
+    ///     it. The files are one line each: what is under test is the count and the reply around it.
+    /// </summary>
+    private static readonly Dictionary<string, Dictionary<string, string>> Wide = new()
+    {
+        ["radix"] = Enumerable.Range(0, 2100).ToDictionary(
+            i => $"src/g{i / 700}/f{i:0000}.cs", i => $"class F{i};\n")
+    };
+
     private TestHost? _host;
 
     public void Dispose() => _host?.Dispose();
@@ -157,7 +168,58 @@ public sealed class FileToolsTests : IDisposable
         string limited = await CallAsync(client, "glob",
             new Dictionary<string, object?> { ["glob"] = "*", ["limit"] = 2 });
         Assert.Contains("7 files matching", limited);
-        Assert.Contains("showing the first 2", limited);
+        // A total a higher limit could reach is still offered one, in the wording it always had.
+        Assert.Contains("showing the first 2 by path (raise limit or narrow the glob)", limited);
+    }
+
+    /// <summary>
+    ///     The two ways a glob can run past its page, which need different advice: a total a higher
+    ///     <c>limit</c> could still reach, and one it never can because <see cref="IndexReader.MaxFiles" />
+    ///     tops out below it. And the rule that produced an oversized answer — a lone <c>*</c> crossing
+    ///     directory separators — named where it bit rather than only in the tool description.
+    /// </summary>
+    [Fact]
+    public async Task Glob_past_the_page_offers_a_higher_limit_only_when_one_could_reach_the_total()
+    {
+        await using var client = await StartAsync(Wide);
+
+        // A one-level shell glob that matched the whole repository: "raise limit" cannot reach 2100.
+        string swallowed = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "radix/*" });
+        Assert.Contains("2100 files matching \"radix/*\"", swallowed);
+        Assert.Contains("showing the first 500 by path", swallowed);
+        Assert.DoesNotContain("raise limit", swallowed);
+        Assert.Contains("2000", swallowed);
+        Assert.Contains("crosses directory separators", swallowed);
+        Assert.Contains("list_tree", swallowed);
+
+        // Past the page but within reach, so the advice that works is still the one offered — and the
+        // `*` note is about the shape of the pattern, not about how far past the cap the total is.
+        string reachable =
+            await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "radix/src/g0/*" });
+        Assert.Contains("700 files matching", reachable);
+        Assert.Contains("showing the first 500 by path (raise limit or narrow the glob)", reachable);
+        Assert.Contains("crosses directory separators", reachable);
+
+        // The case the tool is sold on: a name shape, no directory in it, nothing to warn about however
+        // many it matches.
+        string shape = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "*.cs" });
+        Assert.Contains("2100 files matching \"*.cs\"", shape);
+        Assert.DoesNotContain("raise limit", shape);
+        Assert.DoesNotContain("crosses directory separators", shape);
+        Assert.DoesNotContain("list_tree", shape);
+
+        // `**` is the caller asking for every level, so it is not told that it got them.
+        string deliberate =
+            await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "radix/src/**/*.cs" });
+        Assert.Contains("2100 files matching", deliberate);
+        Assert.DoesNotContain("crosses directory separators", deliberate);
+
+        // A page that holds everything is the reply it always was: no advice, no note.
+        string small =
+            await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "radix/src/g0/f000*" });
+        Assert.Contains("10 files matching \"radix/src/g0/f000*\":\n", small);
+        Assert.DoesNotContain("crosses directory separators", small);
+        Assert.DoesNotContain("narrow the glob", small);
     }
 
     [Fact]

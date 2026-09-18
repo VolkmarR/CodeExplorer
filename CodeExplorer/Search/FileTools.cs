@@ -223,10 +223,23 @@ internal sealed partial class FileTools(
             text.Append(CultureInfo.InvariantCulture,
                 $"{listing.Total} {ToolReply.Plural(listing.Total, "file")} matching \"{pattern}\"");
             if (repository is not null) text.Append(CultureInfo.InvariantCulture, $" in repository '{repository.Slug}'");
-            if (listing.Total > listing.Files.Count)
+            bool truncated = listing.Total > listing.Files.Count;
+            if (truncated)
+            {
+                // "Raise limit" is only a move where raising it can reach the total. Past MaxFiles the
+                // advice is arithmetic the caller cannot do, and it reads like one they can.
                 text.Append(CultureInfo.InvariantCulture,
-                    $"; showing the first {listing.Files.Count} by path (raise limit or narrow the glob)");
+                    $"; showing the first {listing.Files.Count} by path ({(listing.Total <= IndexReader.MaxFiles
+                        ? "raise limit or narrow the glob"
+                        : $"{IndexReader.MaxFiles} is the most limit can return, so narrow the glob")})");
+            }
+
             text.Append(":\n");
+            // The rule that produced the answer, where it bit. It is in the tool description too, which
+            // is the wrong place to read it at the moment a one-level glob returned the whole tree.
+            if (truncated && SwallowedDirectories(pattern))
+                text.Append(CultureInfo.InvariantCulture,
+                    $"`*` crosses directory separators, so \"{pattern}\" matched every level below it rather than one. For the layout of a directory use list_tree.\n");
             foreach (var file in listing.Files)
             {
                 text.Append(CultureInfo.InvariantCulture, $"{file.LineCount,6}L  {file.QualifiedPath}");
@@ -238,6 +251,20 @@ internal sealed partial class FileTools(
             return text.ToString();
         }
     }
+
+    /// <summary>
+    ///     Whether the glob asked for one directory level and got every level below it: a lone <c>*</c>
+    ///     standing as a whole path segment, as a shell glob writes "the entries of this directory".
+    ///     Here <c>*</c> crosses separators, so that shape matches the subtree.
+    ///     A name shape — <c>*Handler.cs</c>, or <c>src/*Commands.cs</c> — is what the tool is for and is
+    ///     not warned about however many it matches, and neither is <c>**</c>, which is the caller asking
+    ///     for every level. A glob with no <c>/</c> at all is excluded for the same reason: it named no
+    ///     directory, so a bare <c>*</c> asked for the project and got it, and there is no level it
+    ///     expected to stop at.
+    /// </summary>
+    private static bool SwallowedDirectories(string glob) =>
+        glob.Contains('/', StringComparison.Ordinal)
+        && glob.Split('/').Any(segment => segment == "*");
 
     [McpServerTool(Name = "list_tree", ReadOnly = true, Idempotent = true, Title = "List directories and files")]
     [Description("""
