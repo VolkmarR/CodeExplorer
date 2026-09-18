@@ -13,6 +13,7 @@ public sealed class ToolReplyTests : IDisposable
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    /// <summary>The host <see cref="UnbuiltProjectAsync" /> made; a test that needs its own says so.</summary>
     private TestHost? _host;
 
     public void Dispose() => _host?.Dispose();
@@ -187,8 +188,7 @@ public sealed class ToolReplyTests : IDisposable
             new Dictionary<string, object?> { ["paths"] = "one/src/Widget.cs" });
         Assert.Contains("was given `paths` as a string where it takes an array", one, StringComparison.Ordinal);
 
-        // A word where a count belongs. A quoted numeral is not the case to assert: the SDK reads
-        // `context: "4"` as 4, so a reply about it would be blaming an argument that worked.
+        // A word where a count belongs.
         string word = await TestHost.CallAsync(client, "grep",
             new Dictionary<string, object?> { ["query"] = "Widget", ["context"] = "a few" });
         Assert.Contains("was given `context` as a string where it takes an integer", word,
@@ -196,24 +196,53 @@ public sealed class ToolReplyTests : IDisposable
     }
 
     /// <summary>
-    ///     The near-miss names are named in the reply and nowhere else (#85): accepting them would put
-    ///     two spellings on one concept, which CONTEXT.md asks against. So the schema must still offer
-    ///     exactly one, and a tool must not have quietly grown the alias it complains about.
+    ///     The line either side of the one above. The SDK reads `context: "4"` as 4, and the check that
+    ///     decides a value is the wrong shape has to agree with it, or the reply blames an argument that
+    ///     worked. Asserted rather than assumed because the disagreement would be silent: the check
+    ///     would find no fault, return nothing, and hand the transport sentence back unchanged.
     /// </summary>
     [Fact]
-    public async Task No_tool_accepts_a_near_miss_name_as_an_argument()
+    public async Task A_number_written_as_a_string_still_binds()
     {
         await using var client = await UnbuiltProjectAsync();
 
-        foreach (var tool in await client.ListToolsAsync(cancellationToken: Ct))
-        {
-            var declared = tool.ProtocolTool.InputSchema.TryGetProperty("properties", out var properties)
-                ? properties.EnumerateObject().Select(p => p.Name).ToList()
-                : [];
-            foreach (string alias in (string[]) ["pattern", "file", "max_results"])
-                Assert.DoesNotContain(alias, declared, StringComparer.Ordinal);
-        }
+        string reply = await TestHost.CallAsync(client, "grep",
+            new Dictionary<string, object?> { ["query"] = "Widget", ["context"] = "4" });
+
+        Assert.Equal(IndexReader.NoIndex("unbuilt"), reply);
     }
+
+    /// <summary>
+    ///     The near-miss names are named in the reply and nowhere else (#85): accepting one would put
+    ///     two spellings on a concept, which CONTEXT.md asks against. Read from the table above rather
+    ///     than listed again, so that a name added there cannot be answered nicely and quietly accepted
+    ///     too. Per tool and not across the surface, because a near miss is only a near miss where it
+    ///     is one: `path` is the real parameter of every tool that takes a single file, and a sweep
+    ///     that forbade it everywhere would have to carve that out by hand.
+    /// </summary>
+    [Fact]
+    public async Task No_tool_accepts_the_near_miss_name_its_reply_names()
+    {
+        await using var client = await UnbuiltProjectAsync();
+
+        var listed = (await client.ListToolsAsync(cancellationToken: Ct))
+            .ToDictionary(tool => tool.Name, Declared, StringComparer.Ordinal);
+        foreach (var row in NearMisses)
+        {
+            (string tool, string wrong, _) = row.Data;
+            Assert.DoesNotContain(wrong, listed[tool], StringComparer.Ordinal);
+        }
+
+        // `max_results` belongs to no near-miss row because `grep` fails on its missing `query` first,
+        // so it is swept for separately: it is still a name the sessions in #85 sent, and still one no
+        // tool may grow.
+        Assert.DoesNotContain("max_results", listed["grep"], StringComparer.Ordinal);
+    }
+
+    private static List<string> Declared(McpClientTool tool) =>
+        tool.ProtocolTool.InputSchema.TryGetProperty("properties", out var properties)
+            ? properties.EnumerateObject().Select(p => p.Name).ToList()
+            : [];
 
     /// <summary>
     ///     The failure this must not swallow. An index that cannot be read is an infrastructure failure
@@ -228,14 +257,14 @@ public sealed class ToolReplyTests : IDisposable
     [InlineData(true)]
     public async Task A_failure_inside_a_tool_is_still_reported_as_a_failure(bool withAStrayArgument)
     {
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("built",
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("built",
             new Dictionary<string, Dictionary<string, string>>
             {
                 ["one"] = new() { ["src/Widget.cs"] = "class Widget { }\n" }
             });
-        await _host.ExecuteAsync("built", "DELETE FROM project_overview");
-        await using var client = await _host.ConnectAsync("built");
+        await host.ExecuteAsync("built", "DELETE FROM project_overview");
+        await using var client = await host.ConnectAsync("built");
 
         var arguments = withAStrayArgument ? new Dictionary<string, object?> { ["pattern"] = "x" } : [];
         var thrown = await Assert.ThrowsAsync<McpException>(() =>
