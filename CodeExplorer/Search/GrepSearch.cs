@@ -214,9 +214,17 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
 
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = request.Filter.Sql(fileParameters);
+
+        // At context 0 the window around a match is the match, and the scan that decided a line
+        // matched had its text in hand: joining `lines` again to fetch that text is a second scan of
+        // the largest table for something already read. So the content rides along in `hits` instead —
+        // 123 ms against 157 ms on Radix, same rows. With context there are neighbouring lines that
+        // were never read and the join earns its place, and a files-only search wants no text at all.
+        bool carried = !request.FilesOnly && bounds.Context == 0;
+        string carriedColumns = carried ? $", l.content{(request.WithHistory ? ", l.commit_id" : "")}" : "";
         string common = $"""
                          WITH hits AS (
-                             SELECT l.file_id, l.line_number, f.qualified_path
+                             SELECT l.file_id, l.line_number, f.qualified_path{carriedColumns}
                              FROM lines l JOIN files f USING (file_id)
                              WHERE {match}{fileFilter}),
                          per_file AS (
@@ -229,6 +237,26 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
                              LIMIT {bounds.PageSize} OFFSET {(bounds.Page - 1) * bounds.PageSize})
                          """;
 
+        // The kept lines' own text where `hits` carried it, and nothing where it did not: there the
+        // text comes from `shown` below, which reads it from `lines`.
+        string keptColumns = carried ? $", content{(request.WithHistory ? ", commit_id" : "")}" : "";
+        string keptSource = carried ? $", h.content{(request.WithHistory ? ", h.commit_id" : "")}" : "";
+
+        // The context window, grouped so that overlapping windows collapse into one run of lines. Empty
+        // where the text was carried: at context 0 the window is the matching line and `kept` is it.
+        string shown = carried
+            ? ""
+            : $"""
+               ,
+               shown AS (
+                   SELECT l.file_id, l.line_number, l.content{(request.WithHistory ? ", l.commit_id" : "")},
+                          bool_or(k.line_number = l.line_number) AS is_match
+                   FROM kept k
+                   JOIN lines l ON l.file_id = k.file_id
+                               AND l.line_number BETWEEN k.line_number - {bounds.Context} AND k.line_number + {bounds.Context}
+                   GROUP BY ALL)
+               """;
+
         // totals drives the join so that a page past the end still returns one row carrying the totals;
         // otherwise an out-of-range page would read as "no matches". Files-only never touches line
         // content: the cheap way to size a broad query.
@@ -240,26 +268,18 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
                FROM totals t LEFT JOIN page_files p ON true
                ORDER BY p.n DESC, p.qualified_path
                """
-            // kept = the matching lines shown per file; shown = those plus their context window, grouped
-            // so overlapping windows collapse into one run of lines.
+            // kept = the matching lines shown per file, carrying their own text where `hits` had it.
             : $"""
                {common},
                kept AS (
-                   SELECT file_id, line_number FROM (
-                       SELECT h.file_id, h.line_number,
+                   SELECT file_id, line_number{keptColumns} FROM (
+                       SELECT h.file_id, h.line_number{keptSource},
                               row_number() OVER (PARTITION BY h.file_id ORDER BY h.line_number) AS rn
                        FROM hits h JOIN page_files p USING (file_id))
-                   WHERE rn <= {bounds.MaxLinesPerFile}),
-               shown AS (
-                   SELECT l.file_id, l.line_number, l.content{(request.WithHistory ? ", l.commit_id" : "")},
-                          bool_or(k.line_number = l.line_number) AS is_match
-                   FROM kept k
-                   JOIN lines l ON l.file_id = k.file_id
-                               AND l.line_number BETWEEN k.line_number - {bounds.Context} AND k.line_number + {bounds.Context}
-                   GROUP BY ALL),
+                   WHERE rn <= {bounds.MaxLinesPerFile}){shown},
                page_lines AS (
-                   SELECT p.qualified_path, p.n, s.line_number, s.content, s.is_match{History(request)}
-                   FROM page_files p JOIN shown s USING (file_id){HistoryJoin(request)})
+                   SELECT p.qualified_path, p.n, s.line_number, s.content, {(carried ? "true AS is_match" : "s.is_match")}{History(request)}
+                   FROM page_files p JOIN {(carried ? "kept" : "shown")} s USING (file_id){HistoryJoin(request)})
                SELECT t.total_files, t.total_lines, p.qualified_path, p.n AS match_count,
                       p.line_number, p.content, p.is_match{Columns(request)}
                FROM totals t LEFT JOIN page_lines p ON true
