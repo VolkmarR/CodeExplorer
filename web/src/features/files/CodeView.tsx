@@ -77,8 +77,14 @@ export function CodeView({
   return (
     // The pane scrolls rather than the page, so the rail beside it and the card's own header stay
     // where they are while a long file is read. The height is what is left under the top bar and
-    // the card head; a pane shorter than the viewport still only takes the room it needs.
-    <ScrollArea className="max-h-[calc(100dvh-16rem)] rounded-lg border bg-card">
+    // the card head; a pane shorter than that still only takes the room it needs, because the
+    // viewport is bounded rather than sized.
+    //
+    // The bound is on the viewport and not on this root, which is the whole of the fix: the viewport
+    // carries `h-full`, a percentage that resolves against an `auto` height when the root has only a
+    // `max-height` — so the element that scrolls grew with the file and a 4900-line file scrolled the
+    // page, taking the header and the rail off the screen with it.
+    <ScrollArea className="rounded-lg border bg-card" viewportClassName="max-h-(--reading-pane)">
       <table className="w-full border-collapse font-mono text-xs">
         <tbody>
           {lines.map(({ children, number }) => {
