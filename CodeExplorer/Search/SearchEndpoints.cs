@@ -96,18 +96,16 @@ internal sealed record DeclarationResponse(
     string Evidence);
 
 /// <summary>
-///     What a file declares. <paramref name="Profiled" /> and <paramref name="ReadsDeclarations" /> are the two
-///     ways an empty list means something other than "this file declares nothing" — an extension no
-///     profile covers was read with the conservative default shapes, and a language whose
-///     declarations this cannot read was never scanned — and the panel draws the three apart, the way
-///     the import panels beside it do. <paramref name="Capped" /> says the list is short of what the
-///     file declares.
+///     What a file declares. <paramref name="Coverage" /> is what an empty list means and
+///     <paramref name="Capped" /> whether the list is short, both as
+///     <see cref="DeclarationsResult" /> explains them; it is one of <c>"unprofiled"</c>,
+///     <c>"unreadable"</c> or <c>"read"</c>, a lowercase name like the two on
+///     <see cref="DeclarationResponse" /> and for the same reason.
 /// </summary>
 internal sealed record FileDeclarationsResponse(
     string QualifiedPath,
     string LanguageName,
-    bool Profiled,
-    bool ReadsDeclarations,
+    string Coverage,
     bool Capped,
     IReadOnlyList<DeclarationResponse> Declarations);
 
@@ -389,8 +387,8 @@ internal static class SearchEndpoints
     ///     lowercase names rather than numbers, so the panel reads the answer instead of decoding it.
     /// </summary>
     private static IResult Declarations(DeclarationsResult result) =>
-        Results.Ok(new FileDeclarationsResponse(result.QualifiedPath, result.LanguageName, result.Profiled,
-            result.ReadsDeclarations, result.Capped,
+        Results.Ok(new FileDeclarationsResponse(result.QualifiedPath, result.LanguageName,
+            result.Coverage.ToString().ToLowerInvariant(), result.Capped,
             result.Declarations
                 .Select(d => new DeclarationResponse(d.LineNumber, d.Text, d.Type, d.Member,
                     d.Role?.ToString().ToLowerInvariant(), d.Evidence.ToString().ToLowerInvariant()))

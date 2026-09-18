@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ErrorPanel } from '@/components/ErrorPanel'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -8,8 +9,11 @@ import { formatCount } from '@/lib/format'
  * How many entries a rail panel shows before the reader asks for the rest. A rail is read alongside
  * the code, and one panel with two hundred entries would push every panel under it out of the rail —
  * while a file with a handful should need no second click to see them all.
+ *
+ * Not exported: every panel reaches it through the components below, which is the point of their
+ * living here.
  */
-export const ENTRIES_SHOWN = 8
+const ENTRIES_SHOWN = 8
 
 /**
  * One section of the file rail. Its own component because every panel beside the code is the same
@@ -90,6 +94,64 @@ export function RailEntries<T>({
       ) : null}
     </>
   )
+}
+
+/**
+ * A panel that answers from the index: the heading and its count, whatever the answer has to explain
+ * about itself, the list, and the caveat on how the answer was reached.
+ *
+ * All three such panels — what a file declares, what it imports, what imports it — are this shape and
+ * differ only in their rows, so it is written once. Each was hand-written before, and the cost was
+ * four literal class strings per copy: a spacing or type-scale fix landed on one panel and left the
+ * others a few pixels off, which is the drift `RailPanel` itself exists to prevent.
+ */
+export function RailPanelAnswer({
+  title,
+  count,
+  note,
+  evidence,
+  children,
+}: {
+  title: string
+  count?: string
+  /** What the answer has to say about itself, or null when the list speaks for itself. */
+  note: string | null
+  /**
+   * How the answer was reached — every one of these is read from line shape and is evidence rather
+   * than proof (CONTEXT.md). Undefined where nothing was read, so there is no claim to qualify.
+   */
+  evidence?: string
+  children: React.ReactNode
+}) {
+  return (
+    <RailPanel title={title} count={count}>
+      {note ? <p className="mb-3 text-sm text-muted-foreground last:mb-0">{note}</p> : null}
+      {children}
+      {evidence === undefined ? null : (
+        <p className="mt-3 text-xs leading-snug text-muted-foreground/80">{evidence}</p>
+      )}
+    </RailPanel>
+  )
+}
+
+/**
+ * A panel with nothing to show yet, and the same panel when the request failed outright. Every panel
+ * in the rail waits for its own request, so the wait and the failure look the same in all of them.
+ */
+export function RailWaiting({ title, error }: { title: string; error: unknown }) {
+  return (
+    <RailPanel title={title}>
+      {error ? <ErrorPanel error={error} title={`${title} could not be read`} /> : <RailPending />}
+    </RailPanel>
+  )
+}
+
+/**
+ * The number beside a heading. A list that stopped at a server ceiling is the one case where its
+ * length is not the answer to "how many", so it is shown as a floor rather than as a total.
+ */
+export function tally(length: number, capped: boolean) {
+  return capped ? `${formatCount(length)}+` : formatCount(length)
 }
 
 /**

@@ -7,9 +7,7 @@ import {
 } from '@/features/files/declarations'
 import { fileSearch } from '@/features/files/fileParams'
 import { declarationsQuery } from '@/features/files/queries'
-import { RailEntries, RailPanel, RailPending } from '@/features/files/RailPanel'
-import { ErrorPanel } from '@/components/ErrorPanel'
-import { formatCount } from '@/lib/format'
+import { RailEntries, RailPanelAnswer, RailWaiting, tally } from '@/features/files/RailPanel'
 
 /**
  * What the file declares, read from the index rather than from the file on screen. It is the same
@@ -23,64 +21,49 @@ import { formatCount } from '@/lib/format'
 export function DeclarationPanel({ project, path }: { project: string; path: string }) {
   const { data, error, isPending } = useQuery(declarationsQuery(project, path))
 
-  if (isPending || error) {
-    return (
-      <RailPanel title="Declarations">
-        {error ? (
-          <ErrorPanel error={error} title="The declarations could not be read" />
-        ) : (
-          <RailPending />
-        )}
-      </RailPanel>
-    )
-  }
-
-  const note = declarationsNote(data)
+  if (isPending || error) return <RailWaiting title="Declarations" error={error} />
 
   return (
-    <RailPanel
+    <RailPanelAnswer
       title="Declarations"
-      // No number where there is no list to count: an extension no profile covers and a language
-      // whose declarations cannot be read both answer in prose, and a `0` beside either would read
-      // as a measurement.
+      // No number where there is no list to count: a `0` beside the heading would read as a
+      // measurement where the answer is prose about why nothing was read.
       count={
-        data.readsDeclarations && data.declarations.length > 0
-          ? `${formatCount(data.declarations.length)}${data.capped ? '+' : ''}`
-          : undefined
+        data.declarations.length > 0 ? tally(data.declarations.length, data.capped) : undefined
       }
+      note={declarationsNote(data)}
+      // Nothing was read, so there is no claim to qualify.
+      evidence={data.coverage === 'unreadable' ? undefined : DECLARATION_EVIDENCE}
     >
-      {note ? <p className="mb-3 text-sm text-muted-foreground last:mb-0">{note}</p> : null}
       {/* A screenful, with the rest a click away, like the import panels below it: a generated file
           declaring seventy names would otherwise fill the whole rail and push every other panel out
           of it. */}
       <RailEntries items={data.declarations} capped={data.capped}>
-        {(declaration) => (
-          <li
-            key={`${declaration.lineNumber}:${declarationLabel(declaration)}`}
-            className="min-w-0 text-xs"
-            title={declaration.text.trim()}
-          >
-            <Link
-              to="/projects/$project/file"
-              params={{ project }}
-              search={fileSearch(path, declaration.lineNumber)}
-              replace
-              className="block truncate text-primary hover:underline"
-            >
-              {declarationLabel(declaration)}
-            </Link>
-            <p className="truncate text-muted-foreground">
-              line {declaration.lineNumber}
-              {/* Only where the language draws the split. Where it does not, saying nothing is the
-                  answer rather than picking one of the two labels (CONTEXT.md, Declaration). */}
-              {declaration.role === null ? null : ` · ${declaration.role}`}
-            </p>
-          </li>
-        )}
+        {(declaration) => {
+          const label = declarationLabel(declaration)
+          return (
+            // The line number alone: one declaration is reported per line, so it already identifies
+            // the row and is the identity the link is built from.
+            <li key={declaration.lineNumber} className="min-w-0 text-xs" title={declaration.text}>
+              <Link
+                to="/projects/$project/file"
+                params={{ project }}
+                search={fileSearch(path, declaration.lineNumber)}
+                replace
+                className="block truncate text-primary hover:underline"
+              >
+                {label}
+              </Link>
+              <p className="truncate text-muted-foreground">
+                line {declaration.lineNumber}
+                {/* Only where the language draws the split. Where it does not, saying nothing is the
+                    answer rather than picking one of the two labels (CONTEXT.md, Declaration). */}
+                {declaration.role === null ? null : ` · ${declaration.role}`}
+              </p>
+            </li>
+          )
+        }}
       </RailEntries>
-      {data.readsDeclarations ? (
-        <p className="mt-3 text-xs leading-snug text-muted-foreground/80">{DECLARATION_EVIDENCE}</p>
-      ) : null}
-    </RailPanel>
+    </RailPanelAnswer>
   )
 }

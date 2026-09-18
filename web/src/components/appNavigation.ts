@@ -61,33 +61,44 @@ export const VIEW_NAMES: Record<View, string> = Object.fromEntries(
   PROJECT_VIEWS.map((item) => [item.view, item.label]),
 ) as Record<View, string>
 
+/** The project-relative segment each view sits at, from the table above. Empty for the overview. */
+const VIEW_SEGMENTS = new Map<string, View>(
+  PROJECT_VIEWS.map((item) => [item.link.to.replace(/^\/projects\/\$project\/?/, ''), item.view]),
+)
+
 /**
- * Which sidebar item is lit, decided from the path rather than by each link's `activeProps`,
- * because one of the six does not sit where its name suggests: reading a file is part of Files and
- * lives at its own route (`/file`, not under `/files`). A link's own active state cannot know that,
- * and would leave the reader of a file standing on no item at all.
+ * Which view a project-relative segment belongs to where it is not the view's own name. Reading a
+ * file is part of Files and lives at its own route — `/file`, not under `/files` — so the reader of
+ * a file would otherwise stand on no item at all.
+ */
+const VIEW_ALIASES = new Map<string, View>([['file', 'files']])
+
+/**
+ * Which sidebar item is lit, decided from the path rather than by each link's own active state,
+ * because of the one exception above: a link cannot know that `/file` belongs to Files.
+ *
+ * Derived from `PROJECT_VIEWS` rather than a chain of comparisons, so adding a view is the one entry
+ * in that table and not an entry plus a branch here — which is what the second edit being caught
+ * only by a test used to mean.
  *
  * Every view is decided from the path alone, which is why this takes nothing else. It read the
  * project page's tab as a second argument while Overview and Settings shared one route, and the
  * cost was that the frame re-read a search param on all six pages to light one item.
  *
- * A module of its own rather than a function inside the sidebar: it is the one part of the frame
- * that grows with every view added, it needs none of the component's state to decide, and every
- * case it gets wrong is a case worth a test.
+ * A module of its own rather than a function inside the sidebar: it needs none of the component's
+ * state to decide, and every case it gets wrong is a case worth a test.
  */
 export function activeView(pathname: string): View | null {
   // A trailing slash is the same page, and the router hands one out for an index route.
   const path = pathname.replace(/\/$/, '')
 
-  if (path.endsWith('/search')) return 'search'
-  if (path.endsWith('/history')) return 'history'
-  if (path.endsWith('/churn')) return 'churn'
-  if (path.endsWith('/settings')) return 'settings'
-  if (path.endsWith('/files') || path.endsWith('/file')) return 'files'
-
-  // `/projects/new` reaches here as a slug-shaped path and is not a project: it is the form that
-  // makes one, and a static segment beats `$project` in the router for the same reason.
+  // `/projects/new` is slug-shaped and is not a project: it is the form that makes one, and a static
+  // segment beats `$project` in the router for the same reason.
   if (path === '/projects/new') return null
 
-  return /^\/projects\/[^/]+$/.test(path) ? 'overview' : null
+  const inProject = /^\/projects\/[^/]+(?:\/(.*))?$/.exec(path)
+  if (inProject === null) return null
+
+  const segment = inProject[1] ?? ''
+  return VIEW_SEGMENTS.get(segment) ?? VIEW_ALIASES.get(segment) ?? null
 }

@@ -13,11 +13,10 @@ const declaration = (member: string): Declaration => ({
 
 const declared = (fields: Partial<FileDeclarations>): FileDeclarations => ({
   capped: false,
+  coverage: 'read',
   declarations: [],
   languageName: 'C#',
-  profiled: true,
   qualifiedPath: 'one/src/Orders.cs',
-  readsDeclarations: true,
   ...fields,
 })
 
@@ -28,10 +27,10 @@ const declared = (fields: Partial<FileDeclarations>): FileDeclarations => ({
  * believe the file.
  */
 test('an empty declarations panel says which kind of empty it is', () => {
-  expect(declarationsNote(declared({ languageName: '.rst', profiled: false }))).toContain(
+  expect(declarationsNote(declared({ coverage: 'unprofiled', languageName: '.rst' }))).toContain(
     'No language profile covers',
   )
-  expect(declarationsNote(declared({ languageName: 'CSS', readsDeclarations: false }))).toContain(
+  expect(declarationsNote(declared({ coverage: 'unreadable', languageName: 'CSS' }))).toContain(
     'CSS declarations',
   )
   expect(declarationsNote(declared({}))).toContain('declares nothing')
