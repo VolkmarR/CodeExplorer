@@ -37,7 +37,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  Lists commits of the project's default branch, newest first. Use it to see what changed recently, and how much of a project is moving, before asking about any one file.
 
                  - `repo` scopes it to one repository; `limit` and `page` walk it. Those are its only arguments.
-                 - It does not filter. Commits cannot be selected by author, by message, by one commit or by date, and any argument name this list does not hold is dropped without a word. `author`, `grep`, `commit` and the old `repository` spelling are declared only so that sending one is reported as ignored, instead of answered with an unfiltered log that reads as a filtered one.
+                 - It does not filter. Commits cannot be selected by author, by message, by one commit or by date. Any other argument name — `author`, `grep`, `commit`, the old `repository` spelling, or one not thought of here — is named as ignored above the answer rather than quietly dropped, so a log is never an unfiltered answer to a filtered question.
                  - For what it cannot answer: page back for older commits, file_history for one file, blame for one line, hot_files for where the work is.
                  - Merges count as one commit and their side branches are not walked, so a pull request reads as a single change.
                  - Only the default branch is recorded. A commit on a branch that was never merged is not here.
@@ -50,67 +50,16 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         int limit = DefaultCommits,
         [Description("1-based page of results, newest first.")]
         int page = 1,
-        // TODO #85: these four filter nothing and exist only to be reported. Delete them, and the
-        // Ignored call below, once the call-tool filter reads the caller's raw arguments against the
-        // declared ones — it says the same thing for every tool and for every spelling, not just these.
-        [Description("Not a filter. Declared only so that sending it is reported: git_log cannot select commits by author.")]
-        string? author = null,
-        [Description("Not a filter. Declared only so that sending it is reported: git_log cannot search commit messages.")]
-        string? grep = null,
-        [Description("Not a filter. Declared only so that sending it is reported: git_log cannot select or start at one commit.")]
-        string? commit = null,
-        [Description(
-            "Not a filter, and no longer this tool's name for the repository scope. Declared only so that sending it is reported: pass repo instead.")]
-        string? repository = null,
         CancellationToken cancellationToken = default)
     {
-        string ignored = Ignored([("author", author), ("grep", grep), ("commit", commit), ("repository", repository)],
-            repo);
+        // Every parameter here is optional, so a name this tool does not have binds nowhere and the
+        // call still runs with its defaults — an unfiltered log answering a filtered question, which
+        // is well-formed, plausible and wrong (#86). What was sent and ignored is said above this
+        // answer by the call-tool filter (ToolArguments), which reads the caller's raw arguments and
+        // so catches every spelling rather than the four this tool once declared to catch them.
         var outcome = await history.LogAsync(Project, new LogRequest(repo, limit, page), cancellationToken);
-        // The caveat goes inside Render's answer so that the cap measures it: joined to the rendered
-        // reply instead, a capped answer would say "truncated at 40 KB" while being larger than that.
-        // A problem is one sentence Render returns uncapped, and the caveat joins it the same way — a
-        // caller that was silently unfiltered hears about it whatever the log turned out to be.
-        return outcome is Problem problem
-            ? ignored + problem.Explanation
-            : ToolReply.Render<LogAnswer>(outcome, answer => ignored + Log(answer),
-                answer => $"Narrow with repo, or raise page past {answer.Page}.");
-    }
-
-    /// <summary>
-    ///     What a call carried that git_log does not filter by, said in front of the log, or nothing
-    ///     when it carried none.
-    ///     Every parameter of git_log is optional, so an argument it does not have binds nowhere and
-    ///     the call still succeeds with the defaults — and an unfiltered log answering a filtered
-    ///     question is well-formed, plausible and wrong, which is worse than an error (issue #86). The
-    ///     four names are what sessions actually send, so they are declared as parameters that filter
-    ///     nothing and are reported here; the SDK does not hand a tool the arguments it could not bind,
-    ///     so there is no way to catch a fifth spelling short of a call-tool filter over the raw
-    ///     arguments (#85), and the description says so rather than leaving it here.
-    ///     <c>repository</c> is in the list because it is what this tool itself took until the scope was
-    ///     renamed <c>repo</c> to match the other five. It is reported and not honoured: both spellings
-    ///     would leave one concept with two names, which is what caused this in the first place.
-    ///     The sentence says nothing about what follows it, because what follows may be a problem, an
-    ///     empty page or a project with no history at all — and a caveat that called one of those "the
-    ///     unfiltered log" would be an absence dressed as a result, which is the failure this whole
-    ///     change is about (CODING_STANDARDS, Errors).
-    /// </summary>
-    /// <param name="sent">Each ignored parameter and what arrived in it.</param>
-    /// <param name="repo">The scope that does exist, so the caveat does not claim it was dropped too.</param>
-    private static string Ignored((string Name, string? Value)[] sent, string? repo)
-    {
-        var names = sent.Where(argument => argument.Value is not null).Select(argument => $"`{argument.Name}`").ToList();
-        if (names.Count == 0) return "";
-
-        // "`a`, `b` or `c`", because the sentence is about what none of them did.
-        string list = names.Count == 1
-            ? names[0]
-            : string.Join(", ", names.Take(names.Count - 1)) + " or " + names[^1];
-        string one = names.Count == 1 ? "it" : "them";
-        return $"`git_log` has no {list} argument; {(names.Count == 1 ? "it was" : "they were")} ignored and "
-               + $"nothing below was filtered by {one}"
-               + (repo is null ? "" : ", beyond the `repo` scope")
-               + ". It takes `repo`, `limit` and `page`.\n\n";
+        return ToolReply.Render<LogAnswer>(outcome, Log,
+            answer => $"Narrow with repo, or raise page past {answer.Page}.");
     }
 
     private static string Log(LogAnswer answer)
