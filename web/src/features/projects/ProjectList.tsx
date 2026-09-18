@@ -3,7 +3,6 @@ import { Link } from '@tanstack/react-router'
 import { Plus, Settings } from 'lucide-react'
 import { treeSearch } from '@/features/files/browseParams'
 import { IndexStatus } from '@/features/projects/IndexStatus'
-import { projectSearch } from '@/features/projects/projectParams'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { projectsQuery } from '@/features/projects/queries'
@@ -65,9 +64,8 @@ export function ProjectList() {
                       </Link>
                     ) : (
                       <Link
-                        to="/projects/$project"
+                        to="/projects/$project/settings"
                         params={{ project: project.slug }}
-                        search={projectSearch('settings')}
                         className={CARD_LINK}
                       >
                         {project.name}
@@ -84,11 +82,7 @@ export function ProjectList() {
                     </span>
                     <Button
                       render={
-                        <Link
-                          to="/projects/$project"
-                          params={{ project: project.slug }}
-                          search={projectSearch('settings')}
-                        />
+                        <Link to="/projects/$project/settings" params={{ project: project.slug }} />
                       }
                       variant="ghost"
                       size="sm"

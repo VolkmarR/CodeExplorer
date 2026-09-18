@@ -3,7 +3,6 @@ import { Fragment } from 'react'
 import { VIEW_NAMES, type View } from '@/components/appNavigation'
 import { AccountBar } from '@/features/auth/AccountBar'
 import { McpEndpoint } from '@/features/projects/McpEndpoint'
-import { projectSearch } from '@/features/projects/projectParams'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import {
   Breadcrumb,
@@ -31,7 +30,7 @@ function crumbs(project: string | undefined, view: View | null): Crumb[] {
   trail.push({
     label: project,
     link: (
-      <Link to="/projects/$project" params={{ project }} search={projectSearch('overview')}>
+      <Link to="/projects/$project" params={{ project }}>
         {project}
       </Link>
     ),

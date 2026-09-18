@@ -1,6 +1,5 @@
 import { Link, useParams } from '@tanstack/react-router'
 import { treeSearch } from '@/features/files/browseParams'
-import { projectSearch } from '@/features/projects/projectParams'
 import { ApiError } from '@/lib/api'
 import { RouteError } from '@/components/RouteError'
 import { Button } from '@/components/ui/button'
@@ -34,13 +33,7 @@ export function BrowseUnavailable({ error }: { error: unknown }) {
         </p>
         {status === 404 ? (
           <Button
-            render={
-              <Link
-                to="/projects/$project"
-                params={{ project }}
-                search={projectSearch('settings')}
-              />
-            }
+            render={<Link to="/projects/$project/settings" params={{ project }} />}
             variant="outline"
             className="mt-4"
           >
