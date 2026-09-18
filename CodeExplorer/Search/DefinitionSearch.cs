@@ -122,7 +122,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
                                                   ORDER BY f.qualified_path, l.line_number
                                                   LIMIT {MaxCandidates}
                                                   """, parameters))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
                 candidates.Add(new Candidate(reader.Int64("file_id"), reader.Text("qualified_path"),
@@ -185,7 +185,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
                    USING (file_id)
                  WHERE regexp_matches(l.content, $q, '')
                  """, parameters);
-            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            using var reader = await command.ReaderAsync(cancellationToken);
             if (await reader.ReadAsync(cancellationToken))
             {
                 naming = (int)reader.Int64("filtered");
@@ -223,7 +223,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
     {
         var extensions = new List<string>();
         using (var command = connection.Query("SELECT DISTINCT extension FROM files", []))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken)) extensions.Add(reader.Text("extension"));
         }

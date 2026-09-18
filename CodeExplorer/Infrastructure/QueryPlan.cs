@@ -4,12 +4,15 @@ using DuckDB.NET.Data;
 namespace CodeExplorer;
 
 /// <summary>
-///     Writes the query plan of a search to a directory, for working out where a slow one spends its
+///     Writes the query plan of a read to a directory, for working out where a slow one spends its
 ///     time. Off unless <c>CODEEXPLORER_EXPLAIN_DIR</c> names a directory, and the check is one string
-///     comparison on a static, so a search pays nothing for this existing.
-///     It explains the statement the search actually built rather than one retyped beside it: a plan
+///     comparison on a static, so a query pays nothing for this existing.
+///     It explains the statement the reader actually built rather than one retyped beside it: a plan
 ///     read off a hand-copied query is a plan for a different query, which is the way this kind of
 ///     investigation usually goes wrong.
+///     In Infrastructure and not in Search, because every module's reads pass through
+///     <see cref="IndexQuery.ReaderAsync" />, and it was a grep diagnostic only while grep was the
+///     one query anybody had measured.
 ///     A diagnostic and not a feature. There is no endpoint and no configuration entry, because the
 ///     one caller is a developer with a shell who already has the environment variable.
 /// </summary>
@@ -18,6 +21,26 @@ internal static class QueryPlan
     private static readonly string? Directory = Environment.GetEnvironmentVariable("CODEEXPLORER_EXPLAIN_DIR");
 
     public static bool Enabled => Directory is not null;
+
+    /// <summary>
+    ///     The plan of a command that is about to be executed, labelled with the method that built it.
+    ///     This is the overload every read goes through (<see cref="IndexQuery.ReaderAsync" />): a label
+    ///     spelled at the call site would be a second name for the query, free to drift from the method
+    ///     that owns it, and thirty of them would have to be written before any of this measured
+    ///     anything.
+    /// </summary>
+    public static Task DumpAsync(DuckDBCommand command, string label, CancellationToken cancellationToken) =>
+        DumpAsync((DuckDBConnection)command.Connection!, label, command.CommandText,
+            [.. command.Parameters.Cast<DuckDBParameter>()], cancellationToken);
+
+    /// <summary>
+    ///     What to call the plan of a query built in <paramref name="member" /> of <paramref name="file" />:
+    ///     <c>IndexReader.FileAsync</c>. The file name and not the type, because the caller is a compiler
+    ///     constant and the type is not — and in this codebase a file is one type often enough that the
+    ///     difference only shows where it does not matter.
+    /// </summary>
+    public static string Label(string file, string member) =>
+        $"{Path.GetFileNameWithoutExtension(file)}.{member}";
 
     /// <summary>
     ///     Runs <c>EXPLAIN ANALYZE</c> on <paramref name="sql" /> and writes it, with the statement and

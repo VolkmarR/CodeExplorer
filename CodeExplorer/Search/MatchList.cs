@@ -163,7 +163,7 @@ public sealed class MatchList(ProjectIndexes indexes)
                                                       ORDER BY g.n DESC, g.value
                                                       LIMIT {limit}
                                                       """, [.. matchParameters, .. fileParameters]))
-            using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            using (var reader = await command.ReaderAsync(cancellationToken))
             {
                 while (await reader.ReadAsync(cancellationToken))
                 {

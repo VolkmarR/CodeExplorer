@@ -48,7 +48,7 @@ internal static class IndexQueries
                                               FROM files f{scope}
                                               GROUP BY f.extension
                                               """, parameters);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var counts = new List<ExtensionCount>();
         while (await reader.ReadAsync(cancellationToken))
             counts.Add(new ExtensionCount(reader.Text("extension"), reader.Int32("files"), reader.Int64("lines"),
@@ -69,7 +69,7 @@ internal static class IndexQueries
         // a TIMESTAMPTZ that does not depend on whether ICU is loaded to decide the session time zone.
         using var command = connection.Query($"SELECT epoch(max(authored_at)) AS newest FROM commits {scope}",
             parameters);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) || reader.IsNull("newest")) return null;
         return HistoryWindow.Ending(DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("newest")), days);
     }
@@ -146,7 +146,7 @@ internal static class IndexQueries
                                               FROM ranked
                                               ORDER BY commits DESC, added + deleted DESC, path
                                               """, parameters);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var files = new List<ChurnedFile>();
         while (await reader.ReadAsync(cancellationToken))
         {
