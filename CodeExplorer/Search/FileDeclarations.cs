@@ -49,9 +49,8 @@ public sealed record FileDeclaration(
 
 /// <summary>
 ///     What one file declares. <see cref="Coverage" /> is what an empty list means, and
-///     <see cref="Capped" /> says the list is short of what the file declares — whichever of the two
-///     ceilings cut it, the answer or the scan that fed it
-///     (<see cref="FileDeclarations.MaxDeclarations" />).
+///     <see cref="Capped" /> says the list stopped at <see cref="FileDeclarations.MaxDeclarations" />
+///     rather than at the end of the file.
 /// </summary>
 public sealed record DeclarationsResult(
     string QualifiedPath,
@@ -85,16 +84,6 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
     public const int MaxDeclarations = 500;
 
     /// <summary>
-    ///     How many candidate lines are read before they are placed. A candidate is already a line
-    ///     shaped like a declaration in this one file, so this is generous for anything but a
-    ///     generated file or a minified bundle. It is deliberately far above
-    ///     <see cref="MaxDeclarations" /> rather than equal to it: a candidate is only a line that
-    ///     might declare something, and a file where most of them turn out to be commented out would
-    ///     otherwise have real declarations cut by a ceiling on the rejects.
-    /// </summary>
-    private const int MaxCandidates = 5_000;
-
-    /// <summary>
     ///     Every read of a file's declarations goes through here, which is what makes this the one
     ///     place such a read is recorded.
     /// </summary>
@@ -117,66 +106,55 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
             var (name, profiled) = Languages.Name(extension);
 
             var parameters = new List<DuckDBParameter> { new("f", file.FileId) };
-            // Null for a language that declares nothing this can read, which is not an empty narrowing
-            // and must not become one: CSS is scanned for no lines rather than for every line of it,
-            // and the answer says the scan never ran.
-            if (SearchQuery.Narrowing(analyzer.DeclarationCandidates, "d", parameters) is not { } narrowing)
+            // Null for a language that declares nothing this can read, which is not a test that is
+            // always false and must not become one: CSS is not scanned at all rather than scanned for
+            // every line of it, and the answer says the scan never ran.
+            if (SearchQuery.CandidateTest(analyzer.DeclarationCandidates, "d", parameters) is not { } test)
                 return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Unreadable, false,
                     []);
 
-            var candidates = new List<(int LineNumber, string Content)>();
-            using (var command = index.Connection.Query($"""
-                                                         SELECT line_number, content FROM lines
-                                                         WHERE file_id = $f{narrowing}
-                                                         ORDER BY line_number
-                                                         LIMIT {MaxCandidates + 1}
-                                                         """, parameters))
-            using (var reader = await command.ExecuteReaderAsync(token))
-            {
-                while (await reader.ReadAsync(token))
-                    candidates.Add((reader.Int32("line_number"), reader.Text("content")));
-            }
-
-            // One row past the ceiling is read so that a file with exactly as many candidates as it
-            // holds is told from one the ceiling cut short, the way the import graph does it.
-            bool scanCutShort = candidates.Count > MaxCandidates;
-            if (scanCutShort) candidates.RemoveAt(candidates.Count - 1);
-
-            // The lines above each candidate, so that a declaration inside a commented-out block is
-            // not one, and one below a Delphi `implementation` is known to be the body. The same walk
-            // the two symbol searches use, for the same reason: one answer about a line however it
-            // was reached.
-            var positions = await FilePositions.ReadAsync(index.Connection,
-                candidates.Select(line => (file.FileId, analyzer, line.LineNumber)), token);
-
+            // Every line of the file, each saying whether it could be a declaration, in one read. The
+            // lines between the candidates are not waste: placing a candidate means knowing what the
+            // lines above it left open, so a declaration inside a commented-out block is not one and a
+            // Delphi routine below `implementation` is known to be the body. Asked as two queries —
+            // the candidates, then the lines above them — the file was scanned twice and every
+            // candidate's text crossed the boundary twice.
             var declarations = new List<FileDeclaration>();
-            foreach (var (lineNumber, content) in candidates)
+            bool scanCutShort = false;
+            using (var command = index.Connection.Query($"""
+                                                         SELECT line_number, content, ({test}) AS wanted
+                                                         FROM lines WHERE file_id = $f
+                                                         ORDER BY line_number
+                                                         """, parameters))
             {
-                var position = positions.GetValueOrDefault((file.FileId, lineNumber), FilePosition.Unknown);
-                var declared = analyzer.Declares(position, content);
-                // The engine narrowed the file to lines shaped like a declaration; this is what says
-                // the shape declares a name rather than merely looking like it might.
-                if (declared.Value is not { } what) continue;
-                // The more specific of the two names, which is the one to ask about: a commented-out
-                // `// public void Removed() { }` is shaped exactly like the live declaration, and
-                // only where the name sits tells them apart.
-                string named = what.Member ?? what.Type!;
-                if (SearchQuery.OnlyInProse(analyzer, position, content, named)) continue;
-                declarations.Add(new FileDeclaration(lineNumber, content, what.Type, what.Member, what.Role,
-                    declared.Evidence));
-                // Stopping one past the ceiling is what tells a full list from a cut one, and it is
-                // also where the work ends: placing the candidates below costs a regex and a cursor
-                // walk each for lines that cannot reach the answer.
-                if (declarations.Count > MaxDeclarations) break;
+                await FilePositions.WalkAsync(command, analyzer, line =>
+                {
+                    if (!line.Wanted) return true;
+                    var declared = analyzer.Declares(line.Position, line.Content);
+                    // The engine narrowed the file to lines shaped like a declaration; this is what
+                    // says the shape declares a name rather than merely looking like it might.
+                    if (declared.Value is not { } what) return true;
+                    // The more specific of the two names, which is the one to ask about: a
+                    // commented-out `// public void Removed() { }` is shaped exactly like the live
+                    // declaration, and only where the name sits tells them apart.
+                    string named = what.Member ?? what.Type!;
+                    if (SearchQuery.OnlyInProse(analyzer, line.Position, line.Content, named)) return true;
+
+                    declarations.Add(new FileDeclaration(line.LineNumber, line.Content, what.Type,
+                        what.Member, what.Role, declared.Evidence));
+                    // One past the ceiling tells a list that ends here from one cut short, and it is
+                    // also where the reading stops: the lines below cannot reach the answer, and
+                    // placing each of them costs a regex and a walk of the line.
+                    if (declarations.Count <= MaxDeclarations) return true;
+                    scanCutShort = true;
+                    return false;
+                }, token);
             }
 
-            bool answerCutShort = declarations.Count > MaxDeclarations;
-            if (answerCutShort) declarations.RemoveAt(declarations.Count - 1);
+            if (scanCutShort) declarations.RemoveAt(declarations.Count - 1);
 
-            // Either ceiling leaves a list short of what the file declares, and the panel says one
-            // sentence for both: the answer stopped, or the scan that fed it did.
             return new DeclarationsResult(file.QualifiedPath, name,
                 profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled,
-                answerCutShort || scanCutShort, declarations);
+                scanCutShort, declarations);
         }, cancellationToken);
 }

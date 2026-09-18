@@ -46,7 +46,27 @@ internal static class SearchQuery
     /// <param name="candidates">What the analyser says it needs to see (ADR-0008).</param>
     /// <param name="name">The parameter to bind the pattern to, unique within the caller's command.</param>
     /// <param name="parameters">The command's parameters, appended to where there is a pattern.</param>
-    public static string? Narrowing(CandidateLines candidates, string name, List<DuckDBParameter> parameters)
+    public static string? Narrowing(CandidateLines candidates, string name, List<DuckDBParameter> parameters) =>
+        CandidateTest(candidates, name, parameters) switch
+        {
+            null => null,
+            // Nothing to narrow by: a clause of `AND true` would say the same and read as a mistake.
+            EveryLineTest => "",
+            var test => $" AND {test}"
+        };
+
+    /// <summary>The test for an analyser that needs every line looked at, which narrows nothing.</summary>
+    private const string EveryLineTest = "true";
+
+    /// <summary>
+    ///     The same question as <see cref="Narrowing" /> asked as a boolean expression rather than as a
+    ///     <c>WHERE</c> clause, for the caller that selects every line of a file and needs each row to
+    ///     say whether it is a candidate — the one that walks a file once instead of querying it twice.
+    ///     Both spellings come from here so that a case added to <see cref="CandidateLines" /> cannot
+    ///     be handled one way in a filter and another way in a projection.
+    /// </summary>
+    public static string? CandidateTest(CandidateLines candidates, string name,
+        List<DuckDBParameter> parameters)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(parameters);
@@ -55,10 +75,10 @@ internal static class SearchQuery
             case CandidateLines.NoLine:
                 return null;
             case CandidateLines.EveryLine:
-                return "";
+                return EveryLineTest;
             case CandidateLines.Re2Pattern pattern:
                 parameters.Add(new DuckDBParameter(name, pattern.Pattern));
-                return $" AND regexp_matches(content, ${name}, '')";
+                return $"regexp_matches(content, ${name}, '')";
             default:
                 // A case added to CandidateLines and not to this: no lines is the answer that costs a
                 // missing declaration, where every line is one that costs reading the whole index.
