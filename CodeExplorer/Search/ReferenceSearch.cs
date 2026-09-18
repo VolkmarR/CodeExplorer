@@ -144,13 +144,16 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
 
+        var matchParameters = new List<DuckDBParameter> { new("q", pattern) };
+        string literally = SearchQuery.Literally(symbol, "lit", matchParameters);
+
         // totals drives the join so that a symbol matching nothing still returns one row carrying the
         // zero counts, the way grep's page-past-the-end does.
         string sql = $"""
                       WITH hits AS (
                           SELECT l.file_id, l.line_number, l.content, f.qualified_path, f.extension
                           FROM lines l JOIN files f USING (file_id)
-                          WHERE regexp_matches(l.content, $q, ''){fileFilter}),
+                          WHERE {literally} AND regexp_matches(l.content, $q, ''){fileFilter}),
                       per_file AS (
                           SELECT file_id, qualified_path, extension, count(*) AS n FROM hits GROUP BY ALL),
                       totals AS (
@@ -170,8 +173,6 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                       FROM totals t LEFT JOIN kept k ON true
                       ORDER BY k.qualified_path, k.line_number
                       """;
-
-        var matchParameters = new List<DuckDBParameter> { new("q", pattern) };
 
         var matched = new List<MatchedLine>();
         int totalFiles = 0;
@@ -196,7 +197,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         int? withoutFilters = null;
         if (filter.Any)
             withoutFilters = (int)await connection.CountAsync(
-                "SELECT count(DISTINCT l.file_id) FROM lines l WHERE regexp_matches(l.content, $q, '')",
+                $"SELECT count(DISTINCT l.file_id) FROM lines l WHERE {literally} AND regexp_matches(l.content, $q, '')",
                 matchParameters, cancellationToken);
 
         var scopes = await ScopesAsync(connection, matched, cancellationToken);
