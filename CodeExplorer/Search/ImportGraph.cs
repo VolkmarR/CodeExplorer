@@ -114,7 +114,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
                                                         ORDER BY i.line_number, i.import_id
                                                         LIMIT {MaxEdges + 1}
                                                         """, [new DuckDBParameter("f", file.FileId)]);
-            using var reader = await command.ExecuteReaderAsync(token);
+            using var reader = await command.ReaderAsync(token);
             while (await reader.ReadAsync(token))
                 edges.Add(new ImportedFrom(reader.Text("name"), ImportBuilder.Shape(reader.Text("shape")),
                     reader.Int32("line_number"), reader.TextOrNull("target_path"),
@@ -137,7 +137,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
                                                          ORDER BY f.qualified_path, i.line_number
                                                          LIMIT {MaxEdges + 1}
                                                          """, [new DuckDBParameter("f", file.FileId)]))
-            using (var reader = await command.ExecuteReaderAsync(token))
+            using (var reader = await command.ReaderAsync(token))
             {
                 while (await reader.ReadAsync(token))
                     dependents.Add(new Dependent(reader.Text("qualified_path"), reader.Text("name"),
