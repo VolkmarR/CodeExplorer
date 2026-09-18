@@ -36,6 +36,41 @@ public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, lon
     public const int SwapStep = 5;
 
     /// <summary>
+    ///     The phases, as the status endpoint hands them to an operator: what is happening, in an
+    ///     operator's words. Constants rather than literals at the call site, so a test waiting for a
+    ///     phase is not waiting on a wording that a rewrite of the sentence quietly breaks. They live
+    ///     here rather than in <c>Refresh/</c> for the reason this whole type does — half of them are
+    ///     reported from inside the build, which cannot depend on the refresh that orchestrates it.
+    ///     A step reports several of them where it does several separable things (#91): step 3 alone
+    ///     attributes, builds the overview and builds the full-text index, and a reader who cannot tell
+    ///     them apart cannot say what a refresh spent its time on.
+    /// </summary>
+    public const string IngestPhase = "Reading the repositories into the shadow index";
+
+    public const string HistoryPhase = "Importing history and attributing lines";
+
+    public const string AttributionPhase = "Writing attribution onto the lines";
+
+    public const string OverviewPhase = "Building the project overview";
+
+    /// <summary>
+    ///     Reported only where this process has the <c>fts</c> extension, because only then is there a
+    ///     BM25 index to build. A project searched by substring scan passes straight from the overview
+    ///     to the store, and says so by never naming this phase — a phase that flashed past instantly
+    ///     would read as a full-text index that was somehow free.
+    /// </summary>
+    public const string FullTextPhase = "Building the full-text index";
+
+    public const string SwapPhase = "Swapping the new index in";
+
+    /// <summary>
+    ///     Writing the durable copy, which happens before the swap: a store that cannot be reached is a
+    ///     build that failed, and an index nothing could make durable is not one to put in front of
+    ///     agents on a server whose disk is wiped on every stop (#9).
+    /// </summary>
+    public const string StorePhase = "Storing the durable copy of the new index";
+
+    /// <summary>
     ///     How often a counting step reports, in items. The status is polled rather than streamed, so a
     ///     finer grain would only cost dictionary writes nobody ever reads.
     /// </summary>

@@ -17,25 +17,7 @@ public sealed class ProjectRefresh(
     ProjectIndexes indexes,
     ILogger<ProjectRefresh> logger)
 {
-    /// <summary>
-    ///     The phases, as the status endpoint hands them to an operator. Constants rather than literals
-    ///     at the call site, so a test waiting for a phase is not waiting on a wording that a rewrite of
-    ///     the sentence quietly breaks.
-    /// </summary>
-    public const string IngestPhase = "Reading the repositories into the shadow index";
-
-    public const string HistoryPhase = "Importing history and attributing lines";
-
-    public const string SwapPhase = "Swapping the new index in";
-
     private const int TotalSteps = RefreshProgress.TotalStepCount;
-
-    /// <summary>
-    ///     Writing the durable copy, which happens before the swap: a store that cannot be reached is a
-    ///     build that failed, and an index nothing could make durable is not one to put in front of
-    ///     agents on a server whose disk is wiped on every stop (#9).
-    /// </summary>
-    public const string StorePhase = "Storing the durable copy of the new index";
 
     /// <param name="project">The project to refresh, as the control database holds it.</param>
     /// <param name="report">
@@ -63,14 +45,14 @@ public sealed class ProjectRefresh(
             IndexSummary summary;
             try
             {
-                report(new RefreshProgress(RefreshProgress.IngestStep, TotalSteps, IngestPhase));
+                report(new RefreshProgress(RefreshProgress.IngestStep, TotalSteps, RefreshProgress.IngestPhase));
                 // Scoped so the shadow connection is closed before the swap: the file cannot be moved
                 // over the live one while the instance still holds it open.
                 using (var shadow = await indexes.CreateShadowAsync(project.Slug, cancellationToken))
                 {
                     summary = await builder.FillAsync(shadow, opened, project.SingleRepository, report,
                         cancellationToken);
-                    report(new RefreshProgress(RefreshProgress.StoreStep, TotalSteps, StorePhase));
+                    report(new RefreshProgress(RefreshProgress.StoreStep, TotalSteps, RefreshProgress.StorePhase));
                     // Exported from the shadow rather than from the live index after the swap, which is
                     // what the tables about to be swapped in are. Doing it here means the export needs
                     // no second attach of the live catalog — one that would quietly re-bind a connection
@@ -78,8 +60,13 @@ public sealed class ProjectRefresh(
                     // shadow and leaves the old index serving, like any other failure of a build.
                     await durable.StoreAsync(shadow.Connection, project.Slug, cancellationToken);
                 }
+                // No phase names the flush to disk because there is no separable call to name: the
+                // server issues no explicit CHECKPOINT, so the shadow flushes when the using above
+                // disposes it and again on the DETACH inside the swap. Both land after StoreStep is
+                // reported, outside the step-3 window #91 is about, so its half-second is billed to
+                // the store rather than to nothing.
 
-                report(new RefreshProgress(RefreshProgress.SwapStep, TotalSteps, SwapPhase));
+                report(new RefreshProgress(RefreshProgress.SwapStep, TotalSteps, RefreshProgress.SwapPhase));
                 await indexes.SwapShadowAsync(project.Slug, cancellationToken);
             }
             catch
