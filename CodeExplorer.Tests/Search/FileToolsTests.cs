@@ -272,7 +272,7 @@ public sealed class FileToolsTests : IDisposable
         string text = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
         Assert.Contains("Project 'alpha'", text);
         Assert.Contains("Indexed at", text);
-        Assert.Contains("Full-text index: not built", text);
+        Assert.Contains("Tokenised: no", text);
         Assert.Contains("one  ", text);
         Assert.Contains("4 files", text);
         Assert.Contains("two  ", text);

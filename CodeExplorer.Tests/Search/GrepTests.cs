@@ -32,7 +32,7 @@ public sealed class GrepTests : IDisposable
     public void Dispose() => _host?.Dispose();
 
     [Theory]
-    [InlineData(SearchEngine.Fts, GrepSearch.FullTextEngine)]
+    [InlineData(SearchEngine.Fts, GrepSearch.TokenEngine)]
     [InlineData(SearchEngine.Substring, GrepSearch.SubstringEngine)]
     public async Task Text_query_matches_in_both_repositories_and_names_the_engine(SearchEngine engine, string reported)
     {
@@ -218,6 +218,53 @@ public sealed class GrepTests : IDisposable
 
         Assert.Contains("no index to read from", text);
         Assert.Contains("POST /api/projects/alpha/refresh", text);
+    }
+
+    /// <summary>
+    ///     The token rule the tokenised path applies, which used to be BM25's and is now a word-boundary
+    ///     test. These are the cases that told the two engines apart before and still have to: a whole
+    ///     token matches, the same letters inside a longer identifier do not, and every piece of a
+    ///     multi-word query has to be present rather than only the first.
+    /// </summary>
+    [Fact]
+    public async Task A_text_query_matches_whole_identifier_tokens_and_not_parts_of_longer_ones()
+    {
+        await using var client = await StartAsync(SearchEngine.Fts);
+
+        string whole = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "Status" });
+        Assert.Contains($"({GrepSearch.TokenEngine} engine)", whole);
+        // `Status();` and `e.Status` are the token; `myStatus` is not, and is the case a substring
+        // scan would answer differently.
+        Assert.Contains("lib/anchors.ts", whole);
+        Assert.DoesNotContain("myStatus = 1", whole);
+
+        // Conjunctive: both pieces must be on the line, which is why the query is split rather than
+        // wrapped in one boundary test.
+        string both = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "const haystack" });
+        Assert.Contains("lib/index.ts", both);
+        Assert.DoesNotContain("anchors.ts", both);
+    }
+
+    /// <summary>
+    ///     A query carrying punctuation used to return nothing at all: the whole string went to BM25,
+    ///     which found no such token, and a real answer was reported as a clean miss (#81). The pieces
+    ///     are now split out of it the way the tokeniser splits them, so the punctuation narrows the
+    ///     answer through contains() instead of erasing it.
+    /// </summary>
+    [Fact]
+    public async Task A_query_with_punctuation_finds_the_lines_that_contain_it()
+    {
+        await using var client = await StartAsync(SearchEngine.Fts);
+
+        string plain = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "Needle" });
+        Assert.Contains("src/Orders.cs", plain);
+
+        string called = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "Needle()" });
+        Assert.Contains("src/Orders.cs", called);
+        Assert.Contains("void Needle() {}", called);
+        // The comment says "needle in a comment" with no parenthesis, so the punctuation is doing
+        // work rather than being ignored.
+        Assert.DoesNotContain("needle in a comment", called);
     }
 
     private async Task<McpClient> StartAsync(SearchEngine engine)

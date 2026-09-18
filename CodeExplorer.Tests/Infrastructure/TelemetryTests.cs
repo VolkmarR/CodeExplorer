@@ -46,7 +46,7 @@ public sealed class TelemetryTests
 
     [Theory]
     [InlineData(SearchEngine.Substring, GrepSearch.SubstringEngine, "tele-search-substring")]
-    [InlineData(SearchEngine.Fts, GrepSearch.FullTextEngine, "tele-search-fts")]
+    [InlineData(SearchEngine.Fts, GrepSearch.TokenEngine, "tele-search-fts")]
     public async Task A_search_records_its_duration_engine_and_result_counts(
         SearchEngine engine, string reported, string slug)
     {
