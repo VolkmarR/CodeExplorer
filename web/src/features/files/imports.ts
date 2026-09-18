@@ -1,13 +1,6 @@
 import type { FileDependents, FileImports } from '@/lib/api'
 
 /**
- * How many entries either import panel shows before the reader asks for the rest. A rail is read
- * alongside the code, and a hub with two hundred dependents would otherwise push everything below it
- * off the screen — while a file with a handful should need no second click to see them all.
- */
-export const ENTRIES_SHOWN = 8
-
-/**
  * What both panels say about the strength of what they show. One sentence, said the same in both
  * places, because the two lists are the same evidence read in opposite directions and one of them
  * wording it more confidently than the other would be the one a reader believes (CONTEXT.md,

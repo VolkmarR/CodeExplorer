@@ -77,6 +77,40 @@ internal sealed record FileDependentsResponse(
     bool Capped,
     IReadOnlyList<DependentResponse> Dependents);
 
+/// <summary>
+///     One declaration the file page's rail lists. <paramref name="Type" /> and
+///     <paramref name="Member" /> are what the line declares — either may be null, and a line that
+///     reads as both fills both — and <paramref name="Text" /> is the line itself, which is what the
+///     panel shows.
+///     <paramref name="Role" /> is <c>"declaration"</c> or <c>"implementation"</c> where the language
+///     announces a routine in one place and writes it in another, and null otherwise; a string and
+///     not the enum, because every other enum on this boundary is one and a number would be a value
+///     the browser has to hold a table for.
+/// </summary>
+internal sealed record DeclarationResponse(
+    int LineNumber,
+    string Text,
+    string? Type,
+    string? Member,
+    string? Role,
+    string Evidence);
+
+/// <summary>
+///     What a file declares. <paramref name="Profiled" /> and <paramref name="ReadsDeclarations" /> are the two
+///     ways an empty list means something other than "this file declares nothing" — an extension no
+///     profile covers was read with the conservative default shapes, and a language whose
+///     declarations this cannot read was never scanned — and the panel draws the three apart, the way
+///     the import panels beside it do. <paramref name="Capped" /> says the list is short of what the
+///     file declares.
+/// </summary>
+internal sealed record FileDeclarationsResponse(
+    string QualifiedPath,
+    string LanguageName,
+    bool Profiled,
+    bool ReadsDeclarations,
+    bool Capped,
+    IReadOnlyList<DeclarationResponse> Declarations);
+
 /// <summary>One commit of the change log, with the message body and what it did to the tree in sums.</summary>
 internal sealed record CommitResponse(
     string Sha,
@@ -232,6 +266,15 @@ internal static class SearchEndpoints
             async (Project project, string path, ImportGraph graph, CancellationToken ct) =>
                 Answer<DependentsResult>(await graph.DependentsAsync(project.Slug, path, ct), Dependents));
 
+        // What the file declares, beside the two import directions, because the rail asks all three
+        // of one file and draws each as it arrives. A route of its own rather than a field on /file:
+        // the scan reads the lines above every candidate to place it, and the code should be on
+        // screen before that comes back — the same reason blame is its own route.
+        project.MapGet("/file/declarations",
+            async (Project project, string path, FileDeclarations declarations, CancellationToken ct) =>
+                Answer<DeclarationsResult>(await declarations.ForFileAsync(project.Slug, path, ct),
+                    Declarations));
+
         // The change log, paged. The files a commit touched are their own route, like blame is: a
         // page of fifty commits touching a few hundred paths each would be mostly paths nobody opens.
         project.MapGet("/commits",
@@ -339,6 +382,18 @@ internal static class SearchEndpoints
             result.Profiled, result.HasImports, result.Module, result.Capped,
             result.Imports
                 .Select(i => new ImportEdgeResponse(i.Name, i.LineNumber, i.TargetPath, i.Unresolved))
+                .ToList()));
+
+    /// <summary>
+    ///     What a file declares, in the order the file writes them. The role and the evidence are
+    ///     lowercase names rather than numbers, so the panel reads the answer instead of decoding it.
+    /// </summary>
+    private static IResult Declarations(DeclarationsResult result) =>
+        Results.Ok(new FileDeclarationsResponse(result.QualifiedPath, result.LanguageName, result.Profiled,
+            result.ReadsDeclarations, result.Capped,
+            result.Declarations
+                .Select(d => new DeclarationResponse(d.LineNumber, d.Text, d.Type, d.Member,
+                    d.Role?.ToString().ToLowerInvariant(), d.Evidence.ToString().ToLowerInvariant()))
                 .ToList()));
 
     private static IResult Dependents(DependentsResult result) =>

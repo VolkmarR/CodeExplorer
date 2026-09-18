@@ -596,6 +596,128 @@ public sealed class SearchEndpointTests
     private static string Route(string direction, string path) =>
         $"/api/projects/alpha/file/{direction}?path={Uri.EscapeDataString(path)}";
 
+    /// <summary>
+    ///     A project covering the three answers the declarations panel has to keep apart: a language
+    ///     whose declarations are read, one a profile covers that declares nothing this can read, and
+    ///     an extension no profile covers at all.
+    /// </summary>
+    private static async Task<TestHost> DeclaringProjectAsync()
+    {
+        var host = new TestHost(SearchEngine.Substring);
+        try
+        {
+            await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+            {
+                ["one"] = new()
+                {
+                    ["src/Orders.cs"] = """
+                                        namespace Orders.Domain;
+
+                                        public class OrderService
+                                        {
+                                            public int Count;
+                                            // public void Removed() { }
+                                            public void Place() { }
+                                            public void Cancel() { }
+                                        }
+
+                                        """,
+                    // A C# file that declares nothing: the language reads declarations, this file has none.
+                    ["src/Empty.cs"] = "// Intentionally holds no declaration.\n",
+                    // CSS is profiled and declares nothing this can read.
+                    ["web/site.css"] = ".panel { color: red; }\n",
+                    ["build/notes.rst"] = "nothing here\n"
+                }
+            });
+            return host;
+        }
+        catch
+        {
+            host.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     What the file page's Declarations panel draws. The type and its members come back with the
+    ///     line each sits on, because the panel links them; a declaration shape inside a comment does
+    ///     not, because the index answers what the file declares and not what it once declared.
+    /// </summary>
+    [Fact]
+    public async Task The_file_page_reads_what_a_file_declares()
+    {
+        using var host = await DeclaringProjectAsync();
+
+        var declared = await GetAsync<FileDeclarationsResponse>(host,
+            Route("declarations", "one/src/Orders.cs"));
+
+        Assert.Equal("one/src/Orders.cs", declared.QualifiedPath);
+        Assert.Equal("C#", declared.LanguageName);
+        Assert.True(declared.Profiled);
+        Assert.True(declared.ReadsDeclarations);
+        Assert.False(declared.Capped);
+
+        // The type and its routines, in the order the file writes them. The field on line 5 is not
+        // among them: these profiles read types and routines and not variables, the same way a Delphi
+        // `var` is no declaration (LanguageAnalyzerTests), and a form no profile knows is one this
+        // does not find rather than one that is not there (CONTEXT.md, Declaration).
+        // Line 6 is the one that matters most: `// public void Removed() { }` is shaped exactly like
+        // the live declaration two lines below it, and only the walk of the lines above tells them
+        // apart.
+        Assert.Equal([(3, "OrderService"), (7, "Place"), (8, "Cancel")],
+            declared.Declarations.Select(d => (d.LineNumber, d.Type ?? d.Member)));
+        // Read from line shape and not from a compiler, which is what the panel says beside the list.
+        Assert.All(declared.Declarations, d => Assert.Equal("text", d.Evidence));
+        // C# announces a routine where it writes it, so there is no side of a split to report.
+        Assert.All(declared.Declarations, d => Assert.Null(d.Role));
+    }
+
+    /// <summary>
+    ///     The three ways the declarations panel can be empty, each answered with the field that says
+    ///     which it is. A panel that drew them the same would tell a reader a file declares nothing
+    ///     when the truth is that nothing looked — the same distinction the import panels draw.
+    /// </summary>
+    [Fact]
+    public async Task An_empty_declaration_list_says_which_kind_of_empty_it_is()
+    {
+        using var host = await DeclaringProjectAsync();
+
+        // A language whose declarations are read, and a file that writes none.
+        var none = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/src/Empty.cs"));
+        Assert.True(none.Profiled);
+        Assert.True(none.ReadsDeclarations);
+        Assert.Empty(none.Declarations);
+
+        // A language a profile covers and whose declarations this cannot read: it was never scanned,
+        // which is not the same as having been scanned and found to declare nothing.
+        var css = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/web/site.css"));
+        Assert.Equal("CSS", css.LanguageName);
+        Assert.True(css.Profiled);
+        Assert.False(css.ReadsDeclarations);
+        Assert.Empty(css.Declarations);
+
+        // An extension no profile covers: it was read with the conservative default shapes, so the
+        // list is thin for a reason the panel has to be able to name.
+        var uncovered = await GetAsync<FileDeclarationsResponse>(host,
+            Route("declarations", "one/build/notes.rst"));
+        Assert.False(uncovered.Profiled);
+        Assert.Equal(".rst", uncovered.LanguageName);
+        Assert.Empty(uncovered.Declarations);
+    }
+
+    [Fact]
+    public async Task A_path_that_names_no_file_has_no_declarations_page_rather_than_an_empty_one()
+    {
+        using var host = await DeclaringProjectAsync();
+
+        using var http = host.CreateClient();
+        using var response = await http.GetAsync(Route("declarations", "one/src/Nowhere.cs"), Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("No indexed file 'one/src/Nowhere.cs'", await response.Content.ReadAsStringAsync(Ct),
+            StringComparison.Ordinal);
+    }
+
     private static async Task<T> GetAsync<T>(TestHost host, string url)
     {
         using var http = host.CreateClient();
