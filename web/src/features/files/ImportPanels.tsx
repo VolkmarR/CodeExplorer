@@ -1,16 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
-import {
-  dependentsNote,
-  ENTRIES_SHOWN,
-  IMPORT_EVIDENCE,
-  importsNote,
-} from '@/features/files/imports'
+import { dependentsNote, IMPORT_EVIDENCE, importsNote } from '@/features/files/imports'
 import { dependentsQuery, importsQuery } from '@/features/files/queries'
-import { RailPanel, RailPending } from '@/features/files/RailPanel'
+import { RailEntries, RailPanel, RailPending } from '@/features/files/RailPanel'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { FilePathLink } from '@/components/FilePathLink'
-import { Button } from '@/components/ui/button'
 import { directoryOf, fileName, formatCount } from '@/lib/format'
 
 /**
@@ -48,7 +41,7 @@ function Imports({ project, path }: { project: string; path: string }) {
           ones first would push the unresolved ones out of the collapsed panel, which is the reading
           this panel exists to prevent: a dependency left off the screen is one the file looks not to
           have. */}
-      <Entries items={data.imports} capped={data.capped}>
+      <RailEntries items={data.imports} capped={data.capped}>
         {(edge) => (
           <li
             key={`${edge.lineNumber}:${edge.name}`}
@@ -74,7 +67,7 @@ function Imports({ project, path }: { project: string; path: string }) {
             </p>
           </li>
         )}
-      </Entries>
+      </RailEntries>
     </GraphPanel>
   )
 }
@@ -90,7 +83,7 @@ function Dependents({ project, path }: { project: string; path: string }) {
       count={tally(data.dependents.length, data.capped)}
       note={dependentsNote(data)}
     >
-      <Entries items={data.dependents} capped={data.capped}>
+      <RailEntries items={data.dependents} capped={data.capped}>
         {(dependent) => (
           <li
             key={`${dependent.qualifiedPath}:${dependent.lineNumber}`}
@@ -113,7 +106,7 @@ function Dependents({ project, path }: { project: string; path: string }) {
             </p>
           </li>
         )}
-      </Entries>
+      </RailEntries>
     </GraphPanel>
   )
 }
@@ -140,49 +133,6 @@ function GraphPanel({
       {children}
       <p className="mt-3 text-xs leading-snug text-muted-foreground/80">{IMPORT_EVIDENCE}</p>
     </RailPanel>
-  )
-}
-
-/**
- * The list and the way out of a long one. A hub with two hundred dependents would push the rest of
- * the rail off the screen, so the panel shows a screenful and says how many it is holding back; once
- * opened it scrolls in place rather than growing without bound.
- *
- * It owns the expansion rather than taking it as a prop, because nothing outside it reads that state
- * and a panel that held it would hold it twice.
- */
-function Entries<T>({
-  items,
-  capped,
-  children,
-}: {
-  items: T[]
-  /** Whether the length is the server's ceiling rather than the count: the button must not say "all". */
-  capped: boolean
-  children: (item: T) => React.ReactNode
-}) {
-  const [expanded, setExpanded] = useState(false)
-
-  if (items.length === 0) return null
-
-  return (
-    <>
-      <ul className={`space-y-2.5 ${expanded ? 'max-h-96 overflow-y-auto pr-1' : ''}`}>
-        {(expanded ? items : items.slice(0, ENTRIES_SHOWN)).map(children)}
-      </ul>
-      {items.length > ENTRIES_SHOWN ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-2 -ml-2"
-          onClick={() => setExpanded((open) => !open)}
-        >
-          {expanded
-            ? 'Show fewer'
-            : `Show ${capped ? 'the first' : 'all'} ${formatCount(items.length)}`}
-        </Button>
-      ) : null}
-    </>
   )
 }
 

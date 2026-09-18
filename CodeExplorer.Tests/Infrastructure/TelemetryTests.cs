@@ -128,6 +128,7 @@ public sealed class TelemetryTests
     [InlineData(typeof(GrepSearch), nameof(GrepSearch.SearchAsync))]
     [InlineData(typeof(ReferenceSearch), nameof(ReferenceSearch.FindAsync))]
     [InlineData(typeof(DefinitionSearch), nameof(DefinitionSearch.FindAsync))]
+    [InlineData(typeof(FileDeclarations), nameof(FileDeclarations.ForFileAsync))]
     [InlineData(typeof(MatchList), nameof(MatchList.ListAsync))]
     [InlineData(typeof(IndexBuilder), nameof(IndexBuilder.FillAsync))]
     public void The_recorded_method_is_the_services_only_way_in(Type service, string only)
@@ -147,8 +148,9 @@ public sealed class TelemetryTests
     ///     point that measured a search without being one.
     /// </summary>
     [Theory]
-    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "DefinitionSearch.cs", "FileQueries.cs",
-        "GrepSearch.cs", "HistoryQueries.cs", "ImportGraph.cs", "MatchList.cs", "ReferenceSearch.cs")]
+    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "DefinitionSearch.cs",
+        "FileDeclarations.cs", "FileQueries.cs", "GrepSearch.cs", "HistoryQueries.cs", "ImportGraph.cs",
+        "MatchList.cs", "ReferenceSearch.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.IndexBuild)}(", "IndexBuilder.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.DurableCopy)}(", "DurableIndex.cs")]
     public void Only_the_recording_services_start_a_recording(string call, params string[] files) =>

@@ -49,6 +49,19 @@ export function dependentsQuery(project: string, path: string) {
   })
 }
 
+/**
+ * What a file declares, its own request beside the file's content for the reason the blame runs are:
+ * placing a candidate line means reading the lines above it, and the code should be on screen before
+ * that comes back. Fixed under a given index, like everything else read from it.
+ */
+export function declarationsQuery(project: string, path: string) {
+  return queryOptions({
+    queryFn: () => api.declarations(project, path),
+    queryKey: [...projectKey(project), 'declarations', path],
+    staleTime: Infinity,
+  })
+}
+
 /** One level of the tree. Keyed by the level, so walking back up is already in the cache. */
 export function treeQuery(project: string, path: string) {
   return queryOptions({
