@@ -3,20 +3,7 @@
 import { ScrollArea as ScrollAreaPrimitive } from '@base-ui/react/scroll-area'
 import { cn } from '@/lib/utils'
 
-function ScrollArea({
-  className,
-  viewportClassName,
-  children,
-  ...props
-}: ScrollAreaPrimitive.Root.Props & {
-  /**
-   * Classes for the element that actually scrolls. A height belongs here and not on `className`:
-   * the viewport is sized `h-full`, which resolves against the root's height, so a `max-h-*` on the
-   * root leaves the root's height `auto` and the viewport grows with its content instead of
-   * overflowing it. The one caller that clamps its pane — the code view — bounds the viewport here.
-   */
-  viewportClassName?: string
-}) {
+function ScrollArea({ className, children, ...props }: ScrollAreaPrimitive.Root.Props) {
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
@@ -25,10 +12,13 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className={cn(
-          'size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1',
-          viewportClassName,
-        )}
+        // `max-h-[inherit]` is what makes a bound on the root bound the thing that actually scrolls.
+        // The viewport is sized `h-full`, a percentage that resolves against an auto height when the
+        // root carries only a `max-height` — so the viewport grew with its content and never
+        // overflowed, and a long file scrolled the page instead of the pane. Inheriting the root's
+        // computed `max-height` fixes it here, once, rather than asking every caller to know that a
+        // height goes on the viewport and not on the root.
+        className="size-full max-h-[inherit] rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

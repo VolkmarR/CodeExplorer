@@ -1,10 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { dependentsNote, IMPORT_EVIDENCE, importsNote } from '@/features/files/imports'
 import { dependentsQuery, importsQuery } from '@/features/files/queries'
-import { RailEntries, RailPanel, RailPending } from '@/features/files/RailPanel'
-import { ErrorPanel } from '@/components/ErrorPanel'
+import { RailEntries, RailPanelAnswer, RailWaiting, tally } from '@/features/files/RailPanel'
 import { FilePathLink } from '@/components/FilePathLink'
-import { directoryOf, fileName, formatCount } from '@/lib/format'
+import { directoryOf, fileName } from '@/lib/format'
 
 /**
  * Where the file sits in the project: what it imports, and what imports it. The second is the walk a
@@ -27,15 +26,16 @@ export function ImportPanels({ project, path }: { project: string; path: string 
 function Imports({ project, path }: { project: string; path: string }) {
   const { data, error, isPending } = useQuery(importsQuery(project, path))
 
-  if (isPending || error) return <Waiting title="Imports" error={error} />
+  if (isPending || error) return <RailWaiting title="Imports" error={error} />
 
   return (
-    <GraphPanel
+    <RailPanelAnswer
       title="Imports"
       // No number where there is no list to count: an extension no profile covers and a language
       // with no imports both answer in prose, and a `0` beside it would read as a measurement.
       count={data.profiled && data.hasImports ? tally(data.imports.length, data.capped) : undefined}
       note={importsNote(data)}
+      evidence={IMPORT_EVIDENCE}
     >
       {/* In the order the file wrote them, resolved and unresolved together. Sorting the resolved
           ones first would push the unresolved ones out of the collapsed panel, which is the reading
@@ -68,20 +68,21 @@ function Imports({ project, path }: { project: string; path: string }) {
           </li>
         )}
       </RailEntries>
-    </GraphPanel>
+    </RailPanelAnswer>
   )
 }
 
 function Dependents({ project, path }: { project: string; path: string }) {
   const { data, error, isPending } = useQuery(dependentsQuery(project, path))
 
-  if (isPending || error) return <Waiting title="Dependents" error={error} />
+  if (isPending || error) return <RailWaiting title="Dependents" error={error} />
 
   return (
-    <GraphPanel
+    <RailPanelAnswer
       title="Dependents"
       count={tally(data.dependents.length, data.capped)}
       note={dependentsNote(data)}
+      evidence={IMPORT_EVIDENCE}
     >
       <RailEntries items={data.dependents} capped={data.capped}>
         {(dependent) => (
@@ -107,48 +108,6 @@ function Dependents({ project, path }: { project: string; path: string }) {
           </li>
         )}
       </RailEntries>
-    </GraphPanel>
+    </RailPanelAnswer>
   )
-}
-
-/**
- * One of the two panels: a heading with a count, whatever the answer has to explain about itself,
- * the list, and the caveat both of them carry. Written once because the two differ in their rows and
- * in nothing else, and a fix to the wrapper made in one of them is a fix the other would not get.
- */
-function GraphPanel({
-  title,
-  count,
-  note,
-  children,
-}: {
-  title: string
-  count?: string
-  note: string | null
-  children: React.ReactNode
-}) {
-  return (
-    <RailPanel title={title} count={count}>
-      {note ? <p className="mb-3 text-sm text-muted-foreground last:mb-0">{note}</p> : null}
-      {children}
-      <p className="mt-3 text-xs leading-snug text-muted-foreground/80">{IMPORT_EVIDENCE}</p>
-    </RailPanel>
-  )
-}
-
-/** A panel with nothing to show yet, and the same panel when the request failed outright. */
-function Waiting({ title, error }: { title: string; error: unknown }) {
-  return (
-    <RailPanel title={title}>
-      {error ? <ErrorPanel error={error} title={`${title} could not be read`} /> : <RailPending />}
-    </RailPanel>
-  )
-}
-
-/**
- * The number beside a heading. A list that stopped at the server's ceiling is the one case where its
- * length is not the answer to "how many", so it is shown as a floor rather than as a total.
- */
-function tally(length: number, capped: boolean) {
-  return capped ? `${formatCount(length)}+` : formatCount(length)
 }

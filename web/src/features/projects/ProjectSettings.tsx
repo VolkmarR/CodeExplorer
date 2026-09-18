@@ -38,7 +38,7 @@ export function ProjectSettings() {
 
   return (
     <ProjectCard project={slug}>
-      <div className="space-y-6">
+      <>
         {remove.error ? <ErrorPanel error={remove.error} /> : null}
         <RepositoryTable project={project} />
 
@@ -72,7 +72,7 @@ export function ProjectSettings() {
             onConfirm={() => remove.mutate()}
           />
         </section>
-      </div>
+      </>
     </ProjectCard>
   )
 }

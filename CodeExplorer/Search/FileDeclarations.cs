@@ -3,6 +3,33 @@ using DuckDB.NET.Data;
 namespace CodeExplorer;
 
 /// <summary>
+///     How much of a file's declarations this was in a position to read at all, which is what keeps an
+///     empty list from reading as "this file declares nothing" — the one sentence a declaration answer
+///     must never say by accident.
+///     One field and not a pair of flags: only three of the four combinations two booleans can spell
+///     are reachable — the fallback profile reads the C-family shapes, so an extension no profile
+///     covers is never also unreadable — and a fourth state that compiles is a fourth state a caller
+///     can render the wrong sentence for.
+/// </summary>
+public enum DeclarationCoverage
+{
+    /// <summary>
+    ///     No profile claims the extension, so the file was read with the conservative default shapes.
+    ///     A list may still come back; it is thinner than a profiled language's would be.
+    /// </summary>
+    Unprofiled,
+
+    /// <summary>
+    ///     The language is covered, and its declarations are not something this can read from a line —
+    ///     CSS. Nothing was scanned, which is not the same as having scanned and found nothing.
+    /// </summary>
+    Unreadable,
+
+    /// <summary>The language is covered and its declaration shapes were read.</summary>
+    Read
+}
+
+/// <summary>
 ///     One name a file introduces, as CONTEXT.md's <em>Declaration</em> defines the word: the line
 ///     that introduces it, the line's own text, and what it turned out to declare. Either name may be
 ///     null — a member declaration names no type and a type declaration no member — and a line that
@@ -21,19 +48,15 @@ public sealed record FileDeclaration(
     Evidence Evidence);
 
 /// <summary>
-///     What one file declares. <see cref="Profiled" /> and <see cref="ReadsDeclarations" /> are the two ways an
-///     empty list means something other than "this file declares nothing": an extension no profile
-///     covers was read with the conservative default shapes, and a language whose declarations this
-///     cannot read was not scanned at all. Three answers, kept apart, because they send a reader to
-///     three different places — the same distinction the import panels draw beside them.
-///     <see cref="Capped" /> says the list is short of what the file declares, whichever ceiling it
-///     was that cut it (<see cref="FileDeclarations.MaxDeclarations" />).
+///     What one file declares. <see cref="Coverage" /> is what an empty list means, and
+///     <see cref="Capped" /> says the list is short of what the file declares — whichever of the two
+///     ceilings cut it, the answer or the scan that fed it
+///     (<see cref="FileDeclarations.MaxDeclarations" />).
 /// </summary>
 public sealed record DeclarationsResult(
     string QualifiedPath,
     string LanguageName,
-    bool Profiled,
-    bool ReadsDeclarations,
+    DeclarationCoverage Coverage,
     bool Capped,
     IReadOnlyList<FileDeclaration> Declarations) : Outcome;
 
@@ -64,9 +87,10 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
     /// <summary>
     ///     How many candidate lines are read before they are placed. A candidate is already a line
     ///     shaped like a declaration in this one file, so this is generous for anything but a
-    ///     generated file or a minified bundle — where the declarations the ceiling costs would have
-    ///     been thrown away by <see cref="MaxDeclarations" /> regardless, and the reply says the list
-    ///     is short either way.
+    ///     generated file or a minified bundle. It is deliberately far above
+    ///     <see cref="MaxDeclarations" /> rather than equal to it: a candidate is only a line that
+    ///     might declare something, and a file where most of them turn out to be commented out would
+    ///     otherwise have real declarations cut by a ceiling on the rejects.
     /// </summary>
     private const int MaxCandidates = 5_000;
 
@@ -93,24 +117,30 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
             var (name, profiled) = Languages.Name(extension);
 
             var parameters = new List<DuckDBParameter> { new("f", file.FileId) };
-            // Null for a language that declares nothing this can read, which is not an empty
-            // narrowing and must not become one: CSS is scanned for no lines rather than for every
-            // line of it, and the answer says the scan never ran.
+            // Null for a language that declares nothing this can read, which is not an empty narrowing
+            // and must not become one: CSS is scanned for no lines rather than for every line of it,
+            // and the answer says the scan never ran.
             if (SearchQuery.Narrowing(analyzer.DeclarationCandidates, "d", parameters) is not { } narrowing)
-                return new DeclarationsResult(file.QualifiedPath, name, profiled, false, false, []);
+                return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Unreadable, false,
+                    []);
 
             var candidates = new List<(int LineNumber, string Content)>();
             using (var command = index.Connection.Query($"""
                                                          SELECT line_number, content FROM lines
                                                          WHERE file_id = $f{narrowing}
                                                          ORDER BY line_number
-                                                         LIMIT {MaxCandidates}
+                                                         LIMIT {MaxCandidates + 1}
                                                          """, parameters))
             using (var reader = await command.ExecuteReaderAsync(token))
             {
                 while (await reader.ReadAsync(token))
                     candidates.Add((reader.Int32("line_number"), reader.Text("content")));
             }
+
+            // One row past the ceiling is read so that a file with exactly as many candidates as it
+            // holds is told from one the ceiling cut short, the way the import graph does it.
+            bool scanCutShort = candidates.Count > MaxCandidates;
+            if (scanCutShort) candidates.RemoveAt(candidates.Count - 1);
 
             // The lines above each candidate, so that a declaration inside a commented-out block is
             // not one, and one below a Delphi `implementation` is known to be the body. The same walk
@@ -134,14 +164,19 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
                 if (SearchQuery.OnlyInProse(analyzer, position, content, named)) continue;
                 declarations.Add(new FileDeclaration(lineNumber, content, what.Type, what.Member, what.Role,
                     declared.Evidence));
+                // Stopping one past the ceiling is what tells a full list from a cut one, and it is
+                // also where the work ends: placing the candidates below costs a regex and a cursor
+                // walk each for lines that cannot reach the answer.
+                if (declarations.Count > MaxDeclarations) break;
             }
 
-            // Either ceiling leaves a list short of what the file declares, and the panel says the
-            // same sentence for both: the candidate read stopped, or the answer did.
-            bool capped = candidates.Count == MaxCandidates || declarations.Count > MaxDeclarations;
-            if (declarations.Count > MaxDeclarations)
-                declarations.RemoveRange(MaxDeclarations, declarations.Count - MaxDeclarations);
+            bool answerCutShort = declarations.Count > MaxDeclarations;
+            if (answerCutShort) declarations.RemoveAt(declarations.Count - 1);
 
-            return new DeclarationsResult(file.QualifiedPath, name, profiled, true, capped, declarations);
+            // Either ceiling leaves a list short of what the file declares, and the panel says one
+            // sentence for both: the answer stopped, or the scan that fed it did.
+            return new DeclarationsResult(file.QualifiedPath, name,
+                profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled,
+                answerCutShort || scanCutShort, declarations);
         }, cancellationToken);
 }

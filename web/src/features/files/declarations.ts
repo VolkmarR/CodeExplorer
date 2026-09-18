@@ -7,12 +7,18 @@ import type { Declaration, FileDeclarations } from '@/lib/api'
  * tell a reader a file declares nothing when what happened is that nothing looked.
  */
 export function declarationsNote(file: FileDeclarations): string | null {
-  if (!file.profiled) {
-    return `No language profile covers this extension, so this file was read with the conservative default shapes. A declaration form this does not know is one it did not find, not one that is not there.`
+  // A switch on the one field the server sends rather than a cascade over two flags: the order of
+  // the checks was itself load-bearing before, and getting it wrong printed a true sentence about
+  // the wrong fact.
+  switch (file.coverage) {
+    case 'unprofiled':
+      return `No language profile covers this extension, so this file was read with the conservative default shapes. A declaration form this does not know is one it did not find, not one that is not there.`
+    case 'unreadable':
+      return `${file.languageName} declarations are not something this can read from a line, so nothing was scanned here. That is a different thing from the file declaring nothing.`
+    case 'read':
+      break
   }
-  if (!file.readsDeclarations) {
-    return `${file.languageName} declarations are not something this can read from a line, so nothing was scanned here. That is a different thing from the file declaring nothing.`
-  }
+
   if (file.declarations.length === 0) {
     return 'This file declares nothing its language writes as a type or a routine.'
   }
