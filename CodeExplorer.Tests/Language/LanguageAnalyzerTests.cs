@@ -608,6 +608,61 @@ public sealed class LanguageAnalyzerTests
         Assert.Null(Declares("cs", "        Status = next;").Value);
     }
 
+    [Theory]
+    // A field is a member, and CONTEXT.md's _Declaration_ says a member is one. The C-family shape
+    // used to require the name to be followed by `(`, `<`, `{` or `=`, so whether a field appeared
+    // depended on whether it had been given an initialiser — the same member, read two ways, and the
+    // opposite of what the xBase/Delphi/SQL shape beside it has always answered with its `;`.
+    [InlineData("public int Count;", "Count")]
+    [InlineData("    private readonly Foo _bar;", "_bar")]
+    // A generic type is read too, and reading it is what corrects the worse of the two old answers:
+    // `private List<string>? _names;` used to match on the `<` of its own type argument, so the line
+    // was reported as declaring `List` — a false declaration under the heading an agent trusts most,
+    // where a bare `int` field was merely a miss. Three lines of this repo were named after their
+    // type that way.
+    // The type must still be written without a space inside its arguments: the type class has never
+    // held one, so `Dictionary<string, int> x` is a miss whether or not it is initialised. That is
+    // this pattern's own gap and not this shape's, which is why the case here is written closed up.
+    [InlineData("    private List<string>? _names;", "_names")]
+    // `event` was not a C-family modifier at all, so this line was found by neither shape.
+    [InlineData("    public event EventHandler? Changed;", "Changed")]
+    // The initialised forms answer what they always answered; this adds a shape, it replaces none.
+    [InlineData("    private const string Pattern = \"x\";", "Pattern")]
+    public void A_C_family_member_declares_whether_or_not_it_was_given_an_initialiser(
+        string line, string member) =>
+        Assert.Equal(member, Declares("cs", line).Value?.Member);
+
+    [Fact]
+    public void A_generic_field_is_named_after_itself_and_not_after_its_type() =>
+        // The regression this shape most needed to fix, and the one a miss hid: with nothing but
+        // `[\(<{=]` to close on, the `<` opening a type argument was an opener, so the name captured
+        // was the type's. It is a declaration that exists, points at the right line, and carries the
+        // wrong name — worse than the bare field's silence, because an agent acts on it.
+        Assert.Equal("_logger", Declares("cs", "    private readonly ILogger<Thing> _logger;").Value?.Member);
+
+    [Theory]
+    // The other half of the same rule, and the one that pays for it: a statement carries no
+    // declaration modifier, so ending at a `;` is not on its own what makes a line a declaration.
+    // DECLARATIONS is the section an agent trusts most, and a false one there is worse than a miss.
+    [InlineData("        return count;")]
+    [InlineData("        var total = 0;")]
+    [InlineData("        await using var scope = new Thing();")]
+    [InlineData("        _bar.Advance(1);")]
+    [InlineData("        new Thing();")]
+    public void A_statement_is_not_a_declaration_just_because_it_ends_at_a_semicolon(string line) =>
+        Assert.Null(Declares("cs", line).Value);
+
+    [Fact]
+    public void Re_exporting_a_binding_is_not_declaring_it() =>
+        // TypeScript and JavaScript share the C-family modifier list, so `export` is one and
+        // `export default thing;` is modifier, word, word, `;` — the field shape exactly, while it
+        // names a binding declared elsewhere. `NonTypeKeywords` is what refuses it.
+        // The `export default function thing() {}` beside it is a miss and not the answer: no shape
+        // reads it today, and it was a miss before the `;` too. Naming it here would be inventing a
+        // behaviour, and a form no profile knows is one this does not find rather than one that is
+        // not there (CONTEXT.md, Declaration).
+        Assert.Null(Declares("ts", "export default thing;").Value);
+
     [Fact]
     public void A_Delphi_unit_announces_a_routine_in_one_section_and_writes_it_in_the_other()
     {
