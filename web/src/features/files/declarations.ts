@@ -22,12 +22,11 @@ export function declarationsNote(file: FileDeclarations): string | null {
   if (file.declarations.length === 0) {
     return 'This file declares nothing its language writes as a type or a routine.'
   }
-  // "May hold" and not "has", which is what the import panels can say: two ceilings raise `capped`
-  // here, and one of them is the scan stopping before the end of a very long file — after which
-  // whether there are more declarations is precisely what is not known. A count the server did not
-  // make is not one to assert on its behalf.
+  // "Has" and not "may hold": the server reads one declaration past what it reports, so a capped
+  // list is one it has actually seen more than. It said "may hold" while a second ceiling — a scan
+  // that stopped early — could also raise the flag, and the two are one ceiling again.
   return file.capped
-    ? `Only the first ${file.declarations.length} are listed; the file may hold more.`
+    ? `Only the first ${file.declarations.length} are listed; the file has more.`
     : null
 }
 
