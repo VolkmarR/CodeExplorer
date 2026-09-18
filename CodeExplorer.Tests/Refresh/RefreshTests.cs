@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using DuckDB.NET.Data;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -314,6 +315,55 @@ public sealed class RefreshTests : IDisposable
         Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
     }
 
+    /// <summary>
+    ///     Step 3 does several separable things, and until #91 everything after the attribution ran
+    ///     under its label — so an operator watching, or anyone reading the status back to find out what
+    ///     a refresh cost, saw one sentence covering four pieces of work. The reports are collected from
+    ///     the refresh itself rather than polled from the status endpoint: on a fixture this small a
+    ///     poll would miss phases that last microseconds, and what is asserted is the order they were
+    ///     reported in, which a poll cannot see at all.
+    ///     Both engines, because the full-text phase is the one piece that is not always there: a
+    ///     project searched by substring scan must not report a phase it spends no time in (#91).
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Substring)]
+    [InlineData(SearchEngine.Fts)]
+    public async Task Each_piece_of_a_build_reports_its_own_phase(SearchEngine engine)
+    {
+        using var host = new TestHost(engine);
+        await host.IndexedProjectAsync("alpha", Fixture());
+        var project = await host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct);
+        Assert.NotNull(project);
+
+        // The refresh is run directly rather than through the service, which reports into a status that
+        // keeps only the latest phase; this is the same code path with the reports kept.
+        var reported = new List<RefreshProgress>();
+        await host.Services.GetRequiredService<ProjectRefresh>().RunAsync(project, reported.Add, Ct);
+
+        List<string> expected =
+            [RefreshProgress.IngestPhase, RefreshProgress.AttributionPhase, RefreshProgress.OverviewPhase];
+        if (engine == SearchEngine.Fts) expected.Add(RefreshProgress.FullTextPhase);
+        expected.AddRange([RefreshProgress.StorePhase, RefreshProgress.SwapPhase]);
+        // Only the fixed phases: the counting ones in between name the repository they are working on,
+        // and this is about which pieces of work are named and in what order, not how often they report.
+        Assert.Equal(expected, reported.Select(progress => progress.Phase).Where(Fixed).ToList());
+
+        // The step count and the step numbers are untouched: the new phases are additional reports at
+        // step 3, which is what keeps "step 3 of 5" a fact rather than a renumbering (#91).
+        Assert.All(reported, progress => Assert.Equal(RefreshProgress.TotalStepCount, progress.TotalSteps));
+        Assert.All(InsideStepThree(reported), progress => Assert.Equal(RefreshProgress.HistoryStep, progress.Step));
+    }
+
+    /// <summary>The phases with a wording of their own, as opposed to the counting ones naming a repository.</summary>
+    private static bool Fixed(string phase) =>
+        phase is RefreshProgress.IngestPhase or RefreshProgress.HistoryPhase or RefreshProgress.AttributionPhase
+            or RefreshProgress.OverviewPhase or RefreshProgress.FullTextPhase or RefreshProgress.StorePhase
+            or RefreshProgress.SwapPhase;
+
+    private static IEnumerable<RefreshProgress> InsideStepThree(IEnumerable<RefreshProgress> reported) =>
+        reported.Where(progress => progress.Phase is RefreshProgress.AttributionPhase
+            or RefreshProgress.OverviewPhase or RefreshProgress.FullTextPhase);
+
     private static Dictionary<string, Dictionary<string, string>> Fixture(string repository = "one") =>
         new() { [repository] = new Dictionary<string, string> { [OldFile] = "class A;\n" } };
 
@@ -325,7 +375,7 @@ public sealed class RefreshTests : IDisposable
     ///     rewording the operator-facing sentence cannot silently turn this into a wait that never ends.
     /// </summary>
     private static Task<RefreshStatus> WaitForSwapAsync(TestHost host, string project) =>
-        PollAsync(host, project, s => s.Phase == ProjectRefresh.SwapPhase);
+        PollAsync(host, project, s => s.Phase == RefreshProgress.SwapPhase);
 
     /// <summary>
     ///     Polls the status endpoint the way the web UI does, until it says what the test is waiting
