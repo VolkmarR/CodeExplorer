@@ -35,7 +35,13 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
         void navigate({ params: { project }, search: draft, to: '/projects/$project/files' })
       }}
     >
-      <div className="min-w-64 flex-1 space-y-2">
+      {/* `flex flex-col gap-2` and not `space-y-2`, which is the same stack until one of them holds
+          a select. `space-y` puts the margin on every child but the last, and Base UI's select
+          renders a hidden input after its trigger — so the trigger counted as "not last" and kept a
+          trailing 8px that `items-end` then aligned the whole row against. The select rode 8px above
+          the input and the button, and the two labels missed each other by the same 8px. `gap` only
+          spaces flow siblings, and a fixed-position input is not one. */}
+      <div className="flex min-w-64 flex-1 flex-col gap-2">
         <Label htmlFor="browse-glob">Path glob</Label>
         <Input
           id="browse-glob"
@@ -47,7 +53,7 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
         />
       </div>
       {multiRepository ? (
-        <div className="w-52 space-y-2">
+        <div className="flex w-52 flex-col gap-2">
           <Label htmlFor="browse-repository">Repository</Label>
           <RepositorySelect
             id="browse-repository"
