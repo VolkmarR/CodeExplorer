@@ -14,6 +14,10 @@ _Avoid_: Workspace, solution, tenant
 One git remote belonging to exactly one project, which CodeExplorer keeps a local copy of and
 refreshes. A project of one repository is the common case, and a project may be declared a
 single-repository project to be named accordingly (ADR-0006); it is a repository either way.
+An argument that scopes an answer to one is spelled `repo` on the MCP tool surface and `repository`
+on the HTTP API: one concept, and two surfaces whose callers are a model reading tool schemas and a
+web app nobody retypes. A new scoped tool or endpoint follows the surface it is on rather than
+choosing, and neither surface accepts both.
 _Avoid_: Source, codebase
 
 **Local copy**:
