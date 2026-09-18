@@ -131,11 +131,15 @@ public sealed class LocalCopy : IDisposable
     /// <param name="cancellationToken">Checked per commit, which is where the diff cost is.</param>
     public IEnumerable<RecordedCommit> History(IReadOnlySet<string> known, CancellationToken cancellationToken)
     {
+        // No SortBy, so the walk streams. First-parent makes the history a line, and a line has one
+        // order however it is sorted — but GIT_SORT_TOPOLOGICAL makes libgit2 pre-traverse and buffer
+        // the whole walk before it yields anything, which is paid before the `known` early-out below
+        // can fire. On a ten-thousand-commit repository that is the entire cost of a refresh that
+        // turns out to have nothing new.
         var filter = new CommitFilter
         {
             IncludeReachableFrom = _repository.Head.Tip,
-            FirstParentOnly = true,
-            SortBy = CommitSortStrategies.Topological
+            FirstParentOnly = true
         };
         foreach (var commit in _repository.Commits.QueryBy(filter))
         {
@@ -144,6 +148,22 @@ public sealed class LocalCopy : IDisposable
             yield return Describe(commit);
         }
     }
+
+    /// <summary>
+    ///     No context lines around a hunk, because nothing here reads one. libgit2 renders three above
+    ///     and three below every hunk by default, and each rendered line costs a native-to-managed
+    ///     transition, a UTF-8 decode, a re-marshal of the file path and two string copies before
+    ///     <see cref="UnifiedDiff.Edits" /> throws it away — for scattered single-line edits that is
+    ///     seven lines rendered per line of change. Sampling a live import put 42% of the walk in
+    ///     LibGit2Sharp's patch rendering, which is what this is against.
+    ///     It is not a change to what is read. <see cref="UnifiedDiff.Edits" /> takes a context line
+    ///     only as "advance one position" and reads the position itself from each hunk header, so with
+    ///     no context every edit run becomes its own hunk and the headers say where each one sits.
+    ///     <c>InterhunkLines</c> stays 0, its default; raising it would merge runs back together.
+    ///     Pinned by <c>Edits_are_the_same_whether_or_not_libgit2_renders_context</c>, which diffs the
+    ///     same commits both ways and asserts the edit lists are equal.
+    /// </summary>
+    private static readonly CompareOptions NoContext = new() { ContextLines = 0 };
 
     /// <summary>
     ///     One commit with the paths it touched, diffed against its first parent — or against nothing
@@ -161,7 +181,7 @@ public sealed class LocalCopy : IDisposable
     {
         var parent = commit.Parents.FirstOrDefault();
         var files = new List<ChangedPath>();
-        foreach (var change in _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree))
+        foreach (var change in _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null, NoContext))
             files.Add(new ChangedPath(change.Path, change.OldPath, change.Status.ToString().ToLowerInvariant(),
                 change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
                 change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
