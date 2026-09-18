@@ -78,7 +78,7 @@ public sealed class OverviewTests : IDisposable
         var builder = _host.Services.GetRequiredService<OverviewBuilder>();
         var shadow = await _host.Indexes.CreateShadowAsync("beta", Ct);
         var overview = await builder.FillAsync(shadow, false, Ct);
-        await shadow.CompleteAsync(false, Ct);
+        await shadow.CompleteAsync(false, _ => { }, Ct);
         // Before the swap: the file cannot be moved while the shadow's connection holds it open.
         shadow.Dispose();
         await _host.Indexes.SwapShadowAsync("beta", Ct);

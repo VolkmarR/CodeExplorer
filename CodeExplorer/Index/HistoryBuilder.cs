@@ -68,7 +68,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         }
 
         report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
-            "Writing attribution onto the lines"));
+            RefreshProgress.AttributionPhase));
         Materialise(connection, cancellationToken);
         return new HistorySummary(appended, attributed);
     }

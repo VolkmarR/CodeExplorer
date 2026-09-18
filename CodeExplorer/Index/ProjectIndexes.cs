@@ -73,10 +73,21 @@ public sealed class ShadowIndex(DuckDBConnection connection, string catalog, str
     ///     lines to one or two row groups, and an ART index would cost memory and slow the Parquet restore.
     /// </summary>
     /// <param name="singleRepository">How this project names its files (ADR-0006), recorded in the index.</param>
+    /// <param name="report">
+    ///     How far the build has got. The BM25 build is the longest thing in a refresh on a large
+    ///     project and was reported under the attribution's label until #91; the phase is announced from
+    ///     here rather than by the caller because only the shadow knows whether there is one to build.
+    /// </param>
     /// <param name="cancellationToken">Cancelling between the two statements leaves a shadow with no row, which is a shadow to discard.</param>
-    public async Task CompleteAsync(bool singleRepository, CancellationToken cancellationToken)
+    public async Task CompleteAsync(bool singleRepository, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
     {
-        if (fullTextLoaded) await FtsExtension.CreateIndexAsync(Connection, cancellationToken);
+        if (fullTextLoaded)
+        {
+            report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+                RefreshProgress.FullTextPhase));
+            await FtsExtension.CreateIndexAsync(Connection, cancellationToken);
+        }
 
         using var command = Connection.CreateCommand();
         command.CommandText =
