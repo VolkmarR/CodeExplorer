@@ -21,15 +21,26 @@ public static class Languages
     public const string NoExtension = "(no extension)";
 
     /// <summary>
-    ///     What the C family calls a modifier. Shared because it is the same list in C#, TypeScript and
-    ///     JavaScript, and a per-language copy would drift.
+    ///     What the C family calls a modifier, as the union of what C#, TypeScript and JavaScript
+    ///     write rather than the intersection: <c>export</c> and <c>declare</c> are TypeScript's and
+    ///     <c>event</c> is C#'s, and none of them is a modifier in all three. One list because a word
+    ///     a language does not write is a word that never appears at the head of its lines, which
+    ///     costs it nothing, where a per-language copy would drift.
     /// </summary>
     private static readonly string[] CFamilyModifiers =
     [
         "public", "private", "protected", "internal", "static", "async", "override", "virtual",
         "abstract", "sealed", "partial", "extern", "new", "readonly", "const", "export", "declare",
-        "function", "def", "val", "let"
+        "function", "def", "val", "let", "event"
     ];
+
+    /// <summary>
+    ///     What follows a C-family modifier and is never the type of a member. <c>default</c> alone,
+    ///     for TypeScript's <c>export default thing;</c>: <c>export</c> is a modifier above, which
+    ///     makes that line modifier-word-word-<c>;</c> — a field, read literally. Shared with the
+    ///     modifier list it guards, so the two cannot come apart.
+    /// </summary>
+    private static readonly string[] CFamilyNonTypes = ["default"];
 
     /// <summary>
     ///     What may introduce a declaration in SQL, which is a phrase rather than a modifier.
@@ -169,6 +180,7 @@ public static class Languages
         ],
         InstantiationKeywords = New,
         DeclarationModifiers = CFamilyModifiers,
+        NonTypeKeywords = CFamilyNonTypes,
         DeclarationKeywords = ["class", "interface", "struct", "record", "enum"]
     };
 
@@ -241,6 +253,7 @@ public static class Languages
             ],
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
+            NonTypeKeywords = CFamilyNonTypes,
             DeclarationKeywords = ["class", "interface", "struct", "record", "enum"],
             GeneratedPathPatterns = ["*.g.cs", "*.designer.cs", "*.generated.cs"]
         },
@@ -259,6 +272,7 @@ public static class Languages
             ImportPaths = EcmaPaths,
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
+            NonTypeKeywords = CFamilyNonTypes,
             DeclarationKeywords = ["class", "interface", "enum", "type"]
         },
         new LanguageProfile("JavaScript", ["js", "jsx", "mjs", "cjs"])
@@ -274,6 +288,7 @@ public static class Languages
             ImportPaths = EcmaPaths,
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
+            NonTypeKeywords = CFamilyNonTypes,
             DeclarationKeywords = ["class"]
         },
         new LanguageProfile("Delphi", ["pas", "dpr", "dpk", "dfm"])

@@ -678,15 +678,13 @@ public sealed class SearchEndpointTests
         Assert.Equal("read", declared.Coverage);
         Assert.False(declared.Capped);
 
-        // The type and its routines, in the order the file writes them. The field on line 5 is not
-        // among them: the C-family member shape requires the name to be followed by `(`, `<`, `{` or
-        // `=`, so an initialised field is a declaration and a bare one is not — #71 asks which way
-        // the two should agree. A form no profile knows is one this does not find rather than one
-        // that is not there (CONTEXT.md, Declaration).
+        // The type and its members, in the order the file writes them. The field on line 5 is among
+        // them: a field is a member and a member is a declaration (CONTEXT.md, Declaration), whether
+        // or not it was given an initialiser.
         // Line 6 is the one that matters most: `// public void Removed() { }` is shaped exactly like
         // the live declaration two lines below it, and only the walk of the lines above tells them
         // apart.
-        Assert.Equal([(3, "OrderService"), (7, "Place"), (8, "Cancel")],
+        Assert.Equal([(3, "OrderService"), (5, "Count"), (7, "Place"), (8, "Cancel")],
             declared.Declarations.Select(d => (d.LineNumber, d.Type ?? d.Member)));
         // Read from line shape and not from a compiler, which is what the panel says beside the list.
         Assert.All(declared.Declarations, d => Assert.Equal("text", d.Evidence));
