@@ -330,6 +330,28 @@ public sealed class SearchEndpointTests
     }
 
     /// <summary>
+    ///     The commit page's own read: one commit by SHA, without paging the log to find it. It answers
+    ///     the same record the log listed — same sums, same body — because the page and the row it was
+    ///     linked from must not disagree, and a SHA the index does not hold is the repository's usual
+    ///     not-found rather than a commit with empty fields.
+    /// </summary>
+    [Fact]
+    public async Task One_commit_answers_by_sha_with_what_the_change_log_said_about_it()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        var scoped = await GetAsync<CommitListResponse>(host, "/api/projects/alpha/commits?repository=one");
+        var listed = Assert.Single(scoped.Commits);
+
+        var one = await GetAsync<CommitResponse>(host, $"/api/projects/alpha/commits/{listed.Sha}");
+        Assert.Equal(listed, one);
+
+        using var http = host.CreateClient();
+        using var missing = await http.GetAsync("/api/projects/alpha/commits/0000000000000000000000000000000000000000", Ct);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
+    /// <summary>
     ///     The churn page. It ranks over a window of days rather than a page of commits, and answers
     ///     with the dates that window resolved to — which end at the newest recorded commit and not at
     ///     today, so a caller can see that an index is stale rather than read an empty ranking as

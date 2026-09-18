@@ -67,11 +67,117 @@ const VIEW_SEGMENTS = new Map<string, View>(
 )
 
 /**
- * Which view a project-relative segment belongs to where it is not the view's own name. Reading a
- * file is part of Files and lives at its own route — `/file`, not under `/files` — so the reader of
- * a file would otherwise stand on no item at all.
+ * The two pages that are not a view of their own: a file and a commit. Each lives at its own route
+ * rather than under the view it belongs to — `/file`, not under `/files` — and each can be reached
+ * from more than one of them, which is what makes them the only pages where "which item is lit" and
+ * "how did the reader get here" can differ.
+ *
+ * `under` answers both questions' default in one place: it is the sidebar item the route belongs to,
+ * and the view the trail falls back to when the link carried no origin. Said once, because a third
+ * such page said twice would be two edits and the second is the one that gets forgotten.
  */
-const VIEW_ALIASES = new Map<string, View>([['file', 'files']])
+const LINKED_PAGES = [
+  { segment: 'file', under: 'files' },
+  { segment: 'commit', under: 'history' },
+] as const satisfies readonly { segment: string; under: View }[]
+
+/**
+ * Which view a project-relative segment belongs to where it is not the view's own name, so the
+ * reader of a file or a commit does not stand on no item at all.
+ *
+ * This is about the sidebar and not about the trail: which item is lit is a fact about the route,
+ * and where the reader came from is a fact about the link they followed. `pageTrail` reads that.
+ */
+const VIEW_ALIASES = new Map<string, View>(LINKED_PAGES.map((page) => [page.segment, page.under]))
+
+/**
+ * Where a page was reached from, carried in the URL by whatever linked there rather than guessed
+ * from the path. A file opened from a commit is the same route as one opened from the tree and the
+ * path cannot tell them apart, so the trail above it would otherwise have to lie about one of them.
+ *
+ * Both fields are optional and absent is the default: a pasted or hand-edited URL still opens, and
+ * reads as though it had been reached from the view its route belongs to.
+ */
+export interface Origin {
+  /** The view that linked here. */
+  view?: View
+  /** The commit that linked here, when the link came from one. */
+  commit?: string
+}
+
+/** A view's name if that is what this is, and undefined for anything else a URL might carry. */
+export function asView(value: unknown): View | undefined {
+  return PROJECT_VIEWS.some((item) => item.view === value) ? (value as View) : undefined
+}
+
+/**
+ * One step of the breadcrumb below the project. A view is named from `VIEW_NAMES` and links to
+ * itself; a commit and a file are named by what they are and are the page they sit on, so the
+ * renderer decides which of them is a link from its position in the trail and not from its kind.
+ */
+export type Step =
+  | { kind: 'view'; view: View }
+  | { kind: 'commit'; sha: string }
+  | { kind: 'file'; path: string }
+
+/**
+ * The trail below the project: which view, and what was opened under it. It reads the origin the
+ * link carried rather than deriving everything from the path, which is what made a file opened from
+ * a commit read `Projects › radix › Files`.
+ *
+ * `activeView` still decides which sidebar item is lit, and deliberately still from the path alone:
+ * the item says which part of the app this route belongs to, and the trail says how the reader got
+ * here. They agree on every page but the two that can be reached from more than one.
+ */
+export function pageTrail(pathname: string, search: Record<string, unknown>): Step[] {
+  const view = activeView(pathname)
+  if (view === null) return []
+
+  const page = LINKED_PAGES.find((linked) => linked.segment === pageSegment(pathname))
+  if (page === undefined) return [{ kind: 'view', view }]
+
+  // The view the link came from, and the page's own `under` when it carried none — the same default
+  // the sidebar uses, read from the same entry so the two cannot say different things.
+  const trail: Step[] = [{ kind: 'view', view: asView(search.from) ?? page.under }]
+
+  if (page.segment === 'commit') {
+    const sha = typeof search.sha === 'string' ? search.sha : ''
+    // A URL naming no commit is the route's own not-found; the trail stops at the view rather than
+    // drawing a crumb for a commit there is none of.
+    if (sha !== '') trail.push({ kind: 'commit', sha })
+    return trail
+  }
+
+  // The commit only where one linked here: a file opened from the tree has no commit above it, and
+  // naming the one that last touched it would claim a route the reader did not take.
+  if (typeof search.fromCommit === 'string' && search.fromCommit !== '')
+    trail.push({ kind: 'commit', sha: search.fromCommit })
+  const path = typeof search.path === 'string' ? search.path : ''
+  if (path !== '') trail.push({ kind: 'file', path })
+  return trail
+}
+
+/**
+ * The project-relative segment of a path, or null for a path that is not inside a project at all.
+ * Both questions this module answers start here — which item is lit, and which page this is — so
+ * the path is read once. Two readings of it drifted the moment one of them wanted `/projects/new`
+ * excluded and the other did not.
+ */
+function pageSegment(pathname: string): string | null {
+  // A trailing slash is the same page, and the router hands one out for an index route.
+  const path = pathname.replace(/\/$/, '')
+
+  // `/projects/new` is slug-shaped and is not a project: it is the form that makes one, and a static
+  // segment beats `$project` in the router for the same reason.
+  if (path === '/projects/new') return null
+
+  const inProject = /^\/projects\/[^/]+(?:\/(.*))?$/.exec(path)
+  if (inProject === null) return null
+
+  // Matched with nothing after the slug is the project's own page, which is the overview and is an
+  // empty segment — not the same answer as "this path is not in a project", which is null above.
+  return inProject[1] ?? ''
+}
 
 /**
  * Which sidebar item is lit, decided from the path rather than by each link's own active state,
@@ -89,16 +195,8 @@ const VIEW_ALIASES = new Map<string, View>([['file', 'files']])
  * state to decide, and every case it gets wrong is a case worth a test.
  */
 export function activeView(pathname: string): View | null {
-  // A trailing slash is the same page, and the router hands one out for an index route.
-  const path = pathname.replace(/\/$/, '')
+  const segment = pageSegment(pathname)
+  if (segment === null) return null
 
-  // `/projects/new` is slug-shaped and is not a project: it is the form that makes one, and a static
-  // segment beats `$project` in the router for the same reason.
-  if (path === '/projects/new') return null
-
-  const inProject = /^\/projects\/[^/]+(?:\/(.*))?$/.exec(path)
-  if (inProject === null) return null
-
-  const segment = inProject[1] ?? ''
   return VIEW_SEGMENTS.get(segment) ?? VIEW_ALIASES.get(segment) ?? null
 }

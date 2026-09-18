@@ -296,6 +296,14 @@ internal static class SearchEndpoints
                 Answer<ChurnAnswer>(
                     await history.ChurnAsync(project.Slug, new ChurnRequest(repository, days, limit), ct), Churn));
 
+        // One commit, for the page a link to a SHA opens. Its own route rather than a filter on the
+        // change log: the page arrives knowing only the SHA, and finding it in the log would mean
+        // paging until it turned up. Beside its files and not with them, like blame beside the file —
+        // the message and the sums draw as soon as they are there, whatever the commit touched.
+        project.MapGet("/commits/{sha}",
+            async (Project project, string sha, HistoryQueries history, CancellationToken ct) =>
+                Answer<CommitAnswer>(await history.CommitAsync(project.Slug, new CommitRequest(sha), ct), OneCommit));
+
         project.MapGet("/commits/{sha}/files",
             async (Project project, string sha, HistoryQueries history, CancellationToken ct) =>
                 Answer<CommitFilesAnswer>(
@@ -307,10 +315,16 @@ internal static class SearchEndpoints
 
     private static IResult Commits(ChangeLogAnswer answer) =>
         Results.Ok(new CommitListResponse(answer.Total, answer.Page, answer.PageSize,
-            answer.Commits
-                .Select(c => new CommitResponse(c.Sha, c.RepositorySlug, c.AuthorName, c.AuthorEmail, c.AuthoredAt,
-                    c.Subject, c.Body, c.FilesChanged, c.Added, c.Deleted))
-                .ToList()));
+            answer.Commits.Select(Logged).ToList()));
+
+    /// <summary>
+    ///     One logged commit as the API spells it. Written once because a page of the log and a commit's
+    ///     own page answer the same ten fields, and the read behind them already goes to the trouble of
+    ///     counting them once — two spellings here would undo that a layer up.
+    /// </summary>
+    private static CommitResponse Logged(LoggedCommit commit) =>
+        new(commit.Sha, commit.RepositorySlug, commit.AuthorName, commit.AuthorEmail, commit.AuthoredAt,
+            commit.Subject, commit.Body, commit.FilesChanged, commit.Added, commit.Deleted);
 
     /// <summary>
     ///     Files in a churn ranking when the caller does not say. A screenful: the ranking is read from
@@ -331,6 +345,13 @@ internal static class SearchEndpoints
                 .Select(f => new ChurnFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits, f.Added,
                     f.Deleted))
                 .ToList(), answer.Coverage.Without));
+
+    /// <summary>
+    ///     One commit, in the same shape the change log lists it in, so the page a link opens and the row
+    ///     it was linked from read the same commit the same way. That sameness is <see cref="Logged" />
+    ///     and not a second spelling of the projection, for the reason the read behind it gives.
+    /// </summary>
+    private static IResult OneCommit(CommitAnswer answer) => Results.Ok(Logged(answer.Commit));
 
     /// <summary>
     ///     The paths one commit touched. A SHA the index does not hold is a problem of kind

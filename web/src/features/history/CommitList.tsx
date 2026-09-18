@@ -1,23 +1,17 @@
-import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
-import { useState } from 'react'
+import { commitSearch } from '@/features/history/commitParams'
 import type { HistoryParameters } from '@/features/history/historyParams'
-import { commitFilesQuery } from '@/features/history/queries'
 import type { CommitEntry, CommitList as CommitPage } from '@/lib/api'
 import { DiffStat } from '@/components/DiffStat'
-import { ErrorPanel } from '@/components/ErrorPanel'
-import { FilePathLink } from '@/components/FilePathLink'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import { formatCount, formatDate, shortSha } from '@/lib/format'
-import { cn } from '@/lib/utils'
 
 /**
- * A page of commits, each a row that opens to its message body and the files it touched. The files
- * are fetched when a row is opened and not with the page: fifty commits touching a few hundred paths
- * each would be mostly paths nobody looks at.
+ * A page of commits, each a row that opens the commit's own page. The row used to expand in place
+ * and fetch the files under it; the page shows the same body and file list with room for the rest of
+ * what a commit is, and two renderings of one commit would drift.
  */
 export function CommitList({
   project,
@@ -87,9 +81,13 @@ export function CommitList({
 }
 
 /**
- * One commit. Closed, it is the line `git log --oneline` would print plus who and when; open, the
- * body and the files. The sums are shown closed too, because "+2 −1 in 1 file" and "+1,400 −1,380 in
- * 90 files" are different kinds of commit and the subject rarely says which.
+ * One commit: the line `git log --oneline` would print plus who, when, and what it did to the tree
+ * in sums — "+2 −1 in 1 file" and "+1,400 −1,380 in 90 files" are different kinds of commit and the
+ * subject rarely says which.
+ *
+ * The whole row is the link to the commit's page. It expanded in place before, which meant the body
+ * and the file list were drawn here as well as there; the chevron stays because it is what says the
+ * row leads somewhere, and now it points at a page rather than at a fold.
  */
 function CommitRow({
   project,
@@ -100,24 +98,15 @@ function CommitRow({
   commit: CommitEntry
   showRepository: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const files = useQuery({ ...commitFilesQuery(project, commit.sha), enabled: open })
-
   return (
-    <li className="px-4 py-3">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="group flex w-full items-start gap-3 text-left"
+    <li>
+      <Link
+        to="/projects/$project/commit"
+        params={{ project }}
+        search={commitSearch(commit.sha, 'history')}
+        className="group flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-muted/40"
       >
-        <ChevronRight
-          className={cn(
-            'mt-1 size-4 shrink-0 text-muted-foreground transition-transform',
-            open && 'rotate-90',
-          )}
-          aria-hidden="true"
-        />
+        <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex min-w-0 items-baseline gap-2">
             {showRepository ? (
@@ -141,40 +130,7 @@ function CommitRow({
             </span>
           </span>
         </span>
-      </button>
-
-      {open ? (
-        <div className="mt-3 ml-7 space-y-3">
-          {commit.body ? (
-            <pre className="max-w-prose font-sans text-sm whitespace-pre-wrap text-muted-foreground">
-              {commit.body}
-            </pre>
-          ) : null}
-          {files.error ? <ErrorPanel error={files.error} /> : null}
-          {files.data ? (
-            <ul className="space-y-0.5 font-mono text-xs">
-              {files.data.files.map((file) => (
-                <li key={file.path} className="flex items-baseline gap-3">
-                  <span className="w-16 shrink-0 text-muted-foreground">{file.changeKind}</span>
-                  <span className="w-24 shrink-0 tabular-nums text-muted-foreground">
-                    +{file.added} −{file.deleted}
-                  </span>
-                  {/* Labelled with the path inside the repository: a commit's own file list is
-                      already under one repository, so the slug would repeat on every row. */}
-                  <FilePathLink
-                    project={project}
-                    qualifiedPath={file.qualifiedPath ?? file.path}
-                    atHead={file.qualifiedPath !== null}
-                    label={file.path}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : files.isPending && !files.error ? (
-            <Skeleton className="h-4 w-64" />
-          ) : null}
-        </div>
-      ) : null}
+      </Link>
     </li>
   )
 }
