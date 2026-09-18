@@ -15,8 +15,20 @@ export function commitsQuery(project: string, parameters: HistoryParameters) {
 }
 
 /**
- * The files one commit touched, fetched when a row is opened. A commit never changes, so this stays
+ * One commit's own record, for the page a link to a SHA opens. A commit never changes, so this stays
  * fresh for as long as the page is open; only a rebuild, which invalidates the project, replaces it.
+ */
+export function commitQuery(project: string, sha: string) {
+  return queryOptions({
+    queryFn: () => api.commit(project, sha),
+    queryKey: [...projectKey(project), 'commit', sha, 'detail'],
+    staleTime: Infinity,
+  })
+}
+
+/**
+ * The files one commit touched, beside the commit itself rather than with it: the list is as long as
+ * the commit is wide, and the page draws the message and the sums without waiting for it.
  */
 export function commitFilesQuery(project: string, sha: string) {
   return queryOptions({

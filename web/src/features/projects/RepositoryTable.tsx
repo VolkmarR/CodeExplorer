@@ -135,6 +135,8 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
                             </span>
                             <CommitLine
                               commit={repository.newestCommit}
+                              project={slug}
+                              from="settings"
                               subject={false}
                               sha={false}
                             />

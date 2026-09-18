@@ -1,7 +1,7 @@
 import { useLocation, useParams, useRouterState } from '@tanstack/react-router'
 import { AppSidebar } from '@/components/AppSidebar'
 import { TopBar } from '@/components/TopBar'
-import { activeView } from '@/components/appNavigation'
+import { activeView, pageTrail } from '@/components/appNavigation'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -17,10 +17,15 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
   // is read loosely and the project half of the frame simply does not render when there is none.
   const { project } = useParams({ strict: false })
 
-  // The path is the whole of it. Every view has a route of its own, so the frame reads no search
-  // param to light an item — it read one on all six pages while Overview and Settings shared a route.
-  const { pathname } = useLocation()
+  // The path is the whole of what lights an item: every view has a route of its own, and a file or a
+  // commit belongs to the view its route sits under however it was opened.
+  //
+  // The trail is the other question — how the reader got here — and only the URL's own search params
+  // can answer it, because the same file route is reached from the tree, a search result and a
+  // commit. Read loosely for the reason the project param is: most routes carry neither param.
+  const { pathname, search } = useLocation()
   const view = activeView(pathname)
+  const steps = pageTrail(pathname, search)
 
   // Code and search results are wide; the overview, the settings and the forms are prose and
   // tables. The reading views drop the column so a long line of code is not folded on a wide screen.
@@ -35,7 +40,7 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
       <SidebarProvider>
         <AppSidebar project={project} view={view} />
         <SidebarInset className="min-w-0">
-          <TopBar project={project} view={view} loading={loading} />
+          <TopBar project={project} steps={steps} loading={loading} />
           <main className={cn('w-full flex-1 px-4 py-5', wide ? '' : 'mx-auto max-w-6xl')}>
             {children}
           </main>

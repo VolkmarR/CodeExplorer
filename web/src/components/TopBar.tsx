@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router'
 import { Fragment } from 'react'
-import { VIEW_NAMES, type View } from '@/components/appNavigation'
+import { PROJECT_VIEWS, VIEW_NAMES, type Step } from '@/components/appNavigation'
+import { commitSearch } from '@/features/history/commitParams'
 import { AccountBar } from '@/features/auth/AccountBar'
 import { McpEndpoint } from '@/features/projects/McpEndpoint'
 import { ThemeToggle } from '@/components/ThemeToggle'
@@ -14,6 +15,7 @@ import {
 } from '@/components/ui/breadcrumb'
 import { Separator } from '@/components/ui/separator'
 import { SidebarTrigger } from '@/components/ui/sidebar'
+import { fileName, shortSha } from '@/lib/format'
 
 interface Crumb {
   label: string
@@ -22,8 +24,13 @@ interface Crumb {
   mono?: boolean
 }
 
-/** The trail from the project list down to the view on screen, as deep as the page actually is. */
-function crumbs(project: string | undefined, view: View | null): Crumb[] {
+/**
+ * The trail from the project list down to the page on screen, as deep as the page actually is. The
+ * steps below the project come from the URL's own account of how it was reached (`pageTrail`), so a
+ * file opened from a commit reads `… › History › <sha> › <file>` and the same file opened from the
+ * tree reads `… › Files › <file>`.
+ */
+function crumbs(project: string | undefined, steps: Step[]): Crumb[] {
   const trail: Crumb[] = [{ label: 'Projects', link: <Link to="/">Projects</Link> }]
   if (!project) return trail
 
@@ -37,9 +44,45 @@ function crumbs(project: string | undefined, view: View | null): Crumb[] {
     mono: true,
   })
   // A page inside a project that is not one of its views — the router's own not-found — stops here
-  // rather than naming a view it is not on.
-  if (view) trail.push({ label: VIEW_NAMES[view] })
+  // rather than naming a view it is not on, which is what an empty trail means.
+  for (const step of steps) trail.push(stepCrumb(project, step))
   return trail
+}
+
+/**
+ * One step, rendered. Every step that can be one is drawn as a link and the list below decides which
+ * is the page: the last crumb is never a link, so a step does not have to know where it sits.
+ */
+function stepCrumb(project: string, step: Step): Crumb {
+  if (step.kind === 'view') {
+    // Asserted, not guarded: `Step`'s view is a `View`, and `PROJECT_VIEWS` is where that union is
+    // spelled — a miss here would mean the table and its own type had come apart.
+    const item = PROJECT_VIEWS.find((view) => view.view === step.view)!
+    return {
+      label: VIEW_NAMES[step.view],
+      link: (
+        <Link {...item.link} params={{ project }}>
+          {VIEW_NAMES[step.view]}
+        </Link>
+      ),
+    }
+  }
+
+  if (step.kind === 'commit') {
+    return {
+      label: shortSha(step.sha),
+      link: (
+        <Link to="/projects/$project/commit" params={{ project }} search={commitSearch(step.sha)}>
+          {shortSha(step.sha)}
+        </Link>
+      ),
+      mono: true,
+    }
+  }
+
+  // The file's own name and not its qualified path: the path is already on the page, under the
+  // title, and a trail carrying it would be longer than the row it sits in.
+  return { label: fileName(step.path), mono: true }
 }
 
 /**
@@ -48,11 +91,12 @@ function crumbs(project: string | undefined, view: View | null): Crumb[] {
  */
 export function TopBar({
   project,
-  view,
+  steps,
   loading,
 }: {
   project: string | undefined
-  view: View | null
+  /** How this page was reached, below the project. Empty for a page that is on no view at all. */
+  steps: Step[]
   loading: boolean
 }) {
   return (
@@ -64,7 +108,7 @@ export function TopBar({
           {/* Built as a list and mapped, so where the trail ends is decided once: the last crumb is
               where you are and is never a link, whether that is the project list, a project with no
               view matched, or a view. Written as branches, each of those was its own case. */}
-          {crumbs(project, view).map((crumb, position, all) => (
+          {crumbs(project, steps).map((crumb, position, all) => (
             <Fragment key={crumb.label}>
               {position > 0 ? <BreadcrumbSeparator /> : null}
               <BreadcrumbItem>
