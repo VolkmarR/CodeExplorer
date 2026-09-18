@@ -242,6 +242,12 @@ public sealed class GrepSearch(ProjectIndexes indexes)
                ORDER BY p.n DESC, p.qualified_path, p.line_number
                """;
 
+        // Before the query runs, so the plan is of the statement that is about to be timed rather than
+        // of a warmed repeat of it.
+        if (QueryPlan.Enabled)
+            await QueryPlan.DumpAsync(connection, engine, sql, [.. matchParameters, .. fileParameters],
+                cancellationToken);
+
         var files = new List<GrepFile>();
         int totalFiles = 0;
         long totalLines = 0;
