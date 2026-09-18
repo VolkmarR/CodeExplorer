@@ -1,3 +1,4 @@
+using System.Data.Common;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer;
@@ -165,6 +166,16 @@ public sealed record CoChangeAnswer(
 
 /// <summary>Everything the paths of one commit ask for. The SHA is full: a listing is where it came from.</summary>
 public sealed record CommitFilesRequest(string Sha);
+
+/// <summary>Everything one commit's own record asks for. The SHA is full, like the file list's.</summary>
+public sealed record CommitRequest(string Sha);
+
+/// <summary>
+///     One commit as the change log would list it, read on its own because something linked to it. A
+///     SHA the index does not hold is a miss and never an answer with empty fields: a page drawn from
+///     one would claim a commit that changed nothing and was written by nobody.
+/// </summary>
+public sealed record CommitAnswer(LoggedCommit Commit) : Outcome;
 
 /// <summary>The paths one commit touched, in path order.</summary>
 public sealed record CommitFilesAnswer(string Sha, IReadOnlyList<CommitFile> Files) : Outcome;
@@ -379,6 +390,29 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     }
 
     /// <summary>
+    ///     One commit, by SHA. Its own read rather than a page of the log filtered down, because the
+    ///     caller here arrived by a link and knows only the SHA — finding it in the log would mean
+    ///     paging until it turned up, and a commit old enough is past the ceiling every page runs under.
+    ///     Separate from its file list for the reason blame is separate from the file: the page draws
+    ///     the message and the sums as soon as it has them, and a commit touching hundreds of paths
+    ///     should not hold that back.
+    /// </summary>
+    public async Task<Outcome> CommitAsync(string slug, CommitRequest request, CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null, async (index, token) =>
+        {
+            var commit = await OneLoggedAsync(index, request.Sha, token);
+            return commit is null
+                ? new Problem($"No commit '{request.Sha}' in the history of project '{slug}'.", ProblemKind.Missing)
+                : (Outcome)new CommitAnswer(commit);
+        }, cancellationToken);
+        if (outcome is CommitAnswer) recording.Matched(Engine, 1, 0);
+        else recording.Problem();
+        return outcome;
+    }
+
+    /// <summary>
     ///     The paths one commit touched. A SHA the index does not hold is a miss and not an empty
     ///     answer: every commit the walk records touched something, the root included, so nothing to
     ///     list means nothing to list it for.
@@ -492,36 +526,73 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
 
     /// <summary>
     ///     A page of the change log, newest first, with each commit's body and the sums of what it did.
-    ///     Ordered by <c>commit_id</c> for the reason <see cref="CommitsAsync" /> gives. The sums are cast
-    ///     because DuckDB widens <c>sum</c> of an INTEGER to HUGEINT, which the driver hands back as a
-    ///     BigInteger.
+    ///     Ordered by <c>commit_id</c> for the reason <see cref="CommitsAsync" /> gives.
     /// </summary>
     private static async Task<IReadOnlyList<LoggedCommit>> LoggedAsync(IndexReader index, string? repositorySlug,
         int limit, int skip, CancellationToken cancellationToken)
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
         using var command = index.Connection.Query($"""
-                                                    SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
-                                                           c.authored_at, c.subject, c.body,
-                                                           count(cf.path)::INTEGER AS files_changed,
-                                                           coalesce(sum(cf.added), 0)::INTEGER AS added,
-                                                           coalesce(sum(cf.deleted), 0)::INTEGER AS deleted
-                                                    FROM commits c LEFT JOIN commit_files cf USING (commit_id)
+                                                    {LoggedProjection}
                                                     {scope}
-                                                    GROUP BY c.commit_id, c.sha, c.repo_slug, c.author_name,
-                                                             c.author_email, c.authored_at, c.subject, c.body
+                                                    {LoggedGrouping}
                                                     ORDER BY c.commit_id DESC
                                                     LIMIT {limit} OFFSET {skip}
                                                     """, parameters);
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var commits = new List<LoggedCommit>();
-        while (await reader.ReadAsync(cancellationToken))
-            commits.Add(new LoggedCommit(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
-                reader.Text("author_email"), reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
-                reader.Text("subject"), reader.Text("body"), reader.Int32("files_changed"), reader.Int32("added"),
-                reader.Int32("deleted")));
+        while (await reader.ReadAsync(cancellationToken)) commits.Add(Logged(reader));
         return commits;
     }
+
+    /// <summary>
+    ///     One logged commit by SHA, or null where the index holds none. The same projection the page of
+    ///     the log uses, so the sums a reader saw in the list are the sums the commit's own page shows.
+    ///     Unscoped by repository, because a link carries a SHA and not the repository it was listed
+    ///     under — and ordered with a ceiling of one, because two repositories of a project can hold the
+    ///     same commit and the answer must not depend on which of them DuckDB grouped first.
+    /// </summary>
+    private static async Task<LoggedCommit?> OneLoggedAsync(IndexReader index, string sha,
+        CancellationToken cancellationToken)
+    {
+        using var command = index.Connection.Query($"""
+                                                    {LoggedProjection}
+                                                    WHERE c.sha = $sha
+                                                    {LoggedGrouping}
+                                                    ORDER BY c.commit_id
+                                                    LIMIT 1
+                                                    """, [new DuckDBParameter("sha", sha)]);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? Logged(reader) : null;
+    }
+
+    /// <summary>
+    ///     The columns of a logged commit, and the sums of what it did. One string rather than a copy
+    ///     per caller, because the page of the log and a commit's own page must count the same way — two
+    ///     spellings would drift the first time one of them learned to count something else. The sums
+    ///     are cast because DuckDB widens <c>sum</c> of an INTEGER to HUGEINT, which the driver hands
+    ///     back as a BigInteger.
+    /// </summary>
+    private const string LoggedProjection = """
+                                            SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
+                                                   c.authored_at, c.subject, c.body,
+                                                   count(cf.path)::INTEGER AS files_changed,
+                                                   coalesce(sum(cf.added), 0)::INTEGER AS added,
+                                                   coalesce(sum(cf.deleted), 0)::INTEGER AS deleted
+                                            FROM commits c LEFT JOIN commit_files cf USING (commit_id)
+                                            """;
+
+    /// <summary>The grouping <see cref="LoggedProjection" />'s sums need, beside it for the same reason.</summary>
+    private const string LoggedGrouping = """
+                                          GROUP BY c.commit_id, c.sha, c.repo_slug, c.author_name,
+                                                   c.author_email, c.authored_at, c.subject, c.body
+                                          """;
+
+    private static LoggedCommit Logged(DbDataReader reader) =>
+        new(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
+            reader.Text("author_email"), reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
+            reader.Text("subject"), reader.Text("body"), reader.Int32("files_changed"), reader.Int32("added"),
+            reader.Int32("deleted"));
 
     /// <summary>
     ///     Who last changed each line of a file, as runs rather than as one row per line: consecutive

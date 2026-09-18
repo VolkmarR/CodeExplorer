@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ProjectsProjectIndexRouteImport } from './routes/projects.$project.index'
 import { Route as ProjectsProjectChurnRouteImport } from './routes/projects.$project.churn'
+import { Route as ProjectsProjectCommitRouteImport } from './routes/projects.$project.commit'
 import { Route as ProjectsProjectFileRouteImport } from './routes/projects.$project.file'
 import { Route as ProjectsProjectFilesRouteImport } from './routes/projects.$project.files'
 import { Route as ProjectsProjectHistoryRouteImport } from './routes/projects.$project.history'
@@ -37,6 +38,11 @@ const ProjectsProjectIndexRoute = ProjectsProjectIndexRouteImport.update({
 const ProjectsProjectChurnRoute = ProjectsProjectChurnRouteImport.update({
   id: '/projects/$project/churn',
   path: '/projects/$project/churn',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsProjectCommitRoute = ProjectsProjectCommitRouteImport.update({
+  id: '/projects/$project/commit',
+  path: '/projects/$project/commit',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsProjectFileRoute = ProjectsProjectFileRouteImport.update({
@@ -69,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/projects/new': typeof ProjectsNewRoute
   '/projects/$project/churn': typeof ProjectsProjectChurnRoute
+  '/projects/$project/commit': typeof ProjectsProjectCommitRoute
   '/projects/$project/file': typeof ProjectsProjectFileRoute
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
@@ -80,6 +87,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/projects/new': typeof ProjectsNewRoute
   '/projects/$project/churn': typeof ProjectsProjectChurnRoute
+  '/projects/$project/commit': typeof ProjectsProjectCommitRoute
   '/projects/$project/file': typeof ProjectsProjectFileRoute
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
@@ -92,6 +100,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/projects/new': typeof ProjectsNewRoute
   '/projects/$project/churn': typeof ProjectsProjectChurnRoute
+  '/projects/$project/commit': typeof ProjectsProjectCommitRoute
   '/projects/$project/file': typeof ProjectsProjectFileRoute
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
@@ -105,6 +114,7 @@ export interface FileRouteTypes {
     | '/'
     | '/projects/new'
     | '/projects/$project/churn'
+    | '/projects/$project/commit'
     | '/projects/$project/file'
     | '/projects/$project/files'
     | '/projects/$project/history'
@@ -116,6 +126,7 @@ export interface FileRouteTypes {
     | '/'
     | '/projects/new'
     | '/projects/$project/churn'
+    | '/projects/$project/commit'
     | '/projects/$project/file'
     | '/projects/$project/files'
     | '/projects/$project/history'
@@ -127,6 +138,7 @@ export interface FileRouteTypes {
     | '/'
     | '/projects/new'
     | '/projects/$project/churn'
+    | '/projects/$project/commit'
     | '/projects/$project/file'
     | '/projects/$project/files'
     | '/projects/$project/history'
@@ -139,6 +151,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ProjectsNewRoute: typeof ProjectsNewRoute
   ProjectsProjectChurnRoute: typeof ProjectsProjectChurnRoute
+  ProjectsProjectCommitRoute: typeof ProjectsProjectCommitRoute
   ProjectsProjectFileRoute: typeof ProjectsProjectFileRoute
   ProjectsProjectFilesRoute: typeof ProjectsProjectFilesRoute
   ProjectsProjectHistoryRoute: typeof ProjectsProjectHistoryRoute
@@ -175,6 +188,13 @@ declare module '@tanstack/react-router' {
       path: '/projects/$project/churn'
       fullPath: '/projects/$project/churn'
       preLoaderRoute: typeof ProjectsProjectChurnRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$project/commit': {
+      id: '/projects/$project/commit'
+      path: '/projects/$project/commit'
+      fullPath: '/projects/$project/commit'
+      preLoaderRoute: typeof ProjectsProjectCommitRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$project/file': {
@@ -219,6 +239,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ProjectsNewRoute: ProjectsNewRoute,
   ProjectsProjectChurnRoute: ProjectsProjectChurnRoute,
+  ProjectsProjectCommitRoute: ProjectsProjectCommitRoute,
   ProjectsProjectFileRoute: ProjectsProjectFileRoute,
   ProjectsProjectFilesRoute: ProjectsProjectFilesRoute,
   ProjectsProjectHistoryRoute: ProjectsProjectHistoryRoute,

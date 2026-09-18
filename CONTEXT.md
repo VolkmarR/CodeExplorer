@@ -36,6 +36,11 @@ _Avoid_: Hit, result
 A place where an identifier appears in code in a way that looks like real use, rather than in a
 comment, a string or an import. Determined from the text alone, never from language analysis, so a
 reference is strong evidence and not proof.
+
+A reference is of a **symbol** and never of a file. There is no such thing here as "the references
+of `Widget.cs`": answering that would mean asking the question of every name the file declares, a
+scan of the project per file opened, for a list that would still be evidence about names rather than
+about the file. What refers to a *file* is an import, and the answer to it is the file's dependents.
 _Avoid_: Usage, call site, occurrence
 
 **Declaration**:

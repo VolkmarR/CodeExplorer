@@ -570,6 +570,11 @@ export const api = {
       })
       .json<Churn>(),
 
+  // One commit, for the page a link to a SHA opens. Its files are a second request, like the file
+  // page's blame: the message and the sums are one row and draw at once, whatever the commit touched.
+  commit: (project: string, sha: string) =>
+    http.get(`projects/${project}/commits/${sha}`).json<CommitEntry>(),
+
   commitFiles: (project: string, sha: string) =>
     http.get(`projects/${project}/commits/${sha}/files`).json<CommitFiles>(),
 

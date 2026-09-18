@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import type { Origin } from '@/components/appNavigation'
 import {
   DECLARATION_EVIDENCE,
   declarationLabel,
@@ -18,7 +19,16 @@ import { RailEntries, RailPanelAnswer, RailWaiting, tally } from '@/features/fil
  * file: the one thing a reader of a 4900-line generated file wants is to land on the routine rather
  * than to scroll for it.
  */
-export function DeclarationPanel({ project, path }: { project: string; path: string }) {
+export function DeclarationPanel({
+  project,
+  path,
+  origin,
+}: {
+  project: string
+  path: string
+  /** Carried through, because a declaration's link lands on this same file and must keep its trail. */
+  origin?: Origin
+}) {
   const { data, error, isPending } = useQuery(declarationsQuery(project, path))
 
   if (isPending || error) return <RailWaiting title="Declarations" error={error} />
@@ -48,7 +58,7 @@ export function DeclarationPanel({ project, path }: { project: string; path: str
               <Link
                 to="/projects/$project/file"
                 params={{ project }}
-                search={fileSearch(path, declaration.lineNumber)}
+                search={fileSearch(path, declaration.lineNumber, origin)}
                 replace
                 className="block truncate text-primary hover:underline"
               >

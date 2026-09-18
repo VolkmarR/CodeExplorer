@@ -3,7 +3,9 @@ import { renderTokens } from '@tanstack/highlight'
 import { Link } from '@tanstack/react-router'
 import { useCallback, useMemo } from 'react'
 import { highlighter, languageFor } from '@/highlight/highlighter'
+import type { Origin } from '@/components/appNavigation'
 import { fileSearch } from '@/features/files/fileParams'
+import { commitSearch } from '@/features/history/commitParams'
 import type { BlameRun } from '@/lib/api'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { formatDate, shortSha } from '@/lib/format'
@@ -29,12 +31,15 @@ export function CodeView({
   line,
   wrap = false,
   blame,
+  origin,
 }: {
   project: string
   content: string
   path: string
   line?: number
   wrap?: boolean
+  /** How this page was reached, so clicking a line number keeps the trail the reader arrived on. */
+  origin?: Origin
   /**
    * Undefined when the gutter is off, null while the runs are on their way, and the runs once they
    * have arrived — which may be none, for a file the history could not attribute at all.
@@ -107,9 +112,17 @@ export function CodeView({
                     ) : attributed?.first ? (
                       attributed.run.by ? (
                         <span className="flex items-baseline gap-2 overflow-hidden">
-                          <span className="text-muted-foreground">
+                          {/* The abbreviated id is the link and not the whole line: the column is
+                              narrow and already holds three things, and the sha is the one of them
+                              that names the commit. */}
+                          <Link
+                            to="/projects/$project/commit"
+                            params={{ project }}
+                            search={commitSearch(attributed.run.by.sha, origin?.view ?? 'files')}
+                            className="text-muted-foreground hover:text-primary hover:underline"
+                          >
                             {shortSha(attributed.run.by.sha)}
-                          </span>
+                          </Link>
                           <span className="text-muted-foreground">
                             {formatDate(attributed.run.by.authoredAt)}
                           </span>
@@ -135,7 +148,7 @@ export function CodeView({
                   <Link
                     to="/projects/$project/file"
                     params={{ project }}
-                    search={fileSearch(path, number)}
+                    search={fileSearch(path, number, origin)}
                     replace
                     className="hover:text-primary hover:underline"
                   >

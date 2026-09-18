@@ -1,13 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import type { Origin } from '@/components/appNavigation'
 import { DeclarationPanel } from '@/features/files/DeclarationPanel'
 import { ImportPanels } from '@/features/files/ImportPanels'
 import { blameQuery } from '@/features/files/queries'
 import { RailPanel, RailPending } from '@/features/files/RailPanel'
-import { searchSearch } from '@/features/search/searchParams'
 import { CommitLine } from '@/components/CommitLine'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import type { CommitRef, FileContent } from '@/lib/api'
-import { splitFileName } from '@/lib/format'
 
 /**
  * How many commits the rail names. Enough to recognise the stretch of work a file is in the middle
@@ -17,70 +16,55 @@ import { splitFileName } from '@/lib/format'
 const RECENT_COMMITS = 6
 
 /**
- * What else is known about the file beside it: what it declares, what refers to it, and what has
- * been done to it lately.
+ * What else is known about the file beside it: what it declares, what imports it and what it
+ * imports, and what has been done to it lately.
  *
  * It exists because the page answered less than the MCP tools over the same index do, and because
  * the import and declaration panels had nowhere to go — a single-column file page has no room for
- * them. The one question still unanswered says so in its own words rather than being left out: an
- * operator comparing this page with what an agent is told should be able to see which questions
- * this server cannot answer yet.
+ * them. Every panel here draws an answer; it carried one that drew a paragraph explaining that the
+ * index answers references of a symbol rather than of a file, which cost a reader a heading and a
+ * box to learn nothing about this file and pushed the answers that exist further down. Dependents
+ * is the answer to "what refers to this file", and the distinction the paragraph made now lives in
+ * CONTEXT.md under _Reference_, where the vocabulary is.
  */
-export function FileRail({ project, file }: { project: string; file: FileContent }) {
+export function FileRail({
+  project,
+  file,
+  origin,
+}: {
+  project: string
+  file: FileContent
+  /**
+   * How this file page was reached, carried into the links that stay in the reader's trail: a
+   * declaration's own line, and a commit of this file. An import or a dependent opens a different
+   * file, which the reader did not reach from this page's commit, so those start a trail of their own.
+   */
+  origin?: Origin
+}) {
   return (
     // The rail holds its own scroll beside the code rather than scrolling with the page, bounded by
     // the same token the code pane is: the two columns are read together, and a rail that ran past
     // the pane would leave the taller column blank for the rest of a long file. Only from `xl`,
     // where the two are side by side — stacked under the code on a narrow screen it is part of the
-    // page and scrolls with it.
+    // page and scrolls with it, which is what the unbounded `max-h-none` below says.
     //
-    // Stacked with `space-y` and not as a flex column, which is what it was: a bounded flex column
-    // shrinks its children to fit instead of overflowing, so every panel was crushed — a file with
-    // 76 declarations showed six of them in a box with no scrollbar and no way to reach the rest.
-    // `pr` for the scrollbar's own width, so a panel's text is not underneath it.
-    <aside className="w-full shrink-0 space-y-4 xl:max-h-(--reading-pane) xl:w-80 xl:overflow-y-auto xl:pr-1">
-      <DeclarationPanel project={project} path={file.qualifiedPath} />
+    // A `ScrollArea` and not the native `overflow-y-auto` it was: that gave the rail the browser's
+    // own scrollbar, a bright track against the dark card column and plainly not the one the code
+    // pane beside it has.
+    <ScrollArea className="w-full shrink-0 max-h-none xl:max-h-(--reading-pane) xl:w-80">
+      {/* The padding is inside the scroll area, so a card at either end of the scroll shows all four
+          of its borders instead of being cut flush against the clip edge — the cards are what is
+          scrolled, and a box that reads as unclosed reads as broken. A whole step and not the 1px a
+          border strictly needs: a focus ring around a card at the edge has to fit too. `pr` is also
+          what keeps a panel's text out from under the scrollbar. */}
+      <aside className="space-y-4 py-1 xl:pr-2.5">
+        <DeclarationPanel project={project} path={file.qualifiedPath} origin={origin} />
 
-      <References project={project} path={file.qualifiedPath} />
+        <ImportPanels project={project} path={file.qualifiedPath} />
 
-      <ImportPanels project={project} path={file.qualifiedPath} />
-
-      <RecentCommits project={project} file={file} />
-    </aside>
-  )
-}
-
-/**
- * Who names this file elsewhere, which the index cannot answer of a file. It answers references of a
- * symbol, and turning that into an answer about a file would mean asking it of every name the file
- * declares — a scan of the project per file opened, for a list that would still be evidence about
- * names rather than about the file.
- *
- * So the gap is said rather than drawn as an empty panel, the way a project with no history says it
- * holds none instead of showing an empty ranking: a panel that looks like an answer and is not is
- * worse than a sentence. The search is the nearest thing there is and is offered as one — seeded
- * with the file's own name, which for these codebases is usually what the type in it is called, and
- * which the reader can see and edit because it is a guess.
- */
-function References({ project, path }: { project: string; path: string }) {
-  const symbol = symbolName(path)
-
-  return (
-    <RailPanel title="References">
-      <p className="text-sm text-muted-foreground">
-        The index answers where a symbol is referenced, not where a file is, so there is no list to
-        draw here. The nearest answer is a search for what this file is likely to be called:{' '}
-        <Link
-          to="/projects/$project/search"
-          params={{ project }}
-          search={searchSearch(symbol)}
-          className="text-primary hover:underline"
-        >
-          search for {symbol}
-        </Link>
-        . The Dependents panel below is the answer for the files that import this one.
-      </p>
-    </RailPanel>
+        <RecentCommits project={project} file={file} origin={origin} />
+      </aside>
+    </ScrollArea>
   )
 }
 
@@ -89,7 +73,15 @@ function References({ project, path }: { project: string; path: string }) {
  * commit wrote each stretch, so the set of them is the file's recent history without a second
  * endpoint to ask. Ordered by when they were authored and not by where they sit in the file.
  */
-function RecentCommits({ project, file }: { project: string; file: FileContent }) {
+function RecentCommits({
+  project,
+  file,
+  origin,
+}: {
+  project: string
+  file: FileContent
+  origin?: Origin
+}) {
   const hasHistory = file.lastCommit !== null
   const blame = useQuery({
     ...blameQuery(project, file.qualifiedPath),
@@ -118,7 +110,13 @@ function RecentCommits({ project, file }: { project: string; file: FileContent }
           {distinctCommits(blame.data?.runs ?? []).map((commit) => (
             <li key={commit.sha} className="min-w-0 text-xs">
               <p className="truncate">{commit.subject}</p>
-              <CommitLine commit={commit} subject={false} className="text-muted-foreground" />
+              <CommitLine
+                commit={commit}
+                project={project}
+                from={origin?.view ?? 'files'}
+                subject={false}
+                className="text-muted-foreground"
+              />
             </li>
           ))}
         </ul>
@@ -134,13 +132,4 @@ function distinctCommits(runs: { by: CommitRef | null }[]): CommitRef[] {
   return [...bySha.values()]
     .toSorted((a, b) => b.authoredAt.localeCompare(a.authoredAt))
     .slice(0, RECENT_COMMITS)
-}
-
-/**
- * The file's name without its extension, which for these codebases is what a type in it is usually
- * called — `SqlSelectBase.prg` declares `SqlSelectBase`. A guess and not a fact, which is why it
- * only ever seeds a search the reader can see and edit, and never claims to be a symbol.
- */
-function symbolName(qualifiedPath: string) {
-  return splitFileName(qualifiedPath).stem
 }

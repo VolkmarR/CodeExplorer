@@ -36,7 +36,7 @@ export function SearchResultGroup({
         <Link
           to="/projects/$project/file"
           params={{ project }}
-          search={fileSearch(file.qualifiedPath)}
+          search={fileSearch(file.qualifiedPath, undefined, { view: 'search' })}
           className="min-w-0 font-mono text-sm hover:underline"
         >
           {/* The directory is dimmed and the name is not: a page of results is scanned by file
@@ -57,7 +57,7 @@ export function SearchResultGroup({
                 <Link
                   to="/projects/$project/file"
                   params={{ project }}
-                  search={fileSearch(file.qualifiedPath, line.lineNumber)}
+                  search={fileSearch(file.qualifiedPath, line.lineNumber, { view: 'search' })}
                   className="hover:text-primary hover:underline"
                 >
                   {line.lineNumber}

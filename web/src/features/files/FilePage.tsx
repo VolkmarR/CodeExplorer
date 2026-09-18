@@ -25,8 +25,12 @@ import { fileName, formatBytes, formatCount } from '@/lib/format'
  */
 export function FilePage() {
   const { project } = useParams({ from: '/projects/$project/file' })
-  const { line, path } = useSearch({ from: '/projects/$project/file' })
+  const { line, path, from, fromCommit } = useSearch({ from: '/projects/$project/file' })
   const { data: file } = useSuspenseQuery(fileQuery(project, path))
+
+  // Kept whole and passed on, so a line clicked in the code or a declaration jumped to in the rail
+  // lands on the same file with the same trail above it rather than back under Files.
+  const origin = { commit: fromCommit, view: from }
 
   // Off by default: code is written for a wide column and a folded line loses its indentation, which
   // is what the reader of a C# file scans by. Local to the page and not the URL — how someone likes
@@ -59,7 +63,7 @@ export function FilePage() {
           {file.lastCommit ? (
             <span className="flex min-w-0 items-baseline gap-1 text-xs">
               <span className="text-muted-foreground">last changed</span>
-              <CommitLine commit={file.lastCommit} />
+              <CommitLine commit={file.lastCommit} project={project} from={from ?? 'files'} />
             </span>
           ) : null}
         </div>
@@ -137,10 +141,11 @@ export function FilePage() {
               wrap={wrap}
               // Three states the gutter tells apart: not asked for, asked for and on its way, arrived.
               blame={blaming ? (blame.data?.runs ?? null) : undefined}
+              origin={origin}
             />
           )}
         </div>
-        <FileRail project={project} file={file} />
+        <FileRail project={project} file={file} origin={origin} />
       </div>
     </PageCard>
   )

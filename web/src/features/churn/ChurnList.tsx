@@ -24,7 +24,12 @@ export function ChurnList({ project, files }: { project: string; files: ChurnFil
           <span className="w-28 shrink-0 tabular-nums">
             <DiffStat added={file.added} deleted={file.deleted} />
           </span>
-          <FilePathLink project={project} qualifiedPath={file.qualifiedPath} atHead={file.atHead} />
+          <FilePathLink
+            project={project}
+            qualifiedPath={file.qualifiedPath}
+            atHead={file.atHead}
+            origin={{ view: 'churn' }}
+          />
         </li>
       ))}
     </ol>
