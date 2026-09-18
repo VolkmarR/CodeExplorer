@@ -109,6 +109,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
         var filter = request.Filter with { Repository = index.Repository?.Slug };
         var symbolPattern = new DuckDBParameter("q", SymbolText.WholeWordPattern(symbol));
         var parameters = new List<DuckDBParameter> { symbolPattern };
+        string literally = SearchQuery.Literally(symbol, "lit", parameters);
         string declarationShapes = await ShapesAsync(connection, parameters, cancellationToken);
         string fileFilter = filter.Sql(parameters);
 
@@ -117,7 +118,8 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
                                                   SELECT f.file_id, f.qualified_path, f.extension,
                                                          l.line_number, l.content
                                                   FROM lines l JOIN files f USING (file_id)
-                                                  WHERE regexp_matches(l.content, $q, ''){fileFilter}
+                                                  WHERE {literally}
+                                                    AND regexp_matches(l.content, $q, ''){fileFilter}
                                                     AND ({declarationShapes})
                                                   ORDER BY f.qualified_path, l.line_number
                                                   LIMIT {MaxCandidates}
@@ -183,7 +185,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
                         count(DISTINCT l.file_id) AS every_file
                  FROM lines l LEFT JOIN (SELECT f.file_id FROM files f WHERE true{fileFilter}) f
                    USING (file_id)
-                 WHERE regexp_matches(l.content, $q, '')
+                 WHERE {literally} AND regexp_matches(l.content, $q, '')
                  """, parameters);
             using var reader = await command.ReaderAsync(cancellationToken);
             if (await reader.ReadAsync(cancellationToken))
