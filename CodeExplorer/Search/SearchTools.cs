@@ -19,7 +19,7 @@ internal sealed class SearchTools(
                  Searches every indexed line of every repository in this project and returns the matching lines grouped by file, with qualified paths (`repo/path/in/repo`) and line numbers. This is the fastest way to locate code; reach for it before reading files.
 
                  - Two modes. Text (the default) finds lines containing every whitespace-separated token of the query. regex=true is an RE2 regular expression over each line: use it for a partial name, a prefix, alternation (`Foo|Bar`) or any pattern. RE2 has no lookbehind, no lookahead and no backreferences; such a pattern gets an explanation, not an empty result.
-                 - Every reply names the engine that answered: `full-text` (BM25 over identifier tokens, exact-verified) or `substring scan` for text queries, `regex scan` or `multiline regex scan` otherwise. They rank files the same way but the full-text path can only find whole identifier tokens, so a text query that misses a partial name should be retried with regex=true.
+                 - Every reply names the engine that answered: `token scan` (every identifier piece of the query matched as a whole token, then exact-verified) or `substring scan` for text queries, `regex scan` or `multiline regex scan` otherwise. They rank files the same way but the token path only finds whole identifier tokens, so a text query that misses a partial name should be retried with regex=true.
                  - On a large or generated code base four parameters pay for themselves: `exclude="*.g.cs,/tests/"` strips noise; `context=4` tells you what a hit means without opening the file; `filesOnly=true` sizes a broad query for almost nothing; `multiline=true` matches a statement wrapped over several lines.
                  - A workflow that works: filesOnly first to see how big the answer is, then the same query with context to read the hits.
                  - Do not run the same pattern once per folder or once per repository. `path` takes a comma-separated list and ORs the terms, and a search always spans every repository in the project.
@@ -106,7 +106,7 @@ internal sealed class SearchTools(
                     : "Try a looser pattern."
                 : request.Query.Any(c => !char.IsLetterOrDigit(c) && c != '_' && !char.IsWhiteSpace(c))
                     ? "Text mode requires every token on one line. Retry with regex=true and escape metacharacters with a backslash, or search a single distinctive token."
-                    : "Text mode requires every token on one line, and the full-text path matches whole identifier tokens. Retry with regex=true for a partial name.";
+                    : "Text mode requires every token on one line, and the token path matches whole identifier tokens. Retry with regex=true for a partial name.";
         }
     }
 

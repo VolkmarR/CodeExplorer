@@ -56,8 +56,8 @@ internal sealed class ProjectTools(
         text.Append(CultureInfo.InvariantCulture,
             $"Indexed at: {status.BuiltAt:yyyy-MM-dd HH:mm:ss} UTC (all repositories are indexed together)\n");
         text.Append(status.FtsIndexed
-            ? "Full-text index: built (text queries in grep use BM25 over identifier tokens)\n"
-            : "Full-text index: not built (text queries in grep use a substring scan)\n");
+            ? "Tokenised: yes (text queries in grep match whole identifier tokens)\n"
+            : "Tokenised: no (text queries in grep use a substring scan, which also finds partial names)\n");
 
         text.Append("\nRepositories:\n");
         int width = Math.Max(indexed.Select(r => r.Slug.Length).DefaultIfEmpty(0).Max(),

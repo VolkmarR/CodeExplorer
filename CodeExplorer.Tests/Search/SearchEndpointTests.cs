@@ -111,7 +111,7 @@ public sealed class SearchEndpointTests
         // full-text matches whole identifier tokens, so `WidgetFactory` is not a hit for `Widget`,
         // while a substring scan finds it. Neither is wrong; the UI shows which one ran.
         Assert.Equal(expected, result.TotalFiles);
-        Assert.Equal(engine == SearchEngine.Fts ? GrepSearch.FullTextEngine : GrepSearch.SubstringEngine,
+        Assert.Equal(engine == SearchEngine.Fts ? GrepSearch.TokenEngine : GrepSearch.SubstringEngine,
             result.Engine);
     }
 
