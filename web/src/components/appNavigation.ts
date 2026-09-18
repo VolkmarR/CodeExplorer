@@ -2,7 +2,6 @@ import { Activity, BarChart3, Clock, FolderTree, Search, Settings } from 'lucide
 import { churnSearch } from '@/features/churn/churnParams'
 import { treeSearch } from '@/features/files/browseParams'
 import { historySearch } from '@/features/history/historyParams'
-import { projectSearch, type ProjectTab } from '@/features/projects/projectParams'
 import { searchSearch } from '@/features/search/searchParams'
 
 /** The sidebar's items, in the order it lists them. */
@@ -15,13 +14,14 @@ export type View = 'overview' | 'files' | 'search' | 'history' | 'churn' | 'sett
  * for the breadcrumb.
  *
  * `link` is spread onto a `Link`, which supplies the `params`; the search for each view comes from
- * that view's own params module, so no default is spelled out here either.
+ * that view's own params module, so no default is spelled out here either. The two views that read
+ * nothing from the URL beyond the project carry no search at all.
  */
 export const PROJECT_VIEWS = [
   {
     Icon: Activity,
     label: 'Overview',
-    link: { search: projectSearch('overview'), to: '/projects/$project' },
+    link: { to: '/projects/$project' },
     view: 'overview',
   },
   {
@@ -51,7 +51,7 @@ export const PROJECT_VIEWS = [
   {
     Icon: Settings,
     label: 'Settings',
-    link: { search: projectSearch('settings'), to: '/projects/$project' },
+    link: { to: '/projects/$project/settings' },
     view: 'settings',
   },
 ] as const satisfies readonly { Icon: typeof Activity; label: string; link: object; view: View }[]
@@ -63,27 +63,31 @@ export const VIEW_NAMES: Record<View, string> = Object.fromEntries(
 
 /**
  * Which sidebar item is lit, decided from the path rather than by each link's `activeProps`,
- * because two of the six do not sit where their name suggests: reading a file is part of Files and
- * lives at its own route (`/file`, not under `/files`), and Overview and Settings are two items on
- * one route told apart by the tab in its URL. A link's own active state can know neither, and would
- * leave the reader of a file standing on no item at all.
+ * because one of the six does not sit where its name suggests: reading a file is part of Files and
+ * lives at its own route (`/file`, not under `/files`). A link's own active state cannot know that,
+ * and would leave the reader of a file standing on no item at all.
+ *
+ * Every view is decided from the path alone, which is why this takes nothing else. It read the
+ * project page's tab as a second argument while Overview and Settings shared one route, and the
+ * cost was that the frame re-read a search param on all six pages to light one item.
  *
  * A module of its own rather than a function inside the sidebar: it is the one part of the frame
  * that grows with every view added, it needs none of the component's state to decide, and every
  * case it gets wrong is a case worth a test.
  */
-export function activeView(pathname: string, tab: ProjectTab): View | null {
+export function activeView(pathname: string): View | null {
   // A trailing slash is the same page, and the router hands one out for an index route.
   const path = pathname.replace(/\/$/, '')
 
   if (path.endsWith('/search')) return 'search'
   if (path.endsWith('/history')) return 'history'
   if (path.endsWith('/churn')) return 'churn'
+  if (path.endsWith('/settings')) return 'settings'
   if (path.endsWith('/files') || path.endsWith('/file')) return 'files'
 
   // `/projects/new` reaches here as a slug-shaped path and is not a project: it is the form that
   // makes one, and a static segment beats `$project` in the router for the same reason.
   if (path === '/projects/new') return null
 
-  return /^\/projects\/[^/]+$/.test(path) ? tab : null
+  return /^\/projects\/[^/]+$/.test(path) ? 'overview' : null
 }

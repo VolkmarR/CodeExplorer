@@ -17,6 +17,7 @@ import { Route as ProjectsProjectFileRouteImport } from './routes/projects.$proj
 import { Route as ProjectsProjectFilesRouteImport } from './routes/projects.$project.files'
 import { Route as ProjectsProjectHistoryRouteImport } from './routes/projects.$project.history'
 import { Route as ProjectsProjectSearchRouteImport } from './routes/projects.$project.search'
+import { Route as ProjectsProjectSettingsRouteImport } from './routes/projects.$project.settings'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -58,6 +59,11 @@ const ProjectsProjectSearchRoute = ProjectsProjectSearchRouteImport.update({
   path: '/projects/$project/search',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectsProjectSettingsRoute = ProjectsProjectSettingsRouteImport.update({
+  id: '/projects/$project/settings',
+  path: '/projects/$project/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -67,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
   '/projects/$project/search': typeof ProjectsProjectSearchRoute
+  '/projects/$project/settings': typeof ProjectsProjectSettingsRoute
   '/projects/$project/': typeof ProjectsProjectIndexRoute
 }
 export interface FileRoutesByTo {
@@ -77,6 +84,7 @@ export interface FileRoutesByTo {
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
   '/projects/$project/search': typeof ProjectsProjectSearchRoute
+  '/projects/$project/settings': typeof ProjectsProjectSettingsRoute
   '/projects/$project': typeof ProjectsProjectIndexRoute
 }
 export interface FileRoutesById {
@@ -88,6 +96,7 @@ export interface FileRoutesById {
   '/projects/$project/files': typeof ProjectsProjectFilesRoute
   '/projects/$project/history': typeof ProjectsProjectHistoryRoute
   '/projects/$project/search': typeof ProjectsProjectSearchRoute
+  '/projects/$project/settings': typeof ProjectsProjectSettingsRoute
   '/projects/$project/': typeof ProjectsProjectIndexRoute
 }
 export interface FileRouteTypes {
@@ -100,6 +109,7 @@ export interface FileRouteTypes {
     | '/projects/$project/files'
     | '/projects/$project/history'
     | '/projects/$project/search'
+    | '/projects/$project/settings'
     | '/projects/$project/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -110,6 +120,7 @@ export interface FileRouteTypes {
     | '/projects/$project/files'
     | '/projects/$project/history'
     | '/projects/$project/search'
+    | '/projects/$project/settings'
     | '/projects/$project'
   id:
     | '__root__'
@@ -120,6 +131,7 @@ export interface FileRouteTypes {
     | '/projects/$project/files'
     | '/projects/$project/history'
     | '/projects/$project/search'
+    | '/projects/$project/settings'
     | '/projects/$project/'
   fileRoutesById: FileRoutesById
 }
@@ -131,6 +143,7 @@ export interface RootRouteChildren {
   ProjectsProjectFilesRoute: typeof ProjectsProjectFilesRoute
   ProjectsProjectHistoryRoute: typeof ProjectsProjectHistoryRoute
   ProjectsProjectSearchRoute: typeof ProjectsProjectSearchRoute
+  ProjectsProjectSettingsRoute: typeof ProjectsProjectSettingsRoute
   ProjectsProjectIndexRoute: typeof ProjectsProjectIndexRoute
 }
 
@@ -192,6 +205,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectSearchRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects/$project/settings': {
+      id: '/projects/$project/settings'
+      path: '/projects/$project/settings'
+      fullPath: '/projects/$project/settings'
+      preLoaderRoute: typeof ProjectsProjectSettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -203,6 +223,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsProjectFilesRoute: ProjectsProjectFilesRoute,
   ProjectsProjectHistoryRoute: ProjectsProjectHistoryRoute,
   ProjectsProjectSearchRoute: ProjectsProjectSearchRoute,
+  ProjectsProjectSettingsRoute: ProjectsProjectSettingsRoute,
   ProjectsProjectIndexRoute: ProjectsProjectIndexRoute,
 }
 export const routeTree = rootRouteImport

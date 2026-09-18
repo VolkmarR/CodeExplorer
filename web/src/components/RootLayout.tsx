@@ -1,8 +1,7 @@
-import { useLocation, useParams, useRouterState, useSearch } from '@tanstack/react-router'
+import { useLocation, useParams, useRouterState } from '@tanstack/react-router'
 import { AppSidebar } from '@/components/AppSidebar'
 import { TopBar } from '@/components/TopBar'
 import { activeView } from '@/components/appNavigation'
-import { validateProjectSearch } from '@/features/projects/projectParams'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -18,12 +17,10 @@ export function RootLayout({ children }: { children: React.ReactNode }) {
   // is read loosely and the project half of the frame simply does not render when there is none.
   const { project } = useParams({ strict: false })
 
-  // Loosely for the same reason, and because only one route has a `tab` at all: reading it strictly
-  // would throw on the five that do not. It goes back through the route's own validator rather than
-  // being re-read here, so the default lives in one place (`projectParams.ts`).
-  const search: Record<string, unknown> = useSearch({ strict: false })
+  // The path is the whole of it. Every view has a route of its own, so the frame reads no search
+  // param to light an item — it read one on all six pages while Overview and Settings shared a route.
   const { pathname } = useLocation()
-  const view = activeView(pathname, validateProjectSearch(search).tab)
+  const view = activeView(pathname)
 
   // Code and search results are wide; the overview, the settings and the forms are prose and
   // tables. The reading views drop the column so a long line of code is not folded on a wide screen.
