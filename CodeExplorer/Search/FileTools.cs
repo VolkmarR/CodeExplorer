@@ -180,16 +180,18 @@ internal sealed partial class FileTools(
 
     [McpServerTool(Name = "glob", ReadOnly = true, Idempotent = true, Title = "Find files by path pattern")]
     [Description("""
-                 Lists indexed files whose qualified path matches a glob, with their line counts, e.g. `main/src/**/Features/**/*Commands.cs` or `*Handler.cs`. Matching is case-insensitive and `*` crosses directory separators, so a bare `*Handler.cs` finds every handler in every repository of the project.
+                 Lists indexed files whose qualified path matches a glob, with their line counts, e.g. `main/src/*Commands.cs` or `*Handler.cs`. Matching is case-insensitive.
 
+                 - **`*` crosses directory separators**, so it matches a subtree and not a level. That is what makes a bare `*Handler.cs` find every handler at every depth in every repository, and it is also why `main/src/*` is the whole tree under `main/src` rather than its top entries. `**` is the same wildcard written twice, not a second operator: `a/**/b` and `a/*/b` match exactly the same files.
+                 - **There is no glob for one directory level.** If that is the question — what is *in* this directory — it is list_tree's, and a glob will answer it with the subtree.
                  - Use glob when you know the shape of a filename but not where it lives; one call replaces a directory walk.
-                 - Use grep when you need the files that *contain* something, and list_tree when you want to understand the layout rather than find a known name.
+                 - Use grep when you need the files that *contain* something, and list_tree when you want the layout rather than a known name.
                  - The glob spans every repository; pass `repo` to scope it to one. Brace expansion (`*.{cs,ts}`) is not supported and is refused rather than silently matching nothing.
                  - A file that is committed but not indexed (binary, oversized) is listed with the reason, so a name you expect never quietly disappears.
                  """)]
     public async Task<string> Glob(
         [Description(
-            "Glob over the qualified path (`repo/path/in/repo`), e.g. \"main/src/**/*Commands.cs\" or \"*Entity.cs\".")]
+            "Glob over the qualified path (`repo/path/in/repo`), e.g. \"main/src/*Commands.cs\" or \"*Entity.cs\".")]
         string glob,
         [Description("Repository slug to scope the glob to. Default: every repository in the project.")]
         string? repo = null,
@@ -257,8 +259,10 @@ internal sealed partial class FileTools(
     ///     standing as a whole path segment, as a shell glob writes "the entries of this directory".
     ///     Here <c>*</c> crosses separators, so that shape matches the subtree.
     ///     A name shape — <c>*Handler.cs</c>, or <c>src/*Commands.cs</c> — is what the tool is for and is
-    ///     not warned about however many it matches, and neither is <c>**</c>, which is the caller asking
-    ///     for every level. A glob with no <c>/</c> at all is excluded for the same reason: it named no
+    ///     not warned about however many it matches. Neither is <c>**</c>: it matches exactly what a
+    ///     single <c>*</c> does here, so it is not a second operator, but writing it is the caller saying
+    ///     they wanted the subtree — which is the one thing this note would tell them.
+    ///     A glob with no <c>/</c> at all is excluded for the same reason: it named no
     ///     directory, so a bare <c>*</c> asked for the project and got it, and there is no level it
     ///     expected to stop at.
     /// </summary>

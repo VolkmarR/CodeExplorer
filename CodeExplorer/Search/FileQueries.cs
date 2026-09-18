@@ -230,13 +230,16 @@ public sealed class FileQueries(ProjectIndexes indexes)
     private static string? MalformedGlob(string glob)
     {
         if (glob.Length == 0)
-            return "The glob is empty. Pass a pattern such as \"*.cs\" or \"main/src/**/*Handler.cs\".";
+            return "The glob is empty. Pass a pattern such as \"*.cs\" or \"main/src/*Handler.cs\".";
         if (glob.Contains('{') || glob.Contains('}'))
             return $"Brace expansion is not supported, so \"{glob}\" matches nothing. Use one call per alternative, "
-                   + "or widen the glob (\"**/*.cs\" then read the list) and filter the result yourself.";
+                   // "*.cs" and not "**/*.cs": `*` crosses separators, so the leading "**/" adds nothing
+                   // except a required '/', which drops a file sitting at the root of a path.
+                   + "or widen the glob (\"*.cs\" then read the list) and filter the result yourself.";
         if (glob.EndsWith('/'))
             return $"A trailing slash matches nothing: \"{glob}\" is a directory, not a file pattern. "
-                   + $"Use \"{glob}**\" for everything under it, or list_tree to see the layout.";
+                   + $"Use \"{glob}*\" for everything under it — `*` crosses separators, so that is the "
+                   + "whole subtree — or list_tree for the entries of the directory itself.";
         // A '[' opens a character class; without its ']' the operator matches nothing and says so to no one.
         if (glob.Count(c => c == '[') != glob.Count(c => c == ']'))
             return

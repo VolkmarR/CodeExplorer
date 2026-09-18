@@ -246,7 +246,10 @@ public sealed class FileToolsTests : IDisposable
 
         string slash = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "one/src/" });
         Assert.Contains("trailing slash", slash);
-        Assert.Contains("one/src/**", slash);
+        // The subtree pattern, not "one/src/**": `**` is the same wildcard twice and teaching it as a
+        // second operator is what makes an agent expect `one/src/*` to be one level.
+        Assert.Contains("one/src/*", slash);
+        Assert.Contains("list_tree", slash);
 
         string empty = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "  " });
         Assert.Contains("empty", empty);

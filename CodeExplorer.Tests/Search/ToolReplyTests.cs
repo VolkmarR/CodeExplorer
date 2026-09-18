@@ -167,7 +167,7 @@ public sealed class ToolReplyTests : IDisposable
         string reply = await TestHost.CallAsync(client, "glob", []);
 
         Assert.Contains("without its required `glob` argument", reply, StringComparison.Ordinal);
-        Assert.Contains("main/src/**/*Commands.cs", reply, StringComparison.Ordinal);
+        Assert.Contains("main/src/*Commands.cs", reply, StringComparison.Ordinal);
         Assert.Contains("Also accepts: `repo`, `limit`.", reply, StringComparison.Ordinal);
     }
 
