@@ -81,7 +81,8 @@ internal sealed class SearchTools(
     private static string NoMatches(GrepRequest request, GrepResult result)
     {
         var text = new StringBuilder($"No matches for \"{request.Query}\" ({result.Engine} engine). ");
-        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "pattern"));
+        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "pattern",
+            "Nothing matches anywhere in the project"));
         // Where the pattern does match outside the filters, the filters are the whole answer: an engine
         // hint there would send the caller to change a pattern that is already right.
         if (result.FilesMatchingWithoutFilters is not > 0)
@@ -106,22 +107,30 @@ internal sealed class SearchTools(
     }
 
     /// <summary>
-    ///     What a miss knows about the filters, said once for the three searches whose result carries
-    ///     the same nullable count. The <c>null</c> case — no filter narrowed the search — is the one
-    ///     that knows the most and said the least until #87: the search already spanned the project, so
-    ///     the absence is certain and the reply states it before falling back to any engine hint.
+    ///     What a miss knows about the filters, read once for the three searches whose result carries
+    ///     the same nullable count. The <c>null</c> case — nothing was filtered — is the one that knows
+    ///     the most and said the least until #87: the search already spanned every file, so the miss is
+    ///     the project's answer and the reply says so before falling back to any hint.
+    ///     Each tool supplies <paramref name="miss" /> rather than this reading spelling it, because what
+    ///     an empty result means is not the same fact in all three: <c>list_matches</c> drops an empty
+    ///     capture value before it counts, so a pattern that matched every line with an empty group
+    ///     arrives here by the same door as one that matched nothing, and only it must say both.
+    ///     The filter clause says the search spanned every file rather than that nothing narrowed it:
+    ///     <c>wholeWord</c>, <c>caseSensitive</c> and <c>group</c> narrow a search too, and the hint that
+    ///     follows may well name one of them.
     /// </summary>
     /// <param name="filesMatchingWithoutFilters">
     ///     How many files hold a match once the filters are dropped: zero when nothing matches anywhere,
     ///     <c>null</c> when there were no filters to drop.
     /// </param>
     /// <param name="subject">What the tool searched for, as its own reply names it.</param>
-    private static string FilterVerdict(int? filesMatchingWithoutFilters, string subject) =>
+    /// <param name="miss">What this tool knows an empty result to mean, as a sentence without its end.</param>
+    private static string FilterVerdict(int? filesMatchingWithoutFilters, string subject, string miss) =>
         filesMatchingWithoutFilters switch
         {
             > 0 => $"The {subject} does match in {ToolReply.HiddenByFilters(filesMatchingWithoutFilters.Value)}",
-            0 => "Nothing matches anywhere in the project, with or without your filters. ",
-            _ => $"Nothing in the project matches this {subject}; no filters narrowed the search. "
+            0 => $"{miss}, with or without your filters. ",
+            _ => $"{miss}; no filters narrowed the search, which spanned every file. "
         };
 
     private static string Format(GrepRequest request, GrepResult result)
@@ -242,8 +251,12 @@ internal sealed class SearchTools(
 
     private static string NoReferences(string symbol, ReferenceResult result)
     {
-        var text = new StringBuilder($"Nothing in this project spells \"{symbol}\". ");
-        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "name"));
+        // The opening says only that this answer is empty. That nothing in the project spells the name is
+        // the stronger claim and belongs to the verdict, which is the one place that knows whether the
+        // filters were what emptied it.
+        var text = new StringBuilder($"No references to \"{symbol}\". ");
+        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "name",
+            "Nothing in this project spells it"));
         // The spelling hint names a mechanism the verdict does not, so it follows every miss the filters
         // do not already explain.
         if (result.FilesMatchingWithoutFilters is not > 0)
@@ -532,12 +545,15 @@ internal sealed class SearchTools(
     private static string NoValues(MatchListRequest request, MatchListResult result)
     {
         var text = new StringBuilder($"No matches for \"{request.Query}\". ");
-        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "pattern"));
+        // An empty capture value is dropped before the counting, so a pattern that matched every line with
+        // an empty group is indistinguishable here from one that matched nothing. The miss is stated as
+        // both and neither as certain: naming the group alone sends the caller off fixing a parenthesis
+        // that was never wrong, and naming the pattern alone denies a match that may have happened.
+        string miss = string.Create(CultureInfo.InvariantCulture,
+            $"The pattern matched nothing{(request.Group > 0 ? $", or matched but capture group {request.Group} was always empty" : "")}");
+        text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "pattern", miss));
         if (result.FilesMatchingWithoutFilters is not > 0)
-            // Do not imply the group is at fault: the pattern may simply match nothing, and saying
-            // otherwise sends the caller off fixing a parenthesis that was never wrong.
-            text.Append(CultureInfo.InvariantCulture,
-                $"{(request.Group > 0 ? $"It may also have matched with capture group {request.Group} always empty. " : "")}Try the same pattern with grep to see whether it matches at all.");
+            text.Append("Try the same pattern with grep to see whether it matches at all.");
         return text.ToString();
     }
 

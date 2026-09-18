@@ -102,32 +102,36 @@ public sealed class GrepTests : IDisposable
         string unfiltered = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "unicorn" });
         Assert.StartsWith("No matches", unfiltered);
         Assert.DoesNotContain("outside your", unfiltered);
-        Assert.Contains("no filters narrowed the search", unfiltered);
+        Assert.Contains("no filters narrowed the search, which spanned every file.", unfiltered);
     }
 
     /// <summary>
-    ///     The miss that knows the most: nothing narrowed the search, so the absence is the whole
-    ///     project's and the reply says so before any engine hint (#87). A hint survives only where it
-    ///     names a mechanism that sentence does not.
+    ///     The miss that knows the most: nothing hid a file from it, so the reply says what it searched
+    ///     before falling back to any engine hint (#87). A hint survives only where it names a mechanism
+    ///     that sentence does not.
     /// </summary>
     [Fact]
-    public async Task An_unfiltered_miss_says_the_project_holds_no_match_at_all()
+    public async Task An_unfiltered_miss_says_it_searched_the_whole_project()
     {
         await using var client = await StartAsync(SearchEngine.Substring);
 
         string regex = await GrepAsync(client,
             new Dictionary<string, object?> { ["query"] = "EKLfsBewKto", ["regex"] = true });
-        Assert.Contains("Nothing in the project matches this pattern; no filters narrowed the search.", regex);
+        Assert.Contains(
+            "Nothing matches anywhere in the project; no filters narrowed the search, which spanned every file.",
+            regex);
         Assert.DoesNotContain("Try a looser pattern", regex);
         Assert.Contains("try a shorter fragment", regex);
 
+        // wholeWord narrows a search without filtering a file out of it, so the scope sentence and the
+        // hint that names it must not contradict each other.
         string wholeWord = await GrepAsync(client,
             new Dictionary<string, object?> { ["query"] = "EKLfsBewKto", ["regex"] = true, ["wholeWord"] = true });
-        Assert.Contains("no filters narrowed the search", wholeWord);
+        Assert.Contains("no filters narrowed the search, which spanned every file.", wholeWord);
         Assert.Contains("wholeWord=true", wholeWord);
 
         string text = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "EKLfsBewKto" });
-        Assert.Contains("no filters narrowed the search", text);
+        Assert.Contains("no filters narrowed the search, which spanned every file.", text);
         Assert.Contains("Retry with regex=true", text);
 
         // A filtered miss is a different fact and keeps its own sentence: the filters were part of it.

@@ -102,10 +102,42 @@ public sealed class MatchListTests : IDisposable
         Assert.Contains("does match in", hidden);
         Assert.Contains("outside your filters", hidden);
 
+        // Asserted as the whole sentence, not as an absence: a reply that stopped saying what it
+        // searched would still hold "does not contain 'outside your'" (#87).
         string nowhere = await ListAsync(client, new Dictionary<string, object?> { ["query"] = "Unicorn\\w+" });
         Assert.StartsWith("No matches", nowhere);
         Assert.DoesNotContain("outside your", nowhere);
+        Assert.Contains("no filters narrowed the search, which spanned every file.", nowhere);
         Assert.Contains("Try the same pattern with grep", nowhere);
+    }
+
+    /// <summary>
+    ///     An empty capture group is dropped before the grouping, so a pattern that matched every line
+    ///     with an empty group comes back exactly as one that matched nothing. The reply may not pick
+    ///     one of the two: the caller would go and fix whichever it named (#87).
+    /// </summary>
+    [Fact]
+    public async Task A_pattern_whose_group_is_always_empty_is_not_reported_as_matching_nothing()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        // The same pattern through grep, so the case is the real one: it does match, and only the
+        // group is empty. Without this the assertions below would also hold for a pattern matching
+        // nothing, which is the case they exist to tell apart.
+        string matching = await TestHost.CallAsync(client, "grep",
+            new Dictionary<string, object?> { ["query"] = "Status\\.(x*)Open", ["regex"] = true });
+        Assert.Contains("files match in total", matching);
+
+        string text = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "Status\\.(x*)Open", ["group"] = 1 });
+
+        Assert.StartsWith("No matches", text);
+        // Both halves of the disjunction, and neither as certain: this call is the case where the
+        // second half is the true one.
+        Assert.Contains(
+            "The pattern matched nothing, or matched but capture group 1 was always empty; no filters narrowed the search, which spanned every file.",
+            text);
+        Assert.Contains("Try the same pattern with grep", text);
     }
 
     [Fact]
