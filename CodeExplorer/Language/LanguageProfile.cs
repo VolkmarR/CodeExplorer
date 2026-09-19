@@ -216,11 +216,27 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     public ImportPathRules ImportPaths { get; init; } = ImportPathRules.AsWritten;
 
     /// <summary>
-    ///     Words that may introduce a member declaration. Keeping the list short and boring is the
-    ///     point: a modifier this does not know costs an unplaced reference, while one it invents
-    ///     costs a call reported as a declaration.
+    ///     Words that may introduce a member declaration — what a declaration shape is built from.
+    ///     Keeping the list short and boring is the point: a modifier this does not know costs an
+    ///     unplaced reference, while one it invents costs a call reported as a declaration.
+    ///     This says what introduces a <em>name</em> and nothing about scope; <see cref="ScopeModifiers" />
+    ///     is the second, narrower question (ADR-0008).
     /// </summary>
     public IReadOnlyList<string> DeclarationModifiers { get; init; } = [];
+
+    /// <summary>
+    ///     The subset of <see cref="DeclarationModifiers" /> that also opens a scope — what a reference
+    ///     below the line may be labelled with. Empty means every modifier does, which is what a
+    ///     profile with nothing to distinguish means and what every profile meant before there were
+    ///     two lists.
+    ///     Two lists because one could not answer both questions (#83). X#'s <c>define</c> introduces
+    ///     a name and opens nothing, so with a single list it had to be left out and a file of nothing
+    ///     but named constants declared nothing at all; the C family's <c>const</c> was never left out
+    ///     and every reference under a local <c>const int Max = 10;</c> was labelled <c>Max</c> instead
+    ///     of with the method. A modifier listed here and not above is ignored: the narrower list is
+    ///     read as a filter on the wider one and never as a way to add a shape.
+    /// </summary>
+    public IReadOnlyList<string> ScopeModifiers { get; init; } = [];
 
     /// <summary>
     ///     Words that may follow a modifier and are never the type of a member being declared, so a

@@ -231,7 +231,19 @@ public sealed record ImportsOnLine(IReadOnlyList<ImportedName> Imports, string? 
 ///     <c>implementation</c> line labelled a declaration is a guess reported as a fact, which is the
 ///     one failure this module is written to avoid.
 /// </summary>
-public sealed record Declared(string? Type, string? Member, DeclarationRole? Role);
+public sealed record Declared(string? Type, string? Member, DeclarationRole? Role)
+{
+    /// <summary>
+    ///     Whether this declaration opens a scope the lines below it sit inside, which is a second
+    ///     question and not the same one (#83, ADR-0008). A routine and a type open one; a named
+    ///     constant, a field and a variable introduce a name and open nothing, so a reference under an
+    ///     X# <c>define</c> or a C# <c>const int Max = 10;</c> belongs to the routine around it and
+    ///     never to the constant.
+    ///     True by default, because that is what a profile with one modifier list says and what every
+    ///     profile said before there were two.
+    /// </summary>
+    public bool OpensScope { get; init; } = true;
+}
 
 /// <summary>
 ///     Everything this server knows about one language, as questions rather than as tables. This is
