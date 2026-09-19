@@ -31,8 +31,12 @@ public sealed record FileRead(
 /// <summary>The entries of a read, in the order they were asked for.</summary>
 public sealed record ReadResult(IReadOnlyList<FileRead> Files) : Outcome;
 
-/// <summary>Everything a glob asks for. The limit is clamped to <see cref="IndexReader.MaxFiles" />.</summary>
-public sealed record GlobRequest(string Glob, string? Repository, int Limit);
+/// <summary>
+///     Everything a glob asks for. The limit is clamped to <see cref="IndexReader.MaxFiles" />, and is
+///     the size of a page: <see cref="Page" /> walks a match too wide to read at once. An agent asks
+///     for one page of a limit it chose and reads the total; the operator's view walks them.
+/// </summary>
+public sealed record GlobRequest(string Glob, string? Repository, int Limit, int Page = 1);
 
 /// <summary>
 ///     The files a glob matched, within <see cref="Repository" /> when one was named. An empty answer
@@ -46,7 +50,8 @@ public sealed record GlobListing(
     int Total,
     IReadOnlyList<IndexedFile> Files,
     int? MatchesInOtherRepositories,
-    IReadOnlyList<IndexedRepository> Repositories) : Outcome;
+    IReadOnlyList<IndexedRepository> Repositories,
+    int Page = 1) : Outcome;
 
 /// <summary>Everything a tree listing asks for: a directory, blank for the project level, and a depth.</summary>
 public sealed record TreeRequest(string Path, int Depth);
@@ -158,9 +163,10 @@ public sealed class FileQueries(ProjectIndexes indexes)
 
         return IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
         {
-            var result = await index.GlobAsync(pattern, request.Limit, token);
+            int page = Math.Max(1, request.Page);
+            var result = await index.GlobAsync(pattern, request.Limit, (page - 1) * request.Limit, token);
             return new GlobListing(pattern, index.Repository, result.Total, result.Files,
-                result.MatchesInOtherRepositories, await index.RepositoriesAsync(token));
+                result.MatchesInOtherRepositories, await index.RepositoriesAsync(token), page);
         }, cancellationToken);
     }
 

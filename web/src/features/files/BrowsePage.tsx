@@ -45,8 +45,9 @@ export function BrowsePage() {
                   to="/projects/$project/files"
                   params={{ project }}
                   // A glob that finds everything, so the tab lands on a listing rather than on the
-                  // tree it is supposed to be the alternative to.
-                  search={{ ...search, glob: search.glob === '' ? '*' : search.glob }}
+                  // tree it is supposed to be the alternative to — at its first page, because
+                  // arriving from the tree is arriving at a listing not yet walked.
+                  search={{ ...search, glob: search.glob === '' ? '*' : search.glob, page: 1 }}
                 >
                   By glob
                 </Link>

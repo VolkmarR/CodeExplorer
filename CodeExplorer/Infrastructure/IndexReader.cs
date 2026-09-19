@@ -593,10 +593,14 @@ public sealed class IndexReader : IDisposable
     ///     Case-insensitive <c>GLOB</c> over the qualified path, within <see cref="Repository" /> when
     ///     one was resolved. The window count rides along with the rows so one statement yields both
     ///     the total and the page. <paramref name="limit" /> is clamped to <see cref="MaxFiles" />.
+    ///     <paramref name="skip" /> walks the same ordering: the sort is on the qualified path, which
+    ///     is unique, so a row cannot sit on two pages or fall between them.
     /// </summary>
-    public async Task<GlobResult> GlobAsync(string glob, int limit, CancellationToken cancellationToken)
+    public async Task<GlobResult> GlobAsync(string glob, int limit, int skip,
+        CancellationToken cancellationToken)
     {
         limit = Math.Clamp(limit, 1, MaxFiles);
+        skip = Math.Max(skip, 0);
         var parameters = new List<DuckDBParameter> { new("g", glob.ToLowerInvariant()) };
         string scope = "";
         if (Repository is not null)
@@ -612,7 +616,7 @@ public sealed class IndexReader : IDisposable
                                                {FileSource}
                                                WHERE lower(f.qualified_path) GLOB $g{scope}
                                                ORDER BY f.qualified_path
-                                               LIMIT {limit}
+                                               LIMIT {limit} OFFSET {skip}
                                                """, parameters))
         using (var reader = await command.ReaderAsync(cancellationToken))
         {
@@ -621,6 +625,19 @@ public sealed class IndexReader : IDisposable
                 files.Add(ReadFile(reader));
                 total = (int)reader.Int64("total");
             }
+        }
+
+        // The window count rides on the rows, so a page past the end carries none — and a total of
+        // zero there would read as "nothing matched", which is the opposite of "you walked past the
+        // last page". Counted separately only in that case, so the common answer stays one statement.
+        if (files.Count == 0 && skip > 0)
+        {
+            using var command = Connection.Query($"""
+                                                  SELECT count(*)
+                                                  {FileSource}
+                                                  WHERE lower(f.qualified_path) GLOB $g{scope}
+                                                  """, parameters);
+            total = Convert.ToInt32(await command.ScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
         }
 
         int? elsewhere = null;

@@ -173,9 +173,11 @@ internal sealed record FileListEntry(
 
 /// <summary>
 ///     A page of a listing. <paramref name="Total" /> counts every match and <paramref name="Files" />
-///     the first <c>limit</c> of them, so the view can say how much it is not showing.
+///     holds one page of them, so the view can both page and say how much it is not showing.
+///     <paramref name="PageSize" /> is echoed rather than inferred from the row count: the last page
+///     is short, and a view dividing by what it received would lose a page at the end.
 /// </summary>
-internal sealed record FileListResponse(int Total, IReadOnlyList<FileListEntry> Files);
+internal sealed record FileListResponse(int Total, int Page, int PageSize, IReadOnlyList<FileListEntry> Files);
 
 /// <summary>
 ///     One row of a tree listing. <paramref name="Files" /> is null for a file and counts everything
@@ -208,6 +210,14 @@ internal sealed record TreeResponse(
 /// </summary>
 internal static class SearchEndpoints
 {
+    /// <summary>
+    ///     Files in one page of a listing, where the client names none. Fifty rows is about a screen
+    ///     and a half of the table the browse view draws, so the page below the fold is short enough
+    ///     to be worth scrolling rather than a second page nobody asked for. A glob over a large
+    ///     project matches thousands, and every row of them rendered at once is what this replaces.
+    /// </summary>
+    private const int DefaultFilePageSize = 50;
+
     public static void MapSearch(this RouteGroupBuilder api)
     {
         // The project is bound from the route (BoundProject), so an unknown slug is a 404 before the
@@ -227,12 +237,15 @@ internal static class SearchEndpoints
                 new GrepRequest(q, regex, caseSensitive, path, Extension: extension, Page: page,
                     PageSize: pageSize), ct), Results.Ok));
 
+        // A page and not the whole match: a glob over a large project matches thousands of files, and
+        // the view was rendering every row of them. The page size is the view's, so the API answers
+        // what was asked rather than a ceiling the client then has to live within.
         project.MapGet("/files",
             async (Project project, FileQueries files, CancellationToken ct, string glob = "*",
-                    string? repository = null) =>
+                    string? repository = null, int page = 1, int pageSize = DefaultFilePageSize) =>
                 Answer<GlobListing>(
-                    await files.GlobAsync(project.Slug, new GlobRequest(glob, repository, IndexReader.MaxFiles), ct),
-                    FileList));
+                    await files.GlobAsync(project.Slug, new GlobRequest(glob, repository, pageSize, page), ct),
+                    listing => FileList(listing, pageSize)));
 
         project.MapGet("/tree",
             async (Project project, FileQueries files, CancellationToken ct, string path = "") =>
@@ -364,8 +377,8 @@ internal static class SearchEndpoints
                 .Select(f => new CommitFileResponse(f.Path, f.ChangeKind, f.Added, f.Deleted, f.QualifiedPath))
                 .ToList()));
 
-    private static IResult FileList(GlobListing listing) =>
-        Results.Ok(new FileListResponse(listing.Total,
+    private static IResult FileList(GlobListing listing, int pageSize) =>
+        Results.Ok(new FileListResponse(listing.Total, listing.Page, pageSize,
             listing.Files
                 .Select(f => new FileListEntry(f.QualifiedPath, f.RepositorySlug, f.LineCount, f.SizeBytes,
                     f.SkipReason))

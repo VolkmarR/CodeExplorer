@@ -73,7 +73,7 @@ export function treeQuery(project: string, path: string) {
 /** The listing behind the browse view, keyed under the project like everything else read from it. */
 export function browseQuery(project: string, parameters: BrowseParameters) {
   return queryOptions({
-    queryFn: () => api.browse(project, parameters.glob, parameters.repository),
+    queryFn: () => api.browse(project, parameters.glob, parameters.page, parameters.repository),
     queryKey: [...projectKey(project), 'browse', parameters],
   })
 }
