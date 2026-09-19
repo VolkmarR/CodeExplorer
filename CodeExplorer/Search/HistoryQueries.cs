@@ -177,7 +177,14 @@ public sealed record BlameAnswer(
 ///     <see cref="Depth" /> rolls the ranking up to the directories that many segments beneath
 ///     <see cref="Directory" />; null ranks files, which is what every surface but the tool asks for.
 /// </summary>
-public sealed record ChurnRequest(string? Directory, int Days, int Limit, int? Depth = null);
+/// <remarks>
+///     <c>Exclude</c> is the comma-separated path terms every other filtered search here takes, and a
+///     ranking needs them more than a search does: a machine-authored commit counts exactly like a
+///     hand-written one, so regenerated output, a mechanical version bump or a bulk rename outranks
+///     the code that drives it (#117).
+/// </remarks>
+public sealed record ChurnRequest(string? Directory, int Days, int Limit, int? Depth = null,
+    string? Exclude = null);
 
 /// <summary>
 ///     The most-changed files of a window, and everything needed to say what the ranking does not
@@ -192,6 +199,9 @@ public sealed record ChurnRequest(string? Directory, int Days, int Limit, int? D
 ///     <see cref="Depth" /> is the depth the rows were rolled up to, or null where they are files. It
 ///     is carried rather than inferred from the request, because what a reply calls its rows has to be
 ///     what the query grouped them by.
+///     <see cref="Hidden" /> is how many paths the <c>exclude</c> terms kept out, zero where there were
+///     none. A filtered ranking reads exactly like an unfiltered one, so the number is carried and said
+///     rather than left for the caller to remember it asked.
 /// </summary>
 public sealed record ChurnAnswer(
     string ScopeSpelled,
@@ -201,7 +211,8 @@ public sealed record ChurnAnswer(
     HistoryCoverage Coverage,
     // Not defaulted: an answer always knows its own grain, and a default is a later construction
     // quietly calling a ranking of directories a ranking of files.
-    int? Depth) : Outcome;
+    int? Depth,
+    int Hidden = 0) : Outcome;
 
 /// <summary>Everything a co-change ranking asks for.</summary>
 public sealed record CoChangeRequest(string Path, int Days, int Limit);
@@ -478,9 +489,13 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                     ? []
                     : depth is { } rollup
                         ? await IndexQueries.RankDirectoriesAsync(index.Connection, paths, window, repositorySlug,
-                            directoryInRepository, rollup, limit, token)
+                            directoryInRepository, rollup, request.Exclude, limit, token)
                         : await IndexQueries.RankAsync(index.Connection, paths, window, repositorySlug,
-                            directoryInRepository, limit, token);
+                            directoryInRepository, request.Exclude, limit, token);
+                int hidden = window is null
+                    ? 0
+                    : await IndexQueries.HiddenByExcludeAsync(index.Connection, paths, window, repositorySlug,
+                        directoryInRepository, request.Exclude, token);
 
                 // A ranking of a scope that does not exist is the emptiest kind of empty answer, and a
                 // path prefixed with the project's slug is the commonest way to ask for one (#111). The
@@ -490,7 +505,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                       && await index.DirectorySlugPrefixAdviceAsync(wanted, token) is { } slugged)
                     return new Problem(slugged);
 
-                return new ChurnAnswer(spelled, hasHistory, window, ranked, coverage, depth);
+                return new ChurnAnswer(spelled, hasHistory, window, ranked, coverage, depth, hidden);
             }, cancellationToken);
         if (outcome is ChurnAnswer answer) recording.Matched(Engine, answer.Files.Count, 0);
         else recording.Problem();

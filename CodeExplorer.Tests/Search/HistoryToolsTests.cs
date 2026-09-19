@@ -1384,6 +1384,120 @@ public sealed class HistoryToolsTests : IDisposable
     private static string[] Paths(params string[] paths) => paths;
 
     /// <summary>
+    ///     A ranking counts machine-authored commits exactly like hand-written ones, so a directory of
+    ///     regenerated output outranks the code that drives it (#117). No suffix list is hard-coded
+    ///     anywhere, so the filter is the caller's and the reply has to say it ran.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_takes_an_exclude_filter_and_says_how_much_it_hid()
+    {
+        await BuildGeneratedProjectAsync("generated");
+        await using var client = await _host.ConnectAsync("generated");
+
+        string unfiltered = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30 });
+        // The distortion, before anything is done about it: the generated file wins.
+        Assert.True(unfiltered.IndexOf("one/src/Model.g.cs", StringComparison.Ordinal)
+                    < unfiltered.IndexOf("one/src/Service.cs", StringComparison.Ordinal));
+        Assert.DoesNotContain("exclude hid", unfiltered, StringComparison.Ordinal);
+
+        string filtered = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["exclude"] = "*.g.cs,/migrations/" });
+        Assert.DoesNotContain("Model.g.cs", filtered, StringComparison.Ordinal);
+        Assert.DoesNotContain("migrations", filtered, StringComparison.Ordinal);
+        Assert.Contains("one/src/Service.cs", filtered, StringComparison.Ordinal);
+        // An excluded ranking must never read as an unfiltered one.
+        Assert.Contains("exclude hid 2 paths, so this is a filtered ranking", filtered,
+            StringComparison.Ordinal);
+
+        // The rollup reads the same scope, so it hides the same files rather than answering differently.
+        string rolled = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["depth"] = 2, ["exclude"] = "/migrations/" });
+        Assert.DoesNotContain("one/migrations", rolled, StringComparison.Ordinal);
+        Assert.Contains("exclude hid 1 path", rolled, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A directory scope is a name and not a pattern (#122). `[slug]`, `[id]` and `[...rest]` are
+    ///     route directories in every file-system router, and each is a character class to GLOB — so
+    ///     the scope used to answer with whatever the sibling `app/s` held and call it the churn of
+    ///     `app/[slug]`. The file ranking and the rollup read one scope, so both are asked.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_reads_a_bracketed_directory_scope_as_a_name()
+    {
+        await BuildRoutedProjectAsync("routed");
+        await using var client = await _host.ConnectAsync("routed");
+
+        string scoped = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["directory"] = "one/app/[slug]" });
+        Assert.Contains("one/app/[slug]/page.tsx", scoped, StringComparison.Ordinal);
+        // The character class `[slug]` matches `s`, `l`, `u` and `g`, so this is the sibling it took in.
+        Assert.DoesNotContain("one/app/s/", scoped, StringComparison.Ordinal);
+
+        string rolled = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?>
+                { ["days"] = 30, ["directory"] = "one/app/[slug]", ["depth"] = 1 });
+        Assert.DoesNotContain("one/app/s", rolled, StringComparison.Ordinal);
+    }
+
+    /// <summary>A repository whose regenerated output and migrations outrank its hand-written code.</summary>
+    private async Task BuildGeneratedProjectAsync(string project)
+    {
+        const int tenDays = 10 * 24 * 60;
+        string name = project + "-one";
+        string source = _host.CreateEmptyGitRepository(name);
+        _host.CommitToGitRepositoryAs(name,
+            new Dictionary<string, string>
+            {
+                ["src/Service.cs"] = "a\n",
+                ["src/Model.g.cs"] = "g\n",
+                ["migrations/0001.sql"] = "create table t (id integer);\n"
+            },
+            "Add the module", "Ada", "ada@example.invalid", tenDays);
+        // Two regenerations and one migration against one hand-written change: the shape the ranking
+        // gets wrong, and it gets it wrong by counting correctly.
+        for (int i = 1; i <= 3; i++)
+            _host.CommitToGitRepositoryAs(name,
+                new Dictionary<string, string>
+                {
+                    ["src/Model.g.cs"] = $"g{i}\n",
+                    ["migrations/0001.sql"] = $"create table t (id integer, c{i} integer);\n"
+                },
+                "Regenerate", "Ada", "ada@example.invalid", tenDays + i);
+        _host.CommitToGitRepositoryAs(name, new Dictionary<string, string> { ["src/Service.cs"] = "a2\n" },
+            "Change the service", "Grace", "grace@example.invalid", tenDays + 4);
+
+        await _host.CreateProjectAsync(project);
+        await _host.AddRepositoryAsync(project, "one", source);
+        await _host.RefreshAsync(project);
+    }
+
+    /// <summary>A repository with a route directory and the sibling its character class would match.</summary>
+    private async Task BuildRoutedProjectAsync(string project)
+    {
+        const int tenDays = 10 * 24 * 60;
+        string name = project + "-one";
+        string source = _host.CreateEmptyGitRepository(name);
+        _host.CommitToGitRepositoryAs(name,
+            new Dictionary<string, string>
+            {
+                ["app/[slug]/page.tsx"] = "export default function Page() {}\n",
+                ["app/s/page.tsx"] = "export default function S() {}\n"
+            },
+            "Add the routes", "Ada", "ada@example.invalid", tenDays);
+        // The sibling churns harder, so a scope that took it in would rank it first and look right.
+        for (int i = 1; i <= 3; i++)
+            _host.CommitToGitRepositoryAs(name,
+                new Dictionary<string, string> { ["app/s/page.tsx"] = $"export default function S{i}() {{}}\n" },
+                "Work on the sibling", "Grace", "grace@example.invalid", tenDays + i);
+
+        await _host.CreateProjectAsync(project);
+        await _host.AddRepositoryAsync(project, "one", source);
+        await _host.RefreshAsync(project);
+    }
+
+    /// <summary>
     ///     A repository with something to rank: one old commit, then four ten days later that touch
     ///     three files unequally, then one that deletes a fourth. Every date is decades before today, so
     ///     a window measured from the clock rather than from the history would rank nothing at all.
