@@ -47,6 +47,14 @@ public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, lon
     /// </summary>
     public const string IngestPhase = "Reading the repositories into the shadow index";
 
+    /// <summary>
+    ///     The moment the refresh has the rebuild slot and has not yet reached the first repository.
+    ///     It lasts milliseconds and was a literal at its call site while the only way to see it was
+    ///     to poll inside them; it is a constant now that the timeline keeps what each phase cost
+    ///     (#92) and a reader finds it on every finished refresh.
+    /// </summary>
+    public const string StartPhase = "Starting";
+
     public const string HistoryPhase = "Importing history and attributing lines";
 
     public const string AttributionPhase = "Writing attribution onto the lines";
