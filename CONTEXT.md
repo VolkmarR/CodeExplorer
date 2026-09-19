@@ -101,6 +101,9 @@ How much a file moved over a span of history: the commits that touched it and th
 and removed. It measures where work happened and not where the logic changed — a reformat is churn,
 the same way it is an attribution — so it answers "what is this project busy with" and never "what
 is unstable". A path that churned and is no longer at HEAD is churn that happened.
+A directory's churn is the distinct commits that touched anything beneath it, never the sum over the
+files in it: one commit touching forty of them changed that directory once, and the sum would say
+forty — wrong in the direction that decides which module looks like it is moving.
 _Avoid_: Hotness, activity, volatility, code age
 
 **Co-Change**:

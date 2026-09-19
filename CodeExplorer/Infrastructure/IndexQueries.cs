@@ -94,28 +94,7 @@ internal static class IndexQueries
         HistoryWindow window, string? repositorySlug, string? directoryInRepository, int limit,
         CancellationToken cancellationToken)
     {
-        // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
-        // WindowAsync reads it that way: it keeps the comparison off the session time zone, and it
-        // keeps a DateTimeOffset out of the driver's parameter mapping entirely.
-        var parameters = new List<DuckDBParameter>
-        {
-            new("since", window.Since.ToUnixTimeSeconds()),
-            new("until", window.Until.ToUnixTimeSeconds())
-        };
-        var conditions = new List<string> { "epoch(c.authored_at) BETWEEN $since AND $until" };
-        if (repositorySlug is not null)
-        {
-            conditions.Add("c.repo_slug = $r");
-            parameters.Add(new DuckDBParameter("r", repositorySlug));
-        }
-
-        if (!string.IsNullOrEmpty(directoryInRepository))
-        {
-            // GLOB and not LIKE: it is this project's one glob dialect (ADR-0004, CODING_STANDARDS),
-            // and `*` crosses `/` in it, so a single pattern covers every depth beneath the directory.
-            conditions.Add("cf.path GLOB $d");
-            parameters.Add(new DuckDBParameter("d", directoryInRepository.TrimEnd('/') + "/*"));
-        }
+        var (conditions, parameters) = ChurnScope(window, repositorySlug, directoryInRepository);
 
         // Ranked first, and only then asked which of the survivors still exist. Resolving `at_head`
         // inside the aggregate would join `files` — the largest table here after `lines` — against
@@ -162,10 +141,141 @@ internal static class IndexQueries
     }
 
     /// <summary>
-    ///     Whether a path a ranking returned is still a file at HEAD, as a SQL fragment over a
-    ///     <c>ranked</c> CTE with a <c>path</c> column. Written once because both rankings in this
-    ///     system rank paths a later commit deleted or renamed away, and a change to how "still there"
-    ///     is recognised has to reach both or the two answer differently about one path.
+    ///     The same window's churn rolled up to the directories <paramref name="depth" /> segments
+    ///     beneath the scope, most commits first. A rollup rather than a ranking the caller sums
+    ///     itself, because a directory's churn is distinct commits and not the sum over its files
+    ///     (CONTEXT.md, Churn) — the two disagree by however many files one commit touched.
+    ///     A path with fewer segments than the depth is its own row, which keeps a file sitting
+    ///     directly in the scope counted somewhere and named as what it is.
+    /// </summary>
+    /// <param name="connection">Bound to the index being ranked.</param>
+    /// <param name="paths">How this project names a file (ADR-0006).</param>
+    /// <param name="window">The span to count over, inclusive at both ends.</param>
+    /// <param name="repositorySlug">One repository, or null for every one in the project.</param>
+    /// <param name="directoryInRepository">A directory inside that repository, or null for all of it.</param>
+    /// <param name="depth">
+    ///     Segments beneath the scope to group by, at least one. In a multi-repository project scoped
+    ///     to nothing, the first segment of a qualified path is the repository, so one level of the
+    ///     depth is spent there and a depth of one ranks repositories.
+    /// </param>
+    /// <param name="limit">How many directories to return.</param>
+    /// <param name="cancellationToken">Threaded through to the command.</param>
+    public static async Task<IReadOnlyList<ChurnedFile>> RankDirectoriesAsync(DuckDBConnection connection,
+        ProjectPaths paths, HistoryWindow window, string? repositorySlug, string? directoryInRepository, int depth,
+        int limit, CancellationToken cancellationToken)
+    {
+        var (conditions, parameters) = ChurnScope(window, repositorySlug, directoryInRepository);
+        string prefix = directoryInRepository?.TrimEnd('/') ?? "";
+        parameters.Add(new DuckDBParameter("p", prefix));
+        // The repository slug leads a qualified path only where the project puts it there (ADR-0006),
+        // and where it does it is the first segment an agent counts. Spending a level on it here is
+        // what makes one depth mean one thing: the first N segments of the path the agent was shown.
+        int beneathScope = depth - (repositorySlug is null && !paths.SingleRepository ? 1 : 0);
+        parameters.Add(new DuckDBParameter("n", Math.Max(beneathScope, 0)));
+
+        using var command = connection.Query($"""
+                                              WITH touched AS (
+                                                  SELECT c.repo_slug, cf.commit_id, cf.added, cf.deleted,
+                                                         -- The scope is already matched by the WHERE
+                                                         -- clause, so every path here starts with it;
+                                                         -- +2 steps over the prefix and its slash.
+                                                         string_split(CASE WHEN $p = '' THEN cf.path
+                                                                           ELSE substr(cf.path, length($p) + 2)
+                                                                      END, '/') AS segments
+                                                  FROM commit_files cf
+                                                  JOIN commits c USING (commit_id)
+                                                  WHERE {string.Join(" AND ", conditions)}
+                                              ),
+                                              grouped AS (
+                                                  SELECT repo_slug,
+                                                         -- list_slice past the end returns the whole
+                                                         -- list, which is how a path shallower than the
+                                                         -- depth becomes its own row rather than none.
+                                                         array_to_string(list_slice(segments, 1, $n), '/') AS below,
+                                                         -- DISTINCT and not count(*): a commit that
+                                                         -- touched forty files under this directory
+                                                         -- changed this directory once.
+                                                         count(DISTINCT commit_id)::INTEGER AS commits,
+                                                         -- Cast for the reason RankAsync casts.
+                                                         sum(added)::BIGINT AS added,
+                                                         sum(deleted)::BIGINT AS deleted
+                                                  FROM touched
+                                                  GROUP BY repo_slug, below
+                                                  ORDER BY count(DISTINCT commit_id) DESC,
+                                                           sum(added) + sum(deleted) DESC, below
+                                                  -- Inlined rather than parameterised, and safe
+                                                  -- because it is an int the caller has already
+                                                  -- clamped; RankAsync inlines its own the same way.
+                                                  LIMIT {limit}
+                                              ),
+                                              ranked AS (
+                                                  SELECT grouped.* EXCLUDE (below),
+                                                         CASE WHEN $p = '' THEN below
+                                                              WHEN below = '' THEN $p
+                                                              ELSE $p || '/' || below
+                                                         END AS path
+                                                  FROM grouped
+                                              )
+                                              SELECT ranked.*,
+                                                     -- The empty path is the repository's own root,
+                                                     -- which is there as long as the repository is.
+                                                     (ranked.path = ''
+                                                      OR {AtHeadExists("ranked.repo_slug", true)}) AS at_head
+                                              FROM ranked
+                                              ORDER BY commits DESC, added + deleted DESC, path
+                                              """, parameters);
+        using var reader = await command.ReaderAsync(cancellationToken);
+        var directories = new List<ChurnedFile>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            string slug = reader.Text("repo_slug");
+            directories.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug, reader.Flag("at_head"),
+                reader.Int32("commits"), reader.Int64("added"), reader.Int64("deleted")));
+        }
+
+        return directories;
+    }
+
+    /// <summary>
+    ///     The window and the scope both rankings of churn count over, as conditions over
+    ///     <c>commit_files cf</c> joined to <c>commits c</c>. Written once because the file ranking and
+    ///     the directory rollup answer the same question at two grains, and a scope that meant
+    ///     something different in one of them would have the rollup disagree with the files under it.
+    /// </summary>
+    private static (List<string> Conditions, List<DuckDBParameter> Parameters) ChurnScope(HistoryWindow window,
+        string? repositorySlug, string? directoryInRepository)
+    {
+        // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
+        // WindowAsync reads it that way: it keeps the comparison off the session time zone, and it
+        // keeps a DateTimeOffset out of the driver's parameter mapping entirely.
+        var parameters = new List<DuckDBParameter>
+        {
+            new("since", window.Since.ToUnixTimeSeconds()),
+            new("until", window.Until.ToUnixTimeSeconds())
+        };
+        var conditions = new List<string> { "epoch(c.authored_at) BETWEEN $since AND $until" };
+        if (repositorySlug is not null)
+        {
+            conditions.Add("c.repo_slug = $r");
+            parameters.Add(new DuckDBParameter("r", repositorySlug));
+        }
+
+        if (!string.IsNullOrEmpty(directoryInRepository))
+        {
+            // GLOB and not LIKE: it is this project's one glob dialect (ADR-0004, CODING_STANDARDS),
+            // and `*` crosses `/` in it, so a single pattern covers every depth beneath the directory.
+            conditions.Add("cf.path GLOB $d");
+            parameters.Add(new DuckDBParameter("d", directoryInRepository.TrimEnd('/') + "/*"));
+        }
+
+        return (conditions, parameters);
+    }
+
+    /// <summary>
+    ///     Whether a path a ranking returned is still there at HEAD, as a SQL fragment over a
+    ///     <c>ranked</c> CTE with a <c>path</c> column. Written once because every ranking in this
+    ///     system ranks paths a later commit deleted or renamed away, and a change to how "still there"
+    ///     is recognised has to reach all of them or two answer differently about one path.
     ///     Always applied to what survived a LIMIT, never inside the aggregate that produced it, for
     ///     the reason <see cref="RankAsync" /> gives where it uses this.
     /// </summary>
@@ -173,12 +283,18 @@ internal static class IndexQueries
     ///     The SQL naming the repository to look in: a column of <c>ranked</c> where the ranking spans
     ///     several, a parameter where it is scoped to one.
     /// </param>
-    public static string AtHeadExists(string repositorySlug) =>
+    /// <param name="includingBeneath">
+    ///     True where the ranked path may be a directory, which is there at HEAD while anything under
+    ///     it is. The rollup asks it of rows that can be either — a row shallower than the depth it was
+    ///     grouped by is a file — so the two tests are or-ed rather than chosen between.
+    /// </param>
+    public static string AtHeadExists(string repositorySlug, bool includingBeneath = false) =>
         $"""
          EXISTS (SELECT 1
                  FROM files f JOIN repositories hr USING (repo_id)
                  WHERE hr.slug = {repositorySlug}
-                   AND f.path = ranked.path)
+                   AND (f.path = ranked.path
+                        {(includingBeneath ? "OR f.path GLOB ranked.path || '/*'" : "")}))
          """;
 
     /// <summary>

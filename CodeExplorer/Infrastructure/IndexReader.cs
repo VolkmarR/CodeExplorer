@@ -77,10 +77,12 @@ public sealed record AttributedBy(string Sha, string AuthorName, DateTimeOffset 
 public sealed record RecordedAuthor(string Name, string Email, long Commits, DateTimeOffset LastCommit);
 
 /// <summary>
-///     One file of a churn ranking: how many commits of the window touched it and what they did to
-///     it. <see cref="QualifiedPath" /> is how the project names that path (ADR-0006) and is always
+///     One row of a churn ranking: how many commits of the window touched it and what they did to
+///     it. The row is a file, or a directory where the ranking was rolled up to one — the same six
+///     numbers and the same mark either way, which is what lets one surface draw both.
+///     <see cref="QualifiedPath" /> is how the project names that path (ADR-0006) and is always
 ///     set, because a window ranks paths a later commit deleted or renamed away and those have to be
-///     named too; <see cref="AtHead" /> is what says whether there is still a file there to read.
+///     named too; <see cref="AtHead" /> is what says whether there is still something there to read.
 /// </summary>
 public sealed record ChurnedFile(
     string QualifiedPath,

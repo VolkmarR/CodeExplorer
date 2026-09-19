@@ -596,6 +596,102 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
+    ///     The rollup ranks directories, and a directory's count is the commits that touched anything
+    ///     beneath it — each once. The fixture's <c>src</c> holds three files whose own counts sum to
+    ///     seven across four commits, so a rollup that added its files up would say seven and fail here
+    ///     rather than happen to agree.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_rolls_up_to_directories_counting_each_commit_once()
+    {
+        await using var client = await ChurnAsync();
+        string reply = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["depth"] = 2 });
+
+        Assert.Contains("most-changed directories", reply, StringComparison.Ordinal);
+        // The window covers every commit of the fixture, so each directory's own total is known:
+        // src was touched by four of the five, docs and old by one each.
+        Assert.Contains("   4 commits  ", reply, StringComparison.Ordinal);
+        Assert.Contains("one/src\n", reply, StringComparison.Ordinal);
+        Assert.Contains("one/docs\n", reply, StringComparison.Ordinal);
+        Assert.Contains("one/old\n", reply, StringComparison.Ordinal);
+        // A rollup is a ranking of directories and nothing else: the files beneath them are what the
+        // caller calls again without `depth` to see.
+        Assert.DoesNotContain("Hot.cs", reply, StringComparison.Ordinal);
+        Assert.True(reply.IndexOf("one/src\n", StringComparison.Ordinal)
+                    < reply.IndexOf("one/docs\n", StringComparison.Ordinal));
+        // The dates are said for the rollup exactly as they are for the file ranking: the window ends
+        // at the newest recorded commit, and a stale index has to show as one either way.
+        Assert.Contains("the 30 days to the newest recorded commit", reply, StringComparison.Ordinal);
+        Assert.Contains("distinct commits", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     Depth counts segments beneath whatever scope the call already had, so `directory` and the
+    ///     rollup compose: one repository, rolled up to its own top level. Depth counted from the
+    ///     project root instead would answer a scoped call with the scope itself, one row of no use.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_counts_depth_beneath_the_directory_it_was_scoped_to()
+    {
+        await using var client = await ChurnAsync();
+        string reply = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["directory"] = "one", ["depth"] = 1 });
+
+        Assert.Contains("repository 'one'", reply, StringComparison.Ordinal);
+        Assert.Contains("one/src\n", reply, StringComparison.Ordinal);
+        Assert.Contains("one/docs\n", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("Note.md", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The first segment of a qualified path in a multi-repository project is the repository, so
+    ///     depth 1 there ranks repositories. It is the same rule and not a special case, and it is the
+    ///     answer to "which of these repositories is moving" in one call.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_rolled_up_to_the_first_segment_ranks_repositories()
+    {
+        await BuildChurnProjectAsync("rolled", withSecondRepository: true);
+        await using var client = await _host.ConnectAsync("rolled");
+
+        string reply = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["depth"] = 1 });
+
+        Assert.Contains("   5 commits  ", reply, StringComparison.Ordinal);
+        Assert.Contains("one\n", reply, StringComparison.Ordinal);
+        Assert.Contains("two\n", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("one/src", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A directory the window changed and HEAD no longer holds is ranked and marked, for the reason
+    ///     a file is: a module that was renamed away is exactly the churn somebody is looking for, and
+    ///     an unmarked row sends an agent to list a directory that is not there.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_marks_a_rolled_up_directory_that_is_no_longer_at_head()
+    {
+        string source = _host.CreateEmptyGitRepository("retired-one");
+        _host.CommitToGitRepositoryAs("retired-one",
+            new Dictionary<string, string> { ["legacy/Old.cs"] = "old\n", ["src/New.cs"] = "new\n" },
+            "Add both", "Ada", "ada@example.invalid", 0);
+        _host.RemoveInGitRepositoryAs("retired-one", ["legacy/Old.cs"], "Retire the legacy module", "Grace",
+            "grace@example.invalid", 1);
+
+        await _host.CreateProjectAsync("retired");
+        await _host.AddRepositoryAsync("retired", "one", source);
+        await _host.RefreshAsync("retired");
+        await using var client = await _host.ConnectAsync("retired");
+
+        string reply = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["depth"] = 2 });
+
+        Assert.Contains("one/legacy  (no longer at HEAD)", reply, StringComparison.Ordinal);
+        Assert.Contains("one/src\n", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     A path the window changed and HEAD no longer holds is ranked and marked. Leaving it out
     ///     would understate the churn of the area it was in; leaving it unmarked would send an agent to
     ///     read a file that is not there.
