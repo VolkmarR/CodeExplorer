@@ -112,6 +112,22 @@ Outside the image, `Index:ExtensionDirectory` is best left unset: DuckDB then us
 under the user profile, which is shared with every other DuckDB on the machine and is why a
 developer downloads the extension once rather than once per checkout.
 
+## Deploying it
+
+Two hosts are written up, and they are the same deployable with a different set of the settings above
+turned on:
+
+- [`docs/deployment/azure-container-apps.md`](docs/deployment/azure-container-apps.md) — the shape
+  ADR-0003 and ADR-0004 were written against: the image, Blob Storage and Key Vault, Entra, the
+  8 GiB ephemeral disk, and the cron job that warms a scale-to-zero replica from outside.
+- [`docs/deployment/iis-windows-server.md`](docs/deployment/iis-windows-server.md) — an entirely
+  on-premises install: publishing, the application pool settings DuckDB's one-process-per-file needs,
+  installing the `fts` extension for Windows, and where the Data Protection key ring lands when there
+  is no blob container to persist it to.
+
+Neither is covered by the tests, for the reason the Azure half of the settings above is not: nothing
+in them reaches an account or a server.
+
 ## Layout
 
 | Path                 | What it is                                                        |
@@ -120,6 +136,7 @@ developer downloads the extension once rather than once per checkout.
 | `CodeExplorer.Tests/`| xunit.v3 against a real DuckDB, mirroring those folders.           |
 | `web/`               | The operator UI. Outside the solution; builds into `wwwroot`.      |
 | `docs/adr/`          | The decisions the code follows from.                               |
+| `docs/deployment/`   | One guide per host: Azure Container Apps, IIS on Windows Server.   |
 | `Dockerfile`         | UI, API and the baked `fts` extension in one build.                |
 
 `CONTEXT.md` holds the vocabulary; `CODING_STANDARDS.md` holds the rules tooling cannot check.
