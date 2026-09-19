@@ -182,12 +182,84 @@ public sealed class LanguageAnalyzerTests
         Assert.NotEqual(ReferenceKind.Definition, Kind("sql", "   or status = 1", "status"));
 
     [Fact]
-    public void A_local_does_not_become_the_scope_everything_under_it_is_labelled_with()
+    public void A_local_introduces_a_name_and_does_not_become_the_scope_under_it()
     {
-        // `local`, `instance`, `var` and `const` introduce a name and not a scope. With them in the
-        // modifier list every reference below one was labelled with the local instead of the method.
-        Assert.Null(Declares("prg", "	local cLabel := self:Status").Value);
-        Assert.Null(Declares("pas", "  var Total: Integer;").Value);
+        // The conflation this test was written for, now removed (#83). `local`, `instance`, `define`
+        // and Delphi's `var` and `const` introduce a name and open no scope; one list answering both
+        // questions meant they could only be kept out of the scope map by being left unread, so an
+        // X# file of nothing but `define` lines declared nothing at all. Both halves are asserted
+        // here, because the name and the missing scope are the two things that used to be one.
+        var local = Declares("prg", "	local cLabel := self:Status").Value;
+        Assert.Equal("cLabel", local?.Member);
+        Assert.False(local?.OpensScope);
+
+        var total = Declares("pas", "  var Total: Integer;").Value;
+        Assert.Equal("Total", total?.Member);
+        Assert.False(total?.OpensScope);
+
+        var limit = Declares("pas", "  const Limit = 10;").Value;
+        Assert.Equal("Limit", limit?.Member);
+        Assert.False(limit?.OpensScope);
+    }
+
+    [Theory]
+    // X#'s named constants, which are three files of AcsLib on their own and read as declaring
+    // nothing until the two modifier sets came apart (#83, #71).
+    [InlineData("prg", "define FSEDIT_GET := 11", "FSEDIT_GET")]
+    [InlineData("prg", "define PD_ALLPAGES             := 0x00000000", "PD_ALLPAGES")]
+    [InlineData("prg", "instance cLabel as string", "cLabel")]
+    // The C family's, which were declarations before this and are still — and which were labelling
+    // every reference under a local with themselves while they were.
+    [InlineData("cs", "        const int Max = 10;", "Max")]
+    [InlineData("cs", "        readonly Span<int> s = stackalloc int[4];", "s")]
+    [InlineData("cs", "    private readonly ILogger _logger;", "_logger")]
+    [InlineData("cs", "    public event EventHandler Changed;", "Changed")]
+    public void A_name_a_modifier_introduces_without_opening_a_scope_is_still_a_declaration(
+        string extension, string line, string member)
+    {
+        var declared = Declares(extension, line).Value;
+        Assert.Equal(member, declared?.Member);
+        // …and is never what a reference below it is labelled with. One name-only modifier decides it
+        // whatever stands beside it: `private const string Pattern = "…";` declares a constant, and a
+        // rule that asked whether any modifier opened a scope would have answered on the `private`.
+        Assert.False(declared?.OpensScope);
+    }
+
+    [Theory]
+    [InlineData("cs", "    public void Advance(int n)")]
+    [InlineData("cs", "public class OrderService")]
+    [InlineData("prg", "method Advance(n as int) as void")]
+    [InlineData("pas", "procedure Advance(n: Integer);")]
+    [InlineData("sql", "create or replace function advance(n int)")]
+    // The SQL family names no scope list at all: its modifiers are the phrases that head a body, so
+    // the two questions have one answer there and the labels are what they were.
+    [InlineData("pkb", "CREATE OR REPLACE PROCEDURE Advance(n number) IS")]
+    [InlineData("pks", "create package body app.orders as")]
+    public void A_routine_or_a_type_opens_the_scope_the_lines_under_it_sit_in(string extension, string line) =>
+        Assert.True(Declares(extension, line).Value?.OpensScope);
+
+    [Fact]
+    public void A_profile_naming_one_modifier_set_reads_every_modifier_in_it_as_opening_a_scope()
+    {
+        // The back-compat half of #83: `ScopeModifiers` left empty means the two questions have one
+        // answer, which is what every profile said before there were two of them and what the SQL
+        // family, Delphi and the markup profiles still say.
+        var one = Analyzer(["let", "func"], []);
+        Assert.True(one.Declares(one.Start, "let Max = 10;").Value?.OpensScope);
+        Assert.True(one.Declares(one.Start, "func Advance(n)").Value?.OpensScope);
+
+        var two = Analyzer(["let", "func"], ["func"]);
+        Assert.Equal("Max", two.Declares(two.Start, "let Max = 10;").Value?.Member);
+        Assert.False(two.Declares(two.Start, "let Max = 10;").Value?.OpensScope);
+        Assert.True(two.Declares(two.Start, "func Advance(n)").Value?.OpensScope);
+        return;
+
+        static TextAnalyzer Analyzer(string[] modifiers, string[] scopes) =>
+            new(new LanguageProfile("Toy", ["toy"])
+            {
+                DeclarationModifiers = modifiers, ScopeModifiers = scopes,
+                DeclarationNamesFollowKeyword = true
+            });
     }
 
     [Theory]

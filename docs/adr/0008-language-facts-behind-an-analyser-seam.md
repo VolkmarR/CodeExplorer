@@ -113,11 +113,24 @@ reported as a right one. A doubtful form is left out.
 - **`IsGenerated` and `ImportOn` have no caller yet.** They are questions the seam has to answer for
   the import-edge and file-filter tickets to be callers of it rather than authors of a second copy;
   they are tested directly until then.
-- **A modifier list is also a scope list, so it holds only what opens a scope.** `local`, `instance`,
-  `var` and `const` introduce a name and not a scope; with them in, every reference below a
-  `local cLabel := …` was labelled with the local rather than with the method it sits in. For the
-  same reason SQL's `or replace` is one entry and not a bare `or`, which would have made the
-  continuation line of every `WHERE` clause read as a declaration.
+- **A modifier list says what introduces a name, and a second, narrower one says what opens a
+  scope.** One list could not answer both (#83). It was read twice — by the analyser to find
+  declarations, and transitively by `DeclarationScope` to decide which declaration a reference sits
+  inside — and `local`, `instance`, `define`, `var` and `const` are a yes to the first question and a
+  no to the second. With one list the only way to keep the second answer right was to leave them out
+  of the first, so every reference below a `local cLabel := …` was labelled with the method rather
+  than with the local, at the price of X# files that are nothing but `define` lines reporting that
+  they declare nothing at all. The C family never paid that price and got the wrong answer instead:
+  its list holds `const`, `readonly`, `val` and `let`, so a *local* `const int Max = 10;` matched the
+  member shape and every reference indented under it was labelled `Max`. The scope list is a subset
+  of the name list, which stops a profile naming a scope-opener no declaration shape matches, and a
+  profile that names no scope list keeps today's behaviour — the fail-safe direction, since
+  forgetting one costs the old label and not a language whose references quietly stop being placed.
+  The distinction rides on the answer, decided by the match that produced the name: `Declared` says
+  whether the line opens a scope, and `DeclarationScope` asks rather than reading a list, which is
+  the rule this whole seam is built on. For the same reason as the lists themselves, SQL's
+  `or replace` is one entry and not a bare `or`, which would have made the continuation line of every
+  `WHERE` clause read as a declaration.
 - **Keyword matching follows the profile's own case rule everywhere, not only in its patterns.**
   SQL, PL/SQL, X# and Delphi are case-insensitive and shout their keywords; an ordinal check beside
   a case-insensitive pattern made one line a declaration for the scope label and a call for the

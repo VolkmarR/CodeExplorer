@@ -75,6 +75,19 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     // examined, and an IReadOnlyList<string> there is an interface dispatch per opener per character —
     // which on a minified bundle, where the whole file is one line, is most of the time spent.
     private readonly string[] _declarationModifiers;
+
+    /// <summary>
+    ///     The modifiers that introduce a name and open no scope: what
+    ///     <see cref="LanguageProfile.DeclarationModifiers" /> holds and
+    ///     <see cref="LanguageProfile.ScopeModifiers" /> does not. Empty where the profile named one
+    ///     list, which is the answer it gave before there were two and costs nothing to keep.
+    ///     Kept as the difference rather than as the narrower list because that is what a line is read
+    ///     against: one of these words in a declaration head says the line declares a constant, a field
+    ///     or a variable whatever else stands beside it, and <c>private const string Pattern = "…";</c>
+    ///     would otherwise open a scope on the strength of its <c>private</c>.
+    /// </summary>
+    private readonly string[] _nameOnlyModifiers;
+
     private readonly string[] _directivePrefixes;
     private readonly string[] _instantiationKeywords;
     private readonly string[] _lineComments;
@@ -157,6 +170,20 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         _importForms = [.. profile.ImportForms.OrderByDescending(form => form.Opener.Length)];
         _spanningImport = Array.FindIndex(_importForms, form => form.SpansLines);
         _declarationModifiers = [.. profile.DeclarationModifiers];
+        // A word in ScopeModifiers that is not a declaration modifier at all names no shape and is
+        // therefore nothing this can read: the narrower list filters the wider one and never extends
+        // it, which is what keeps the two from being two ways to add a keyword.
+        _nameOnlyModifiers = profile.ScopeModifiers.Count == 0
+            ? []
+            : [
+                .. profile.DeclarationModifiers.Where(modifier =>
+                    // Under the profile's own case rule like every other keyword comparison here: the
+                    // two lists are written in one file, but a language that shouts its keywords may
+                    // shout one of them and not the other.
+                    !profile.ScopeModifiers.Contains(modifier, profile.CaseInsensitiveKeywords
+                        ? StringComparer.OrdinalIgnoreCase
+                        : StringComparer.Ordinal))
+            ];
         _sectionMarkers = [.. profile.SectionMarkers.OrderByDescending(marker => marker.Phrase.Length)];
         char[] opensInCode =
         [
@@ -720,12 +747,18 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         ArgumentNullException.ThrowIfNull(line);
         string? type = TypeOn(line);
         string? member = null;
+        bool opensScope = true;
         // The C-family shape first: where a language writes both, it is the more specific of the two
         // and the keyword shape would stop at the return type.
-        if (_memberDeclaration.Match(line) is { Success: true } m) member = m.Groups[1].Value;
+        if (_memberDeclaration.Match(line) is { Success: true } m)
+        {
+            member = m.Groups[1].Value;
+            opensScope = OpensScope(line, m.Groups[1].Index);
+        }
         else if (_keywordDeclaration.Match(line) is { Success: true } k)
         {
             member = k.Groups[2].Value;
+            opensScope = OpensScope(line, k.Groups[2].Index);
             // `procedure TCustomer.Save;` names both, and the type it names is the one the member
             // belongs to — which is what a caller looking for the enclosing scope of a line in that
             // routine needs, since a Delphi implementation section nests nothing by indentation.
@@ -733,8 +766,30 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         }
 
         return new Answer<Declared?>(
-            type is null && member is null ? null : new Declared(type, member, RoleAt(position, line)),
+            type is null && member is null
+                ? null
+                : new Declared(type, member, RoleAt(position, line)) { OpensScope = opensScope },
             Evidence.Text);
+    }
+
+    /// <summary>
+    ///     Whether the member declared at <paramref name="nameAt" /> opens a scope the lines below it
+    ///     sit in, or only introduces a name (#83). Read off the head of the line — everything in front
+    ///     of the name, which is where a language writes its modifiers — because one name-only modifier
+    ///     decides it whatever accompanies it: <c>private const string Pattern = "…";</c> declares a
+    ///     constant and not a scope, and a rule that asked whether <em>any</em> modifier opened one
+    ///     would have answered it on its <c>private</c>.
+    ///     A type declaration is not asked about. Every language here writes one as a thing that holds
+    ///     members, and there is no modifier that makes it otherwise.
+    /// </summary>
+    private bool OpensScope(string line, int nameAt)
+    {
+        if (_nameOnlyModifiers.Length == 0) return true;
+        var head = line.AsSpan(0, nameAt);
+        for (int i = 0; i < _nameOnlyModifiers.Length; i++)
+            if (SymbolText.ContainsWord(head, _nameOnlyModifiers[i], _keywordComparison))
+                return false;
+        return true;
     }
 
     /// <summary>
