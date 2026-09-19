@@ -609,10 +609,69 @@ public sealed class FileToolsTests : IDisposable
         Assert.DoesNotContain("declares", text);
     }
 
+    /// <summary>
+    ///     The back half of a big file (#112). A 500-row cap with no continuation is a hard ceiling on
+    ///     any repository holding one long file, and the note that used to sit on it called that file
+    ///     generated and sent the reader to read it — the single most expensive move available, and
+    ///     false besides. The page is now a page: it says what it listed, where it got to, and what to
+    ///     ask for next, and asking for it eventually reaches the end rather than looping.
+    /// </summary>
+    [Fact]
+    public async Task List_declarations_pages_past_its_cap_and_says_where_it_got_to()
+    {
+        // One declaration past a full second page, so three pages: full, full, and a remainder.
+        const int routines = (2 * FileDeclarations.MaxDeclarations) + 1;
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                // The class itself is a declaration, so the file declares routines + 1 names.
+                ["src/Big.cs"] = "public class Big\n{\n"
+                                 + string.Concat(Enumerable.Range(0, routines)
+                                     .Select(i => $"    public void M{i}() {{ }}\n"))
+                                 + "}\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("alpha");
+
+        string first = await DeclarationsAsync(client, "one/src/Big.cs");
+        Assert.Contains($"declares {FileDeclarations.MaxDeclarations} names, in file order", first);
+        Assert.Contains($"NOTE: {FileDeclarations.MaxDeclarations} listed, reaching line ", first);
+        Assert.Contains($"offset={FileDeclarations.MaxDeclarations} for the next page", first);
+        // The claim that made the advice wrong, and the advice it led to.
+        Assert.DoesNotContain("is generated", first);
+        Assert.DoesNotContain("read it directly", first);
+        // The first page stops where it says it does, and the name after it is not on it.
+        Assert.Contains("M498", first);
+        Assert.DoesNotContain("M499", first);
+
+        string second = await PagedDeclarationsAsync(client, "one/src/Big.cs", FileDeclarations.MaxDeclarations);
+        Assert.Contains($"skipping the first {FileDeclarations.MaxDeclarations}", second);
+        // The back half is reachable, which is the whole point.
+        Assert.Contains("M499", second);
+        Assert.Contains("M998", second);
+
+        string third = await PagedDeclarationsAsync(client, "one/src/Big.cs", 2 * FileDeclarations.MaxDeclarations);
+        Assert.Contains("declares 2 names", third);
+        Assert.Contains("M999", third);
+        Assert.Contains("M1000", third);
+        Assert.DoesNotContain("NOTE:", third);
+
+        // Past the end is the end of the listing and not a file that declares nothing.
+        string past = await PagedDeclarationsAsync(client, "one/src/Big.cs", 3 * FileDeclarations.MaxDeclarations);
+        Assert.Contains("has no declaration past the first 1500", past);
+        Assert.DoesNotContain("declares nothing its language writes", past);
+    }
+
     private Task<McpClient> DeclaringAsync() => StartAsync(Declaring);
 
     private static Task<string> DeclarationsAsync(McpClient client, string path) =>
         CallAsync(client, "list_declarations", new Dictionary<string, object?> { ["path"] = path });
+
+    private static Task<string> PagedDeclarationsAsync(McpClient client, string path, int offset) =>
+        CallAsync(client, "list_declarations",
+            new Dictionary<string, object?> { ["path"] = path, ["offset"] = offset });
 
     private Task<McpClient> StartAsync() => StartAsync(TwoRepositories);
 

@@ -51,12 +51,17 @@ public sealed record FileDeclaration(
 ///     What one file declares. <see cref="Coverage" /> is what an empty list means, and
 ///     <see cref="Capped" /> says the list stopped at <see cref="FileDeclarations.MaxDeclarations" />
 ///     rather than at the end of the file.
+///     <see cref="Offset" /> is how many declarations were skipped to reach this page, so a caller can
+///     say where the listing starts and what to ask for next. An empty list with an offset past every
+///     declaration the file has is the end of the paging and not a file that declares nothing — two
+///     answers that must not read alike.
 /// </summary>
 public sealed record DeclarationsResult(
     string QualifiedPath,
     string LanguageName,
     DeclarationCoverage Coverage,
     bool Capped,
+    int Offset,
     IReadOnlyList<FileDeclaration> Declarations) : Outcome;
 
 /// <summary>
@@ -77,26 +82,31 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
     public const string Engine = "file declarations";
 
     /// <summary>
-    ///     How many declarations one answer carries. A file declaring more than this is generated, and
-    ///     past the first few hundred the list has stopped being the answer to "what is in this file" —
-    ///     the reply says it was cut rather than reading as complete.
+    ///     How many declarations one answer carries. Past the first few hundred the list has stopped
+    ///     being the answer to "what is in this file", so the page ends here and the reply says it was
+    ///     cut rather than reading as complete. It is a page and not a ceiling: the declarations past
+    ///     it are reached with an offset, because a long-lived core class is as likely to be behind
+    ///     this number as a generated one, and a file no one can page through is a file no one can see
+    ///     the back half of (#112).
     /// </summary>
     public const int MaxDeclarations = 500;
 
     /// <summary>
     ///     Every read of a file's declarations goes through here, which is what makes this the one
-    ///     place such a read is recorded.
+    ///     place such a read is recorded. <paramref name="offset" /> is how many declarations to skip
+    ///     before the page, in file order; negative is read as none.
     /// </summary>
-    public async Task<Outcome> ForFileAsync(string slug, string path, CancellationToken cancellationToken)
+    public async Task<Outcome> ForFileAsync(string slug, string path, int offset,
+        CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await ReadAsync(slug, path, cancellationToken);
+        var outcome = await ReadAsync(slug, path, Math.Max(0, offset), cancellationToken);
         if (outcome is DeclarationsResult result) recording.Matched(Engine, 1, result.Declarations.Count);
         else recording.Problem();
         return outcome;
     }
 
-    private Task<Outcome> ReadAsync(string slug, string path, CancellationToken cancellationToken) =>
+    private Task<Outcome> ReadAsync(string slug, string path, int offset, CancellationToken cancellationToken) =>
         IndexReader.OverFileAsync(indexes, slug, path, true, async (index, file, token) =>
         {
             string extension = Languages.ExtensionOf(file.QualifiedPath);
@@ -111,7 +121,7 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
             // every line of it, and the answer says the scan never ran.
             if (SearchQuery.CandidateTest(analyzer.DeclarationCandidates, "d", parameters) is not { } test)
                 return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Unreadable, false,
-                    []);
+                    offset, []);
 
             // Every line of the file, each saying whether it could be a declaration, in one read. The
             // lines between the candidates are not waste: placing a candidate means knowing what the
@@ -121,6 +131,10 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
             // candidate's text crossed the boundary twice.
             var declarations = new List<FileDeclaration>();
             bool scanCutShort = false;
+            // Declarations seen, including the ones the offset skips. The skipping happens here and not
+            // in SQL because a candidate line is only a declaration once its analyser has placed it —
+            // the engine cannot count what it cannot classify, so the page is taken from the walk.
+            int seen = 0;
             using (var command = index.Connection.Query($"""
                                                          SELECT line_number, content, ({test}) AS wanted
                                                          FROM lines WHERE file_id = $f
@@ -140,6 +154,8 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
                     string named = what.Member ?? what.Type!;
                     if (SearchQuery.OnlyInProse(analyzer, line.Position, line.Content, named)) return true;
 
+                    if (seen++ < offset) return true;
+
                     declarations.Add(new FileDeclaration(line.LineNumber, line.Content, what.Type,
                         what.Member, what.Role, declared.Evidence));
                     // One past the ceiling tells a list that ends here from one cut short, and it is
@@ -155,6 +171,6 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
 
             return new DeclarationsResult(file.QualifiedPath, name,
                 profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled,
-                scanCutShort, declarations);
+                scanCutShort, offset, declarations);
         }, cancellationToken);
 }
