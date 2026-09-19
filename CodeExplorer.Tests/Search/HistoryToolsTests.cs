@@ -716,6 +716,13 @@ public sealed class HistoryToolsTests : IDisposable
         Assert.Contains("History:MaxCommitPaths", reply, StringComparison.Ordinal);
         // The coupling that is real survives the exclusion.
         Assert.Contains("one/src/Store.cs", reply, StringComparison.Ordinal);
+
+        // The header counts every commit that touched the file, which is the number the note below it
+        // then divides: Api.cs has five, one of them the reformat. Counting only the paired four there
+        // made the two sentences contradict each other, with the smaller number leading (#116).
+        Assert.Contains("alongside one/src/Api.cs, out of the 5 commits that touched it", reply,
+            StringComparison.Ordinal);
+        Assert.Contains("1 of its 5 commits", reply, StringComparison.Ordinal);
     }
 
     /// <summary>
