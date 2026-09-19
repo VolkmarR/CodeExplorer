@@ -149,9 +149,14 @@ export interface FileListEntry {
   skipReason: string | null
 }
 
-/** <Total> counts every match; <files> holds the first page of them. */
+/**
+ * `total` counts every match; `files` holds one page of them. `pageSize` is the server's answer and
+ * not the row count, because the last page is short and dividing by it would lose a page.
+ */
 export interface FileList {
   total: number
+  page: number
+  pageSize: number
   files: FileListEntry[]
 }
 
@@ -523,10 +528,10 @@ export const api = {
   createProject: (slug: string, name: string, singleRepository: boolean) =>
     http.post('projects', { json: { name, singleRepository, slug } }).json<CreatedProject>(),
 
-  browse: (project: string, glob: string, repository?: string) =>
+  browse: (project: string, glob: string, page: number, repository?: string) =>
     http
       .get(`projects/${project}/files`, {
-        searchParams: repository ? { glob, repository } : { glob },
+        searchParams: repository ? { glob, page, repository } : { glob, page },
       })
       .json<FileList>(),
 

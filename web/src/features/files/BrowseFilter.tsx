@@ -32,7 +32,13 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
       className="flex flex-wrap items-end gap-3 rounded-lg border bg-card p-4"
       onSubmit={(event) => {
         event.preventDefault()
-        void navigate({ params: { project }, search: draft, to: '/projects/$project/files' })
+        // Page 1, because the page a filter is submitted from belongs to the previous glob: page 7
+        // of a new match is a blank listing that reads as no matches at all.
+        void navigate({
+          params: { project },
+          search: { ...draft, page: 1 },
+          to: '/projects/$project/files',
+        })
       }}
     >
       {/* `flex flex-col gap-2` and not `space-y-2`, which is the same stack until one of them holds

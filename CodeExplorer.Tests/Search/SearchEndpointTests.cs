@@ -96,6 +96,36 @@ public sealed class SearchEndpointTests
         Assert.Equal("two/src/Widget.cs", Assert.Single(scoped.Files).QualifiedPath);
     }
 
+    /// <summary>
+    ///     The browse view pages its listing rather than rendering every match, so a glob over a large
+    ///     project is a page of rows and not thousands. Three assertions, for the three things a pager
+    ///     needs: the rows of the page it asked for, the size it asked for echoed back, and a total
+    ///     that survives a page past the end — where the window count rides on rows there are none of,
+    ///     and a zero there would read as "nothing matched".
+    /// </summary>
+    [Fact]
+    public async Task Browsing_answers_one_page_of_a_glob_and_keeps_the_total_past_the_end()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        var first = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?glob=*&page=1&pageSize=2");
+        Assert.Equal(3, first.Total);
+        Assert.Equal(1, first.Page);
+        Assert.Equal(2, first.PageSize);
+        Assert.Equal(2, first.Files.Count);
+
+        var second = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?glob=*&page=2&pageSize=2");
+        Assert.Equal(3, second.Total);
+        Assert.Equal(2, second.Page);
+        // Ordered by qualified path, so the pages partition the match rather than overlapping.
+        Assert.Empty(second.Files.Select(f => f.QualifiedPath).Intersect(first.Files.Select(f => f.QualifiedPath),
+            StringComparer.Ordinal));
+
+        var pastTheEnd = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?glob=*&page=9&pageSize=2");
+        Assert.Equal(3, pastTheEnd.Total);
+        Assert.Empty(pastTheEnd.Files);
+    }
+
     [Theory]
     [InlineData(SearchEngine.Substring, 1)]
     [InlineData(SearchEngine.Fts, 0)]
