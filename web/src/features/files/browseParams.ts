@@ -7,6 +7,8 @@ export interface BrowseParameters {
   path: string
   glob: string
   repository?: string
+  /** Which page of a glob's matches. The tree ignores it: a level is as deep as it is. */
+  page: number
 }
 
 /**
@@ -19,12 +21,14 @@ export interface BrowseParameters {
  * glob that selects the tree cannot be forgotten at one of them and quietly open the flat list.
  */
 export function treeSearch(path = ''): BrowseParameters {
-  return { glob: '', path }
+  return { glob: '', page: 1, path }
 }
 
 export function validateBrowseSearch(search: Record<string, unknown>): BrowseParameters {
+  const page = Number(search.page)
   return {
     glob: typeof search.glob === 'string' ? search.glob : '',
+    page: Number.isInteger(page) && page > 0 ? page : 1,
     path: typeof search.path === 'string' ? search.path : '',
     repository:
       typeof search.repository === 'string' && search.repository !== ''
