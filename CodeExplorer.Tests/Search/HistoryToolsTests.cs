@@ -1443,6 +1443,24 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
+    ///     `repo` and `path` naming different repositories cannot both hold, and the quiet answer that
+    ///     falls out of it — "no commits under 'one/src'" about a busy folder — is exactly the false
+    ///     negative #118 exists to stop. It is refused, naming both.
+    /// </summary>
+    [Fact]
+    public async Task A_repo_and_a_path_naming_different_repositories_are_refused_rather_than_answered_quietly()
+    {
+        await BuildChurnProjectAsync("crossed", withSecondRepository: true);
+        await using var client = await _host.ConnectAsync("crossed");
+
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["repo"] = "two", ["path"] = "one/src" });
+
+        Assert.Contains("name different repositories", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("No commits", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     A ranking counts machine-authored commits exactly like hand-written ones, so a directory of
     ///     regenerated output outranks the code that drives it (#117). No suffix list is hard-coded
     ///     anywhere, so the filter is the caller's and the reply has to say it ran.

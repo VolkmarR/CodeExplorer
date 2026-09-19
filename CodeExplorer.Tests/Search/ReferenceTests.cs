@@ -477,6 +477,12 @@ public sealed class ReferenceTests : IDisposable
         Assert.Contains($"{ReferenceSearch.MaxFiles} is the most maxFiles can examine", text);
         Assert.Contains("grep(filesOnly=true) for breadth", text);
         Assert.DoesNotContain("Raise maxFiles", text);
+        // The total is over every matching file and the sample stops at the cap, so on a fixture wider
+        // than the cap the two numbers differ — which is the whole point of counting them apart (#119).
+        int matching = ReferenceSearch.MaxFiles + 1;
+        Assert.Contains($"{matching} files hold the name, {matching} occurrences in all", text);
+        Assert.Contains($"a floor for the {ReferenceSearch.DefaultMaxFiles} files examined", text);
+        Assert.Contains($"{ReferenceSearch.DefaultMaxFiles} calls", text);
     }
 
     [Fact]
