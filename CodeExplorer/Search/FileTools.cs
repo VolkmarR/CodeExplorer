@@ -183,6 +183,7 @@ internal sealed partial class FileTools(
                  Lists indexed files whose qualified path matches a glob, with their line counts, e.g. `main/src/*Commands.cs` or `*Handler.cs`. Matching is case-insensitive.
 
                  - **`*` crosses directory separators**, so it matches a subtree and not a level. That is what makes a bare `*Handler.cs` find every handler at every depth in every repository, and it is also why `main/src/*` is the whole tree under `main/src` rather than its top entries. `**` is the same wildcard written twice, not a second operator: `a/**/b` and `a/*/b` match exactly the same files.
+                 - **A trailing name prefix is a subtree too.** `main/src/RX*` is not "the directories starting with RX" — it is every file at every depth whose path continues with anything, so it answers with the whole tree under `main/src` minus the names that start with something else. Finding directories whose names begin with something is list_tree's job.
                  - **There is no glob for one directory level.** If that is the question — what is *in* this directory — it is list_tree's, and a glob will answer it with the subtree.
                  - Use glob when you know the shape of a filename but not where it lives; one call replaces a directory walk.
                  - Use grep when you need the files that *contain* something, and list_tree when you want the layout rather than a known name.
@@ -255,9 +256,10 @@ internal sealed partial class FileTools(
     }
 
     /// <summary>
-    ///     Whether the glob asked for one directory level and got every level below it: a lone <c>*</c>
-    ///     standing as a whole path segment, as a shell glob writes "the entries of this directory".
-    ///     Here <c>*</c> crosses separators, so that shape matches the subtree.
+    ///     Whether the glob asked for one directory level and got every level below it: a whole path
+    ///     segment that is a lone <c>*</c>, as a shell glob writes "the entries of this directory", or a
+    ///     name prefix such as <c>RX*</c>, as one writes "the entries whose name starts with RX".
+    ///     Here <c>*</c> crosses separators, so both shapes match the subtree.
     ///     A name shape — <c>*Handler.cs</c>, or <c>src/*Commands.cs</c> — is what the tool is for and is
     ///     not warned about however many it matches. Neither is <c>**</c>: it matches exactly what a
     ///     single <c>*</c> does here, so it is not a second operator, but writing it is the caller saying
@@ -268,7 +270,15 @@ internal sealed partial class FileTools(
     /// </summary>
     private static bool SwallowedDirectories(string glob) =>
         glob.Contains('/', StringComparison.Ordinal)
-        && glob.Split('/').Any(segment => segment == "*");
+        && glob.Split('/').Any(AskedForNames);
+
+    /// <summary>
+    ///     A segment that names directory entries rather than a file: a lone <c>*</c>, or a prefix ending
+    ///     in one. A dot in the segment makes it a filename shape — <c>*Commands.cs</c>, <c>RX*.cs</c> —
+    ///     which is what the tool is for, so it is not warned about however many files it matches.
+    /// </summary>
+    private static bool AskedForNames(string segment) =>
+        segment != "**" && segment.EndsWith('*') && !segment.Contains('.', StringComparison.Ordinal);
 
     [McpServerTool(Name = "list_tree", ReadOnly = true, Idempotent = true, Title = "List directories and files")]
     [Description("""

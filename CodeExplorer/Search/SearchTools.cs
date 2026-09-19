@@ -215,6 +215,7 @@ internal sealed class SearchTools(
                  - To answer "what changes this field?", use writesOnly=true. Writes are assignments — `x.Status = …`, `Status += …`, and the receiver-less object-initializer form `Status = dao.Status` that a `\.Status\s*=` regex silently misses. Comparisons (`==`, `>=`) and lambda arrows stay out, so a write list is not padded with reads.
                  - Comments, strings and import lines are counted but not listed unless includeNoise=true.
                  - For an interface, a call names the method rather than the interface, so run it again on the member you care about.
+                 - **The per-kind counts are a floor for the files examined, never a project total.** Only the `maxFiles` files naming it most often are classified, so "412 calls" means 412 in that sample. Where the name is spread wider than the cap the reply gives the project-wide occurrence count beside it, and `maxFiles` stops at 100 however many files hold the name — for breadth past that, `grep(filesOnly=true)` counts the files and `list_matches` the distinct spellings.
                  - Scope with `repo`, `path`, `ext` and `exclude` exactly as grep does. When a filter is set the reply says how many further files matched outside it, because a declaration hidden by `exclude` makes a thin answer look complete.
                  """)]
     public async Task<string> FindReferences(
@@ -281,16 +282,32 @@ internal sealed class SearchTools(
                 $"{Count(ReferenceKind.TypeUse)} type {ToolReply.Plural(Count(ReferenceKind.TypeUse), "use")}, {Count(ReferenceKind.MemberAccess)} {ToolReply.Plural(Count(ReferenceKind.MemberAccess), "read")}, ")
             .Append(CultureInfo.InvariantCulture, $"{Count(ReferenceKind.Other)} unplaced\n");
 
+        // The per-kind counts above are the sample's, and a sample read of the heaviest files reads as a
+        // project total unless it is denied. The occurrence count is the project-wide number the caller
+        // wanted; it is unclassified, so it is never printed as if it were the same kind of number.
+        // "Raise maxFiles" is only a move where raising it can reach the total — against thousands of
+        // files it is advice the caller cannot complete, so past the ceiling the pivot is named instead.
         if (result.TotalFiles > result.FilesExamined)
             text.Append(CultureInfo.InvariantCulture,
-                $"  NOTE: {result.TotalFiles} files hold the name in total; only the {result.FilesExamined} that hold it most often were examined. Narrow with repo/path/ext/exclude, or raise maxFiles.\n");
+                $"  NOTE: the counts above are a floor for the {result.FilesExamined} files examined, not a project total. "
+                + $"{result.TotalFiles} files hold the name, {result.TotalOccurrences} {ToolReply.Plural(result.TotalOccurrences, "occurrence")} in all; only the files holding it most often were read. "
+                + $"{(result.TotalFiles <= ReferenceSearch.MaxFiles
+                    ? "Raise maxFiles for the rest, or narrow with repo/path/ext/exclude"
+                    : $"{ReferenceSearch.MaxFiles} is the most maxFiles can examine, so narrow with repo/path/ext/exclude to classify a slice, and use grep(filesOnly=true) for breadth")}.\n");
 
         // A file cut short at the per-file ceiling would otherwise be indistinguishable from one that
         // simply holds that many lines, and the unread ones could include the declaration.
         var cutShort = result.CutShortFiles;
         if (cutShort.Count > 0)
+        {
             text.Append(CultureInfo.InvariantCulture,
                 $"  NOTE: {ToolReply.Plural(cutShort.Count, "one file holds", $"{cutShort.Count} files hold")} {ReferenceSearch.MaxLinesPerFile} or more lines naming it and {ToolReply.Plural(cutShort.Count, "was", "were")} read no further ({string.Join(", ", cutShort)}). The name is too common to enumerate; narrow with path, or search a more distinctive one.\n");
+            // Every file was examined and the answer is still a sample, because a file was cut short.
+            // The note above already carries the project-wide count where files were left unread.
+            if (result.TotalFiles <= result.FilesExamined)
+                text.Append(CultureInfo.InvariantCulture,
+                    $"  NOTE: the counts above are a floor for the lines that were read; the name occurs {result.TotalOccurrences} {ToolReply.Plural(result.TotalOccurrences, "time", "times")} project-wide.\n");
+        }
 
         // A thin answer under a filter is the footgun: the declaration may sit in a file the filter
         // hid, and a generated partial is the usual case.
@@ -504,6 +521,7 @@ internal sealed class SearchTools(
                  - Every distinct status constant, HTTP route, config key, error code, table name or imported namespace — anything spelled out in many files that you want deduplicated.
 
                  - Always a pattern; there is nothing to deduplicate about a literal. `group=1` returns the first capture group instead of the whole match, which is usually what you want: put the parentheses around the part that varies and leave the boilerplate outside them.
+                 - **A group aimed at the wrong parenthesis returns a tidy, confident, wrong list.** Nothing about the reply can tell you that `catch (\w+) (\w+)` with group=1 counted exception types where you asked for variable names — the values are well-formed, just not the ones you wanted. Read the top few and check they look like the kind of thing you asked for; `group=0` shows the whole match, which is where a mis-aimed group becomes obvious.
                  - Results are ordered by frequency, so the common cases come first and a one-off outlier is visible at the bottom. `count` is how often the value was matched and `files` is how many files those matches came from; the two differ where a value repeats within one file.
                  - Prefer grep when you need to see WHERE something appears. This is also the cheap way to learn a code base's vocabulary before searching it: list the distinct status constants first, then grep for the one you want.
                  - "No matches" replies say whether the pattern matched outside your filters, so a filtered miss is never mistaken for a pattern that matches nothing.

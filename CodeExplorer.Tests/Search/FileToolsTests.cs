@@ -289,6 +289,12 @@ public sealed class FileToolsTests : IDisposable
         Assert.Contains("showing the first 500 by path (raise limit or narrow the glob)", reachable);
         Assert.Contains("crosses directory separators", reachable);
 
+        // A prefix segment reads as "the directories starting with g" and is the whole subtree (#113).
+        string prefix = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "radix/src/g*" });
+        Assert.Contains("2100 files matching \"radix/src/g*\"", prefix);
+        Assert.Contains("crosses directory separators", prefix);
+        Assert.Contains("list_tree", prefix);
+
         // The case the tool is sold on: a name shape, no directory in it, nothing to warn about however
         // many it matches.
         string shape = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "*.cs" });
