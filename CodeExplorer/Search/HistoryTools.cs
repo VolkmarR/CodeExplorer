@@ -369,10 +369,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                    + (coupling.Excluded == 0 ? "" : " " + ExcludedNote(coupling, answer.MaxCommitPaths));
 
         string files = ToolReply.Plural(coupling.Files.Count, "file");
-        string commits = ToolReply.Plural(coupling.Paired, "commit");
+        string commits = ToolReply.Plural(coupling.Commits, "commit");
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{coupling.Files.Count} {files} changed alongside {spelled}, out of the {coupling.Paired} {commits} that touched it, {window.Describe()}.\n");
+            // Commits and not Paired: Paired is what the ceiling left to pair with, and calling that
+            // "the commits that touched it" understates the file's history by exactly the number the
+            // note below then quotes — one sentence contradicting the next, with the smaller number
+            // leading (#116). The pairing's own denominator is said where it is explained.
+            $"{coupling.Files.Count} {files} changed alongside {spelled}, out of the {coupling.Commits} {commits} that touched it, {window.Describe()}.\n");
         // Above the ranking and not below it: a full ranking is exactly where the reply cap bites, and
         // it is also exactly where knowing that a third of the file's commits were left out matters.
         if (coupling.Excluded > 0)
