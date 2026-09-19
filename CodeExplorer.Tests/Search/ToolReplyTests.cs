@@ -37,6 +37,7 @@ public sealed class ToolReplyTests : IDisposable
     /// </summary>
     private static readonly Dictionary<string, Dictionary<string, object?>> Tools = new(StringComparer.Ordinal)
     {
+        ["authors"] = [],
         ["blame"] = new() { ["path"] = "one/src/Widget.cs" },
         ["co_changed"] = new() { ["path"] = "one/src/Widget.cs" },
         ["file_history"] = new() { ["path"] = "one/src/Widget.cs" },
@@ -225,15 +226,17 @@ public sealed class ToolReplyTests : IDisposable
     {
         await using var client = await UnbuiltProjectAsync();
 
-        // `author` is the name the session in #86 sent, and no tool declares it — asserted below, so
-        // that a tool growing one cannot turn this into a sweep over a name that binds.
+        // `committer` is a name no tool declares — asserted below, so that a tool growing one cannot
+        // turn this into a sweep over a name that binds. It is what `author` was until git_log grew a
+        // real one, and it is the spelling an agent reaches for next: git records both, this records
+        // the author (CONTEXT.md, History).
         foreach ((string tool, var arguments) in Tools)
         {
             string reply = await TestHost.CallAsync(client, tool,
-                new Dictionary<string, object?>(arguments) { ["author"] = "Holger" });
+                new Dictionary<string, object?>(arguments) { ["committer"] = "Holger" });
 
-            Assert.StartsWith($"`{tool}` has no `author` argument; it was ignored and had no effect on "
-                              + "what follows. It takes ", reply, StringComparison.Ordinal);
+            Assert.StartsWith($"`{tool}` has no `committer` argument; it was ignored. It takes ", reply,
+                StringComparison.Ordinal);
             // The tool's own answer is kept: the caveat is what it is read with, not a refusal.
             Assert.Contains(tool == WithoutIndex ? "unbuilt" : IndexReader.NoIndex("unbuilt"), reply,
                 StringComparison.Ordinal);
@@ -242,7 +245,7 @@ public sealed class ToolReplyTests : IDisposable
         }
 
         var listed = (await client.ListToolsAsync(cancellationToken: Ct)).ToList();
-        Assert.All(listed, tool => Assert.DoesNotContain("author", Declared(tool), StringComparer.Ordinal));
+        Assert.All(listed, tool => Assert.DoesNotContain("committer", Declared(tool), StringComparer.Ordinal));
     }
 
     /// <summary>

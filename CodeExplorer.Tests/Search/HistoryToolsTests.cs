@@ -24,8 +24,8 @@ public sealed class HistoryToolsTests : IDisposable
     ///     telling an agent something about a log that may not be there.
     /// </summary>
     private const string Caveat =
-        "`git_log` has no `author` argument; it was ignored and had no effect on what follows. "
-        + "It takes `repo`, `limit` and `page`.";
+        "`git_log` has no `committer` argument; it was ignored. "
+        + "It takes `repo`, `author`, `limit` and `page`.";
 
     public void Dispose() => _host.Dispose();
 
@@ -47,11 +47,187 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
+    ///     <c>author</c> narrows the log, and the header carries the filter: a narrowed log that
+    ///     introduces itself as "5 commits" is the wrong fact #86 was about, arrived at from the other
+    ///     direction.
+    ///     One address whose commits all fit is the whole answer, so nothing is listed under it. The
+    ///     line is for what the header cannot say.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_scopes_to_one_author_by_address()
+    {
+        await BuildChurnProjectAsync("mixed", true);
+        await using var client = await _host.ConnectAsync("mixed");
+
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["author"] = "grace" });
+
+        Assert.Contains("3 commits by an address matching 'grace'", reply, StringComparison.Ordinal);
+        // Ada's commits are in the same repository and the same page, so their absence is the filter.
+        Assert.DoesNotContain("Add the module", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("Import the old code", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("matched 1 address", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     What the header cannot say: a substring caught more than one address, or more commits than
+    ///     the page holds. Both are what a caller needs to know it did not get the person it meant, and
+    ///     neither is visible in a page of commits that all look plausible.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_lists_the_addresses_a_filter_caught_when_it_caught_more_than_the_page_shows()
+    {
+        await BuildChurnProjectAsync("mixed", true);
+        await using var client = await _host.ConnectAsync("mixed");
+
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["author"] = "example.invalid", ["limit"] = 2 });
+
+        Assert.Contains("2 commits by an address matching 'example.invalid'", reply, StringComparison.Ordinal);
+        // Three people share the domain, and the page shows two commits of the six they have between
+        // them — neither fact is visible in the page itself.
+        Assert.Contains("'example.invalid' matched 3 addresses, 6 commits in all:", reply, StringComparison.Ordinal);
+        Assert.Contains("Grace <grace@example.invalid>", reply, StringComparison.Ordinal);
+        Assert.Contains("Ada <ada@example.invalid>", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     An empty `author` is no filter, and the two ways it could go wrong are opposite: `ILIKE '%%'`
+    ///     matches every commit and would be reported as a filtered log, which is the #86 failure again.
+    ///     The `_` is the other half — a LIKE metacharacter in caller text, which must match a literal
+    ///     underscore rather than any character, or a filter silently widens to a stranger's commits.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_takes_an_empty_author_as_no_filter_and_a_wildcard_as_text()
+    {
+        var client = await StartAsync();
+
+        string blank = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["author"] = "  " });
+        Assert.StartsWith("2 commits", blank, StringComparison.Ordinal);
+        Assert.DoesNotContain("matching", blank, StringComparison.Ordinal);
+
+        // "gr_ce" is "grace" with a LIKE wildcard where the `a` is: a match means the pattern is live.
+        string wildcard = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["author"] = "gr_ce" });
+        Assert.StartsWith("No address contains 'gr_ce'", wildcard, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The listing `author` is read from, so the address an agent types into the filter is one it
+    ///     saw here. Ranked by commits, and scoped the way every other history tool is.
+    /// </summary>
+    [Fact]
+    public async Task Authors_lists_who_committed_with_the_address_each_commits_from()
+    {
+        await BuildChurnProjectAsync("mixed", true);
+        await using var client = await _host.ConnectAsync("mixed");
+
+        string scoped = await TestHost.CallAsync(client, "authors",
+            new Dictionary<string, object?> { ["repo"] = "one" });
+
+        Assert.StartsWith("2 authors in repository 'one', most commits first:", scoped, StringComparison.Ordinal);
+        Assert.Contains("3 commits  Grace <grace@example.invalid>, last on ", scoped, StringComparison.Ordinal);
+        Assert.Contains("2 commits  Ada <ada@example.invalid>, last on ", scoped, StringComparison.Ordinal);
+        // Most commits first, which is what makes the first row "who to ask".
+        Assert.True(scoped.IndexOf("Grace", StringComparison.Ordinal) < scoped.IndexOf("Ada", StringComparison.Ordinal));
+
+        // The second repository has its own author, so the unscoped listing is wider than the scoped one.
+        string whole = await TestHost.CallAsync(client, "authors", []);
+        Assert.DoesNotContain("in repository 'one'", whole, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A cut listing says so, because a list that stops at the limit and says nothing reads as the
+    ///     whole team — and "who has worked here" is a question an agent answers once and carries.
+    /// </summary>
+    [Fact]
+    public async Task Authors_says_how_many_there_are_when_the_limit_cuts_the_list()
+    {
+        await BuildChurnProjectAsync("mixed", false);
+        await using var client = await _host.ConnectAsync("mixed");
+
+        string reply = await TestHost.CallAsync(client, "authors", new Dictionary<string, object?> { ["limit"] = 1 });
+
+        Assert.StartsWith("2 authors", reply, StringComparison.Ordinal);
+        Assert.Contains("(1 shown, limit 1):", reply, StringComparison.Ordinal);
+        Assert.Contains("Grace <grace@example.invalid>", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ada <ada@example.invalid>", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     An index with no history has no authors, and says the one sentence every history tool says
+    ///     about it: an empty list here would read as a project nobody has worked on, which is a fact,
+    ///     where this is the absence of one (CONTEXT.md, History).
+    /// </summary>
+    [Fact]
+    public async Task Authors_says_an_index_without_history_has_none_in_the_shared_words()
+    {
+        await _host.IndexedProjectAsync("empty",
+            new Dictionary<string, Dictionary<string, string>> { ["only"] = new() { ["a.cs"] = "class A;\n" } });
+        await _host.ExecuteAsync("empty", "DELETE FROM commits");
+        await using var client = await _host.ConnectAsync("empty");
+
+        Assert.Equal(ToolReply.NoHistory, await TestHost.CallAsync(client, "authors", []));
+    }
+
+    /// <summary>
+    ///     The decision the parameter's description states: the address is the identity git records, so
+    ///     a display name matches nothing. Asserted with a name that is not part of its own address,
+    ///     because the fixtures elsewhere commit as "Grace &lt;grace@…&gt;" and would pass either way —
+    ///     the one shape that cannot tell the two rules apart.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_matches_the_address_and_never_the_display_name()
+    {
+        string source = _host.CreateEmptyGitRepository("named");
+        _host.CommitToGitRepositoryAs("named", new Dictionary<string, string> { ["src/A.cs"] = "a\n" },
+            "Add it", "Holger Meyer", "hm@example.invalid", 0);
+        await _host.CreateProjectAsync("named");
+        await _host.AddRepositoryAsync("named", "one", source);
+        await _host.RefreshAsync("named");
+        await using var client = await _host.ConnectAsync("named");
+
+        string byName = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["author"] = "Holger" });
+        Assert.StartsWith("No address contains 'Holger'", byName, StringComparison.Ordinal);
+        Assert.Contains("`author` matches the address, not the name", byName, StringComparison.Ordinal);
+
+        string byAddress = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["author"] = "hm@" });
+        Assert.Contains("1 commit by an address matching 'hm@'", byAddress, StringComparison.Ordinal);
+        Assert.Contains("Add it", byAddress, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A filtered miss is not a clean negative (CODING_STANDARDS, Errors). "No commits by Holger"
+    ///     and "no address here contains 'Holger'" mean opposite things to an agent, and the first is
+    ///     what an empty log says on its own — so the reply says which it is, how many addresses there
+    ///     are to have got wrong, and which tool lists them.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_says_an_address_that_matched_nobody_is_not_the_same_as_no_commits()
+    {
+        var client = await StartAsync();
+
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["author"] = "nobody@example.invalid" });
+
+        Assert.StartsWith("No address contains 'nobody@example.invalid'", reply,
+            StringComparison.Ordinal);
+        Assert.Contains("2 addresses recorded; call authors to list them.", reply, StringComparison.Ordinal);
+        Assert.Contains("call authors to list them.", reply, StringComparison.Ordinal);
+        // The log itself must not be under it: an unfiltered log below that sentence is the #86 bug.
+        Assert.DoesNotContain("Tighten the check", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     The failure this tool is most dangerous at, and the reason it is asserted here as well as
     ///     across the surface (ToolReplyTests). Every parameter of git_log is optional, so an argument
     ///     it does not have binds nowhere and the method runs with its defaults — and an unfiltered log
-    ///     answering a filtered question is well-formed, plausible and wrong. The three names here are
-    ///     the ones a real session sent (issue #86).
+    ///     answering a filtered question is well-formed, plausible and wrong. The names here are what a
+    ///     real session sent (issue #86), with `committer` for the `author` it has since grown: git
+    ///     records both and this records the author, so it is the next spelling to arrive.
     /// </summary>
     [Fact]
     public async Task Git_log_says_which_arguments_it_ignored_rather_than_answering_as_though_it_filtered()
@@ -60,15 +236,15 @@ public sealed class HistoryToolsTests : IDisposable
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?>
             {
-                ["author"] = "Holger",
+                ["committer"] = "Holger",
                 ["grep"] = "Holger",
                 ["commit"] = "a41267be",
                 ["limit"] = 3
             });
 
         Assert.StartsWith(
-            "`git_log` has no `author`, `grep` or `commit` argument; they were ignored and had no effect "
-            + "on what follows. It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
+            "`git_log` has no `committer`, `grep` or `commit` argument; they were ignored. "
+            + "It takes `repo`, `author`, `limit` and `page`.", reply, StringComparison.Ordinal);
         // The log is still answered: the caveat is what the answer is read with, not a refusal.
         Assert.Contains("2 commits", reply, StringComparison.Ordinal);
     }
@@ -84,7 +260,7 @@ public sealed class HistoryToolsTests : IDisposable
     public async Task Git_log_says_what_it_ignored_without_claiming_there_is_a_log()
     {
         var client = await StartAsync();
-        var ignoredArgument = new Dictionary<string, object?> { ["author"] = "Holger" };
+        var ignoredArgument = new Dictionary<string, object?> { ["committer"] = "Holger" };
 
         // A problem: Render returns the explanation instead of an answer, and the caveat still arrives.
         string unknownRepository = await TestHost.CallAsync(client, "git_log",
@@ -125,8 +301,8 @@ public sealed class HistoryToolsTests : IDisposable
             new Dictionary<string, object?> { ["repository"] = "one" });
 
         Assert.StartsWith(
-            "`git_log` has no `repository` argument; it was ignored and had no effect on what follows. "
-            + "It takes `repo`, `limit` and `page`.", reply, StringComparison.Ordinal);
+            "`git_log` has no `repository` argument; it was ignored. "
+            + "It takes `repo`, `author`, `limit` and `page`.", reply, StringComparison.Ordinal);
         // It bound nowhere, so the answer really does still span the second repository.
         Assert.Contains("[two]", reply, StringComparison.Ordinal);
     }
@@ -165,7 +341,7 @@ public sealed class HistoryToolsTests : IDisposable
         await BuildChurnProjectAsync("mixed", true);
         await using var client = await _host.ConnectAsync("mixed");
         string reply = await TestHost.CallAsync(client, "git_log",
-            new Dictionary<string, object?> { ["repo"] = "one", ["author"] = "Grace" });
+            new Dictionary<string, object?> { ["repo"] = "one", ["committer"] = "Grace" });
 
         Assert.StartsWith(Caveat, reply, StringComparison.Ordinal);
         Assert.Contains("5 commits in repository 'one'", reply, StringComparison.Ordinal);

@@ -84,6 +84,23 @@ internal static class ToolReply
     }
 
     /// <summary>
+    ///     One author of a ranking: how many commits, who, and when they were last here. Drawn once
+    ///     because three surfaces list authors over the same commits — the overview's "who to ask", the
+    ///     `authors` tool, and the addresses a filtered `git_log` says it matched — and a caller
+    ///     comparing an address it read in one against an address it types into another must be
+    ///     comparing the same text.
+    /// </summary>
+    /// <param name="text">The reply being built.</param>
+    /// <param name="indent">What the surface puts before a row; the overview indents its sections.</param>
+    /// <param name="author">Who, and their totals.</param>
+    public static void AuthorRow(StringBuilder text, string indent, RecordedAuthor author)
+    {
+        text.Append(indent);
+        text.Append(CultureInfo.InvariantCulture,
+            $"{author.Commits,6} {Plural(author.Commits, "commit"),-8} {author.Name} <{author.Email}>, last on {author.LastCommit:yyyy-MM-dd}\n");
+    }
+
+    /// <summary>
     ///     Ends a ranked row: the path, and the mark saying there is nothing at it to read any more.
     ///     Every ranking drawn from history ranks paths a later commit deleted or renamed away, and two
     ///     spellings of that mark would be one of them eventually sending an agent to open a file that

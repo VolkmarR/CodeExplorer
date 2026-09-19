@@ -25,6 +25,12 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     private const int DefaultCommits = 30;
 
     /// <summary>
+    ///     Authors named by default. The overview stops at ten, which answers "who to ask"; this answers
+    ///     who has been here at all, so it is a page of a team rather than its top.
+    /// </summary>
+    private const int DefaultAuthors = 30;
+
+    /// <summary>
     ///     A whole mid-sized file's blame in one call. Runs, not lines, so this is far more of a file
     ///     than the number suggests — a 2000-line file is usually well under a hundred runs.
     /// </summary>
@@ -36,9 +42,10 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     [Description("""
                  Lists commits of the project's default branch, newest first. Use it to see what changed recently, and how much of a project is moving, before asking about any one file.
 
-                 - `repo` scopes it to one repository; `limit` and `page` walk it. Those are its only arguments.
-                 - It does not filter. Commits cannot be selected by author, by message, by one commit or by date. Any other argument name — `author`, `grep`, `commit`, the old `repository` spelling, or one not thought of here — is named as ignored above the answer rather than quietly dropped, so a log is never an unfiltered answer to a filtered question.
-                 - For what it cannot answer: page back for older commits, file_history for one file, blame for one line, hot_files for where the work is.
+                 - `repo` scopes it to one repository, `author` to one person; `limit` and `page` walk it. Those are its only arguments.
+                 - `author` matches the email address, not the display name: `grace@example.com` or `grace`, never "Grace Hopper". `authors` lists the addresses.
+                 - Nothing else filters — not by message, by one commit or by date. Any other argument name, `grep` and `commit` included, is named as ignored above the answer.
+                 - For what it cannot answer: page back for older commits, authors for who has worked here, file_history for one file, blame for one line, hot_files for where the work is.
                  - Merges count as one commit and their side branches are not walked, so a pull request reads as a single change.
                  - Only the default branch is recorded. A commit on a branch that was never merged is not here.
                  - History may not reach the beginning of the repository, and it is not the same as the code.
@@ -46,36 +53,116 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     public async Task<string> GitLog(
         [Description("Repository slug to scope to. Default: every repository in the project.")]
         string? repo = null,
+        [Description(
+            "Email address, whole or in part, e.g. \"grace@example.com\" or \"grace\". Matches the address and not the display name, case-insensitively. Default: every author.")]
+        string? author = null,
         [Description("Commits to return, 1-200. Default 30.")]
         int limit = DefaultCommits,
         [Description("1-based page of results, newest first.")]
         int page = 1,
         CancellationToken cancellationToken = default)
     {
-        // Every parameter here is optional, so a name this tool does not have binds nowhere and the
-        // call still runs with its defaults — an unfiltered log answering a filtered question, which
-        // is well-formed, plausible and wrong (#86). What was sent and ignored is said above this
-        // answer by the call-tool filter (ToolArguments), which reads the caller's raw arguments and
-        // so catches every spelling rather than the four this tool once declared to catch them.
-        var outcome = await history.LogAsync(Project, new LogRequest(repo, limit, page), cancellationToken);
+        // A name this tool does not have binds nowhere — every parameter is optional — and the call
+        // still runs with its defaults, which is an unfiltered log answering a filtered question:
+        // well-formed, plausible and wrong (#86). What was sent and ignored is said above this answer
+        // by the call-tool filter (ToolArguments), which reads the caller's raw arguments and so
+        // catches every spelling rather than the four this tool once declared to catch them.
+        var outcome = await history.LogAsync(Project, new LogRequest(repo, limit, page, author), cancellationToken);
         return ToolReply.Render<LogAnswer>(outcome, Log,
-            answer => $"Narrow with repo, or raise page past {answer.Page}.");
+            answer => $"Narrow with repo or author, or raise page past {answer.Page}.");
     }
 
     private static string Log(LogAnswer answer)
     {
         if (!answer.HasHistory) return ToolReply.NoHistory;
+        // Before the empty-page reading, because an address that matches nobody and a page past the
+        // end of a real author's commits are opposite facts and the second sentence would fit both.
+        if (answer.Author is { Addresses: 0 } miss) return NoSuchAuthor(miss, answer.Repository);
 
         int skip = (answer.Page - 1) * answer.Limit;
         if (answer.Commits.Count == 0)
             return skip > 0
-                ? $"No commits on page {answer.Page}. There are fewer than {skip + 1} commits recorded{Scope(answer.Repository)}."
-                : $"No commits are recorded{Scope(answer.Repository)}.";
+                ? $"No commits on page {answer.Page}. There are fewer than {skip + 1} commits{By(answer.Author)} recorded{Scope(answer.Repository)}."
+                : $"No commits{By(answer.Author)} are recorded{Scope(answer.Repository)}.";
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{Scope(answer.Repository)}, newest first:\n\n");
+            $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{By(answer.Author)}{Scope(answer.Repository)}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null);
+        if (answer.Author is { } filter) Matched(text, filter, answer.Commits.Count);
+        return text.ToString();
+    }
+
+    /// <summary>
+    ///     A filtered miss, which must not read as a clean negative: "no commits by Holger" and "no
+    ///     address here contains Holger" mean opposite things to an agent, and the first is what an
+    ///     unqualified empty answer says (CODING_STANDARDS, Errors). The count is what makes it
+    ///     actionable — a project with authors and no match is a misspelling — and the rule it was
+    ///     probably broken against is the one the name-shaped guess breaks.
+    /// </summary>
+    private static string NoSuchAuthor(AuthorFilter filter, IndexedRepository? repository) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"No address contains '{filter.Query}'{Scope(repository)} — `author` matches the address, not the name. {filter.AuthorsInScope} {ToolReply.Plural(filter.AuthorsInScope, "address", "addresses")} recorded; call authors to list them.");
+
+    /// <summary>
+    ///     Who the filter matched, under the log it narrowed. Said where the header cannot already have
+    ///     said it: a substring that caught two addresses, or a total the page does not reach. One
+    ///     address whose commits all fit is what the header states, and repeating it there is what
+    ///     teaches an agent to skim past the line that matters.
+    /// </summary>
+    private static void Matched(StringBuilder text, AuthorFilter filter, int shown)
+    {
+        if (filter.Addresses == 1 && filter.Commits == shown) return;
+
+        // The addresses listed are capped, so the count leads and the rows follow it: a broad filter
+        // says how wide it was even where naming every address it caught would be the whole reply.
+        text.Append(string.Create(CultureInfo.InvariantCulture,
+            $"\n'{filter.Query}' matched {filter.Addresses} {ToolReply.Plural(filter.Addresses, "address", "addresses")}, {filter.Commits} {ToolReply.Plural(filter.Commits, "commit")} in all"));
+        text.Append(filter.Addresses > filter.Matched.Count
+            ? string.Create(CultureInfo.InvariantCulture, $" ({filter.Matched.Count} shown):\n")
+            : ":\n");
+        foreach (var one in filter.Matched) ToolReply.AuthorRow(text, "  ", one);
+    }
+
+    /// <summary>What the count in a sentence is counting, when a filter narrowed it.</summary>
+    private static string By(AuthorFilter? filter) => filter is null ? "" : $" by an address matching '{filter.Query}'";
+
+    [McpServerTool(Name = "authors", ReadOnly = true, Idempotent = true, Title = "List who has committed")]
+    [Description("""
+                 Lists who has committed, most commits first, with the address each one commits from. Read it before filtering git_log by `author`, which matches that address.
+
+                 - `repo` scopes it to one repository; `limit` cuts the list.
+                 - One row is one address: two addresses are two rows, and a respelled name is one row under the newest spelling. Git records the address as the identity.
+                 - Counts are commits over the whole imported history, not lines and not a recent window. hot_files is what is moving now; this is who has been here.
+                 - It says who touched the code, never who wrote it: a reformat is a commit, so a mass change makes its author look expert in files they only reindented.
+                 """)]
+    public async Task<string> Authors(
+        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        string? repo = null,
+        [Description("Authors to return, 1-200. Default 30.")]
+        int limit = DefaultAuthors,
+        CancellationToken cancellationToken = default)
+    {
+        return ToolReply.Render<AuthorsAnswer>(
+            await history.AuthorsAsync(Project, new AuthorsRequest(repo, limit), cancellationToken),
+            AuthorList, "Lower limit to see fewer, or scope with repo.");
+    }
+
+    private static string AuthorList(AuthorsAnswer answer)
+    {
+        if (!answer.HasHistory) return ToolReply.NoHistory;
+        // A project with history and no author is not reachable — a commit carries one — so this is
+        // about a repository scope that holds no commits, and says that rather than "nobody".
+        if (answer.Authors.Count == 0) return $"No commits are recorded{Scope(answer.Repository)}, so no authors are.";
+
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture,
+            $"{answer.Total} {ToolReply.Plural(answer.Total, "author")}{Scope(answer.Repository)}, most commits first");
+        // Only where the list was cut, so the common answer does not carry arithmetic nobody needs.
+        text.Append(answer.Total > answer.Authors.Count
+            ? string.Create(CultureInfo.InvariantCulture, $" ({answer.Authors.Count} shown, limit {answer.Limit}):\n\n")
+            : ":\n\n");
+        foreach (var author in answer.Authors) ToolReply.AuthorRow(text, "", author);
         return text.ToString();
     }
 

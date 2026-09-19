@@ -60,7 +60,39 @@ public sealed record CoChanges(int Commits, int Paired, IReadOnlyList<CoChangedF
 }
 
 /// <summary>Everything a page of the log asks for. A null repository covers every one in the project.</summary>
-public sealed record LogRequest(string? Repository, int Limit, int Page);
+public sealed record LogRequest(string? Repository, int Limit, int Page, string? Author = null);
+
+/// <summary>
+///     What an <c>author</c> filter matched, carried beside the page it narrowed so a reply can say
+///     what it filtered by rather than presenting a narrowed log as the log.
+///     <see cref="Matched" /> is empty for a filter that matched nobody, which is a different answer
+///     from an empty page: the first says the address is wrong, the second that the page is past the
+///     end (CODING_STANDARDS, Errors). A substring can match two addresses, so they are listed and not
+///     collapsed into the text the caller supplied.
+/// </summary>
+/// <param name="Query">What the caller asked for, quoted back.</param>
+/// <param name="Commits">Commits by everyone matched, in scope — the total the page walks.</param>
+/// <param name="Addresses">How many addresses matched, which <see cref="Matched" /> may be cut short of.</param>
+/// <param name="Matched">The matched addresses, most commits first, capped like any other listing.</param>
+/// <param name="AuthorsInScope">How many authors there are, which is what a miss is read against.</param>
+public sealed record AuthorFilter(string Query, long Commits, long Addresses,
+    IReadOnlyList<RecordedAuthor> Matched, long AuthorsInScope);
+
+/// <summary>Everything a listing of a project's authors asks for.</summary>
+public sealed record AuthorsRequest(string? Repository, int Limit);
+
+/// <summary>
+///     The authors of a project or one repository, most commits first. <see cref="Total" /> is how
+///     many there are in scope, so a page cut at <see cref="Limit" /> says what it left out instead of
+///     reading as the whole list. <see cref="HasHistory" /> is carried for the reason
+///     <see cref="LogAnswer" /> carries it.
+/// </summary>
+public sealed record AuthorsAnswer(
+    bool HasHistory,
+    IndexedRepository? Repository,
+    long Total,
+    int Limit,
+    IReadOnlyList<RecordedAuthor> Authors) : Outcome;
 
 /// <summary>
 ///     A page of commits, newest first. <see cref="HasHistory" /> is the project's and not the page's:
@@ -75,7 +107,8 @@ public sealed record LogAnswer(
     IndexedRepository? Repository,
     int Page,
     int Limit,
-    IReadOnlyList<RecordedChange> Commits) : Outcome;
+    IReadOnlyList<RecordedChange> Commits,
+    AuthorFilter? Author = null) : Outcome;
 
 /// <summary>Everything a page of the change log asks for.</summary>
 public sealed record ChangeLogRequest(string? Repository, int Page, int PageSize);
@@ -207,6 +240,14 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     private const int MaxCommits = 200;
 
     /// <summary>
+    ///     Ceiling on the authors one answer names. A project of two hundred contributors is a
+    ///     contributor list rather than "who knows this code", and the same ceiling bounds the
+    ///     addresses a filter reports matching — where more than a handful means the caller asked for
+    ///     something far too broad, and the count says so without the reply becoming the list.
+    /// </summary>
+    private const int MaxAuthors = 200;
+
+    /// <summary>
     ///     The most files either ranking may return. A hundred is already more than anybody reads off a
     ///     ranking, and past it the reply cap or the page's own scroll is what would bite.
     /// </summary>
@@ -245,12 +286,44 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
             bool hasHistory = await HasHistoryAsync(index, token);
             int limit = Math.Clamp(request.Limit, 1, MaxCommits);
             int page = Math.Max(1, request.Page);
-            var commits = hasHistory
-                ? await CommitsAsync(index, index.Repository?.Slug, limit, (page - 1) * limit, token)
+            string? scope = index.Repository?.Slug;
+            // Who the filter matched is read before the page is, so that a page which comes back empty
+            // can be told apart from an address that matches nobody — and so the reply names the
+            // addresses rather than the caller's own text, which may have matched two of them.
+            // Whitespace is no filter: `author: ""` would otherwise become ILIKE '%%', match every
+            // commit, and be reported as a filtered log — the unfiltered answer to a filtered question
+            // this tool is careful about everywhere else (#86).
+            string? asked = string.IsNullOrWhiteSpace(request.Author) ? null : request.Author.Trim();
+            var author = hasHistory && asked is not null
+                ? await MatchedAsync(index, scope, asked, token)
+                : null;
+            var commits = hasHistory && author?.Addresses != 0
+                ? await CommitsAsync(index, scope, asked, limit, (page - 1) * limit, token)
                 : [];
-            return new LogAnswer(hasHistory, index.Repository, page, limit, commits);
+            return new LogAnswer(hasHistory, index.Repository, page, limit, commits, author);
         }, cancellationToken);
         if (outcome is LogAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
+        else recording.Problem();
+        return outcome;
+    }
+
+    /// <summary>
+    ///     The authors of a project or of one repository, most commits first, with how many there are
+    ///     in scope so a cut listing says what it left out.
+    /// </summary>
+    public async Task<Outcome> AuthorsAsync(string slug, AuthorsRequest request, CancellationToken cancellationToken)
+    {
+        using var recording = Telemetry.Search(slug);
+        var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
+        {
+            bool hasHistory = await HasHistoryAsync(index, token);
+            int limit = Math.Clamp(request.Limit, 1, MaxAuthors);
+            string? scope = index.Repository?.Slug;
+            var authors = hasHistory ? await AuthorsAsync(index, scope, null, limit, token) : [];
+            long total = hasHistory ? await AuthorCountAsync(index, scope, token) : 0;
+            return new AuthorsAnswer(hasHistory, index.Repository, total, limit, authors);
+        }, cancellationToken);
+        if (outcome is AuthorsAnswer answer) recording.Matched(Engine, answer.Authors.Count, 0);
         else recording.Problem();
         return outcome;
     }
@@ -470,9 +543,9 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     an author date does not (ADR-0007).
     /// </summary>
     private static async Task<IReadOnlyList<RecordedChange>> CommitsAsync(IndexReader index, string? repositorySlug,
-        int limit, int skip, CancellationToken cancellationToken)
+        string? author, int limit, int skip, CancellationToken cancellationToken)
     {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author);
         using var command = index.Connection.Query($"""
                                                     SELECT sha, repo_slug, author_name, author_email, authored_at,
                                                            subject
@@ -513,6 +586,82 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                 reader.Text("author_email"),
                 reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")), reader.Text("subject")));
         return changes;
+    }
+
+    /// <summary>
+    ///     The authors of the commits in scope, most commits first, with the newest name each address
+    ///     committed under. Grouped by address for the reason the overview groups by it: the address is
+    ///     the identity git records, and a person who respells their name is one author, not two.
+    ///     <paramref name="author" /> narrows it to the addresses a filter matched, which is the same
+    ///     read with the same grouping — so what a filtered log says it matched cannot disagree with
+    ///     what the authors listing says is there.
+    /// </summary>
+    private static async Task<IReadOnlyList<RecordedAuthor>> AuthorsAsync(IndexReader index, string? repositorySlug,
+        string? author, int limit, CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author);
+        using var command = index.Connection.Query($"""
+                                                    SELECT author_email,
+                                                           arg_max(author_name, authored_at) AS author_name,
+                                                           count(*) AS commits,
+                                                           -- epoch() because seconds as a double do not
+                                                           -- depend on whether ICU is loaded to decide
+                                                           -- the session time zone.
+                                                           epoch(max(authored_at)) AS last_commit
+                                                    FROM commits {scope}
+                                                    GROUP BY author_email
+                                                    ORDER BY commits DESC, author_email
+                                                    LIMIT {limit}
+                                                    """, parameters);
+        using var reader = await command.ReaderAsync(cancellationToken);
+        var authors = new List<RecordedAuthor>();
+        while (await reader.ReadAsync(cancellationToken))
+            authors.Add(new RecordedAuthor(reader.Text("author_name"), reader.Text("author_email"),
+                reader.GetFieldValue<long>(reader.GetOrdinal("commits")),
+                DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("last_commit"))));
+        return authors;
+    }
+
+    /// <summary>How many authors are recorded in scope, which is what a filter matching none is read against.</summary>
+    private static async Task<long> AuthorCountAsync(IndexReader index, string? repositorySlug,
+        CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
+        using var command = index.Connection.Query($"SELECT count(DISTINCT author_email) FROM commits {scope}",
+            parameters);
+        return (long)(await command.ScalarAsync(cancellationToken) ?? 0L);
+    }
+
+    /// <summary>
+    ///     Who an <c>author</c> filter matched, and how many commits they have in scope.
+    ///     The two totals are counted rather than summed over the rows: the rows are capped like any
+    ///     listing, and a broad substring past the cap would otherwise report the sum of the first two
+    ///     hundred addresses as though it were the whole match — a number too low, with nothing saying
+    ///     so, which is the reply this change exists to stop.
+    /// </summary>
+    private static async Task<AuthorFilter> MatchedAsync(IndexReader index, string? repositorySlug, string author,
+        CancellationToken cancellationToken)
+    {
+        var (addresses, commits) = await MatchCountsAsync(index, repositorySlug, author, cancellationToken);
+        var matched = addresses == 0
+            ? []
+            : await AuthorsAsync(index, repositorySlug, author, MaxAuthors, cancellationToken);
+        return new AuthorFilter(author, commits, addresses, matched,
+            addresses > 0 ? 0 : await AuthorCountAsync(index, repositorySlug, cancellationToken));
+    }
+
+    /// <summary>How many addresses a filter matched and how many commits they have between them.</summary>
+    private static async Task<(long Addresses, long Commits)> MatchCountsAsync(IndexReader index,
+        string? repositorySlug, string author, CancellationToken cancellationToken)
+    {
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author);
+        using var command = index.Connection.Query(
+            $"SELECT count(DISTINCT author_email) AS addresses, count(*) AS commits FROM commits {scope}", parameters);
+        using var reader = await command.ReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return (0, 0);
+
+        return (reader.GetFieldValue<long>(reader.GetOrdinal("addresses")),
+            reader.GetFieldValue<long>(reader.GetOrdinal("commits")));
     }
 
     /// <summary>How many commits are recorded in scope, so a page can say how many there are.</summary>

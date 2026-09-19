@@ -188,7 +188,46 @@ internal static class IndexQueries
     ///     them eventually being wrong.
     /// </summary>
     public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug) =>
-        repositorySlug is null
-            ? ("", [])
-            : ("WHERE repo_slug = $r", [new DuckDBParameter("r", repositorySlug)]);
+        CommitScope(repositorySlug, null);
+
+    /// <summary>
+    ///     The same, narrowed to the commits of one author as well. The author is matched on the
+    ///     address and never the display name: the address is the identity git records, it is what the
+    ///     overview groups authors by, and it is stable where a name is not — one person commits as
+    ///     "Grace Hopper", "grace" and "Grace M. Hopper" from one address, and two people share a
+    ///     first name. Matching both would make the same call mean different things depending on which
+    ///     spelling a commit happened to carry.
+    ///     A case-insensitive substring, because an agent has an address it read off an overview or a
+    ///     blame, and a local part ("grace") is the half of it worth typing. A substring can still
+    ///     match two addresses, so what it matched is named in the reply rather than assumed
+    ///     (<see cref="HistoryQueries.LogAsync" />).
+    ///     The pattern is escaped and bound, never interpolated: it is caller text, and `%` or `_` in
+    ///     it would otherwise widen the match silently.
+    /// </summary>
+    public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug, string? author)
+    {
+        var clauses = new List<string>(2);
+        var parameters = new List<DuckDBParameter>(2);
+        if (repositorySlug is not null)
+        {
+            clauses.Add("repo_slug = $r");
+            parameters.Add(new DuckDBParameter("r", repositorySlug));
+        }
+
+        if (author is not null)
+        {
+            // ESCAPE '!' rather than the backslash default: caller text carries backslashes of its
+            // own, and '!' is not a character of an address.
+            clauses.Add("author_email ILIKE $a ESCAPE '!'");
+            parameters.Add(new DuckDBParameter("a", $"%{Escaped(author)}%"));
+        }
+
+        return (clauses.Count == 0 ? "" : $"WHERE {string.Join(" AND ", clauses)}", parameters);
+    }
+
+    /// <summary>The LIKE metacharacters, made literal, so an address matches as the text it is.</summary>
+    private static string Escaped(string author) =>
+        author.Replace("!", "!!", StringComparison.Ordinal)
+            .Replace("%", "!%", StringComparison.Ordinal)
+            .Replace("_", "!_", StringComparison.Ordinal);
 }

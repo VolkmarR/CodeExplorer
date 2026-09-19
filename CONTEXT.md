@@ -82,6 +82,14 @@ repository may have none at all, and a file's history begins where it was last r
 told nothing is told that, rather than being given an empty answer.
 _Avoid_: Log, git history, timeline, audit trail
 
+**Author**:
+Whoever a commit records as having written it, identified by their email address and never by the
+display name beside it: one person commits under several spellings of their name from one address,
+and two people share a first name. So a ranking groups by address, a person committing from two
+addresses is two authors, and `git_log`'s `author` filter matches the address — `authors` is what
+names them. Author and not committer: a rebase makes the two disagree.
+_Avoid_: Contributor, owner, committer, developer
+
 **Attribution**:
 The commit a line or a file was last changed by. Evidence of who touched something last and not of
 who wrote the logic — a reformat is an attribution — so it answers "who worked on this" and never
