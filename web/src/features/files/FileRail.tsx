@@ -52,12 +52,16 @@ export function FileRail({
     // own scrollbar, a bright track against the dark card column and plainly not the one the code
     // pane beside it has.
     <ScrollArea className="w-full shrink-0 max-h-none xl:max-h-(--reading-pane) xl:w-80">
-      {/* The padding is inside the scroll area, so a card at either end of the scroll shows all four
+      {/* The padding is inside the scroll area, so a card at any edge of the scroll shows all four
           of its borders instead of being cut flush against the clip edge — the cards are what is
-          scrolled, and a box that reads as unclosed reads as broken. A whole step and not the 1px a
-          border strictly needs: a focus ring around a card at the edge has to fit too. `pr` is also
-          what keeps a panel's text out from under the scrollbar. */}
-      <aside className="space-y-4 py-1 xl:pr-2.5">
+          scrolled, and a box that reads as unclosed reads as broken. On every side and not only the
+          two it scrolls between: a card's border is `ring-1`, which is drawn outside its box rather
+          than inside it, so the left edge sat under the viewport's clip and every panel in the rail
+          lost that one border while keeping the other three.
+          A whole step and not the 1px a border strictly needs: a focus ring around a card at the
+          edge has to fit too. `pr` is wider still, because it also keeps a panel's text out from
+          under the scrollbar. */}
+      <aside className="space-y-4 p-1 xl:pr-2.5">
         <DeclarationPanel project={project} path={file.qualifiedPath} origin={origin} />
 
         <ImportPanels project={project} path={file.qualifiedPath} />
