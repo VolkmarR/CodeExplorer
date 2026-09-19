@@ -692,6 +692,35 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
+    ///     A directory name is data and not a pattern. `[xy]` is a route directory in half the web
+    ///     frameworks there are, and it is a character class to GLOB — so a glob built from it would
+    ///     match the sibling `x` and report a directory that was deleted as still being at HEAD. That
+    ///     is the mark saying the opposite of what happened, which is worse than no mark at all.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_reads_a_rolled_up_directory_name_as_a_name_and_not_as_a_glob()
+    {
+        string source = _host.CreateEmptyGitRepository("routes-one");
+        _host.CommitToGitRepositoryAs("routes-one",
+            new Dictionary<string, string> { ["pages/[xy]/a.ts"] = "a\n", ["pages/x/b.ts"] = "b\n" },
+            "Add the routes", "Ada", "ada@example.invalid", 0);
+        _host.RemoveInGitRepositoryAs("routes-one", ["pages/[xy]/a.ts"], "Drop the dynamic route", "Grace",
+            "grace@example.invalid", 1);
+
+        await _host.CreateProjectAsync("routes");
+        await _host.AddRepositoryAsync("routes", "one", source);
+        await _host.RefreshAsync("routes");
+        await using var client = await _host.ConnectAsync("routes");
+
+        string reply = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["depth"] = 3 });
+
+        Assert.Contains("one/pages/[xy]  (no longer at HEAD)", reply, StringComparison.Ordinal);
+        // The sibling the character class would have matched is still there, and unmarked.
+        Assert.Contains("one/pages/x\n", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     A path the window changed and HEAD no longer holds is ranked and marked. Leaving it out
     ///     would understate the churn of the area it was in; leaving it unmarked would send an agent to
     ///     read a file that is not there.
