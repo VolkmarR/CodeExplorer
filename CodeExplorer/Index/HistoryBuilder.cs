@@ -285,17 +285,19 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         try
         {
             // The runs are expanded to one row per attributed line so the write below joins on equality
-            // instead of BETWEEN. Measured on a synthetic 10M-line index: the range join is 505 ms, the
-            // expansion 47 ms and the equality update 264 ms, while writing every value with no join at
-            // all is 81 ms — so the cost is the range join and not the number of rows written, and six
-            // times more join-side rows still come out ahead. Only paths that exist at HEAD are
-            // expanded; attribution keeps rows for paths this walk no longer sees, and they join to
-            // nothing either way.
+            // instead of BETWEEN. Measured on a copy of the real Radix index — 9,495,301 lines,
+            // 1,635,798 runs, 49,689 files — the range join is ~9.9 s, while the expansion is ~75 ms
+            // and the equality update ~335 ms. Writing every value with no join at all is ~0.4 s, so
+            // the cost is the range join and not the number of rows written, and the expansion's
+            // 10,433,190 rows still come out ahead of the 1,635,798 runs they came from. Every one of
+            // those lines gets the same commit the range join gave it (#80).
+            // Only paths that exist at HEAD are expanded; attribution keeps rows for paths this walk
+            // no longer sees, and they join to nothing either way.
             // TEMP and not a table in the shadow: this is scratch for one statement, and the shadow file
             // is about to be swapped in and would carry it forever.
             Execute(connection,
                 """
-                CREATE OR REPLACE TEMP TABLE attributed_line AS
+                CREATE OR REPLACE TEMP TABLE attributed_lines AS
                 SELECT f.file_id, unnest(range(a.start_line, a.end_line + 1))::INTEGER AS line_number,
                        a.commit_id
                 FROM attribution a
@@ -306,7 +308,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             Execute(connection,
                 """
                 UPDATE lines SET commit_id = e.commit_id
-                FROM attributed_line e
+                FROM attributed_lines e
                 WHERE lines.file_id = e.file_id AND lines.line_number = e.line_number
                 """, cancellationToken);
         }
@@ -314,7 +316,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         {
             // In a finally so a cancelled or failed build does not leave the scratch behind on a
             // connection the pool hands out again.
-            Execute(connection, "DROP TABLE IF EXISTS attributed_line", CancellationToken.None);
+            Execute(connection, "DROP TABLE IF EXISTS attributed_lines", CancellationToken.None);
         }
 
         // Bounded by commit_id and not by date: the ids ascend with history by construction, while an
@@ -339,7 +341,9 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     recoverable; the index it would have swapped in is not.
     ///     Checked on the runs and not on the expansion: each path's runs are compared against the
     ///     furthest line any earlier run of the same path reached, which is one ordered pass over a
-    ///     table thousands of times smaller than the lines it describes.
+    ///     table thousands of times smaller than the lines it describes. It covers the same runs the
+    ///     expansion does — those whose path is still at HEAD — so it refuses what could be written
+    ///     wrongly and stays quiet about history for paths that are no longer there.
     /// </summary>
     private static void RefuseOverlappingRuns(DuckDBConnection connection, CancellationToken cancellationToken)
     {
@@ -347,11 +351,25 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         command.CommandText =
             """
             SELECT repo_slug, path, start_line FROM (
-                SELECT repo_slug, path, start_line,
-                       max(end_line) OVER (PARTITION BY repo_slug, path ORDER BY start_line
+                -- covered is the furthest line any EARLIER run of the same path reached: the window
+                -- is ordered by start_line and stops one row short of the current one, so a run is
+                -- never compared against itself. Runs are read in start order and may nest, which is
+                -- why this is max(end_line) over all previous rows and not the previous row's alone.
+                SELECT a.repo_slug, a.path, a.start_line,
+                       max(a.end_line) OVER (PARTITION BY a.repo_slug, a.path ORDER BY a.start_line
                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS covered
-                FROM attribution)
+                FROM attribution a
+                -- The same joins the expansion makes, so this asks about exactly the runs that are
+                -- about to be written and no others. attribution keeps runs for paths this walk no
+                -- longer sees; they expand to nothing and can corrupt no line, and failing the build
+                -- over one would strand the project on an error whose only remedy is a rebuild.
+                JOIN repositories r ON r.slug = a.repo_slug
+                JOIN files f ON f.repo_id = r.repo_id AND f.path = a.path)
+            -- covered is NULL for each path's first run, and NULL <= x is never true, so the first
+            -- run of every path falls out here without a special case.
             WHERE start_line <= covered
+            -- One row is all the caller needs: it names the first overlap to fail the build on, and
+            -- stopping there keeps this to a scan that quits early on the healthy case.
             LIMIT 1
             """;
         cancellationToken.ThrowIfCancellationRequested();

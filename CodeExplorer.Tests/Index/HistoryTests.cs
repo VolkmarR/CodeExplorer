@@ -275,6 +275,20 @@ public sealed class HistoryTests : IDisposable
     ///     naming the same commit.
     /// </summary>
     [Fact]
+    public async Task A_first_build_attributes_every_line_in_the_project()
+    {
+        await IndexTwoCommitProjectAsync();
+
+        // The whole-index write is what a first build needs and the case a scoped one would have
+        // broken, so it is asserted as a count of what is NOT attributed rather than by reading the
+        // lines of one file: nothing anywhere may be left without a commit.
+        Assert.Equal(["0"], await _host.ScalarsAsync("alpha",
+            "SELECT count(*)::VARCHAR FROM lines WHERE commit_id IS NULL"));
+        Assert.Equal(["3"], await _host.ScalarsAsync("alpha",
+            "SELECT count(*)::VARCHAR FROM lines"));
+    }
+
+    [Fact]
     public async Task A_refresh_of_one_repository_leaves_the_other_repositorys_attribution_alone()
     {
         await IndexTwoRepositoryProjectAsync();
@@ -337,7 +351,7 @@ public sealed class HistoryTests : IDisposable
         await IndexTwoCommitProjectAsync();
 
         var tables = await _host.ScalarsAsync("alpha", "SELECT table_name FROM duckdb_tables()");
-        Assert.DoesNotContain("attributed_line", tables);
+        Assert.DoesNotContain("attributed_lines", tables);
     }
 
     /// <summary>
@@ -363,6 +377,35 @@ public sealed class HistoryTests : IDisposable
         Assert.Equal(RefreshState.Failed, status.State);
         Assert.Contains("src/Check.cs", status.Error);
         Assert.Contains("'one'", status.Error);
+    }
+
+    [Fact]
+    public async Task Attribution_runs_that_overlap_on_a_path_no_longer_at_HEAD_do_not_fail_the_build()
+    {
+        await IndexTwoCommitProjectAsync();
+        // attribution keeps runs for paths the walk no longer sees. They join to no file and so are
+        // written onto no line, which is why an overlap among them is not a reason to refuse a build
+        // whose only remedy would be a rebuild from scratch.
+        await _host.ExecuteAsync("alpha",
+            "INSERT INTO attribution SELECT repo_slug, 'src/Gone.cs', start_line, end_line, commit_id "
+            + "FROM attribution WHERE path = 'src/Check.cs'");
+        await _host.ExecuteAsync("alpha",
+            "INSERT INTO attribution SELECT * FROM attribution WHERE path = 'src/Gone.cs'");
+
+        using (var response = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await _host.WaitForRefreshesAsync();
+
+        var status = await _host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Succeeded, status.State);
+        // And the file that is still there is attributed as it was.
+        var attributed = await _host.ScalarsAsync("alpha",
+            """
+            SELECT coalesce(c.subject, 'none') FROM lines l
+            LEFT JOIN commits c USING (commit_id)
+            ORDER BY l.line_number
+            """);
+        Assert.Equal(["Add the validator", "Tighten the check", "Add the validator"], attributed);
     }
 
     /// <summary>
