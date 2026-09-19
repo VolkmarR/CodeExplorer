@@ -25,6 +25,11 @@ public sealed record IndexedFile(
 ///     One repository as the last build left it. <paramref name="Commits" /> is how much history was
 ///     imported for it and <paramref name="NewestCommit" /> the last one recorded; zero and null mean
 ///     none was, which is a different thing from a repository nobody has changed.
+///     <paramref name="FirstCommitAt" /> and <paramref name="LastCommitAt" /> are the dates that
+///     history spans — the earliest and latest authored date, not the first and last commit of the
+///     walk. The two differ: <c>commit_id</c> ascends with history by construction and an author date
+///     does not (ADR-0007), so the tip of the walk is not always the newest date. A span is a question
+///     about dates, and the dates are what it answers with.
 /// </summary>
 public sealed record IndexedRepository(
     string Slug,
@@ -33,7 +38,9 @@ public sealed record IndexedRepository(
     int FileCount,
     long LineCount,
     long Commits = 0,
-    AttributedBy? NewestCommit = null);
+    AttributedBy? NewestCommit = null,
+    DateTimeOffset? FirstCommitAt = null,
+    DateTimeOffset? LastCommitAt = null);
 
 /// <summary>
 ///     What an index holds, for the readers that describe a project rather than read from it:
@@ -877,6 +884,10 @@ public sealed class IndexReader : IDisposable
         _repositories = repositories;
     }
 
+    /// <summary>A nullable timestamp column: null for a repository whose history was never walked.</summary>
+    private static DateTimeOffset? When(DbDataReader reader, string column) =>
+        reader.IsNull(column) ? null : reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal(column));
+
     private static async Task<IReadOnlyList<IndexedRepository>> ReadRepositoriesAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
     {
@@ -886,11 +897,16 @@ public sealed class IndexReader : IDisposable
         using var command = connection.Query(
             """
             SELECT r.slug, r.url, r.head_commit, r.file_count, r.line_count,
-                   coalesce(h.commits, 0) AS commits, h.sha, h.author_name, h.authored_at, h.subject
+                   coalesce(h.commits, 0) AS commits, h.sha, h.author_name, h.authored_at, h.subject,
+                   h.first_at, h.last_at
             FROM repositories r
             LEFT JOIN (SELECT repo_slug, count(*) AS commits,
                               argMax(sha, commit_id) AS sha, argMax(author_name, commit_id) AS author_name,
-                              argMax(authored_at, commit_id) AS authored_at, argMax(subject, commit_id) AS subject
+                              argMax(authored_at, commit_id) AS authored_at, argMax(subject, commit_id) AS subject,
+                              -- The span, by date rather than by walk order: min and max, not the first
+                              -- and last commit_id, because an author date does not ascend with history
+                              -- (ADR-0007) and "how far back does this go" is asked about dates.
+                              min(authored_at) AS first_at, max(authored_at) AS last_at
                        FROM commits GROUP BY repo_slug) h ON h.repo_slug = r.slug
             ORDER BY r.repo_id
             """, []);
@@ -906,7 +922,9 @@ public sealed class IndexReader : IDisposable
                     ? null
                     : new AttributedBy(reader.Text("sha"), reader.Text("author_name"),
                         reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
-                        reader.Text("subject"))
+                        reader.Text("subject")),
+                FirstCommitAt = When(reader, "first_at"),
+                LastCommitAt = When(reader, "last_at")
             });
         return result;
     }

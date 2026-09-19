@@ -30,7 +30,10 @@ internal sealed class ProjectTools(
 
     [McpServerTool(Name = "repo_info", ReadOnly = true, Idempotent = true, Title = "Describe the project's index")]
     [Description("""
-                 Describes this project: its repositories with the commit each was indexed at, file and line counts, when the index was built and whether full-text search is active. Call it first when you do not know what the project holds, then list_tree(depth=2) to learn the layout. A repository added after the last build is listed as not indexed yet, so a missing file may be waiting for a rebuild rather than absent.
+                 Describes this project: its repositories with the commit each was indexed at, file and line counts, how much history each holds and the dates it spans, when the index was built and whether full-text search is active. Call it first when you do not know what the project holds, then list_tree(depth=2) to learn the layout. A repository added after the last build is listed as not indexed yet, so a missing file may be waiting for a rebuild rather than absent.
+
+                 - The history line answers "how far back does this go" and "how much is there" without paging git_log for either. The span is of what was imported, which may begin later than the repository itself does.
+                 - A repository whose history was never walked says so. That is not the same as a repository nobody has changed, and no history tool can answer anything about it.
                  """)]
     public async Task<string> RepoInfo(CancellationToken cancellationToken = default)
     {
@@ -63,13 +66,39 @@ internal sealed class ProjectTools(
         int width = Math.Max(indexed.Select(r => r.Slug.Length).DefaultIfEmpty(0).Max(),
             configured.Select(r => r.Slug.Length).DefaultIfEmpty(0).Max());
         foreach (var repository in indexed)
+        {
             text.Append(repository.Slug.PadRight(width)).Append(CultureInfo.InvariantCulture,
                 $"  {repository.FileCount} {ToolReply.Plural(repository.FileCount, "file")}, {repository.LineCount} {ToolReply.Plural(repository.LineCount, "line")}, commit {repository.HeadCommit[..Math.Min(12, repository.HeadCommit.Length)]}, {repository.Url}\n");
+            text.Append(' ', width).Append("  ").Append(History(repository)).Append('\n');
+        }
+
         foreach (var repository in configured.Where(c => indexed.All(i => i.Slug != c.Slug)))
             text.Append(repository.Slug.PadRight(width)).Append(CultureInfo.InvariantCulture,
                 $"  not indexed yet: added after the last refresh. The operator includes it with POST /api/projects/{project.Slug}/refresh.\n");
 
         return text.ToString();
+    }
+
+    /// <summary>
+    ///     How much history one repository has, and how far back it reaches. Said here because the
+    ///     alternative is what an agent did instead: bisecting `git_log(limit=1, page=N)` until the
+    ///     oldest commit turned up, which cost one measured evaluation fifteen of its twenty-eight
+    ///     calls to establish two dates (#108).
+    ///     A repository with none says so in those words. An empty span and a repository nobody has
+    ///     changed read alike and mean opposite things (CONTEXT.md, History) — and here the first is
+    ///     always what it means, because a walk that ran records the root commit at least.
+    /// </summary>
+    private static string History(IndexedRepository repository)
+    {
+        if (repository.Commits == 0 || repository.FirstCommitAt is not { } first ||
+            repository.LastCommitAt is not { } last)
+            return "no history imported: its walk found nothing, or the index predates history. "
+                   + "Nothing about who changed what can be answered for it.";
+
+        // One interpolated string and not a concatenation: joined with `+` it is a string rather than a
+        // handler, and the culture-aware overload then binds to something else entirely.
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{repository.Commits:N0} {ToolReply.Plural(repository.Commits, "commit")} imported, {first:yyyy-MM-dd} to {last:yyyy-MM-dd}. That is what was imported, which may begin later than the repository itself does.");
     }
 
     [McpServerTool(Name = "project_overview", ReadOnly = true, Idempotent = true,
