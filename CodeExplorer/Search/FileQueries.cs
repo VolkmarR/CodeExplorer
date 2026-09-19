@@ -204,8 +204,16 @@ public sealed class FileQueries(ProjectIndexes indexes)
                 if (await index.FindFileAsync(directory.QualifiedPath, token) is not null)
                     return new Problem(
                         $"'{directory.QualifiedPath}' is a file, not a directory, in project '{index.ProjectSlug}'. Use read_file to read it.");
-                return new Problem(
-                    $"'{location.PathInRepository}' is not a directory in repository '{location.RepositorySlug}'. Call list_tree with a parent path to see what exists there.");
+
+                string miss = $"'{location.PathInRepository}' is not a directory in repository "
+                              + $"'{location.RepositorySlug}'. ";
+                // The same diagnosis the file miss gives, in the same words: an agent that prefixed a
+                // path with the slug will do it to both tools, and being told the rule by one of them
+                // and left guessing by the other is the round-trip this was meant to remove (#111).
+                if (await index.DirectorySlugPrefixAdviceAsync(request.Path ?? "", token) is { } slugged)
+                    return new Problem(miss + slugged);
+
+                return new Problem(miss + "Call list_tree with a parent path to see what exists there.");
             }
 
             var repositories = await index.RepositoriesAsync(token);

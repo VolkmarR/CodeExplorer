@@ -445,6 +445,14 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                     ? []
                     : await IndexQueries.RankAsync(index.Connection, await index.PathsAsync(token), window,
                         repositorySlug, directoryInRepository, Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
+
+                // A ranking of a scope that does not exist is the emptiest kind of empty answer, and a
+                // path prefixed with the project's slug is the commonest way to ask for one (#111). The
+                // diagnosis is the reader's, so hot_files says what read_file and list_tree say.
+                if (ranked.Count == 0 && request.Directory is { } wanted
+                                      && await index.DirectorySlugPrefixAdviceAsync(wanted, token) is { } slugged)
+                    return new Problem(slugged);
+
                 return new ChurnAnswer(spelled, hasHistory, window, ranked, coverage);
             }, cancellationToken);
         if (outcome is ChurnAnswer answer) recording.Matched(Engine, answer.Files.Count, 0);
