@@ -42,11 +42,16 @@ public sealed record Reference(
 ///     short" is a question about this result, not about its formatting.
 ///     <see cref="TotalLines" /> counts the lines holding the identifier anywhere in the project
 ///     under the filters, which is not the number of references: one line may name it twice.
+///     <see cref="TotalOccurrences" /> is that same project-wide sweep counted per appearance rather
+///     than per line, so it answers "how many, in the whole project" where <see cref="References" />
+///     can only answer it for the sample that was read. It is a count and not a classification: an
+///     occurrence here may turn out to be a call, a comment or an unrelated symbol of the same name.
 /// </summary>
 public sealed record ReferenceResult(
     int TotalFiles,
     int FilesExamined,
     long TotalLines,
+    long TotalOccurrences,
     IReadOnlyList<Reference> References,
     int? FilesMatchingWithoutFilters) : Outcome
 {
@@ -155,9 +160,12 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                           FROM lines l JOIN files f USING (file_id)
                           WHERE {literally} AND regexp_matches(l.content, $q, ''){fileFilter}),
                       per_file AS (
-                          SELECT file_id, qualified_path, extension, count(*) AS n FROM hits GROUP BY ALL),
+                          SELECT file_id, qualified_path, extension, count(*) AS n,
+                                 sum(len(regexp_extract_all(content, $q, 0))) AS occurrences
+                          FROM hits GROUP BY ALL),
                       totals AS (
-                          SELECT count(*) AS total_files, coalesce(sum(n), 0) AS total_lines FROM per_file),
+                          SELECT count(*) AS total_files, coalesce(sum(n), 0) AS total_lines,
+                                 coalesce(sum(occurrences), 0) AS total_occurrences FROM per_file),
                       page_files AS (
                           SELECT file_id, qualified_path, extension FROM per_file
                           ORDER BY n DESC, qualified_path
@@ -168,7 +176,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                                      row_number() OVER (PARTITION BY h.file_id ORDER BY h.line_number) AS rn
                               FROM hits h JOIN page_files p USING (file_id))
                           WHERE rn <= {MaxLinesPerFile})
-                      SELECT t.total_files, t.total_lines, k.file_id, k.qualified_path, k.extension,
+                      SELECT t.total_files, t.total_lines, t.total_occurrences, k.file_id, k.qualified_path, k.extension,
                              k.line_number, k.content
                       FROM totals t LEFT JOIN kept k ON true
                       ORDER BY k.qualified_path, k.line_number
@@ -177,6 +185,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         var matched = new List<MatchedLine>();
         int totalFiles = 0;
         long totalLines = 0;
+        long totalOccurrences = 0;
         using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
         using (var reader = await command.ReaderAsync(cancellationToken))
         {
@@ -184,6 +193,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
             {
                 totalFiles = (int)reader.Int64("total_files");
                 totalLines = reader.Int64("total_lines");
+                totalOccurrences = reader.Int64("total_occurrences");
                 if (reader.IsNull("qualified_path")) continue;
                 matched.Add(new MatchedLine(reader.Int64("file_id"), reader.Text("qualified_path"),
                     Languages.Default.For(reader.Text("extension")), reader.Int32("line_number"),
@@ -222,7 +232,8 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
             .ToList();
 
         int filesExamined = matched.Select(line => line.FileId).Distinct().Count();
-        return new ReferenceResult(totalFiles, filesExamined, totalLines, references, withoutFilters);
+        return new ReferenceResult(totalFiles, filesExamined, totalLines, totalOccurrences, references,
+            withoutFilters);
     }
 
     /// <summary>

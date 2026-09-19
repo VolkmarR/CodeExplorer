@@ -259,8 +259,8 @@ public sealed class ReferenceTests : IDisposable
         string text = await FindAsync(client,
             new Dictionary<string, object?> { ["symbol"] = "OrderStatus", ["maxFiles"] = 1 });
 
-        Assert.Contains("3 files hold the name in total", text);
-        Assert.Contains("raise maxFiles", text);
+        Assert.Contains("3 files hold the name", text);
+        Assert.Contains("Raise maxFiles", text);
     }
 
     [Fact]
@@ -422,6 +422,61 @@ public sealed class ReferenceTests : IDisposable
         Assert.Contains("3 in comments, strings or imports", text);
         Assert.Contains("select Advance from orders", text);
         Assert.Contains("0 unplaced", text);
+    }
+
+    /// <summary>
+    ///     The project-wide occurrence total (#119). The detailed classification stops at the heaviest
+    ///     files, and the sizing question — "how big is this change?" — is about all of them. The total
+    ///     counts appearances and not lines, so a line naming the symbol twice counts twice.
+    /// </summary>
+    [Fact]
+    public async Task A_sample_says_how_many_occurrences_the_whole_project_holds()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("wide", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Heavy.cs"] = "class Heavy\n{\n    void A() => Ship(Ship());\n    void B() => Ship();\n}\n",
+                ["src/Thin.cs"] = "class Thin\n{\n    void C() => Ship();\n}\n",
+                ["src/Other.cs"] = "class Other\n{\n    void D() => Ship();\n}\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("wide");
+
+        string text = await FindAsync(client,
+            new Dictionary<string, object?> { ["symbol"] = "Ship", ["maxFiles"] = 1 });
+
+        // The sample is the one heaviest file: three of the five occurrences.
+        Assert.Contains("\"Ship\" in 1 file", text);
+        Assert.Contains("3 calls", text);
+        // The whole project is five, and the reply must not let the sample read as the total.
+        Assert.Contains("a floor for the 1 files examined, not a project total", text);
+        Assert.Contains("3 files hold the name, 5 occurrences in all", text);
+        Assert.Contains("Raise maxFiles for the rest", text);
+    }
+
+    /// <summary>
+    ///     The same note past the ceiling (#113). "Raise maxFiles" is arithmetic the caller cannot
+    ///     complete once more files hold the name than maxFiles can ever examine, so the advice becomes
+    ///     the pivot that does answer breadth.
+    /// </summary>
+    [Fact]
+    public async Task Past_the_ceiling_the_note_names_a_pivot_instead_of_a_higher_cap()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        var files = new Dictionary<string, string>();
+        for (int i = 0; i <= ReferenceSearch.MaxFiles; i++)
+            files[$"src/File{i}.cs"] = $"class File{i}\n{{\n    void Run() => Ship();\n}}\n";
+        await _host.IndexedProjectAsync("huge",
+            new Dictionary<string, Dictionary<string, string>> { ["one"] = files });
+        await using var client = await _host.ConnectAsync("huge");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Ship" });
+
+        Assert.Contains($"{ReferenceSearch.MaxFiles} is the most maxFiles can examine", text);
+        Assert.Contains("grep(filesOnly=true) for breadth", text);
+        Assert.DoesNotContain("Raise maxFiles", text);
     }
 
     [Fact]
