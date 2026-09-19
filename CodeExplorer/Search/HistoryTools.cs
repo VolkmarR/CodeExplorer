@@ -480,7 +480,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             // The window names its own end, so the repository is not named here: in a single-repository
             // project its slug is one the operator never assigned and no path an agent holds contains.
             return $"No commit changed {spelled} between {window.Describe()}, so there is nothing it "
-                   + "could have changed alongside; raise days to look further back.";
+                   + $"could have changed alongside. {WhyNoCommits(answer.Recorded)}";
 
         if (coupling.Files.Count == 0)
             return $"No other file was changed by any of the {coupling.Paired} "
@@ -512,6 +512,32 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         }
 
         return text.ToString();
+    }
+
+    /// <summary>
+    ///     Why a window reached none of a path's commits (#115). Two opposite facts share this branch:
+    ///     a path the imported history has never recorded, which is what a bulk rename leaves behind and
+    ///     which no window will ever reach, and a path whose commits are simply older than the days
+    ///     asked for. They must not share a sentence — "raise days" is the whole answer to the second
+    ///     and useless against the first, where the file's coupling is real and its history sits under
+    ///     another name. History is matched by the path a commit recorded, which is what a caller has to
+    ///     know to read either answer; blame follows content across a rename and can still answer.
+    /// </summary>
+    private static string WhyNoCommits(RecordedPath? recorded)
+    {
+        const string ByPath =
+            "History here is matched by the path a commit recorded, so it begins where the file was last renamed.";
+
+        if (recorded is not { Commits: > 0 } some)
+            return $"{ByPath} No commit at all is recorded under this path, which is what an unrelated bulk "
+                   + "rename leaves behind — a long-lived file that looks brand new. Widening days will not "
+                   + "reach it; blame follows content across a rename and can still say who changed these lines.";
+
+        string newest = some.Newest is { } at
+            ? string.Create(CultureInfo.InvariantCulture, $", the newest from {at:yyyy-MM-dd}")
+            : "";
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{some.Commits} {ToolReply.Plural(some.Commits, "commit")} {ToolReply.Plural(some.Commits, "is", "are")} recorded under this path{newest}, all of them older than the window; raise days to reach them. {ByPath} A path that records very few commits is usually one a rename severed, and blame follows content across a rename.");
     }
 
     /// <summary>
