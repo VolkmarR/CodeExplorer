@@ -42,10 +42,12 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     [Description("""
                  Lists commits of the project's default branch, newest first. Use it to see what changed recently, and how much of a project is moving, before asking about any one file.
 
-                 - `repo` scopes it to one repository, `author` to one person, `message` to what a commit says it did; `limit` and `page` walk it. Those are its only arguments.
+                 - `repo` scopes it to one repository, `path` to a folder or a file inside one, `author` to one person, `message` to what a commit says it did; `limit` and `page` walk it. Those are its only arguments, and they combine.
+                 - `path` is a qualified path, exactly as grep, glob and list_tree print one: `main/src/Api` for everything under a folder, or `main/src/Api/Orders.cs` for one file. It is what makes "what has been happening in this folder" one call. Scoping is by the path each commit recorded, so it begins where a file was last renamed.
                  - `author` matches the email address, not the display name: `grace@example.com` or `grace`, never "Grace Hopper". `authors` lists the addresses.
                  - `message` matches text in the subject line, case-insensitively: a ticket key, a PR number, a release name. A ticket or PR number lives in the commit message and almost never in the code, so look for it here rather than with grep. It searches the subject only, not the body, and it is text and not a pattern — `%` and `_` match themselves.
                  - Nothing else filters — not by one commit and not by date. Any other argument name is named as ignored above the answer.
+                 - It is not project-wide only: `repo` and `path` narrow it, and `file_history` is the same read for one exact path.
                  - For what it cannot answer: page back for older commits, authors for who has worked here, file_history for one file, blame for one line, hot_files for where the work is, commit and commit_files for the message and the paths of one commit found here.
                  - Merges count as one commit and their side branches are not walked, so a pull request reads as a single change.
                  - Only the default branch is recorded. A commit on a branch that was never merged is not here.
@@ -64,6 +66,9 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         int limit = DefaultCommits,
         [Description("1-based page of results, newest first.")]
         int page = 1,
+        [Description(
+            "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. Default: the whole project.")]
+        string? path = null,
         CancellationToken cancellationToken = default)
     {
         // A name this tool does not have binds nowhere — every parameter is optional — and the call
@@ -71,10 +76,10 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         // well-formed, plausible and wrong (#86). What was sent and ignored is said above this answer
         // by the call-tool filter (ToolArguments), which reads the caller's raw arguments and so
         // catches every spelling rather than the four this tool once declared to catch them.
-        var outcome = await history.LogAsync(Project, new LogRequest(repo, limit, page, author, message),
+        var outcome = await history.LogAsync(Project, new LogRequest(repo, limit, page, author, message, path),
             cancellationToken);
         return ToolReply.Render<LogAnswer>(outcome, Log,
-            answer => $"Narrow with repo or author, or raise page past {answer.Page}.");
+            answer => $"Narrow with repo, path or author, or raise page past {answer.Page}.");
     }
 
     private static string Log(LogAnswer answer)
@@ -85,23 +90,27 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         if (answer.Author is { Addresses: 0 } miss) return NoSuchAuthor(miss, answer.Repository);
 
         int skip = (answer.Page - 1) * answer.Limit;
+        string where = Scope(answer.Repository, answer.Path);
         if (answer.Commits.Count == 0)
-            return skip > 0
-                ? $"No commits on page {answer.Page}. There are fewer than {skip + 1} commits{By(answer.Author)}{Saying(answer.Message)} recorded{Scope(answer.Repository)}."
-                // A subject filter that matched nothing is named as the filter it is, and points at the
-                // half of the search this tool does not do: the message is all it reads, so a number
-                // that only ever appears in the code is a miss here and a grep somewhere else.
-                : answer.Message is { } missed
-                    ? $"No commit's subject contains '{missed}'{By(answer.Author)}{Scope(answer.Repository)}. "
-                      + "The subject is the only text searched — not the message body, and not the code. "
-                      + "grep searches the code."
-                    : $"No commits{By(answer.Author)} are recorded{Scope(answer.Repository)}.";
+            return (skip > 0
+                       ? $"No commits on page {answer.Page}. There are fewer than {skip + 1} commits{By(answer.Author)}{Saying(answer.Message)} recorded{where}."
+                       // A subject filter that matched nothing is named as the filter it is, and points
+                       // at the half of the search this tool does not do: the message is all it reads,
+                       // so a number that only ever appears in the code is a miss here and a grep
+                       // somewhere else.
+                       : answer.Message is { } missed
+                           ? $"No commit's subject contains '{missed}'{By(answer.Author)}{where}. "
+                             + "The subject is the only text searched — not the message body, and not the code. "
+                             + "grep searches the code."
+                           : $"No commits{By(answer.Author)} are recorded{where}.")
+                   + ByRecordedPath(answer.Path);
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{By(answer.Author)}{Saying(answer.Message)}{Scope(answer.Repository)}, newest first:\n\n");
-        foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null);
+            $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{By(answer.Author)}{Saying(answer.Message)}{where}, newest first:\n\n");
+        foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null && answer.Path is null);
         if (answer.Author is { } filter) Matched(text, filter, answer.Commits.Count);
+        if (answer.Path is not null) text.Append(CultureInfo.InvariantCulture, $"\n{ByRecordedPath(answer.Path).TrimStart()}\n");
         return text.ToString();
     }
 
@@ -151,7 +160,8 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     [Description("""
                  Lists who has committed, most commits first, with the address each one commits from. Read it before filtering git_log by `author`, which matches that address.
 
-                 - `repo` scopes it to one repository; `limit` cuts the list.
+                 - `repo` scopes it to one repository and `path` to a folder or a file inside one, which is what makes "who owns this folder" one call rather than a file_history per file; `limit` cuts the list.
+                 - `path` is a qualified path, exactly as grep, glob and list_tree print one: `main/src/Api`, or `main/src/Api/Orders.cs` for one file. Scoping is by the path each commit recorded, so it begins where a file was last renamed — a folder that was moved reads as a quiet one unless you know that.
                  - One row is one address: two addresses are two rows, and a respelled name is one row under the newest spelling. Git records the address as the identity.
                  - Counts are commits over the whole imported history, not lines and not a recent window. hot_files is what is moving now; this is who has been here.
                  - It says who touched the code, never who wrote it: a reformat is a commit, so a mass change makes its author look expert in files they only reindented.
@@ -161,11 +171,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         string? repo = null,
         [Description("Authors to return, 1-200. Default 30.")]
         int limit = DefaultAuthors,
+        [Description(
+            "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. Default: the whole project.")]
+        string? path = null,
         CancellationToken cancellationToken = default)
     {
         return ToolReply.Render<AuthorsAnswer>(
-            await history.AuthorsAsync(Project, new AuthorsRequest(repo, limit), cancellationToken),
-            AuthorList, "Lower limit to see fewer, or scope with repo.");
+            await history.AuthorsAsync(Project, new AuthorsRequest(repo, limit, path), cancellationToken),
+            AuthorList, "Lower limit to see fewer, or scope with repo or path.");
     }
 
     private static string AuthorList(AuthorsAnswer answer)
@@ -173,16 +186,21 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         if (!answer.HasHistory) return ToolReply.NoHistory;
         // A project with history and no author is not reachable — a commit carries one — so this is
         // about a repository scope that holds no commits, and says that rather than "nobody".
-        if (answer.Authors.Count == 0) return $"No commits are recorded{Scope(answer.Repository)}, so no authors are.";
+        string where = Scope(answer.Repository, answer.Path);
+        if (answer.Authors.Count == 0)
+            return $"No commits are recorded{where}, so no authors are."
+                   + ByRecordedPath(answer.Path);
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{answer.Total} {ToolReply.Plural(answer.Total, "author")}{Scope(answer.Repository)}, most commits first");
+            $"{answer.Total} {ToolReply.Plural(answer.Total, "author")}{where}, most commits first");
         // Only where the list was cut, so the common answer does not carry arithmetic nobody needs.
         text.Append(answer.Total > answer.Authors.Count
             ? string.Create(CultureInfo.InvariantCulture, $" ({answer.Authors.Count} shown, limit {answer.Limit}):\n\n")
             : ":\n\n");
         foreach (var author in answer.Authors) ToolReply.AuthorRow(text, "", author);
+        if (answer.Path is not null)
+            text.Append(CultureInfo.InvariantCulture, $"\n{ByRecordedPath(answer.Path).TrimStart()}\n");
         return text.ToString();
     }
 
@@ -609,4 +627,24 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
 
     private static string Scope(IndexedRepository? repository) =>
         repository is { } found ? $" in repository '{found.Slug}'" : "";
+
+    /// <summary>
+    ///     The same, where a <c>path</c> scope may have narrowed the read further (#118). The path wins
+    ///     because it is the narrower of the two and names the repository already; naming both would
+    ///     say the same slug twice in one sentence.
+    /// </summary>
+    private static string Scope(IndexedRepository? repository, PathScope? path) =>
+        path is { } under ? $" under '{under.Spelled}'" : Scope(repository);
+
+    /// <summary>
+    ///     The caveat every path-scoped reply ends with. The scope is matched on the path a commit
+    ///     recorded, so a directory reorganised last month has nothing recorded under its new name and
+    ///     would otherwise read as a directory nobody works in — the same fact file_history states, and
+    ///     the reason an empty scoped answer is never a finding about the people who work there.
+    /// </summary>
+    private static string ByRecordedPath(PathScope? path) =>
+        path is null
+            ? ""
+            : " The scope is matched by the path each commit recorded, so it begins where a file was "
+              + "last renamed; a directory that was moved records nothing under its new name.";
 }
