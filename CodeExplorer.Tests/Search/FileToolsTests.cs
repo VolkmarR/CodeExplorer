@@ -373,6 +373,53 @@ public sealed class FileToolsTests : IDisposable
         Assert.Contains("not indexed yet", text);
     }
 
+    /// <summary>
+    ///     How much history a repository holds and what it spans, which is the pair of facts an agent
+    ///     otherwise establishes by bisecting the log: one measured evaluation spent 15 of its 28 calls
+    ///     on `git_log(limit=1, page=N)` doing exactly that (#108).
+    /// </summary>
+    [Fact]
+    public async Task Repo_info_reports_how_much_history_each_repository_holds_and_what_it_spans()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        string source = _host.CreateEmptyGitRepository("one");
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/A.cs"] = "a\n" },
+            "Import the old code", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/A.cs"] = "a2\n" },
+            "Change it later", "Grace", "grace@example.invalid", 60 * 24 * 40);
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "one", source);
+        await _host.RefreshAsync("alpha");
+        await using var client = await _host.ConnectAsync("alpha");
+
+        string text = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
+
+        // Two commits forty days apart, so the span is a fact about dates and not about the walk.
+        Assert.Contains("2 commits imported, 1970-01-01 to 1970-02-10", text);
+        Assert.Contains("may begin later than the repository itself does", text);
+    }
+
+    /// <summary>
+    ///     A repository whose history was never walked. "No commits" and "nobody changed it" read alike
+    ///     and mean opposite things (CONTEXT.md, History), and this is the reply an agent reads before
+    ///     it asks any history tool about the repository at all.
+    /// </summary>
+    [Fact]
+    public async Task Repo_info_says_when_a_repository_has_no_imported_history()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("alpha", TwoRepositories);
+        await _host.ExecuteAsync("alpha", "DELETE FROM commits WHERE repo_slug = 'two'");
+        await using var client = await _host.ConnectAsync("alpha");
+
+        string text = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
+
+        Assert.Contains("no history imported", text);
+        // The repository that does have history still reports it, so the two are distinguishable in
+        // one reply rather than the whole project reading as historyless. One commit, so singular.
+        Assert.Contains("1 commit imported, ", text);
+    }
+
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation_from_every_tool()
     {
