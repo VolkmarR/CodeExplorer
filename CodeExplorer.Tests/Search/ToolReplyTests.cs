@@ -40,6 +40,8 @@ public sealed class ToolReplyTests : IDisposable
         ["authors"] = [],
         ["blame"] = new() { ["path"] = "one/src/Widget.cs" },
         ["co_changed"] = new() { ["path"] = "one/src/Widget.cs" },
+        ["commit"] = new() { ["sha"] = "0123456789abcdef0123456789abcdef01234567" },
+        ["commit_files"] = new() { ["sha"] = "0123456789abcdef0123456789abcdef01234567" },
         ["file_history"] = new() { ["path"] = "one/src/Widget.cs" },
         ["find_definition"] = new() { ["symbol"] = "Widget" },
         ["find_references"] = new() { ["symbol"] = "Widget" },
