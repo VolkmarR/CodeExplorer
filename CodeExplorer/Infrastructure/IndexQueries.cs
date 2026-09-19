@@ -294,7 +294,15 @@ internal static class IndexQueries
                  FROM files f JOIN repositories hr USING (repo_id)
                  WHERE hr.slug = {repositorySlug}
                    AND (f.path = ranked.path
-                        {(includingBeneath ? "OR f.path GLOB ranked.path || '/*'" : "")}))
+                        {(includingBeneath
+                            // starts_with and not GLOB, although a scope this project narrows by is
+                            // always a glob (ADR-0004): the pattern there is written by a caller, and
+                            // this one would be a directory name read out of the repository. A route
+                            // directory called `[slug]` is a character class to GLOB, so the deleted
+                            // one would match a sibling and be reported as still at HEAD — a silent
+                            // wrong answer about the one thing this mark exists to say.
+                            ? "OR starts_with(f.path, ranked.path || '/')"
+                            : "")}))
          """;
 
     /// <summary>
