@@ -97,9 +97,48 @@ public sealed class ImportTests : IDisposable
 
         string text = await WhoImportsAsync(client, "one/src/Storage.cs");
 
-        Assert.Contains("No file in this project was found to import one/src/Storage.cs", text);
+        Assert.Contains("No import edge in this project resolved to one/src/Storage.cs", text);
         Assert.Contains("this file declares `Orders.Storage`, and 1 other file declares it too", text);
-        Assert.Contains("grep for `Orders.Storage`", text);
+        // The pivot that answers the question, not a grep the caller has to turn into one (#114).
+        Assert.Contains("list_declarations on it names what it declares", text);
+        Assert.DoesNotContain("grep for `Orders.Storage`", text);
+    }
+
+    /// <summary>
+    ///     An all-unresolved answer reads as "this file depends on nothing here" (#114). It is not: a
+    ///     project-local dependency a language expresses without an import line leaves nothing to
+    ///     resolve, so the reply denies the reading and names the lookup that does work.
+    /// </summary>
+    [Fact]
+    public async Task Nothing_resolving_is_not_evidence_the_file_depends_on_nothing_here()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string text = await ImportsAsync(client, "one/src/Orders.cs");
+
+        Assert.Contains("none of the 2 names resolved to a file in this project", text);
+        Assert.Contains("not evidence the file has no project-local dependencies", text);
+        Assert.Contains("find_references on one of those names", text);
+
+        // A file whose imports do resolve is unaffected: no note, no hedging.
+        string resolving = await ImportsAsync(client, "one/src/Report.cs");
+        Assert.DoesNotContain("no project-local dependencies", resolving);
+    }
+
+    /// <summary>
+    ///     The empty reverse lookup, where no shared namespace explains it (#114). "Nothing imports
+    ///     this" is this tool's claim; "nothing depends on this" is the one an agent reads and acts on.
+    /// </summary>
+    [Fact]
+    public async Task No_importers_says_no_edge_resolved_rather_than_nothing_depends_on_it()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string text = await WhoImportsAsync(client, "one/src/Report.cs");
+
+        Assert.Contains("No import edge in this project resolved to one/src/Report.cs", text);
+        Assert.Contains("not the same as nothing depending on it", text);
+        Assert.Contains("find_references on one of those names", text);
     }
 
     [Fact]
