@@ -377,6 +377,84 @@ public sealed class IndexReader : IDisposable
             : $"a qualified path must start with a repository slug, then the path inside it. Repositories: {await SlugsAsync(cancellationToken)}.";
 
     /// <summary>
+    ///     The sentence for the one wrong path an agent writes over and over: a qualified path in a
+    ///     single-repository project, prefixed with the slug the project is known by. ADR-0006 names
+    ///     files there without one, so the prefix parses as a directory inside the repository and the
+    ///     miss that follows names the very repository the agent meant — which reads as confirmation
+    ///     that the prefix was right. Three agents in the Edilverso evaluation lost a round-trip to it.
+    ///     Null where the path is not that mistake, so a caller adds this and keeps its own wording
+    ///     for everything else.
+    ///     The corrected path is only offered once something is found at it. A repository whose slug is
+    ///     also a directory inside it — a repository called `src` — would otherwise be told to drop a
+    ///     segment that was correct, which is the same wrong turn pointing the other way.
+    /// </summary>
+    /// <param name="path">The path an agent wrote, as it wrote it.</param>
+    /// <param name="cancellationToken">Threaded to the probe.</param>
+    public async Task<string?> FileSlugPrefixAdviceAsync(string path, CancellationToken cancellationToken)
+    {
+        if (await SlugPrefixAsync(path, cancellationToken) is not { } prefix) return null;
+        return await FindFileAsync(prefix.Corrected, cancellationToken) is null
+            ? null
+            : SlugAdvice(prefix.Slug, prefix.Corrected);
+    }
+
+    /// <inheritdoc cref="FileSlugPrefixAdviceAsync" />
+    /// <remarks>
+    ///     The same mistake made of a directory, which is there when anything is under it. Beside the
+    ///     file flavour rather than probed by the caller: the tree's reader is here, and a caller that
+    ///     built the probe itself would be rebuilding the parse this already did.
+    /// </remarks>
+    public async Task<string?> DirectorySlugPrefixAdviceAsync(string path, CancellationToken cancellationToken)
+    {
+        if (await SlugPrefixAsync(path, cancellationToken) is not { } prefix) return null;
+        var paths = await PathsAsync(cancellationToken);
+        var under = await TreeAsync(new QualifiedPath(paths.RepositorySlug, prefix.Corrected), 1, cancellationToken);
+        // A file at the corrected path counts too. `list_tree("alpha/README.md")` is the slug mistake
+        // and a file named as a directory at once, and suppressing the diagnosis because the corrected
+        // path holds no children would answer the smaller of the two questions.
+        if (under.Count == 0 && await FindFileAsync(prefix.Corrected, cancellationToken) is null) return null;
+        return SlugAdvice(prefix.Slug, prefix.Corrected);
+    }
+
+    /// <summary>
+    ///     The slug an agent prefixed and the path without it, or null where the path is not that
+    ///     mistake. The probe is the caller's because only the kind of thing being looked for differs;
+    ///     everything up to it is one rule.
+    /// </summary>
+    private async Task<(string Slug, string Corrected)?> SlugPrefixAsync(string path,
+        CancellationToken cancellationToken)
+    {
+        var paths = await PathsAsync(cancellationToken);
+        // A multi-repository project is the case where the first segment really is a repository slug,
+        // so there is nothing here to diagnose.
+        if (!paths.SingleRepository) return null;
+
+        string written = path.Trim().Replace('\\', '/').Trim('/');
+        int slash = written.IndexOf('/');
+        // No second segment is no correction to offer: `read_file("edilverso")` is a path that names a
+        // directory, which the miss it gets already says.
+        if (slash < 0) return null;
+
+        // One comparison covers both halves of the mistake: a single-repository project's one
+        // repository is named after the project (ADR-0006, ControlDatabase.AddRepositoryAsync), so the
+        // slug an agent read off a project list and the slug it read off a path are the same string.
+        string first = written[..slash];
+        if (!first.Equals(paths.RepositorySlug, StringComparison.OrdinalIgnoreCase)) return null;
+
+        string corrected = written[(slash + 1)..];
+        return corrected.Length == 0 ? null : (first, corrected);
+    }
+
+    /// <summary>
+    ///     The sentence itself, written once because the file miss and the tree miss are one mistake
+    ///     and an agent that meets it in both must be told the same rule in the same words.
+    /// </summary>
+    private static string SlugAdvice(string slug, string corrected) =>
+        $"'{slug}' is the repository, not a directory in it: this project holds one repository "
+        + $"and names its files without the slug, so '{slug}/' was read as a folder and matched "
+        + $"nothing. The path is '{corrected}'.";
+
+    /// <summary>
     ///     Compared lower-cased on both sides: git paths are case-sensitive, but an agent quoting a path
     ///     from memory gets the case wrong far more often than a repository holds two files differing
     ///     only by case. An exact match wins if both exist.
@@ -430,6 +508,13 @@ public sealed class IndexReader : IDisposable
 
         string explanation = $"No indexed file '{spelled}' in repository '{repository.Slug}' of project "
                              + $"'{ProjectSlug}'. ";
+
+        // Ahead of both tails below, and instead of them: where this fires it is the whole reason the
+        // path missed, and a "did you mean" under it would offer the same file as a guess after the
+        // sentence that already named it.
+        if (await FileSlugPrefixAdviceAsync(path, cancellationToken) is { } slugged)
+            return (null, new Problem(explanation + slugged, ProblemKind.Missing));
+
         if (!suggestions)
             return (null, new Problem(explanation + "Use glob or list_tree to locate it.", ProblemKind.Missing));
 
