@@ -963,6 +963,41 @@ public sealed class HistoryToolsTests : IDisposable
 
         Assert.Contains("No commit", reply, StringComparison.Ordinal);
         Assert.Contains("raise days", reply, StringComparison.Ordinal);
+        // "Older than the window" and "never recorded" are opposite facts, so this one names its
+        // newest recorded commit rather than leaving the caller to guess which it got (#115).
+        Assert.Contains("1 commit is recorded under this path, the newest from", reply, StringComparison.Ordinal);
+        Assert.Contains("matched by the path a commit recorded", reply, StringComparison.Ordinal);
+        Assert.Contains("blame follows content across a rename", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The branch a renamed file lands in (#115). A bulk rename moves a long-lived file to a new
+    ///     path, the commits that made it are recorded under the old one, and every window that ends
+    ///     after the rename reaches nothing — a real coupling the tool would otherwise go quiet about.
+    /// </summary>
+    [Fact]
+    public async Task Co_changed_says_a_path_records_nothing_rather_than_only_offering_a_wider_window()
+    {
+        await BuildCoupledProjectAsync(_host, "severed");
+        // No commit_files row spells this path, which is what a severed history looks like from here.
+        await _host.ExecuteAsync("severed",
+            "DELETE FROM commit_files WHERE path = 'old/Ancient.cs'");
+
+        await using var client = await _host.ConnectAsync("severed");
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/old/Ancient.cs", ["days"] = 3650 });
+
+        Assert.Contains("No commit at all is recorded under this path", reply, StringComparison.Ordinal);
+        Assert.Contains("bulk rename", reply, StringComparison.Ordinal);
+        // The one piece of advice that cannot work here is the one the branch used to give.
+        Assert.Contains("Widening days will not reach it", reply, StringComparison.Ordinal);
+        Assert.Contains("blame follows content across a rename", reply, StringComparison.Ordinal);
+
+        // The neighbouring branch is a different answer and must stay one.
+        string alone = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Lonely.cs", ["days"] = 3650 });
+        Assert.Contains("It moves alone in the history that was imported", alone, StringComparison.Ordinal);
+        Assert.DoesNotContain("No commit at all is recorded", alone, StringComparison.Ordinal);
     }
 
     [Fact]
