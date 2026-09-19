@@ -102,6 +102,18 @@ export interface RefreshStatus {
   error: string | null
   /** Set while the refresh runs; null before it starts and after it ends. */
   progress: RefreshProgress | null
+  /**
+   * What each phase cost, oldest first, and the only part of a refresh that outlives it: `phase`
+   * says what is happening now and is gone the moment it changes. Empty before the first phase ends.
+   */
+  phases: PhaseCost[]
+}
+
+/** What one phase of a refresh cost. `step` is the step it ran at — several phases share step 3. */
+export interface PhaseCost {
+  step: number
+  phase: string
+  seconds: number
 }
 
 export interface GrepLine {

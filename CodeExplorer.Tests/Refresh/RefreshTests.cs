@@ -354,6 +354,79 @@ public sealed class RefreshTests : IDisposable
         Assert.All(InsideStepThree(reported), progress => Assert.Equal(RefreshProgress.HistoryStep, progress.Step));
     }
 
+    /// <summary>
+    ///     #91 named each piece of step 3 while it ran, and a refresh that had finished still could not
+    ///     say what it spent: the status keeps one phase at a time, so the whole timeline collapsed to
+    ///     "Done" the moment the swap returned. Attributing one real refresh therefore still took a
+    ///     bespoke poller — 25 ms against a live server, to catch phases lasting a few milliseconds —
+    ///     which is the harness #91's last item set out to make unnecessary, and is what #92 means by
+    ///     making the status honest about a cost the project has decided to accept.
+    ///     Read back from the finished status alone, with nothing polled while it ran, because that is
+    ///     the whole claim. Both engines for the reason the phase test covers both: the full-text
+    ///     rebuild is the item #92 is about and the one item that is not always there.
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Substring)]
+    [InlineData(SearchEngine.Fts)]
+    public async Task A_finished_refresh_says_what_each_phase_cost(SearchEngine engine)
+    {
+        using var host = new TestHost(engine);
+        await host.IndexedProjectAsync("alpha", Fixture());
+        host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+
+        await host.RefreshAsync("alpha");
+        var status = await host.RefreshStatusAsync("alpha");
+
+        List<string> expected =
+            [RefreshProgress.IngestPhase, RefreshProgress.AttributionPhase, RefreshProgress.OverviewPhase];
+        if (engine == SearchEngine.Fts) expected.Add(RefreshProgress.FullTextPhase);
+        expected.AddRange([RefreshProgress.StorePhase, RefreshProgress.SwapPhase]);
+        // The same phases the reports carry, in the same order, and now outliving the refresh that
+        // reported them. Only the fixed ones, for the reason the report test gives: the counting
+        // phases name the repository they are working on.
+        Assert.Equal(expected, status.Phases.Select(cost => cost.Phase).Where(Fixed).ToList());
+
+        // Each phase carries the step it ran at, so a reader can see that several of these are step 3
+        // rather than having to know which ones are (#91).
+        Assert.All(status.Phases.Where(cost => InsideStepThree(cost.Phase)),
+            cost => Assert.Equal(RefreshProgress.HistoryStep, cost.Step));
+
+        // The timeline accounts for the refresh rather than merely listing it: every phase costs
+        // something a clock could measure, and together they fit inside the wall clock the status
+        // already reports. Fitting inside it and not equalling it — the queue wait before the first
+        // phase is part of that span and is not a phase.
+        Assert.All(status.Phases, cost => Assert.True(cost.Seconds >= 0, $"{cost.Phase} cost {cost.Seconds}s"));
+        Assert.NotNull(status.FinishedAt);
+        Assert.NotNull(status.StartedAt);
+        var wall = (status.FinishedAt.Value - status.StartedAt.Value).TotalSeconds;
+        var attributed = status.Phases.Sum(cost => cost.Seconds);
+        Assert.True(attributed <= wall + 0.01, $"phases sum to {attributed}s of a {wall}s refresh");
+    }
+
+    /// <summary>
+    ///     A refresh that died says how far it got. The failure replaces the status wholesale — a
+    ///     failed refresh has no summary and no progress — and the timeline is the one part of it worth
+    ///     carrying across, because which phase a refresh failed in is most of what an operator wants
+    ///     from one that failed.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_refresh_keeps_the_phases_it_got_through()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        // The same break the message test uses: no branch is left to follow, so the refresh fails
+        // partway through rather than being refused before it starts and reporting nothing at all.
+        _host.RenameDefaultBranch("one", "trunk");
+        TestHost.BreakHead(_host.FixtureGitPath("one"), "main");
+
+        using (var response = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await _host.WaitForRefreshesAsync();
+
+        var status = await _host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.NotEmpty(status.Phases);
+    }
+
     /// <summary>The phases with a wording of their own, as opposed to the counting ones naming a repository.</summary>
     private static bool Fixed(string phase) =>
         phase is RefreshProgress.IngestPhase or RefreshProgress.HistoryPhase or RefreshProgress.AttributionPhase
@@ -361,8 +434,12 @@ public sealed class RefreshTests : IDisposable
             or RefreshProgress.SwapPhase;
 
     private static IEnumerable<RefreshProgress> InsideStepThree(IEnumerable<RefreshProgress> reported) =>
-        reported.Where(progress => progress.Phase is RefreshProgress.AttributionPhase
-            or RefreshProgress.OverviewPhase or RefreshProgress.FullTextPhase);
+        reported.Where(progress => InsideStepThree(progress.Phase));
+
+    /// <summary>The pieces #91 separated out of step 3, which all still report as step 3.</summary>
+    private static bool InsideStepThree(string phase) =>
+        phase is RefreshProgress.AttributionPhase or RefreshProgress.OverviewPhase
+            or RefreshProgress.FullTextPhase;
 
     private static Dictionary<string, Dictionary<string, string>> Fixture(string repository = "one") =>
         new() { [repository] = new Dictionary<string, string> { [OldFile] = "class A;\n" } };
