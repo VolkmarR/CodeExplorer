@@ -25,7 +25,7 @@ public sealed class HistoryToolsTests : IDisposable
     /// </summary>
     private const string Caveat =
         "`git_log` has no `committer` argument; it was ignored. "
-        + "It takes `repo`, `author`, `message`, `limit` and `page`.";
+        + "It takes `repo`, `author`, `message`, `limit`, `page` and `path`.";
 
     public void Dispose() => _host.Dispose();
 
@@ -326,7 +326,7 @@ public sealed class HistoryToolsTests : IDisposable
 
         Assert.StartsWith(
             "`git_log` has no `committer`, `grep` or `commit` argument; they were ignored. "
-            + "It takes `repo`, `author`, `message`, `limit` and `page`.", reply, StringComparison.Ordinal);
+            + "It takes `repo`, `author`, `message`, `limit`, `page` and `path`.", reply, StringComparison.Ordinal);
         // The log is still answered: the caveat is what the answer is read with, not a refusal.
         Assert.Contains("2 commits", reply, StringComparison.Ordinal);
     }
@@ -384,7 +384,7 @@ public sealed class HistoryToolsTests : IDisposable
 
         Assert.StartsWith(
             "`git_log` has no `repository` argument; it was ignored. "
-            + "It takes `repo`, `author`, `message`, `limit` and `page`.", reply, StringComparison.Ordinal);
+            + "It takes `repo`, `author`, `message`, `limit`, `page` and `path`.", reply, StringComparison.Ordinal);
         // It bound nowhere, so the answer really does still span the second repository.
         Assert.Contains("[two]", reply, StringComparison.Ordinal);
     }
@@ -1382,6 +1382,65 @@ public sealed class HistoryToolsTests : IDisposable
 
     /// <summary>Routes an inline array argument through a parameter so CA1861 does not ask for a static field per call.</summary>
     private static string[] Paths(params string[] paths) => paths;
+
+    /// <summary>
+    ///     "Who owns this folder" and "what has happened in this folder" are one call each (#118). They
+    ///     used to be a file_history per file, because a path argument was accepted and ignored.
+    /// </summary>
+    [Fact]
+    public async Task Authors_and_git_log_scope_to_a_path()
+    {
+        await BuildChurnProjectAsync("scoped", withSecondRepository: false);
+        await using var client = await _host.ConnectAsync("scoped");
+
+        // src holds the four recent commits; old/Ancient.cs holds the one import, by Ada alone.
+        string owners = await TestHost.CallAsync(client, "authors",
+            new Dictionary<string, object?> { ["path"] = "one/old" });
+        Assert.Contains("under 'one/old'", owners, StringComparison.Ordinal);
+        Assert.Contains("ada@example.invalid", owners, StringComparison.Ordinal);
+        Assert.DoesNotContain("grace@example.invalid", owners, StringComparison.Ordinal);
+        Assert.Contains("matched by the path each commit recorded", owners, StringComparison.Ordinal);
+
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src" });
+        Assert.Contains("under 'one/src'", log, StringComparison.Ordinal);
+        Assert.Contains("Drop the dead file", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("Import the old code", log, StringComparison.Ordinal);
+
+        // One exact file is the same argument, and it combines with repo and author.
+        string one = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?>
+                { ["path"] = "one/src/Hot.cs", ["repo"] = "one", ["author"] = "grace" });
+        Assert.Contains("under 'one/src/Hot.cs'", one, StringComparison.Ordinal);
+        Assert.Contains("Fix the check", one, StringComparison.Ordinal);
+        Assert.DoesNotContain("Add the module", one, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A scope nothing was committed under and a scope that is not there are opposite facts, and the
+    ///     first must not read as the second (#118). The fixture's docs folder is committed once, so a
+    ///     path with no commits at all is made by deleting the rows rather than by finding a corner.
+    /// </summary>
+    [Fact]
+    public async Task A_path_scope_with_no_commits_is_told_apart_from_a_path_that_is_not_there()
+    {
+        await BuildChurnProjectAsync("quiet", withSecondRepository: false);
+        await _host.ExecuteAsync("quiet", "DELETE FROM commit_files WHERE path LIKE 'docs/%'");
+
+        await using var client = await _host.ConnectAsync("quiet");
+
+        string quiet = await TestHost.CallAsync(client, "authors",
+            new Dictionary<string, object?> { ["path"] = "one/docs" });
+        Assert.Contains("No commits are recorded under 'one/docs', so no authors are", quiet,
+            StringComparison.Ordinal);
+        Assert.Contains("begins where a file was last renamed", quiet, StringComparison.Ordinal);
+
+        string nowhere = await TestHost.CallAsync(client, "authors",
+            new Dictionary<string, object?> { ["path"] = "one/nowhere" });
+        Assert.Contains("names nothing in this index", nowhere, StringComparison.Ordinal);
+        Assert.Contains("glob or list_tree", nowhere, StringComparison.Ordinal);
+        Assert.DoesNotContain("so no authors are", nowhere, StringComparison.Ordinal);
+    }
 
     /// <summary>
     ///     A ranking counts machine-authored commits exactly like hand-written ones, so a directory of

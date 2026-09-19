@@ -397,11 +397,38 @@ internal static class IndexQueries
     ///     the same reason too: this is caller text, and a `%` in it would widen the match rather than
     ///     fail to find one.
     /// </summary>
+    /// <summary>
+    ///     The same again, narrowed to the commits that recorded a path at or beneath
+    ///     <paramref name="pathInRepository" /> of <paramref name="pathRepositorySlug" /> — a semi-join
+    ///     on <c>commit_files</c>, which is the join <c>file_history</c> already makes for one exact
+    ///     path, widened here from a path to a prefix (#118).
+    ///     Matched on the path a commit recorded, so the scope begins where a file was last renamed;
+    ///     every reply that uses it says so, because a reorganised directory would otherwise read as a
+    ///     quiet one. Taken literally rather than as a glob, for the reason
+    ///     <see cref="AtHeadExists" /> gives: it is a name and `[slug]` is a character class (#122).
+    /// </summary>
     public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug, string? author,
-        string? message = null)
+        string? message = null, string? pathRepositorySlug = null, string? pathInRepository = null)
     {
         var clauses = new List<string>(3);
         var parameters = new List<DuckDBParameter>(3);
+        if (pathRepositorySlug is not null)
+        {
+            clauses.Add("repo_slug = $pr");
+            parameters.Add(new DuckDBParameter("pr", pathRepositorySlug));
+            // An empty path is the repository's own root, which every commit of it is under: the
+            // repository clause above is the whole scope and a semi-join matching everything is waste.
+            if (!string.IsNullOrEmpty(pathInRepository))
+            {
+                clauses.Add("""
+                            EXISTS (SELECT 1 FROM commit_files cf
+                                    WHERE cf.commit_id = commits.commit_id
+                                      AND (cf.path = $pp OR starts_with(cf.path, $pp || '/')))
+                            """);
+                parameters.Add(new DuckDBParameter("pp", pathInRepository.TrimEnd('/')));
+            }
+        }
+
         if (repositorySlug is not null)
         {
             clauses.Add("repo_slug = $r");

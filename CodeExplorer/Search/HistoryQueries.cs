@@ -67,7 +67,21 @@ public sealed record CoChanges(int Commits, int Paired, IReadOnlyList<CoChangedF
 
 /// <summary>Everything a page of the log asks for. A null repository covers every one in the project.</summary>
 public sealed record LogRequest(string? Repository, int Limit, int Page, string? Author = null,
-    string? Message = null);
+    string? Message = null, string? Path = null);
+
+/// <summary>
+///     A path a history read was narrowed to: the qualified path as the project spells it, and the
+///     repository and repository-relative path it resolved to. Carried on the answer rather than kept
+///     by the caller, because a reply that says which scope it covered must not be able to name a
+///     different one from the query.
+///     The scope is matched on the path a commit recorded, so it begins where a file was last renamed
+///     — the caveat <c>file_history</c> already states, and one every reply here repeats: a
+///     reorganised directory would otherwise read as a quiet one.
+/// </summary>
+/// <param name="Spelled">The qualified path, respelled by the project (ADR-0006).</param>
+/// <param name="RepositorySlug">The repository the path resolved to.</param>
+/// <param name="PathInRepository">The path inside it; empty is the repository's own root.</param>
+public sealed record PathScope(string Spelled, string RepositorySlug, string PathInRepository);
 
 /// <summary>
 ///     What an <c>author</c> filter matched, carried beside the page it narrowed so a reply can say
@@ -86,7 +100,7 @@ public sealed record AuthorFilter(string Query, long Commits, long Addresses,
     IReadOnlyList<RecordedAuthor> Matched, long AuthorsInScope);
 
 /// <summary>Everything a listing of a project's authors asks for.</summary>
-public sealed record AuthorsRequest(string? Repository, int Limit);
+public sealed record AuthorsRequest(string? Repository, int Limit, string? Path = null);
 
 /// <summary>
 ///     The authors of a project or one repository, most commits first. <see cref="Total" /> is how
@@ -99,7 +113,8 @@ public sealed record AuthorsAnswer(
     IndexedRepository? Repository,
     long Total,
     int Limit,
-    IReadOnlyList<RecordedAuthor> Authors) : Outcome;
+    IReadOnlyList<RecordedAuthor> Authors,
+    PathScope? Path = null) : Outcome;
 
 /// <summary>
 ///     A page of commits, newest first. <see cref="HasHistory" /> is the project's and not the page's:
@@ -121,7 +136,8 @@ public sealed record LogAnswer(
     int Limit,
     IReadOnlyList<RecordedChange> Commits,
     AuthorFilter? Author = null,
-    string? Message = null) : Outcome;
+    string? Message = null,
+    PathScope? Path = null) : Outcome;
 
 /// <summary>Everything a page of the change log asks for.</summary>
 public sealed record ChangeLogRequest(string? Repository, int Page, int PageSize);
@@ -337,6 +353,9 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         using var recording = Telemetry.Search(slug);
         var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
         {
+            var (path, unresolved) = await ScopeAsync(index, request.Path, token);
+            if (unresolved is not null) return unresolved;
+
             bool hasHistory = await HasHistoryAsync(index, token);
             int limit = Math.Clamp(request.Limit, 1, MaxCommits);
             int page = Math.Max(1, request.Page);
@@ -353,12 +372,12 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
             // the commits that mention something.
             string? mentions = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim();
             var author = hasHistory && asked is not null
-                ? await MatchedAsync(index, scope, asked, token)
+                ? await MatchedAsync(index, scope, asked, path, token)
                 : null;
             var commits = hasHistory && author?.Addresses != 0
-                ? await CommitsAsync(index, scope, asked, mentions, limit, (page - 1) * limit, token)
+                ? await CommitsAsync(index, scope, asked, mentions, path, limit, (page - 1) * limit, token)
                 : [];
-            return new LogAnswer(hasHistory, index.Repository, page, limit, commits, author, mentions);
+            return new LogAnswer(hasHistory, index.Repository, page, limit, commits, author, mentions, path);
         }, cancellationToken);
         if (outcome is LogAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
         else recording.Problem();
@@ -374,12 +393,15 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         using var recording = Telemetry.Search(slug);
         var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
         {
+            var (path, unresolved) = await ScopeAsync(index, request.Path, token);
+            if (unresolved is not null) return unresolved;
+
             bool hasHistory = await HasHistoryAsync(index, token);
             int limit = Math.Clamp(request.Limit, 1, MaxAuthors);
             string? scope = index.Repository?.Slug;
-            var authors = hasHistory ? await AuthorsAsync(index, scope, null, limit, token) : [];
-            long total = hasHistory ? await AuthorCountAsync(index, scope, token) : 0;
-            return new AuthorsAnswer(hasHistory, index.Repository, total, limit, authors);
+            var authors = hasHistory ? await AuthorsAsync(index, scope, null, path, limit, token) : [];
+            long total = hasHistory ? await AuthorCountAsync(index, scope, path, token) : 0;
+            return new AuthorsAnswer(hasHistory, index.Repository, total, limit, authors, path);
         }, cancellationToken);
         if (outcome is AuthorsAnswer answer) recording.Matched(Engine, answer.Authors.Count, 0);
         else recording.Problem();
@@ -707,6 +729,36 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     }
 
     /// <summary>
+    ///     A <c>path</c> argument resolved to the scope the commit reads narrow by, or the sentence
+    ///     saying why it names nothing. Both halves are null for a call that passed no path.
+    ///     Whether the index holds the path is asked here and not left to an empty answer: "nothing in
+    ///     this folder has been committed" and "there is no such folder" are opposite facts, and a
+    ///     reply that shared one sentence for them would have an agent take a typo for a quiet module
+    ///     (CODING_STANDARDS, Errors). The slug-prefix diagnosis is the reader's, so a path this
+    ///     refuses is refused in the words read_file and list_tree use.
+    /// </summary>
+    private static async Task<(PathScope? Scope, Problem? Unresolved)> ScopeAsync(IndexReader index, string? path,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return (null, null);
+
+        var (directory, problem) = await index.LocateDirectoryAsync(path, cancellationToken);
+        if (directory is null) return (null, problem);
+        // A repository root resolves with a null repository only at the project level, which a
+        // non-blank path cannot name.
+        if (directory.Repository is not { } repository)
+            return (null, new Problem($"'{path}' names no file or directory to scope to."));
+
+        if (!await index.HoldsPathAsync(repository.Slug, directory.PathInRepository, cancellationToken))
+            return (null, new Problem(
+                await index.DirectorySlugPrefixAdviceAsync(path, cancellationToken)
+                ?? $"'{directory.QualifiedPath}' names nothing in this index — no file is at that path and none is under it. Use glob or list_tree to locate it.",
+                ProblemKind.Missing));
+
+        return (new PathScope(directory.QualifiedPath, repository.Slug, directory.PathInRepository), null);
+    }
+
+    /// <summary>
     ///     Whether this index holds any history at all. An index built before ADR-0007, or one whose
     ///     every repository failed to walk, has the tables and nothing in them — and "no commits
     ///     recorded" must never be answered as "this file was never changed", which reads as a fact.
@@ -723,9 +775,10 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     an author date does not (ADR-0007).
     /// </summary>
     private static async Task<IReadOnlyList<RecordedChange>> CommitsAsync(IndexReader index, string? repositorySlug,
-        string? author, string? message, int limit, int skip, CancellationToken cancellationToken)
+        string? author, string? message, PathScope? path, int limit, int skip, CancellationToken cancellationToken)
     {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, message);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, message,
+            path?.RepositorySlug, path?.PathInRepository);
         using var command = index.Connection.Query($"""
                                                     SELECT sha, repo_slug, author_name, author_email, authored_at,
                                                            subject
@@ -802,9 +855,10 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     what the authors listing says is there.
     /// </summary>
     private static async Task<IReadOnlyList<RecordedAuthor>> AuthorsAsync(IndexReader index, string? repositorySlug,
-        string? author, int limit, CancellationToken cancellationToken)
+        string? author, PathScope? path, int limit, CancellationToken cancellationToken)
     {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, null,
+            path?.RepositorySlug, path?.PathInRepository);
         using var command = index.Connection.Query($"""
                                                     SELECT author_email,
                                                            arg_max(author_name, authored_at) AS author_name,
@@ -828,10 +882,11 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     }
 
     /// <summary>How many authors are recorded in scope, which is what a filter matching none is read against.</summary>
-    private static async Task<long> AuthorCountAsync(IndexReader index, string? repositorySlug,
+    private static async Task<long> AuthorCountAsync(IndexReader index, string? repositorySlug, PathScope? path,
         CancellationToken cancellationToken)
     {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, null, null,
+            path?.RepositorySlug, path?.PathInRepository);
         using var command = index.Connection.Query($"SELECT count(DISTINCT author_email) FROM commits {scope}",
             parameters);
         return (long)(await command.ScalarAsync(cancellationToken) ?? 0L);
@@ -845,21 +900,22 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     so, which is the reply this change exists to stop.
     /// </summary>
     private static async Task<AuthorFilter> MatchedAsync(IndexReader index, string? repositorySlug, string author,
-        CancellationToken cancellationToken)
+        PathScope? path, CancellationToken cancellationToken)
     {
-        var (addresses, commits) = await MatchCountsAsync(index, repositorySlug, author, cancellationToken);
+        var (addresses, commits) = await MatchCountsAsync(index, repositorySlug, author, path, cancellationToken);
         var matched = addresses == 0
             ? []
-            : await AuthorsAsync(index, repositorySlug, author, MaxAuthors, cancellationToken);
+            : await AuthorsAsync(index, repositorySlug, author, path, MaxAuthors, cancellationToken);
         return new AuthorFilter(author, commits, addresses, matched,
-            addresses > 0 ? 0 : await AuthorCountAsync(index, repositorySlug, cancellationToken));
+            addresses > 0 ? 0 : await AuthorCountAsync(index, repositorySlug, path, cancellationToken));
     }
 
     /// <summary>How many addresses a filter matched and how many commits they have between them.</summary>
     private static async Task<(long Addresses, long Commits)> MatchCountsAsync(IndexReader index,
-        string? repositorySlug, string author, CancellationToken cancellationToken)
+        string? repositorySlug, string author, PathScope? path, CancellationToken cancellationToken)
     {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, null,
+            path?.RepositorySlug, path?.PathInRepository);
         using var command = index.Connection.Query(
             $"SELECT count(DISTINCT author_email) AS addresses, count(*) AS commits FROM commits {scope}", parameters);
         using var reader = await command.ReaderAsync(cancellationToken);

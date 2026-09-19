@@ -558,6 +558,27 @@ public sealed class IndexReader : IDisposable
         return (new IndexedDirectory(repository, qualified.PathInRepository, spelled), null);
     }
 
+    /// <summary>
+    ///     Whether the index holds anything at this repository-relative path: a file of that name, or
+    ///     any file beneath it. It is what tells "this scope has no recorded commit" from "this scope
+    ///     names nothing here" — opposite facts that an empty history answer would otherwise share a
+    ///     sentence for (CODING_STANDARDS, Errors). An empty path is the repository's own root, which
+    ///     is there as long as the repository the caller already resolved is.
+    ///     <c>starts_with</c> and not GLOB or LIKE: the path is a name, and `[slug]` or `my_module`
+    ///     read as a pattern would answer about a sibling (#122).
+    /// </summary>
+    public async Task<bool> HoldsPathAsync(string repositorySlug, string pathInRepository,
+        CancellationToken cancellationToken)
+    {
+        if (pathInRepository.Length == 0) return true;
+        using var command = Connection.Query("""
+                                             SELECT count(*) > 0 FROM files f JOIN repositories r USING (repo_id)
+                                             WHERE r.slug = $r AND (f.path = $p OR starts_with(f.path, $p || '/'))
+                                             """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
+        return await command.ScalarAsync(cancellationToken) is true;
+    }
+
     /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
     private const int MaxSuggestions = 5;
 
