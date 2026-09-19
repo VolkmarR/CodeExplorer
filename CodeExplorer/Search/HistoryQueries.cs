@@ -174,8 +174,10 @@ public sealed record BlameAnswer(
 ///     Everything a churn ranking asks for. <see cref="Directory" /> is a qualified path, a bare
 ///     repository slug, or null for the whole project — one field, because a repository is a directory
 ///     and both callers hand over whichever of the two their surface spells.
+///     <see cref="Depth" /> rolls the ranking up to the directories that many segments beneath
+///     <see cref="Directory" />; null ranks files, which is what every surface but the tool asks for.
 /// </summary>
-public sealed record ChurnRequest(string? Directory, int Days, int Limit);
+public sealed record ChurnRequest(string? Directory, int Days, int Limit, int? Depth = null);
 
 /// <summary>
 ///     The most-changed files of a window, and everything needed to say what the ranking does not
@@ -187,13 +189,19 @@ public sealed record ChurnRequest(string? Directory, int Days, int Limit);
 ///     could not speak for whichever of those it is.
 ///     <see cref="ScopeSpelled" /> is what the answer calls the scope, so a ranking and a miss name it
 ///     the same way.
+///     <see cref="Depth" /> is the depth the rows were rolled up to, or null where they are files. It
+///     is carried rather than inferred from the request, because what a reply calls its rows has to be
+///     what the query grouped them by.
 /// </summary>
 public sealed record ChurnAnswer(
     string ScopeSpelled,
     bool HasHistory,
     HistoryWindow? Window,
     IReadOnlyList<ChurnedFile> Files,
-    HistoryCoverage Coverage) : Outcome;
+    HistoryCoverage Coverage,
+    // Not defaulted: an answer always knows its own grain, and a default is a later construction
+    // quietly calling a ranking of directories a ranking of files.
+    int? Depth) : Outcome;
 
 /// <summary>Everything a co-change ranking asks for.</summary>
 public sealed record CoChangeRequest(string Path, int Days, int Limit);
@@ -265,6 +273,13 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     ranking, and past it the reply cap or the page's own scroll is what would bite.
     /// </summary>
     private const int MaxRankedFiles = 100;
+
+    /// <summary>
+    ///     The deepest a churn ranking may be rolled up to. Ten segments below the scope is past the
+    ///     depth of any layout anybody nests by hand, and past it the rollup is the file ranking with a
+    ///     different name on it — which is the call the caller should be making instead.
+    /// </summary>
+    private const int MaxRollupDepth = 10;
 
     /// <summary>
     ///     The most lines one blame may cover. The index refuses files over <c>Index:MaxFileBytes</c>
@@ -441,19 +456,26 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                 // Read whether or not there is a ranking, and before the answer branches: a reader shown
                 // nothing is the one most likely to conclude that nothing changed.
                 var coverage = await index.HistoryCoverageAsync(repositorySlug, token);
+                int? depth = request.Depth is { } requested ? Math.Clamp(requested, 1, MaxRollupDepth) : null;
+                int limit = Math.Clamp(request.Limit, 1, MaxRankedFiles);
+                var paths = await index.PathsAsync(token);
                 IReadOnlyList<ChurnedFile> ranked = window is null
                     ? []
-                    : await IndexQueries.RankAsync(index.Connection, await index.PathsAsync(token), window,
-                        repositorySlug, directoryInRepository, Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
+                    : depth is { } rollup
+                        ? await IndexQueries.RankDirectoriesAsync(index.Connection, paths, window, repositorySlug,
+                            directoryInRepository, rollup, limit, token)
+                        : await IndexQueries.RankAsync(index.Connection, paths, window, repositorySlug,
+                            directoryInRepository, limit, token);
 
                 // A ranking of a scope that does not exist is the emptiest kind of empty answer, and a
                 // path prefixed with the project's slug is the commonest way to ask for one (#111). The
-                // diagnosis is the reader's, so hot_files says what read_file and list_tree say.
+                // diagnosis is the reader's, so hot_files says what read_file and list_tree say. Asked
+                // of both grains: a rollup of a scope that is not there is empty for the same reason.
                 if (ranked.Count == 0 && request.Directory is { } wanted
                                       && await index.DirectorySlugPrefixAdviceAsync(wanted, token) is { } slugged)
                     return new Problem(slugged);
 
-                return new ChurnAnswer(spelled, hasHistory, window, ranked, coverage);
+                return new ChurnAnswer(spelled, hasHistory, window, ranked, coverage, depth);
             }, cancellationToken);
         if (outcome is ChurnAnswer answer) recording.Matched(Engine, answer.Files.Count, 0);
         else recording.Problem();

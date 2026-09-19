@@ -380,6 +380,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  - Scope it with `directory`, a qualified path: `main/src/Api` for one area, or a bare repository slug for one repository.
                  - Ranking is by number of commits, then by lines changed. A reformat counts as a change, the same way blame does — this is where work happened, not where the logic changed.
                  - Files a later commit deleted or renamed away are ranked too and marked; there is nothing at those paths to read now.
+                 - `depth` ranks **directories** instead of files. Reach for it when the question is which module, package or app is moving rather than which file — that is one call, where ranking files and then scoping the tool to each candidate directory in turn is one call per directory. Then call it again without `depth`, scoped to the directory that won, for the files inside it.
                  """)]
     public async Task<string> HotFiles(
         [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
@@ -387,14 +388,18 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         [Description(
             "Qualified path of a directory to rank within, e.g. \"main/src/Api\", or a repository slug alone for one repository. Default: the whole project.")]
         string? directory = null,
-        [Description("Files to return, 1-100. Default 20.")]
+        [Description("Rows to return — files, or directories under `depth` — 1-100. Default 20.")]
         int limit = DefaultRankedFiles,
+        [Description(
+            "Rank directories instead of files, grouped by this many path segments beneath the scope, 1-10. Unscoped, that is the first segments of the qualified path, so in a multi-repository project depth 1 ranks repositories and depth 2 their top-level directories. A directory's count is the commits that touched anything beneath it, each counted once. Default: rank files.")]
+        int? depth = null,
         CancellationToken cancellationToken = default)
     {
         string project = Project;
         return ToolReply.Render<ChurnAnswer>(
-            await history.ChurnAsync(project, new ChurnRequest(directory, days, limit), cancellationToken),
-            answer => Ranking(answer, project), "Lower limit, or narrow with directory.");
+            await history.ChurnAsync(project, new ChurnRequest(directory, days, limit, depth), cancellationToken),
+            answer => Ranking(answer, project),
+            "Lower limit, narrow with directory, or roll the ranking up with depth.");
     }
 
     private static string Ranking(ChurnAnswer answer, string projectSlug)
@@ -414,11 +419,22 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                    + $"The newest recorded commit there is {window.Until:yyyy-MM-dd}; raise days to look further back."
                    + (coverage is null ? "" : " " + coverage);
 
+        string rows = answer.Depth is null
+            ? ToolReply.Plural(answer.Files.Count, "file")
+            : ToolReply.Plural(answer.Files.Count, "directory", "directories");
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{answer.Files.Count} most-changed {ToolReply.Plural(answer.Files.Count, "file")} in {answer.ScopeSpelled}, {window.Describe()}:\n\n");
+            $"{answer.Files.Count} most-changed {rows} in {answer.ScopeSpelled}, {window.Describe()}:\n\n");
 
         foreach (var file in answer.Files) ToolReply.ChurnRow(text, "", file);
+
+        // Said under every rollup and not only a surprising one: a count that looks low beside the
+        // files under it is the reading to head off, and an agent that adds the rows up to check has
+        // already learnt the wrong fact. The lines do sum, which is why only the commits are said.
+        if (answer.Depth is not null)
+            text.Append("\nEach count is the distinct commits that touched anything beneath the directory, "
+                        + "so it is not the sum of its files' counts; the lines are. "
+                        + "Call again without depth, scoped to one of these, for the files in it.\n");
 
         if (coverage is not null) text.Append(CultureInfo.InvariantCulture, $"\n{coverage}\n");
         return text.ToString();
