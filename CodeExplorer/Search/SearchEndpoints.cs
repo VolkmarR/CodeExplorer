@@ -282,8 +282,9 @@ internal static class SearchEndpoints
         // the scan reads the lines above every candidate to place it, and the code should be on
         // screen before that comes back — the same reason blame is its own route.
         project.MapGet("/file/declarations",
-            async (Project project, string path, FileDeclarations declarations, CancellationToken ct) =>
-                Answer<DeclarationsResult>(await declarations.ForFileAsync(project.Slug, path, ct),
+            async (Project project, string path, FileDeclarations declarations, CancellationToken ct,
+                    int offset = 0) =>
+                Answer<DeclarationsResult>(await declarations.ForFileAsync(project.Slug, path, offset, ct),
                     Declarations));
 
         // The change log, paged. The files a commit touched are their own route, like blame is: a
