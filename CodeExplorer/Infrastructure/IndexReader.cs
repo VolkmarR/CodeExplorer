@@ -60,6 +60,16 @@ public sealed record ExtensionCount(string Extension, int Files, long Lines, int
 public sealed record AttributedBy(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
 
 /// <summary>
+///     One author of a project's history, identified by the address git records rather than by the
+///     display name: a person who respells their name is one author under their newest spelling, and
+///     two people who share a first name are two. The name is the one on their most recent commit.
+///     Here rather than beside the query that reads it, because three surfaces draw the same row
+///     through <see cref="ToolReply.AuthorRow" /> and Infrastructure may not reach into Search
+///     (ADR-0005).
+/// </summary>
+public sealed record RecordedAuthor(string Name, string Email, long Commits, DateTimeOffset LastCommit);
+
+/// <summary>
 ///     One file of a churn ranking: how many commits of the window touched it and what they did to
 ///     it. <see cref="QualifiedPath" /> is how the project names that path (ADR-0006) and is always
 ///     set, because a window ranks paths a later commit deleted or renamed away and those have to be
