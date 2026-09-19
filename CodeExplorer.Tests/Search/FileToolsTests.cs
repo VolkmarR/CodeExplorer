@@ -14,6 +14,20 @@ public sealed class FileToolsTests : IDisposable
     private const string Orders =
         "class Orders\n{\n    void Needle() {}\n    // needle in a comment\n    int Count;\n}\n";
 
+    /// <summary>
+    ///     One repository, for the project shape ADR-0006 names files in without a slug. Its slug is
+    ///     the one the slug-prefix tests write in front of a path, and nothing in it is called `one`,
+    ///     so a path that reads as a directory called `one` can only be that mistake.
+    /// </summary>
+    private static readonly Dictionary<string, Dictionary<string, string>> OneRepository = new()
+    {
+        ["one"] = new Dictionary<string, string>
+        {
+            ["src/Orders.cs"] = Orders,
+            ["README.md"] = "the only repository\n"
+        }
+    };
+
     private static readonly Dictionary<string, Dictionary<string, string>> TwoRepositories = new()
     {
         ["one"] = new Dictionary<string, string>
@@ -138,6 +152,81 @@ public sealed class FileToolsTests : IDisposable
         Assert.Contains("ends before it starts", inverted);
         Assert.Contains("one/src/Orders.cs:2-4", inverted);
         Assert.DoesNotContain("class Orders", inverted);
+    }
+
+    /// <summary>
+    ///     The mistake three agents in the Edilverso evaluation made: a path prefixed with the slug the
+    ///     project is known by, in a project that names its files without one. It parses as a directory,
+    ///     misses, and the miss then names the repository the agent thought it was addressing — which
+    ///     reads as confirmation that the prefix was right. Both tools that resolve a path say what
+    ///     actually happened and print the path that works.
+    /// </summary>
+    [Fact]
+    public async Task A_path_prefixed_with_the_slug_is_diagnosed_in_a_single_repository_project()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("alpha", OneRepository, singleRepository: true);
+        await using var client = await _host.ConnectAsync("alpha");
+
+        // 'alpha' is both slugs at once: the one repository of such a project is named after the
+        // project (ADR-0006), so the slug read off a project list and the slug read off a path are the
+        // same string, and one prefix is both halves of the mistake.
+        string file = await ReadAsync(client, "alpha/src/Orders.cs");
+        Assert.Contains("'alpha' is the repository, not a directory in it", file);
+        Assert.Contains("The path is 'src/Orders.cs'.", file);
+        // Refused and not quietly accepted: two spellings for one path is what ADR-0006 argues against,
+        // and an agent corrected once stops sending the other one.
+        Assert.DoesNotContain("class Orders", file);
+
+        string tree = await ListTreeAsync(client, "alpha/src", 1);
+        Assert.Contains("'alpha' is the repository, not a directory in it", tree);
+        Assert.Contains("The path is 'src'.", tree);
+
+        // A file named as a directory is the same mistake twice over, and the slug is the half the
+        // "that is a file" sentence cannot explain on its own.
+        string fileAsTree = await ListTreeAsync(client, "alpha/README.md", 1);
+        Assert.Contains("'alpha' is the repository, not a directory in it", fileAsTree);
+        Assert.Contains("The path is 'README.md'.", fileAsTree);
+
+        // hot_files resolves a directory too, and an unexplained empty ranking there reads as "nothing
+        // changed in this module" — a fact, and the wrong one.
+        string churn = await CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["directory"] = "alpha/src" });
+        Assert.Contains("'alpha' is the repository, not a directory in it", churn);
+        Assert.Contains("The path is 'src'.", churn);
+    }
+
+    /// <summary>
+    ///     What the diagnosis must not do: fire where the first segment really is a repository, and
+    ///     fire where the path is simply wrong. Both would teach an agent a rule this project does not
+    ///     have — the first that its own qualified paths are malformed, the second that a typo is a
+    ///     naming mistake — so a miss that is not this mistake keeps every word it had.
+    /// </summary>
+    [Fact]
+    public async Task The_slug_diagnosis_stays_out_of_a_multi_repository_project_and_out_of_an_ordinary_miss()
+    {
+        await using var client = await StartAsync();
+
+        // 'one' is a repository here, so the path is right in shape and wrong only in its leaf.
+        string real = await ReadAsync(client, "one/src/Nope.cs");
+        Assert.Contains("No indexed file 'one/src/Nope.cs' in repository 'one' of project 'alpha'", real);
+        Assert.DoesNotContain("is the repository, not a directory in it", real);
+
+        _host!.Dispose();
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("beta", OneRepository, singleRepository: true);
+        await using var single = await _host.ConnectAsync("beta");
+
+        // A path with no slug prefix keeps today's wording, "did you mean" and all.
+        string typo = await ReadAsync(single, "Orders.cs");
+        Assert.Contains("Did you mean src/Orders.cs", typo);
+        Assert.DoesNotContain("is the repository, not a directory in it", typo);
+
+        // The prefix is there, but nothing is at the corrected path either: a repository whose slug is
+        // also a directory in it would otherwise be told to drop a segment that was correct.
+        string neither = await ReadAsync(single, "beta/src/Nope.cs");
+        Assert.DoesNotContain("is the repository, not a directory in it", neither);
+        Assert.Contains("No indexed file", neither);
     }
 
     [Fact]
