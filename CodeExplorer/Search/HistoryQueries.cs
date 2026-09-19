@@ -207,16 +207,31 @@ public sealed record ChurnAnswer(
 public sealed record CoChangeRequest(string Path, int Days, int Limit);
 
 /// <summary>
+///     What the index holds for a path outside any window: how many commits recorded it at all, and
+///     when the newest of them was. Read only where a window came back empty, because that is the one
+///     place the two ways of being empty have opposite meanings — a path git has never recorded under
+///     this spelling, usually because a rename severed its history, against one whose commits are
+///     simply older than the days asked for.
+/// </summary>
+/// <param name="Commits">Commits recorded for the path, over the whole imported history.</param>
+/// <param name="Newest">When the newest of them was authored, or null where there are none.</param>
+public sealed record RecordedPath(int Commits, DateTimeOffset? Newest);
+
+/// <summary>
 ///     What one file changed alongside over a window. <see cref="MaxCommitPaths" /> is the ceiling the
 ///     pairing ran under, carried so that the reply explaining what was excluded quotes the number that
 ///     was actually used rather than reading the configuration a second time.
+///     <see cref="Recorded" /> is what the path has outside the window, filled only where the window
+///     reached none of its commits — the branch where an empty answer has to say which kind of empty
+///     it is, and the only one that pays for the extra read.
 /// </summary>
 public sealed record CoChangeAnswer(
     IndexedFile File,
     bool HasHistory,
     HistoryWindow? Window,
     CoChanges Coupling,
-    int MaxCommitPaths) : Outcome;
+    int MaxCommitPaths,
+    RecordedPath? Recorded = null) : Outcome;
 
 /// <summary>Everything the paths of one commit ask for. The SHA is full: a listing is where it came from.</summary>
 public sealed record CommitFilesRequest(string Sha);
@@ -502,7 +517,12 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                     ? new CoChanges(0, 0, [])
                     : await PairAsync(index, window, file.RepositorySlug, file.PathInRepository, _maxCommitPaths,
                         Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
-                return new CoChangeAnswer(file, hasHistory, window, coupling, _maxCommitPaths);
+                // One extra read, and only on the branch that cannot answer without it: a window that
+                // reached nothing has to say whether the path has any history at all.
+                var recorded = window is not null && coupling.Commits == 0
+                    ? await RecordedPathAsync(index, file.RepositorySlug, file.PathInRepository, token)
+                    : null;
+                return new CoChangeAnswer(file, hasHistory, window, coupling, _maxCommitPaths, recorded);
             }, cancellationToken);
         if (outcome is CoChangeAnswer answer) recording.Matched(Engine, answer.Coupling.Files.Count, 0);
         else recording.Problem();
@@ -719,6 +739,31 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                                     """,
             [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path)]);
         return await ChangesAsync(command, cancellationToken);
+    }
+
+    /// <summary>
+    ///     What the whole imported history holds for one path of one repository, matched the same way
+    ///     <see cref="PathCommitsAsync" /> matches it — on the path the commit recorded, so a rename
+    ///     severs it. That is the point: a path with zero commits here is almost always a path that was
+    ///     renamed, and a path with commits older than the window is a quiet file. The two are opposite
+    ///     facts and this is what tells them apart.
+    /// </summary>
+    private static async Task<RecordedPath> RecordedPathAsync(IndexReader index, string repositorySlug, string path,
+        CancellationToken cancellationToken)
+    {
+        using var command = index.Connection.Query("""
+                                                   SELECT count(*) AS commits, max(c.authored_at) AS newest
+                                                   FROM commit_files cf JOIN commits c USING (commit_id)
+                                                   WHERE c.repo_slug = $r AND cf.path = $p
+                                                   """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path)]);
+        using var reader = await command.ReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return new RecordedPath(0, null);
+        int commits = (int)reader.Int64("commits");
+        return new RecordedPath(commits,
+            commits == 0 || reader.IsNull("newest")
+                ? null
+                : reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("newest")));
     }
 
     private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
