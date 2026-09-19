@@ -399,15 +399,19 @@ internal sealed partial class FileTools(
                  - IMPORTANT: declarations are read from the shape of each line in the language the file is written in, not from a compiler. A form no profile knows is one this did not find rather than one that is not there. Strong evidence, not proof.
                  - An empty answer always says which kind of empty it is: no profile covers the extension, or the language has no declarations that can be read from a line, or the file genuinely declares none. Those are three different facts and are never worded alike.
                  - Where a language announces a routine in one place and writes it in another — Delphi, a C header beside its source — each entry says which of the two it is.
+                 - A page holds at most 500 declarations. A file with more is paged with `offset`, so the back half of a big class is reachable without reading the file; the reply says how many it listed and which line it reached.
                  """)]
     public async Task<string> ListDeclarations(
         [Description("Qualified path of the file, e.g. \"main/src/Api/Orders.cs\".")]
         string path,
+        [Description(
+            "Skip this many declarations, in file order, and list the page after them. Default 0. Pass the running total the previous reply listed to continue where it stopped.")]
+        int offset = 0,
         CancellationToken cancellationToken = default)
     {
         var project = BoundProject.Get(httpContextAccessor);
         return ToolReply.Render<DeclarationsResult>(
-            await declarations.ForFileAsync(project.Slug, path, cancellationToken), Format,
+            await declarations.ForFileAsync(project.Slug, path, offset, cancellationToken), Format,
             "Ask about a smaller file, or read the ranges you need with read_file.");
     }
 
@@ -449,6 +453,13 @@ internal sealed partial class FileTools(
             text.Append(CultureInfo.InvariantCulture,
                 $"NOTE: no language profile covers this extension, so {result.QualifiedPath} was read with the conservative default shapes. What follows is thinner than a covered language's answer would be.\n");
 
+        // Paging past the last declaration is the end of the listing, not a file that declares nothing.
+        // The two say opposite things about the file, and only the offset tells them apart.
+        if (result.Declarations.Count == 0 && result.Offset > 0)
+            return text.Append(CultureInfo.InvariantCulture,
+                    $"{result.QualifiedPath} has no declaration past the first {result.Offset}: that was the end of the listing, and the file declares fewer names than the offset asked to skip.\n")
+                .ToString();
+
         if (result.Declarations.Count == 0)
             return text.Append(result.Coverage == DeclarationCoverage.Unprofiled
                     ? string.Create(CultureInfo.InvariantCulture,
@@ -459,14 +470,19 @@ internal sealed partial class FileTools(
                 // line shapes can say is what it would have said had it found something.
                 .Append('\n').Append(TextualCaveat).Append('\n').ToString();
 
+        int listed = result.Declarations.Count;
+        int next = result.Offset + listed;
         text.Append(CultureInfo.InvariantCulture,
-            $"{result.QualifiedPath} ({result.LanguageName}) declares {result.Declarations.Count} {ToolReply.Plural(result.Declarations.Count, "name")}, in file order:\n");
-        // A list that stopped at the ceiling reads as the whole outline unless it says otherwise. "Has
-        // more" and not "may have": the scan reads one declaration past what it reports, so a capped
-        // list is one it has actually seen past the end of.
+            $"{result.QualifiedPath} ({result.LanguageName}) declares {listed} {ToolReply.Plural(listed, "name")}{(result.Offset > 0 ? $", skipping the first {result.Offset}" : "")}, in file order:\n");
+        // A list that stopped at the page size reads as the whole outline unless it says otherwise.
+        // "Has more" and not "may have": the scan reads one declaration past what it reports, so a
+        // capped list is one it has actually seen past the end of. What it says is what is true — how
+        // many, and where it got to — and not what the size of the file implies about its origin: both
+        // files this cap was measured on were hand-written, and "read it directly" is the most
+        // expensive move available on a file long enough to reach it.
         if (result.Capped)
             text.Append(CultureInfo.InvariantCulture,
-                $"NOTE: the first {FileDeclarations.MaxDeclarations} are listed and the file has more. A file declaring that many is generated; read it directly for the rest.\n");
+                $"NOTE: {listed} listed, reaching line {result.Declarations[^1].LineNumber}, and the file declares more. Call list_declarations again with offset={next} for the next page.\n");
         text.Append('\n');
 
         // Labelled once. The column width and the rows ask the same question of the same list, and the
