@@ -37,7 +37,19 @@ public sealed record RefreshStatus(
     DateTimeOffset? FinishedAt,
     IndexSummary? Summary,
     string? Error,
-    RefreshProgress? Progress = null);
+    RefreshProgress? Progress = null)
+{
+    /// <summary>
+    ///     What each phase of this refresh cost, oldest first, filled as the refresh passes out of one
+    ///     phase and into the next. <see cref="Phase" /> says what is happening now and is gone the
+    ///     moment it changes; this is what a reader has afterwards, and is the difference between a
+    ///     refresh whose cost can be read off its status and one that has to be measured again (#92).
+    ///     A property with a default rather than a seventh positional parameter: only the refresh
+    ///     itself ever has a timeline to put here, so an empty list is the honest answer at every other
+    ///     call site and none of them has to say so.
+    /// </summary>
+    public IReadOnlyList<PhaseCost> Phases { get; init; } = [];
+}
 
 /// <summary>
 ///     Why a refresh was not taken on: the prose saying what to do instead, and the status code that
@@ -146,17 +158,30 @@ public sealed class RefreshService(
         // Set when the refresh was queued, which is what an operator watching a queue wants to see.
         var started = _statuses[project.Slug].StartedAt;
 
+        // What this refresh has spent so far, kept beside the status because the status itself holds
+        // only the phase running now (#92).
+        var timeline = new PhaseTimeline();
+
         // The phase text stays the status's own field as well as the progress's, so a caller that only
         // reads `phase` — the cron, an older client — keeps working unchanged.
-        void Report(RefreshProgress progress) =>
-            _statuses[project.Slug] = Status(project.Slug) with
+        void Report(RefreshProgress progress)
+        {
+            var current = Status(project.Slug);
+            _statuses[project.Slug] = current with
             {
-                State = RefreshState.Running, Phase = progress.Phase, Progress = progress
+                State = RefreshState.Running,
+                Phase = progress.Phase,
+                Progress = progress,
+                // Null where the report did not turn the page to a new phase, which is most of them: a
+                // counting step reports every 200 items, and a snapshot per report would be a list
+                // rebuilt thousands of times to say exactly what it said before.
+                Phases = timeline.Record(progress) ?? current.Phases
             };
+        }
 
         void Fail(string error) =>
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Failed, "Failed", started,
-                DateTimeOffset.UtcNow, null, error);
+                DateTimeOffset.UtcNow, null, error) { Phases = timeline.Close() };
 
         try
         {
@@ -176,10 +201,10 @@ public sealed class RefreshService(
                 return;
             }
 
-            Report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount, "Starting"));
+            Report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount, RefreshProgress.StartPhase));
             var summary = await refresh.RunAsync(project, Report, cancellationToken);
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Succeeded, "Done", started,
-                DateTimeOffset.UtcNow, summary, null);
+                DateTimeOffset.UtcNow, summary, null) { Phases = timeline.Close() };
             if (logger.IsEnabled(LogLevel.Information))
                 logger.LogInformation("Refresh of project {Project} finished", project.Slug);
         }

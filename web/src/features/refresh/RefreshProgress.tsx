@@ -1,5 +1,6 @@
 import type { RefreshProgress as Step, RefreshStatus } from '@/lib/api'
 import { ErrorPanel } from '@/components/ErrorPanel'
+import { RefreshPhases } from '@/features/refresh/RefreshPhases'
 import { RefreshSummary } from '@/features/refresh/RefreshSummary'
 import { isRefreshRunning } from '@/features/refresh/queries'
 import { Progress, ProgressValue } from '@/components/ui/progress'
@@ -14,6 +15,26 @@ import { formatCount } from '@/lib/format'
 export function RefreshProgress({ status }: { status: RefreshStatus }) {
   if (status.state === 'NeverRun') return null
 
+  return (
+    <>
+      <Panel status={status} />
+      {/* Beside the panel and never inside it, so the breakdown is one card in every state rather
+          than a card nested in the running one. While a refresh runs these are the phases already
+          behind it, which is what tells someone watching whether the phase on screen is the
+          expensive one or whether that is still coming; afterwards it is the whole refresh. */}
+      <RefreshPhases phases={status.phases} wallSeconds={wallSeconds(status)} />
+    </>
+  )
+}
+
+/** How long the refresh took, or null while it is still running and there is no whole to measure. */
+function wallSeconds(status: RefreshStatus): number | null {
+  if (!status.startedAt || !status.finishedAt) return null
+  return (Date.parse(status.finishedAt) - Date.parse(status.startedAt)) / 1000
+}
+
+/** What the refresh is doing or did, above the breakdown of what it spent. */
+function Panel({ status }: { status: RefreshStatus }) {
   if (isRefreshRunning(status)) {
     const progress = status.progress
     return (
