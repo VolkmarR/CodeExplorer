@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+
 namespace CodeExplorer;
 
 /// <summary>
@@ -19,6 +21,41 @@ public static class Languages
     ///     extension at all. They are one group and not one per file, and "" would print as nothing.
     /// </summary>
     public const string NoExtension = "(no extension)";
+
+    /// <summary>
+    ///     The extensions whose missing profile costs a search nothing: prose, data and build
+    ///     metadata. A repository holds these whatever it is written in, so without this list every
+    ///     answer that met a README or a project file would carry a caveat about an unprofiled
+    ///     language — the note an agent learns to skip, and the one case where it then skips the note
+    ///     that mattered (#126).
+    ///     It is a list of what is <em>not</em> code rather than a second language table: a profile
+    ///     says how a language writes a declaration, and Markdown has no answer to give, where Python
+    ///     or Go has one this build simply does not know. Being absent from both lists is what makes
+    ///     an extension worth reporting, so a language added to neither is reported rather than
+    ///     silently dropped — the safe direction.
+    ///     Files with no extension are here for the same reason: LICENSE, CHANGELOG and the like are
+    ///     what a repository holds without an extension, and a Makefile among them is not worth a
+    ///     caveat on every reply.
+    /// </summary>
+    private static readonly FrozenSet<string> NotCode = new[]
+    {
+        "", "md", "markdown", "mdx", "txt", "rst", "adoc", "asciidoc", "json", "jsonc", "yml", "yaml",
+        "toml", "ini", "cfg", "conf", "config", "properties", "env", "csv", "tsv", "xml", "resx",
+        "csproj", "vbproj", "fsproj", "sqlproj", "sln", "props", "targets", "nuspec", "lock", "log",
+        "svg", "png", "jpg", "jpeg", "gif", "ico", "pdf"
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    ///     Whether an extension could hold code a language profile would have read differently. False
+    ///     for the prose and data a repository carries whatever it is written in; true for everything
+    ///     else, including the languages this build has no profile for, which is the answer a caller
+    ///     reports on. The extension is spelled the way <c>files.extension</c> stores it.
+    /// </summary>
+    public static bool MightHoldCode(string extension)
+    {
+        ArgumentNullException.ThrowIfNull(extension);
+        return !NotCode.Contains(extension.TrimStart('.'));
+    }
 
     /// <summary>
     ///     What the C family calls a modifier, as the union of what C#, TypeScript and JavaScript

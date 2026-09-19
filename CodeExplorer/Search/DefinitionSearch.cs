@@ -34,13 +34,17 @@ public sealed record DefinitionSite(
 ///     "this particular answer happened to contain both" — a routine found only in an implementation
 ///     section is still an implementation, and a caller inferring the split from the sites would print
 ///     it unlabelled.
+///     <see cref="Unprofiled" /> is the extensions among the files naming the symbol that no profile
+///     covers (#126). It is carried whether or not sites were found: a declaration form the default
+///     shapes do not know is missing from a full answer exactly as silently as from an empty one.
 /// </summary>
 public sealed record DefinitionResult(
     IReadOnlyList<DefinitionSite> Sites,
     int TotalSites,
     bool Separated,
     int FilesNamingIt,
-    int? FilesNamingItWithoutFilters) : Outcome;
+    int? FilesNamingItWithoutFilters,
+    IReadOnlyList<UnprofiledFiles> Unprofiled) : Outcome;
 
 /// <summary>
 ///     Where a symbol is declared (#54), answered in one call instead of a reference search read past
@@ -195,8 +199,14 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
             }
         }
 
+        // What the scan was not equipped to read, over the files that spell the name. After the sites
+        // and not instead of them: an answer that found three declarations may still be missing the
+        // one written in a language no profile covers, and the reply says so either way (#126).
+        var unprofiled = await ScopeCoverage.OfMatchesAsync(connection,
+            $"{literally} AND regexp_matches(l.content, $q, '')", fileFilter, parameters, cancellationToken);
+
         return new DefinitionResult([.. ranked.Take(MaxSites)], ranked.Count, separated, naming,
-            namingWithoutFilters);
+            namingWithoutFilters, unprofiled);
     }
 
     /// <summary>One line the engine offered, before the file's language says what it declares.</summary>
