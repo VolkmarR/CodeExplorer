@@ -265,8 +265,10 @@ public static class Languages
             // `local`, `instance` and `define` are here and not in the scope list, which is what the
             // split is for (#83). All three introduce a name and open no scope, and with one list
             // answering both questions they had to be left out altogether to keep the scope label
-            // right: the cost was that three AcsLib files which are nothing but `define` lines
-            // answered that they declared nothing at all. Now `find_definition` finds them and
+            // right: the cost was that the five AcsLib files which are nothing but `define` lines
+            // answered that they declared nothing at all — 952 names between them, measured on the
+            // real index, of which the largest is `src/BaseGUI/_const.prg` at 787. Now
+            // `find_definition` finds them and
             // `DeclarationScope` cannot reach for them, so a reference below a `local cLabel := …` is
             // still labelled with the method it sits in — by the scope list rather than by omission.
             DeclarationModifiers = [.. XSharpScopeModifiers, "define", "local", "instance"],
