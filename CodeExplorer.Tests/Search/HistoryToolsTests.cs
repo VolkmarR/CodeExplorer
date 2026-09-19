@@ -950,6 +950,40 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
+    ///     A file whose every commit in the window was a mass change (#127). The ceiling excluded all of
+    ///     them, so nothing was paired and nothing can be — which is the opposite fact from a file that
+    ///     moves alone, and the answer a bulk rename leaves behind on every path it touched.
+    /// </summary>
+    [Fact]
+    public async Task Co_changed_says_a_files_only_commits_were_mass_changes_rather_than_that_it_moves_alone()
+    {
+        using var tight = new TestHost(SearchEngine.Substring, maxCommitPaths: 5);
+        await BuildCoupledProjectAsync(tight, "swept");
+        await using var client = await tight.ConnectAsync("swept");
+
+        // Bulk01.cs was created by the thirteen-path reformat and touched by nothing else.
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/vendor/Bulk01.cs", ["days"] = 30 });
+
+        Assert.Contains("no usable co-change history", reply, StringComparison.Ordinal);
+        Assert.Contains("one/vendor/Bulk01.cs", reply, StringComparison.Ordinal);
+        Assert.Contains("more than 5 paths", reply, StringComparison.Ordinal);
+        Assert.Contains("file_history", reply, StringComparison.Ordinal);
+        // The two empty answers must not read alike: this file's history is unusable, where Lonely.cs
+        // has a usable history that holds no coupling. The words "moves alone" do appear — this
+        // branch denies the reading rather than avoiding it — but the other branch's claim must not.
+        Assert.DoesNotContain("It moves alone in the history", reply, StringComparison.Ordinal);
+        // Nor may it read as the count it would have carried: none of its commits were pairable, and
+        // "any of the 0 commits that touched it" is the sentence this branch exists to replace.
+        Assert.DoesNotContain("the 0 commits", reply, StringComparison.Ordinal);
+
+        string alone = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Lonely.cs", ["days"] = 30 });
+        Assert.Contains("moves alone", alone, StringComparison.Ordinal);
+        Assert.DoesNotContain("no usable co-change history", alone, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     A window that reaches none of a file's commits is not a file that moves alone, and the two
     ///     answers have to read differently or the shorter window teaches the agent a wrong fact.
     /// </summary>
@@ -1223,6 +1257,105 @@ public sealed class HistoryToolsTests : IDisposable
                     < reply.IndexOf("one/src/Gone.cs", StringComparison.Ordinal));
         // The boundary, said rather than left for a follow-up call that cannot be answered.
         Assert.Contains("diff", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A commit too wide for one reply (#125). The list is a page, it says how many paths the
+    ///     commit really touched, and it names the offset that reaches the rest — where before it was
+    ///     cut by the reply ceiling with nothing saying so, which is how an agent reads half a commit
+    ///     as the whole of it.
+    /// </summary>
+    [Fact]
+    public async Task Commit_files_pages_a_commit_wider_than_one_reply_and_says_what_it_left()
+    {
+        const int paths = HistoryTools.MaxPathsListed + 20;
+        var wide = new Dictionary<string, string>();
+        for (int i = 1; i <= paths; i++)
+            wide[string.Create(CultureInfo.InvariantCulture, $"src/Bulk{i:0000}.cs")] = $"class B{i} {{ }}\n";
+        _host.CreateGitRepository("sweeping-one", wide);
+        await _host.CreateProjectAsync("sweeping");
+        await _host.AddRepositoryAsync("sweeping", "one", _host.FixturePath("sweeping-one"));
+        await _host.RefreshAsync("sweeping");
+
+        await using var client = await _host.ConnectAsync("sweeping");
+        string sha = await ShaOfAsync("sweeping", "fixture");
+
+        string first = await TestHost.CallAsync(client, "commit_files",
+            new Dictionary<string, object?> { ["sha"] = sha });
+
+        // The commit's own size, not the page's: a header counting the page would be the truncation
+        // the note beneath it is denying.
+        Assert.Contains($"{paths} paths changed by", first, StringComparison.Ordinal);
+        Assert.Contains($"offset={HistoryTools.MaxPathsListed}", first, StringComparison.Ordinal);
+        Assert.Contains("src/Bulk0001.cs", first, StringComparison.Ordinal);
+        Assert.DoesNotContain($"src/Bulk{paths:0000}.cs", first, StringComparison.Ordinal);
+
+        string second = await TestHost.CallAsync(client, "commit_files",
+            new Dictionary<string, object?> { ["sha"] = sha, ["offset"] = HistoryTools.MaxPathsListed });
+
+        Assert.Contains($"src/Bulk{paths:0000}.cs", second, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/Bulk0001.cs", second, StringComparison.Ordinal);
+        // The last page is the end of the list and says nothing about a next one.
+        Assert.DoesNotContain("for the next", second, StringComparison.Ordinal);
+
+        // Past the end is the end of the paging, never a commit that touched nothing.
+        string past = await TestHost.CallAsync(client, "commit_files",
+            new Dictionary<string, object?> { ["sha"] = sha, ["offset"] = paths + 50 });
+        Assert.Contains("no path past the first", past, StringComparison.Ordinal);
+        Assert.DoesNotContain("touched no path", past, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     Paths long enough that three hundred of them would overrun the reply ceiling. The count is
+    ///     not the binding limit there — the characters are — and a page cut by the ceiling instead of
+    ///     by this code would lose rows no offset can reach, which is the truncation #125 is about
+    ///     arrived at from the inside.
+    /// </summary>
+    [Fact]
+    public async Task Commit_files_ends_a_page_of_long_paths_before_the_reply_ceiling_cuts_it()
+    {
+        const int paths = 260;
+        // Long names rather than deep directories: git on Windows refuses the second well before the
+        // reply ceiling is reached. Each row is then about 170 characters, so the budget binds first.
+        string padding = new('x', 130);
+        var wide = new Dictionary<string, string>();
+        for (int i = 1; i <= paths; i++)
+            wide[string.Create(CultureInfo.InvariantCulture, $"Bulk{i:0000}-{padding}.cs")] = $"class B{i} {{ }}\n";
+        _host.CreateGitRepository("longpaths-one", wide);
+        await _host.CreateProjectAsync("longpaths");
+        await _host.AddRepositoryAsync("longpaths", "one", _host.FixturePath("longpaths-one"));
+        await _host.RefreshAsync("longpaths");
+
+        await using var client = await _host.ConnectAsync("longpaths");
+        string reply = await TestHost.CallAsync(client, "commit_files",
+            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync("longpaths", "fixture") });
+
+        // The reply cap never bit, so nothing was cut by something that cannot say what it cut.
+        Assert.DoesNotContain("capped at", reply, StringComparison.Ordinal);
+        Assert.True(reply.Length <= ToolReply.MaxOutputChars);
+        // Fewer than the count ceiling were listed, and the offset named is the one actually reached.
+        Assert.Contains("further paths not shown", reply, StringComparison.Ordinal);
+        int listed = reply.Split('\n').Count(line => line.Contains("Bulk", StringComparison.Ordinal));
+        Assert.True(listed < HistoryTools.MaxPathsListed, $"listed {listed}");
+        Assert.Contains($"offset={listed}", reply, StringComparison.Ordinal);
+        Assert.Contains($"listing {listed} of them", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A commit that fits says nothing about paging, because a note on every reply is one an agent
+    ///     learns to skip.
+    /// </summary>
+    [Fact]
+    public async Task Commit_files_says_nothing_about_paging_when_the_whole_commit_fits()
+    {
+        await BuildCommitProjectAsync("whole");
+        await using var client = await _host.ConnectAsync("whole");
+
+        string reply = await TestHost.CallAsync(client, "commit_files",
+            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync("whole", "BugFix 558185") });
+
+        Assert.DoesNotContain("offset=", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("NOTE", reply, StringComparison.Ordinal);
     }
 
     /// <summary>

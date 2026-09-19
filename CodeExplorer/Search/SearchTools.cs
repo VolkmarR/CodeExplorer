@@ -217,6 +217,7 @@ internal sealed class SearchTools(
                  - For an interface, a call names the method rather than the interface, so run it again on the member you care about.
                  - **The per-kind counts are a floor for the files examined, never a project total.** Only the `maxFiles` files naming it most often are classified, so "412 calls" means 412 in that sample. Where the name is spread wider than the cap the reply gives the project-wide occurrence count beside it, and `maxFiles` stops at 100 however many files hold the name — for breadth past that, `grep(filesOnly=true)` counts the files and `list_matches` the distinct spellings.
                  - Scope with `repo`, `path`, `ext` and `exclude` exactly as grep does. When a filter is set the reply says how many further files matched outside it, because a declaration hidden by `exclude` makes a thin answer look complete.
+                 - Where files holding the name are written in a language no profile covers, the reply names those extensions and how many files they are: the lines were matched, but what each appearance is was read from shapes that are not that language's.
                  """)]
     public async Task<string> FindReferences(
         [Description(
@@ -250,6 +251,36 @@ internal sealed class SearchTools(
             "Narrow with repo/path/ext/exclude, or lower maxFiles.");
     }
 
+    /// <summary>
+    ///     What a symbol search could not read the way its language writes it (#126). `imports`,
+    ///     `who_imports` and `list_declarations` all say outright when an extension has no profile, so
+    ///     an empty answer from them is never mistaken for a fact about the file; these two tools —
+    ///     the two an agent reaches for most — said nothing, and a file read with the conservative
+    ///     default shapes contributed the same silence as a file that was searched and held nothing.
+    ///     One sentence for both of them, because a caller running one after the other must be told
+    ///     one fact and not two shapes of it. What follows from it differs and is the caller's clause.
+    ///     Empty where every matching file's extension is profiled, which is the common case: a note
+    ///     on every reply is one an agent stops reading.
+    /// </summary>
+    /// <param name="unprofiled">The extensions, most files first, as the search counted them.</param>
+    /// <param name="consequence">What the gap costs this tool's answer, in the tool's own words.</param>
+    private static string UnprofiledNote(IReadOnlyList<UnprofiledFiles> unprofiled, string consequence)
+    {
+        if (unprofiled.Count == 0) return "";
+
+        int files = unprofiled.Sum(u => u.Files);
+        var named = unprofiled.Take(ScopeCoverage.MaxExtensionsNamed).ToList();
+        string extensions = string.Join(", ", named.Select(u => u.Extension));
+        // The remainder is counted rather than listed: how many kinds of file this covers is the part
+        // that still says something once the list would be the project's file types.
+        if (unprofiled.Count > named.Count)
+            extensions += string.Create(CultureInfo.InvariantCulture,
+                $" and {unprofiled.Count - named.Count} further {ToolReply.Plural(unprofiled.Count - named.Count, "extension")}");
+
+        return string.Create(CultureInfo.InvariantCulture,
+            $"NOTE: {files} {ToolReply.Plural(files, "file")} spelling the name {ToolReply.Plural(files, "is", "are")} {extensions}, which no language profile covers, so {ToolReply.Plural(files, "it was", "they were")} read with the conservative default shapes rather than the forms that language writes. {consequence}\n");
+    }
+
     private static string NoReferences(string symbol, ReferenceResult result)
     {
         // The opening says only that this answer is empty. That nothing in the project spells the name is
@@ -265,6 +296,15 @@ internal sealed class SearchTools(
                 "The name is matched whole and case-sensitively, so check the spelling and the case, or search for the interface that declares it. grep with regex=true finds a partial name.");
         return text.ToString();
     }
+
+    /// <summary>
+    ///     What an unprofiled extension costs a reference answer: the matching is unaffected — a
+    ///     pattern is a pattern in every language — and the classification is what was guessed at.
+    /// </summary>
+    private const string ReferenceCost =
+        "Their lines were matched like any other, but what each appearance is — a call, a write, a "
+        + "comment — was read from shapes that are not this language's, so treat those rows as weaker "
+        + "evidence and read the file where one of them matters.";
 
     private static string FormatReferences(
         string symbol, ReferenceResult result, bool writesOnly, bool includeNoise)
@@ -315,6 +355,11 @@ internal sealed class SearchTools(
         if (hiddenFiles > 0)
             text.Append(CultureInfo.InvariantCulture,
                 $"  NOTE: {ToolReply.PartlyHiddenByFilters(hiddenFiles)}\n");
+
+        // Beside the other notes about what this answer does not cover, and above the listing for the
+        // reason they are: a caveat under a long list is one the reply cap can cut (#126).
+        if (UnprofiledNote(result.Unprofiled, ReferenceCost) is { Length: > 0 } unprofiled)
+            text.Append("  ").Append(unprofiled);
 
         Section("DECLARATIONS", ReferenceKind.Definition);
         Section("WRITES", ReferenceKind.Write);
@@ -380,6 +425,7 @@ internal sealed class SearchTools(
                  - IMPORTANT: this is a heuristic over text, not a compiler. It knows the declaration forms its language profile knows, so a form it does not know is a miss and not proof there is none. A miss degrades to find_references and grep, and the reply says so rather than pretending the symbol has no declaration.
                  - The name is matched whole and case-sensitively, exactly as find_references matches it.
                  - A name declared more than once — an overload, a partial class, the same name on two unrelated types — returns every site, ranked.
+                 - Where files holding the name are written in a language no profile covers, the reply names those extensions and how many files they are, because a declaration written the way that language writes one is not searched for at all there — the answer is silent about those files, not negative about them.
                  - Scope with `repo`, `path`, `ext` and `exclude` exactly as grep does.
                  """)]
     public async Task<string> FindDefinition(
@@ -433,8 +479,24 @@ internal sealed class SearchTools(
                 $"{ToolReply.PartlyHiddenByFilters(result.FilesNamingItWithoutFilters.Value - result.FilesNamingIt)} ");
         text.Append(CultureInfo.InvariantCulture,
             $"This reads the declaration forms it knows, so a form it does not know is a miss and not proof there is none — the symbol may also be declared in a language this indexes without profiling, or generated rather than written. Run find_references(symbol=\"{symbol}\") and read its DECLARATIONS section, or grep for it.");
+        // Which of those two a miss actually is, where the index can say: "a language this indexes
+        // without profiling" is a possibility in the sentence above and a fact here, named with the
+        // files it applies to (#126).
+        if (UnprofiledNote(result.Unprofiled, DefinitionCost) is { Length: > 0 } unprofiled)
+            text.Append('\n').Append(unprofiled);
         return text.ToString();
     }
+
+    /// <summary>
+    ///     What an unprofiled extension costs a declaration answer. Stronger than the reference tool's
+    ///     clause and deliberately so: a declaration is found by matching the shape of the line, so a
+    ///     language whose shapes were never registered can hide one completely, where a reference in
+    ///     the same file is still found and only its label is a guess.
+    /// </summary>
+    private const string DefinitionCost =
+        "A declaration written the way that language writes one is not found by those shapes at all, "
+        + "so this answer is silent about those files rather than negative about them: grep the name "
+        + "there, or read one of them to see how the language declares things.";
 
     private static string FormatDefinitions(string symbol, DefinitionResult result)
     {
@@ -445,6 +507,11 @@ internal sealed class SearchTools(
             ? string.Create(CultureInfo.InvariantCulture,
                 $"; showing the first {result.Sites.Count}. The name is declared too often to enumerate — narrow with repo/path/ext/exclude.\n")
             : ".\n");
+
+        // Above the sites, where a reply that found something is most likely to be read as the whole
+        // of what there is: an answer of three declarations can still be missing the one written in a
+        // language no profile covers (#126).
+        text.Append(UnprofiledNote(result.Unprofiled, DefinitionCost));
 
         // Headings where the language draws the distinction they name, and none where it does not.
         // Whether this ANSWER holds both kinds decides nothing: a Delphi routine found only in its

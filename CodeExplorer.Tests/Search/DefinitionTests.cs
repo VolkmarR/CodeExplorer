@@ -292,6 +292,51 @@ public sealed class DefinitionTests : IDisposable
         Assert.Contains("your filters hid 1 further matching file", hidden);
     }
 
+    /// <summary>
+    ///     An extension no profile covers is named outright (#126), the way imports, who_imports and
+    ///     list_declarations already name one. Those files are searched with the conservative default
+    ///     shapes, so a declaration written the way that language writes one is missing from the answer
+    ///     — and a reply that said nothing about it would read the same as one that searched them.
+    /// </summary>
+    [Fact]
+    public async Task An_extension_no_profile_covers_is_named_rather_than_silently_contributing_nothing()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("mixed", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Orders.cs"] = "public class OrderService\n{\n    public void Advance(int n) { }\n}\n",
+                // Ruby declares a routine in a form no profile here knows, so the declaration on this
+                // line is exactly what the answer cannot see.
+                ["lib/orders.rb"] = "class Orders\n  def Advance(n)\n    n\n  end\nend\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("mixed");
+
+        string found = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Advance" });
+
+        // The C# declaration is answered, and the reply still says what it could not read.
+        Assert.Contains("one/src/Orders.cs", found);
+        Assert.Contains("no language profile covers", found);
+        Assert.Contains(".rb", found);
+        Assert.Contains("1 file spelling the name is", found);
+
+        // A scope of nothing but unprofiled files is the sharpest case: an empty answer there is not
+        // a negative, and the reply has to say which of the two it is.
+        string only = await FindAsync(client,
+            new Dictionary<string, object?> { ["symbol"] = "Advance", ["ext"] = "rb" });
+        Assert.Contains("No declaration of \"Advance\" was recognised", only);
+        Assert.Contains("no language profile covers", only);
+        Assert.Contains("silent about those files rather than negative about them", only);
+
+        // And a search that met no unprofiled file says nothing about one: a note on every reply is
+        // one an agent stops reading.
+        string profiled = await FindAsync(client,
+            new Dictionary<string, object?> { ["symbol"] = "OrderService" });
+        Assert.DoesNotContain("no language profile covers", profiled);
+    }
+
     [Fact]
     public async Task Malformed_input_is_explained_rather_than_answered_with_nothing()
     {
