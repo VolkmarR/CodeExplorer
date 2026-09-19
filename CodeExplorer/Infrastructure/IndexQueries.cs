@@ -204,10 +204,22 @@ internal static class IndexQueries
     ///     The pattern is escaped and bound, never interpolated: it is caller text, and `%` or `_` in
     ///     it would otherwise widen the match silently.
     /// </summary>
-    public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug, string? author)
+    /// <summary>
+    ///     The same again, narrowed to the commits whose subject carries some text.
+    ///     The subject and not the body: an identifier that brings an agent here — a ticket key, a PR
+    ///     number, a release name — is put in the subject line by every convention that puts it in a
+    ///     commit at all, and matching the body as well would make a passing mention in a paragraph
+    ///     rank equal with the commit that declares itself. Said in the tool's own words, so a caller
+    ///     that meant the body knows this did not search it.
+    ///     A case-insensitive substring for the reason the address is one, and escaped and bound for
+    ///     the same reason too: this is caller text, and a `%` in it would widen the match rather than
+    ///     fail to find one.
+    /// </summary>
+    public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug, string? author,
+        string? message = null)
     {
-        var clauses = new List<string>(2);
-        var parameters = new List<DuckDBParameter>(2);
+        var clauses = new List<string>(3);
+        var parameters = new List<DuckDBParameter>(3);
         if (repositorySlug is not null)
         {
             clauses.Add("repo_slug = $r");
@@ -222,12 +234,18 @@ internal static class IndexQueries
             parameters.Add(new DuckDBParameter("a", $"%{Escaped(author)}%"));
         }
 
+        if (message is not null)
+        {
+            clauses.Add("subject ILIKE $m ESCAPE '!'");
+            parameters.Add(new DuckDBParameter("m", $"%{Escaped(message)}%"));
+        }
+
         return (clauses.Count == 0 ? "" : $"WHERE {string.Join(" AND ", clauses)}", parameters);
     }
 
-    /// <summary>The LIKE metacharacters, made literal, so an address matches as the text it is.</summary>
-    private static string Escaped(string author) =>
-        author.Replace("!", "!!", StringComparison.Ordinal)
+    /// <summary>The LIKE metacharacters, made literal, so caller text matches as the text it is.</summary>
+    private static string Escaped(string text) =>
+        text.Replace("!", "!!", StringComparison.Ordinal)
             .Replace("%", "!%", StringComparison.Ordinal)
             .Replace("_", "!_", StringComparison.Ordinal);
 }

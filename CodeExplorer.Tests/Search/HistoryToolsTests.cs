@@ -25,7 +25,7 @@ public sealed class HistoryToolsTests : IDisposable
     /// </summary>
     private const string Caveat =
         "`git_log` has no `committer` argument; it was ignored. "
-        + "It takes `repo`, `author`, `limit` and `page`.";
+        + "It takes `repo`, `author`, `message`, `limit` and `page`.";
 
     public void Dispose() => _host.Dispose();
 
@@ -111,6 +111,88 @@ public sealed class HistoryToolsTests : IDisposable
         string wildcard = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["author"] = "gr_ce" });
         Assert.StartsWith("No address contains 'gr_ce'", wildcard, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The entry point into history an agent actually arrives with: a ticket number, a PR number,
+    ///     a release name — a token that exists in the commit message and nowhere in the code. Without
+    ///     this, finding its commit was paging the log until it appeared, and one measured evaluation
+    ///     instead grepped the source for the ticket number and hit nothing, because that is not where
+    ///     ticket numbers live (#110).
+    /// </summary>
+    [Fact]
+    public async Task Git_log_finds_a_commit_by_text_in_its_subject()
+    {
+        await BuildChurnProjectAsync("tickets", true);
+        await using var client = await _host.ConnectAsync("tickets");
+
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["message"] = "the module" });
+
+        // The header says it was narrowed and by what: a filtered log that introduces itself as the
+        // log is the fault #86 was about, arrived at from a third direction.
+        Assert.Contains("1 commit whose subject contains 'the module'", reply, StringComparison.Ordinal);
+        Assert.Contains("Add the module", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("Fix the check", reply, StringComparison.Ordinal);
+
+        // Case-insensitive, like the address filter, because a subject is quoted from memory.
+        string shouted = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["message"] = "ADD THE MODULE" });
+        Assert.Contains("Add the module", shouted, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The two filters narrow one log together, and the header names both. One that mentioned the
+    ///     address and not the subject would be describing a page it did not return.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_combines_the_subject_filter_with_author_and_repo()
+    {
+        await BuildChurnProjectAsync("both", true);
+        await using var client = await _host.ConnectAsync("both");
+
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["message"] = "it", ["author"] = "grace", ["repo"] = "one" });
+
+        Assert.Contains("by an address matching 'grace'", reply, StringComparison.Ordinal);
+        Assert.Contains("whose subject contains 'it'", reply, StringComparison.Ordinal);
+        Assert.Contains("in repository 'one'", reply, StringComparison.Ordinal);
+        // Ada's "Import the old code" also contains "it"... it does not: the filter is a substring of
+        // the subject, and only Grace's two commits carry one. Her "Fix the check" does not either.
+        Assert.Contains("Tighten it again", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("Import the old code", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A subject nobody wrote, and the two ways that is not an empty log: it is a filter that
+    ///     matched nothing, and the thing it searched is the subject and not the code. An agent that
+    ///     reads it as "this project has no such commits" goes looking in the wrong place next
+    ///     (CODING_STANDARDS, Errors).
+    ///     The wildcard half is the same trap the address filter has: `%` is caller text here, and a
+    ///     filter that silently matched everything would report the whole log as a search result.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_says_a_subject_filter_missed_and_treats_a_wildcard_as_text()
+    {
+        await BuildChurnProjectAsync("miss", false);
+        await using var client = await _host.ConnectAsync("miss");
+
+        string missed = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["message"] = "BugFix 558185" });
+        Assert.StartsWith("No commit's subject contains 'BugFix 558185'", missed, StringComparison.Ordinal);
+        Assert.Contains("grep searches the code", missed, StringComparison.Ordinal);
+        // Not the sentence for a project with no commits, which is the opposite fact.
+        Assert.DoesNotContain("No commits are recorded", missed, StringComparison.Ordinal);
+
+        string wildcard = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["message"] = "%" });
+        Assert.StartsWith("No commit's subject contains '%'", wildcard, StringComparison.Ordinal);
+
+        // Whitespace is no filter at all, not a filter matching everything.
+        string blank = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["message"] = "  " });
+        Assert.DoesNotContain("whose subject contains", blank, StringComparison.Ordinal);
+        Assert.Contains("Add the module", blank, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -244,7 +326,7 @@ public sealed class HistoryToolsTests : IDisposable
 
         Assert.StartsWith(
             "`git_log` has no `committer`, `grep` or `commit` argument; they were ignored. "
-            + "It takes `repo`, `author`, `limit` and `page`.", reply, StringComparison.Ordinal);
+            + "It takes `repo`, `author`, `message`, `limit` and `page`.", reply, StringComparison.Ordinal);
         // The log is still answered: the caveat is what the answer is read with, not a refusal.
         Assert.Contains("2 commits", reply, StringComparison.Ordinal);
     }
@@ -302,7 +384,7 @@ public sealed class HistoryToolsTests : IDisposable
 
         Assert.StartsWith(
             "`git_log` has no `repository` argument; it was ignored. "
-            + "It takes `repo`, `author`, `limit` and `page`.", reply, StringComparison.Ordinal);
+            + "It takes `repo`, `author`, `message`, `limit` and `page`.", reply, StringComparison.Ordinal);
         // It bound nowhere, so the answer really does still span the second repository.
         Assert.Contains("[two]", reply, StringComparison.Ordinal);
     }
