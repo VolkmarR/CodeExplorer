@@ -235,6 +235,12 @@ public sealed class LanguageAnalyzerTests
     // the two questions have one answer there and the labels are what they were.
     [InlineData("pkb", "CREATE OR REPLACE PROCEDURE Advance(n number) IS")]
     [InlineData("pks", "create package body app.orders as")]
+    // A type opens a scope even when a name-only modifier shares the line with it. TypeScript's
+    // `const enum` is the one that bites: read as a constant, every member inside it would be
+    // labelled with whatever encloses the enum instead of with the enum.
+    [InlineData("ts", "export const enum Direction {")]
+    [InlineData("cs", "public readonly struct Point")]
+    [InlineData("cs", "public readonly record struct Money(decimal Amount)")]
     public void A_routine_or_a_type_opens_the_scope_the_lines_under_it_sit_in(string extension, string line) =>
         Assert.True(Declares(extension, line).Value?.OpensScope);
 

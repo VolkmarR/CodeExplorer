@@ -765,6 +765,12 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             if (type is null && k.Groups[1].Success) type = k.Groups[1].Value;
         }
 
+        // A type holds members whatever decorates it, so a line that names one opens a scope even when
+        // a name-only modifier shares it. TypeScript's `export const enum Direction {` is the case:
+        // its `const` describes how the enum's values are emitted and does not make the enum a
+        // constant, and reading it as one would stop every member inside from being labelled with it.
+        if (type is not null) opensScope = true;
+
         return new Answer<Declared?>(
             type is null && member is null
                 ? null
