@@ -328,6 +328,57 @@ public sealed class ReferenceTests : IDisposable
     }
 
     /// <summary>
+    ///     The other half of #83, over a real index: a named constant is a declaration (#71) and a
+    ///     declaration is not automatically a scope. A local <c>const</c> sits above the lines that
+    ///     follow it and is indented less than the ones inside the block below it, so before the two
+    ///     modifier sets were split every reference under one was labelled with the constant instead of
+    ///     with the method it sits in — the regression the X# profile had been keeping <c>define</c> out
+    ///     to avoid, live in C# all along.
+    /// </summary>
+    [Fact]
+    public async Task A_local_constant_is_not_the_scope_the_lines_below_it_are_labelled_with()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("limits", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Limits.cs"] = """
+                                    public class Limits
+                                    {
+                                        public void Advance(int n)
+                                        {
+                                            const int Max = 10;
+                                            if (n > 0)
+                                            {
+                                                Total = n + Max;
+                                            }
+                                        }
+
+                                        public void Fill(int n)
+                                        {
+                                            readonly Span<int> s = stackalloc int[4];
+                                            if (n > 0)
+                                            {
+                                                Total = s.Length;
+                                            }
+                                        }
+                                    }
+
+                                    """
+            }
+        });
+        await using var client = await _host.ConnectAsync("limits");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Total" });
+
+        Assert.DoesNotContain("Limits.Max", text);
+        Assert.DoesNotContain("Limits.s", text);
+        Assert.Contains("[Limits.Advance] Total = n + Max;", text);
+        Assert.Contains("[Limits.Fill] Total = s.Length;", text);
+    }
+
+    /// <summary>
     ///     The file-level scan over a real index (#53). The lines a match sits on are the only ones
     ///     DuckDB hands back, so knowing that one of them is inside a block opened forty lines earlier
     ///     means reading the lines above it — which this proves happens, and happens per file.

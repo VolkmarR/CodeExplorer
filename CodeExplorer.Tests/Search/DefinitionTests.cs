@@ -339,6 +339,36 @@ public sealed class DefinitionTests : IDisposable
         Assert.Contains("No declaration of \"Advance\" was recognised", text);
     }
 
+    /// <summary>
+    ///     What #83 was opened for: an X# file that is nothing but named constants. Three such files in
+    ///     AcsLib answered that they declared nothing, because `define` introduces a name and opens no
+    ///     scope and one modifier list had to answer both questions. The fixture is what can be checked
+    ///     here; the three real files are a re-index and a look.
+    /// </summary>
+    [Fact]
+    public async Task A_file_of_nothing_but_XSharp_defines_declares_every_one_of_them()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("xbase", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Fsedit.vh"] = """
+                                    define FSEDIT_GET := 11
+                                    define PD_ALLPAGES             := 0x00000000
+
+                                    """
+            }
+        });
+        await using var client = await _host.ConnectAsync("xbase");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "FSEDIT_GET" });
+
+        Assert.Contains("\"FSEDIT_GET\" is declared in 1 place.", text);
+        Assert.Contains("one/src/Fsedit.vh", text);
+        Assert.Contains("1: define FSEDIT_GET := 11", text);
+    }
+
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation()
     {

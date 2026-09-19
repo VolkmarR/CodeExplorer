@@ -43,6 +43,49 @@ public static class Languages
     private static readonly string[] CFamilyNonTypes = ["default"];
 
     /// <summary>
+    ///     Which of those also open a scope, which is the narrower of the two questions one list used
+    ///     to answer at once (#83, ADR-0008). What is left is what can head a body: <c>function</c>,
+    ///     <c>def</c>, and the access, static and inheritance modifiers that decorate one.
+    ///     Written as the five that drop out, because that is the decision. <c>const</c>,
+    ///     <c>readonly</c>, <c>val</c>, <c>let</c> and <c>event</c> introduce a name and hold no lines,
+    ///     and a <b>local</b> <c>const int Max = 10;</c> or <c>readonly Span&lt;int&gt; s = …;</c>
+    ///     matches the member shape like any field — so every reference indented under one was
+    ///     labelled <c>Max</c> rather than with the method it sits in, in C#, TypeScript and JavaScript
+    ///     alike. That is the regression the X# profile cited as its reason for leaving <c>define</c>
+    ///     out, live here all along and unmitigated.
+    ///     Derived from the list above rather than written out beside it, so a modifier added there
+    ///     opens a scope unless it is named here and the two cannot come apart.
+    /// </summary>
+    private static readonly string[] CFamilyScopeModifiers =
+        [.. CFamilyModifiers.Except(["const", "readonly", "val", "let", "event"])];
+
+    /// <summary>
+    ///     What opens a scope in X#: the routine and member words, and every visibility and inheritance
+    ///     modifier that can stand in front of one. This is the list the profile carried before the two
+    ///     questions came apart (#83), unchanged — the name list is this plus the three words that
+    ///     introduce a name and hold no lines, which the profile explains.
+    /// </summary>
+    private static readonly string[] XSharpScopeModifiers =
+    [
+        "public", "private", "protected", "internal", "export", "hidden", "static", "virtual",
+        "override", "abstract", "sealed", "partial", "const",
+        "function", "procedure", "method", "access", "assign", "property", "event", "delegate"
+    ];
+
+    /// <summary>
+    ///     What opens a scope in Delphi, which is what the profile listed before <c>var</c> and
+    ///     <c>const</c> could be admitted beside them (#83). A routine, a property or a type heads
+    ///     something that holds lines; a <c>var</c> or <c>const</c> entry names a variable or a
+    ///     constant and heads nothing.
+    /// </summary>
+    private static readonly string[] DelphiScopeModifiers =
+    [
+        "procedure", "function", "constructor", "destructor", "property",
+        "type", "class", "published", "private", "protected", "public", "strict", "override",
+        "virtual", "overload", "static"
+    ];
+
+    /// <summary>
     ///     What may introduce a declaration in SQL, which is a phrase rather than a modifier.
     ///     <c>or replace</c> is one entry and not two: a bare <c>or</c> would make the wrapped line of
     ///     any <c>WHERE</c> clause read as a declaration, and a false declaration is worse than an
@@ -179,6 +222,10 @@ public static class Languages
             new ImportForm("require(", ImportShape.Path) { Anywhere = true, Closer = ")" }
         ],
         InstantiationKeywords = New,
+        // No scope list, and deliberately: a profile that names one list behaves as it did before
+        // there were two (#83), and this one is today's behaviour exactly by contract — including the
+        // rules that are wrong somewhere (ADR-0008). An extension nobody declared does not become the
+        // place a C-family judgement is applied on its behalf.
         DeclarationModifiers = CFamilyModifiers,
         NonTypeKeywords = CFamilyNonTypes,
         DeclarationKeywords = ["class", "interface", "struct", "record", "enum"]
@@ -215,16 +262,15 @@ public static class Languages
                 new ImportForm("#using ", ImportShape.Module),
                 new ImportForm("#include", ImportShape.Path)
             ],
-            // `local`, `instance` and `define` are deliberately absent. They introduce a name, but not
-            // a scope, and every modifier here is also what DeclarationScope reads as one: with them
-            // in, every reference below a `local cLabel := …` was labelled with the local instead of
-            // with the method it sits in.
-            DeclarationModifiers =
-            [
-                "public", "private", "protected", "internal", "export", "hidden", "static", "virtual",
-                "override", "abstract", "sealed", "partial", "const",
-                "function", "procedure", "method", "access", "assign", "property", "event", "delegate"
-            ],
+            // `local`, `instance` and `define` are here and not in the scope list, which is what the
+            // split is for (#83). All three introduce a name and open no scope, and with one list
+            // answering both questions they had to be left out altogether to keep the scope label
+            // right: the cost was that three AcsLib files which are nothing but `define` lines
+            // answered that they declared nothing at all. Now `find_definition` finds them and
+            // `DeclarationScope` cannot reach for them, so a reference below a `local cLabel := …` is
+            // still labelled with the method it sits in — by the scope list rather than by omission.
+            DeclarationModifiers = [.. XSharpScopeModifiers, "define", "local", "instance"],
+            ScopeModifiers = XSharpScopeModifiers,
             DeclarationKeywords = ["class", "interface", "struct", "structure", "vostruct", "union", "enum"],
             DeclarationNamesFollowKeyword = true,
             DeclarationBodyOpeners = ["as"],
@@ -253,6 +299,7 @@ public static class Languages
             ],
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
+            ScopeModifiers = CFamilyScopeModifiers,
             NonTypeKeywords = CFamilyNonTypes,
             DeclarationKeywords = ["class", "interface", "struct", "record", "enum"],
             GeneratedPathPatterns = ["*.g.cs", "*.designer.cs", "*.generated.cs"]
@@ -272,6 +319,7 @@ public static class Languages
             ImportPaths = EcmaPaths,
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
+            ScopeModifiers = CFamilyScopeModifiers,
             NonTypeKeywords = CFamilyNonTypes,
             DeclarationKeywords = ["class", "interface", "enum", "type"]
         },
@@ -288,6 +336,7 @@ public static class Languages
             ImportPaths = EcmaPaths,
             InstantiationKeywords = New,
             DeclarationModifiers = CFamilyModifiers,
+            ScopeModifiers = CFamilyScopeModifiers,
             NonTypeKeywords = CFamilyNonTypes,
             DeclarationKeywords = ["class"]
         },
@@ -312,14 +361,14 @@ public static class Languages
                     { Separated = true, Closer = ";", SpansLines = true },
                 new ImportForm("unit ", ImportShape.Module) { Declares = true }
             ],
-            // `var` and `const` are left out for the reason X#'s `local` is: they open a block of
-            // names, not a scope, and DeclarationScope would label everything under one with it.
-            DeclarationModifiers =
-            [
-                "procedure", "function", "constructor", "destructor", "property",
-                "type", "class", "published", "private", "protected", "public", "strict", "override",
-                "virtual", "overload", "static"
-            ],
+            // `var` and `const` are in the name list and out of the scope list, for the reason X#'s
+            // `local` is (#83): a `var Total: Integer;` introduces a name and opens nothing, and it
+            // was left out entirely while one list answered both questions. What it names on the
+            // lines under a bare `var` — the block form, where the keyword heads the section and the
+            // names follow it — is still not read, because no modifier stands on those lines; the
+            // one-line form is what this admits.
+            DeclarationModifiers = [.. DelphiScopeModifiers, "var", "const"],
+            ScopeModifiers = DelphiScopeModifiers,
             DeclarationKeywords = ["class", "record", "interface", "object"],
             DeclarationNamesFollowKeyword = true,
             // `TCustomer = class(TBase)` is how a Delphi type is declared; `class TCustomer` is not

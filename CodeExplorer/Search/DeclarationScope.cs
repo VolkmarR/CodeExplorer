@@ -25,6 +25,9 @@ internal sealed record DeclarationLine(int LineNumber, int Indent, Declared Decl
 ///     Where a language writes the enclosing type into the declaration head — Delphi's
 ///     <c>procedure TCustomer.Save;</c> — indentation is not consulted at all, because the line says
 ///     it.
+///     Which declarations are eligible at all is the analyser's answer too (#83): a named constant, a
+///     field or a variable introduces a name and holds no lines, and <see cref="Declared.OpensScope" />
+///     is what says so. This asks; it does not read a list of modifiers to decide for itself.
 /// </summary>
 internal static class DeclarationScope
 {
@@ -45,6 +48,12 @@ internal static class DeclarationScope
         {
             var declaration = declarations[i];
             if (declaration.LineNumber >= lineNumber) continue;
+            // A declaration that opens no scope is invisible here, and is still a declaration
+            // everywhere else (#83). A named constant, a field or a variable introduces a name and
+            // holds no lines, so the nearest one above a reference is not what the reference sits
+            // inside: which words those are is the analyser's answer and never this caller's
+            // (ADR-0008).
+            if (!declaration.Declared.OpensScope) continue;
 
             if (member is null && declaration.Declared.Member is not null && declaration.Indent < indent)
             {
