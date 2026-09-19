@@ -1,3 +1,4 @@
+using System.Net;
 using LibGit2Sharp;
 using Xunit;
 
@@ -267,6 +268,104 @@ public sealed class HistoryTests : IDisposable
     }
 
     /// <summary>
+    ///     Attribution is written for the whole index on every build, from the runs of every repository
+    ///     at once, so a refresh that appends commits to one repository re-runs the write over the
+    ///     other's lines too. What it writes there has to be what was there before: the second
+    ///     repository was not walked and its runs did not move, so every line of it must come back
+    ///     naming the same commit.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_of_one_repository_leaves_the_other_repositorys_attribution_alone()
+    {
+        await IndexTwoRepositoryProjectAsync();
+        const string sql =
+            """
+            SELECT f.path || ':' || l.line_number || ' ' || c.sha
+            FROM lines l JOIN files f USING (file_id) JOIN repositories r USING (repo_id)
+            JOIN commits c USING (commit_id)
+            WHERE r.slug = 'two' ORDER BY f.path, l.line_number
+            """;
+        var before = await _host.ScalarsAsync("gamma", sql);
+        Assert.NotEmpty(before);
+
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond-changed\nlast\n" },
+            "Rename the third line", "Linus", "linus@example.invalid", 4);
+        await _host.RefreshAsync("gamma");
+
+        Assert.Equal(before, await _host.ScalarsAsync("gamma", sql));
+        // The half that says the refresh happened at all: the walked repository did move.
+        var walked = await _host.ScalarsAsync("gamma",
+            """
+            SELECT c.subject FROM lines l JOIN files f USING (file_id) JOIN repositories r USING (repo_id)
+            JOIN commits c USING (commit_id) WHERE r.slug = 'one' ORDER BY l.line_number
+            """);
+        Assert.Equal(["Add the validator", "Tighten the check", "Rename the third line"], walked);
+    }
+
+    /// <summary>
+    ///     A file deleted and added again is two spans of file-level history and one file at HEAD. The
+    ///     replay forgets the path on the deletion, so the lines that come back are the re-adding
+    ///     commit's and not the original author's — the deletion is not a rename and nothing followed
+    ///     the content across it.
+    /// </summary>
+    [Fact]
+    public async Task A_file_deleted_and_added_again_attributes_to_the_commit_that_brought_it_back()
+    {
+        await IndexTwoCommitProjectAsync();
+        _host.RemoveInGitRepositoryAs("one", ["src/Check.cs"], "Drop the validator", "Linus",
+            "linus@example.invalid", 2);
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond-changed\nthird\n" },
+            "Bring the validator back", "Linus", "linus@example.invalid", 3);
+        await _host.RefreshAsync("alpha");
+
+        var attributed = await _host.ScalarsAsync("alpha",
+            "SELECT c.subject FROM lines l JOIN commits c USING (commit_id) ORDER BY l.line_number");
+        Assert.Equal(
+            ["Bring the validator back", "Bring the validator back", "Bring the validator back"], attributed);
+    }
+
+    /// <summary>
+    ///     The runs are expanded to one row per line to write attribution, and that expansion is scratch
+    ///     for one statement. A table left behind would be in the file about to be swapped in, roughly
+    ///     doubling it, and would then be carried nowhere and read by nothing.
+    /// </summary>
+    [Fact]
+    public async Task The_built_index_holds_no_trace_of_the_expansion_attribution_is_written_from()
+    {
+        await IndexTwoCommitProjectAsync();
+
+        var tables = await _host.ScalarsAsync("alpha", "SELECT table_name FROM duckdb_tables()");
+        Assert.DoesNotContain("attributed_line", tables);
+    }
+
+    /// <summary>
+    ///     Two runs of one path covering the same line is a state the replay cannot produce, so reaching
+    ///     the write with one means the history carried into this build was not written by it. Both the
+    ///     old range join and the new equality join would take whichever row they reached last and ship
+    ///     a line naming a commit that never touched it. The build fails instead, naming where.
+    /// </summary>
+    [Fact]
+    public async Task Attribution_runs_that_overlap_fail_the_build_naming_the_repository_and_the_path()
+    {
+        await IndexTwoCommitProjectAsync();
+        // Planted on the live index, which the next build carries its history over from. The refresh
+        // finds no new commit, so the replay does not rewrite the runs and the overlap reaches the write.
+        await _host.ExecuteAsync("alpha",
+            "INSERT INTO attribution SELECT * FROM attribution WHERE start_line = 1");
+
+        using (var response = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await _host.WaitForRefreshesAsync();
+
+        var status = await _host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.Contains("src/Check.cs", status.Error);
+        Assert.Contains("'one'", status.Error);
+    }
+
+    /// <summary>
     ///     Two commits on one file: the first writes three lines, the second rewrites the middle one.
     ///     Every attribution assertion here rests on that shape, so it is built once.
     /// </summary>
@@ -283,5 +382,34 @@ public sealed class HistoryTests : IDisposable
         await _host.CreateProjectAsync("alpha");
         await _host.AddRepositoryAsync("alpha", "one", source);
         await _host.RefreshAsync("alpha");
+    }
+
+    /// <summary>
+    ///     One project over two repositories, each with a history of its own. The second holds two files
+    ///     and three commits so that "untouched" means several paths and several commits and not one row
+    ///     that could match by luck.
+    /// </summary>
+    private async Task IndexTwoRepositoryProjectAsync()
+    {
+        string first = _host.CreateEmptyGitRepository("one");
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond\nthird\n" },
+            "Add the validator", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond-changed\nthird\n" },
+            "Tighten the check", "Grace", "grace@example.invalid", 1);
+
+        string second = _host.CreateEmptyGitRepository("two");
+        _host.CommitToGitRepositoryAs("two",
+            new Dictionary<string, string> { ["src/Parse.cs"] = "alpha\nbeta\ngamma\n", ["README.md"] = "docs\n" },
+            "Add the parser", "Ada", "ada@example.invalid", 2);
+        _host.CommitToGitRepositoryAs("two",
+            new Dictionary<string, string> { ["src/Parse.cs"] = "alpha\nbeta-changed\ngamma\ndelta\n" },
+            "Extend the parser", "Grace", "grace@example.invalid", 3);
+
+        await _host.CreateProjectAsync("gamma");
+        await _host.AddRepositoryAsync("gamma", "one", first);
+        await _host.AddRepositoryAsync("gamma", "two", second);
+        await _host.RefreshAsync("gamma");
     }
 }
