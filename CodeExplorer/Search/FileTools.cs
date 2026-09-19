@@ -399,7 +399,7 @@ internal sealed partial class FileTools(
                  - IMPORTANT: declarations are read from the shape of each line in the language the file is written in, not from a compiler. A form no profile knows is one this did not find rather than one that is not there. Strong evidence, not proof.
                  - An empty answer always says which kind of empty it is: no profile covers the extension, or the language has no declarations that can be read from a line, or the file genuinely declares none. Those are three different facts and are never worded alike.
                  - Where a language announces a routine in one place and writes it in another — Delphi, a C header beside its source — each entry says which of the two it is.
-                 - A page holds at most 500 declarations. A file with more is paged with `offset`, so the back half of a big class is reachable without reading the file; the reply says how many it listed and which line it reached.
+                 - A page holds at most 500 declarations. A file with more is paged with `offset`, so the back half of a long file is reachable without reading it; the reply says how many it listed and which line it reached.
                  """)]
     public async Task<string> ListDeclarations(
         [Description("Qualified path of the file, e.g. \"main/src/Api/Orders.cs\".")]

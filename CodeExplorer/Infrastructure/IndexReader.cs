@@ -792,8 +792,8 @@ public sealed class IndexReader : IDisposable
     ///     order here.
     ///     It was one query per directory visited until #93, on the grounds that a level costs well
     ///     under a millisecond and a listing is bounded by what an agent can read. The first half was
-    ///     wrong on a real project — a level of Radix's <c>src</c> measures 7 ms, because
-    ///     <c>directory LIKE 'src/%'</c> is a scan of <c>files</c> and nothing indexes it — and the
+    ///     wrong on a real project — a level of Radix's <c>src</c> measures 7 ms, because a prefix
+    ///     test over <c>directory</c> is a scan of <c>files</c> and nothing indexes it — and the
     ///     second half does not follow: the recursion visits every directory in the subtree, not every
     ///     directory listed. <c>list_tree radix/src 3</c> ran 6,822 queries over 338 million rows and
     ///     took 39.7 seconds, against 48 milliseconds for the two below.
@@ -831,7 +831,11 @@ public sealed class IndexReader : IDisposable
                                                    SELECT str_split(substr(f.directory, length($p) + 1), '/') AS segments,
                                                           f.line_count, f.size_bytes
                                                    FROM files f JOIN repositories r USING (repo_id)
-                                                   WHERE r.slug = $r AND f.directory LIKE $p || '%' AND f.directory <> $d)
+                                                   -- starts_with and not LIKE: the prefix is a
+                                                   -- directory NAME, and `_` is a LIKE wildcard, so
+                                                   -- `src/my_module/` would take in `src/myXmodule/`
+                                                   -- and count a sibling's files as this one's (#122).
+                                                   WHERE r.slug = $r AND starts_with(f.directory, $p) AND f.directory <> $d)
                                                SELECT array_to_string(list_slice(segments, 1, k), '/') AS directory,
                                                       CAST(count(*) AS BIGINT) AS files,
                                                       CAST(sum(line_count) AS BIGINT) AS lines,
@@ -863,7 +867,7 @@ public sealed class IndexReader : IDisposable
         string deeper = depth > 1
             ? $"""
 
-                  OR (f.directory LIKE $p || '%' AND f.directory <> $d
+                  OR (starts_with(f.directory, $p) AND f.directory <> $d
                       AND len(str_split(substr(f.directory, length($p) + 1), '/')) <= {depth - 1})
               """
             : "";

@@ -381,6 +381,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  - Ranking is by number of commits, then by lines changed. A reformat counts as a change, the same way blame does — this is where work happened, not where the logic changed.
                  - Files a later commit deleted or renamed away are ranked too and marked; there is nothing at those paths to read now.
                  - `depth` ranks **directories** instead of files. Reach for it when the question is which module, package or app is moving rather than which file — that is one call, where ranking files and then scoping the tool to each candidate directory in turn is one call per directory. Then call it again without `depth`, scoped to the directory that won, for the files inside it.
+                 - IMPORTANT: a machine-authored commit counts exactly like a hand-written one. Regenerated output, a mechanical version bump across unrelated modules and a bulk rename all rank like real work, and a directory of generated files can outrank the code that generates it. `exclude` is the answer, in grep's syntax: `exclude="*.g.ts,*.generated.*,/migrations/,package-lock.json"`. Nothing is excluded by default and no naming convention is assumed — look at the top of an unfiltered ranking first, then exclude what the project turns out to regenerate. The reply says how many paths the filter hid.
                  """)]
     public async Task<string> HotFiles(
         [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
@@ -393,11 +394,15 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         [Description(
             "Rank directories instead of files, grouped by this many path segments beneath the scope, 1-10. Unscoped, that is the first segments of the qualified path, so in a multi-repository project depth 1 ranks repositories and depth 2 their top-level directories. A directory's count is the commits that touched anything beneath it, each counted once. Default: rank files.")]
         int? depth = null,
+        [Description(
+            "Drop files whose qualified path matches any of these comma-separated terms, e.g. \"*.g.cs,/migrations/\". Same syntax as grep: a term with * or ? is a glob over the whole qualified path, anything else a plain substring, and matching is case-insensitive. Default: rank everything.")]
+        string? exclude = null,
         CancellationToken cancellationToken = default)
     {
         string project = Project;
         return ToolReply.Render<ChurnAnswer>(
-            await history.ChurnAsync(project, new ChurnRequest(directory, days, limit, depth), cancellationToken),
+            await history.ChurnAsync(project, new ChurnRequest(directory, days, limit, depth, exclude),
+                cancellationToken),
             answer => Ranking(answer, project),
             "Lower limit, narrow with directory, or roll the ranking up with depth.");
     }
@@ -414,9 +419,18 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         // the one most likely to conclude that nothing changed.
         string? coverage = Coverage(answer.Coverage);
 
+        // What the exclude kept out, said wherever there is an answer to misread: an excluded ranking
+        // must never read as an unfiltered one, and an empty excluded ranking must never read as a
+        // scope where nothing changed.
+        string hidden = answer.Hidden == 0
+            ? ""
+            : string.Create(CultureInfo.InvariantCulture,
+                $" exclude hid {answer.Hidden} {ToolReply.Plural(answer.Hidden, "path")}, so this is a filtered ranking.");
+
         if (answer.Files.Count == 0)
             return $"No commit changed a file in {answer.ScopeSpelled} between {window.Describe()}. "
                    + $"The newest recorded commit there is {window.Until:yyyy-MM-dd}; raise days to look further back."
+                   + hidden
                    + (coverage is null ? "" : " " + coverage);
 
         string rows = answer.Depth is null
@@ -424,7 +438,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             : ToolReply.Plural(answer.Files.Count, "directory", "directories");
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{answer.Files.Count} most-changed {rows} in {answer.ScopeSpelled}, {window.Describe()}:\n\n");
+            $"{answer.Files.Count} most-changed {rows} in {answer.ScopeSpelled}, {window.Describe()}.{hidden}\n\n");
 
         foreach (var file in answer.Files) ToolReply.ChurnRow(text, "", file);
 

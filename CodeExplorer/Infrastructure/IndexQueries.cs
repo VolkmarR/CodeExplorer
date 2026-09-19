@@ -88,13 +88,17 @@ internal static class IndexQueries
     ///     without <paramref name="repositorySlug" />, because a directory of one repository is not a
     ///     directory of another; callers resolve both from the one qualified path they were given.
     /// </param>
+    /// <param name="exclude">
+    ///     Comma-separated path terms whose files are dropped from the ranking, in
+    ///     <see cref="PathTerms" />' syntax, or null to rank everything the scope holds.
+    /// </param>
     /// <param name="limit">How many files to return.</param>
     /// <param name="cancellationToken">Threaded through to the command.</param>
     public static async Task<IReadOnlyList<ChurnedFile>> RankAsync(DuckDBConnection connection, ProjectPaths paths,
-        HistoryWindow window, string? repositorySlug, string? directoryInRepository, int limit,
+        HistoryWindow window, string? repositorySlug, string? directoryInRepository, string? exclude, int limit,
         CancellationToken cancellationToken)
     {
-        var (conditions, parameters) = ChurnScope(window, repositorySlug, directoryInRepository);
+        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository, exclude);
 
         // Ranked first, and only then asked which of the survivors still exist. Resolving `at_head`
         // inside the aggregate would join `files` — the largest table here after `lines` — against
@@ -158,13 +162,17 @@ internal static class IndexQueries
     ///     to nothing, the first segment of a qualified path is the repository, so one level of the
     ///     depth is spent there and a depth of one ranks repositories.
     /// </param>
+    /// <param name="exclude">
+    ///     The same terms the file ranking takes, applied to the files before they are rolled up — so a
+    ///     directory's churn is the churn of the files the caller can still see.
+    /// </param>
     /// <param name="limit">How many directories to return.</param>
     /// <param name="cancellationToken">Threaded through to the command.</param>
     public static async Task<IReadOnlyList<ChurnedFile>> RankDirectoriesAsync(DuckDBConnection connection,
         ProjectPaths paths, HistoryWindow window, string? repositorySlug, string? directoryInRepository, int depth,
-        int limit, CancellationToken cancellationToken)
+        string? exclude, int limit, CancellationToken cancellationToken)
     {
-        var (conditions, parameters) = ChurnScope(window, repositorySlug, directoryInRepository);
+        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository, exclude);
         string prefix = directoryInRepository?.TrimEnd('/') ?? "";
         parameters.Add(new DuckDBParameter("p", prefix));
         // The repository slug leads a qualified path only where the project puts it there (ADR-0006),
@@ -237,13 +245,41 @@ internal static class IndexQueries
     }
 
     /// <summary>
+    ///     How many distinct paths of the scope the <c>exclude</c> terms kept out of a ranking. Counted
+    ///     rather than implied: a filtered ranking reads exactly like an unfiltered one, and "the top
+    ///     file here is X" is a sentence an agent repeats. Asked only where there are terms, so an
+    ///     unfiltered call pays for nothing.
+    /// </summary>
+    public static async Task<int> HiddenByExcludeAsync(DuckDBConnection connection, ProjectPaths paths,
+        HistoryWindow window, string? repositorySlug, string? directoryInRepository, string? exclude,
+        CancellationToken cancellationToken)
+    {
+        if (PathTerms.Split(exclude).Count == 0) return 0;
+
+        // The scope without the exclude, and then only the paths the exclude would drop: the same
+        // window and the same directory, so the number is about this ranking and not about the project.
+        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository, null);
+        string? excluding = PathTerms.Excluding(exclude, ChurnedPath(paths), "cx", parameters);
+        conditions.Add($"NOT ({excluding})");
+
+        using var command = connection.Query($"""
+                                              SELECT count(*) AS hidden FROM (
+                                                  SELECT DISTINCT c.repo_slug, cf.path
+                                                  FROM commit_files cf JOIN commits c USING (commit_id)
+                                                  WHERE {string.Join(" AND ", conditions)})
+                                              """, parameters);
+        using var reader = await command.ReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? (int)reader.Int64("hidden") : 0;
+    }
+
+    /// <summary>
     ///     The window and the scope both rankings of churn count over, as conditions over
     ///     <c>commit_files cf</c> joined to <c>commits c</c>. Written once because the file ranking and
     ///     the directory rollup answer the same question at two grains, and a scope that meant
     ///     something different in one of them would have the rollup disagree with the files under it.
     /// </summary>
-    private static (List<string> Conditions, List<DuckDBParameter> Parameters) ChurnScope(HistoryWindow window,
-        string? repositorySlug, string? directoryInRepository)
+    private static (List<string> Conditions, List<DuckDBParameter> Parameters) ChurnScope(ProjectPaths paths,
+        HistoryWindow window, string? repositorySlug, string? directoryInRepository, string? exclude)
     {
         // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
         // WindowAsync reads it that way: it keeps the comparison off the session time zone, and it
@@ -262,14 +298,36 @@ internal static class IndexQueries
 
         if (!string.IsNullOrEmpty(directoryInRepository))
         {
-            // GLOB and not LIKE: it is this project's one glob dialect (ADR-0004, CODING_STANDARDS),
-            // and `*` crosses `/` in it, so a single pattern covers every depth beneath the directory.
-            conditions.Add("cf.path GLOB $d");
-            parameters.Add(new DuckDBParameter("d", directoryInRepository.TrimEnd('/') + "/*"));
+            // starts_with and not GLOB, for the reason AtHeadExists gives: this scope is a directory
+            // NAME and not a pattern. `[slug]`, `[id]` and `[...rest]` are route directories in every
+            // file-system router, and each of them is a character class to GLOB — `app/[slug]` would
+            // scope to whatever `app/s`, `app/l`, `app/u` and `app/g` hold and report that as the
+            // churn of `app/[slug]`. The name arrives from a path this server printed, so it is index
+            // data one call further round. The scopes a caller genuinely writes as patterns — grep,
+            // glob, list_tree — stay globs (ADR-0004); the ones built out of a path cannot.
+            // A trailing '/' and the separator are appended rather than matched, so the scope selects
+            // everything beneath the directory and never a sibling whose name merely starts with it.
+            conditions.Add("starts_with(cf.path, $d)");
+            parameters.Add(new DuckDBParameter("d", directoryInRepository.TrimEnd('/') + "/"));
         }
+
+        // The terms every other filtered search takes, parsed by the same code rather than spelled a
+        // second time (#117). Matched against the qualified path, because that is the path the caller
+        // was shown and the one an exclude term is written against.
+        if (PathTerms.Excluding(exclude, ChurnedPath(paths), "cx", parameters) is { } excluding)
+            conditions.Add(excluding);
 
         return (conditions, parameters);
     }
+
+    /// <summary>
+    ///     The qualified path of a <c>commit_files</c> row, lower-cased for matching. A commit records
+    ///     a path inside its repository, and the slug leads it only where the project puts it there
+    ///     (ADR-0006) — so an exclude term reads against the path the caller was shown and not a
+    ///     repository-relative one the project never prints.
+    /// </summary>
+    private static string ChurnedPath(ProjectPaths paths) =>
+        paths.SingleRepository ? "lower(cf.path)" : "lower(c.repo_slug || '/' || cf.path)";
 
     /// <summary>
     ///     Whether a path a ranking returned is still there at HEAD, as a SQL fragment over a
