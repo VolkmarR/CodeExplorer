@@ -122,9 +122,11 @@ internal static class OverviewReply
             return;
         }
 
+        // The row the authors tool and a filtered git_log draw, so an address read here is the same
+        // text an agent types into that filter (ToolReply.AuthorRow).
         foreach (var author in overview.Authors)
-            text.Append(CultureInfo.InvariantCulture,
-                $"  {author.Commits,6} {ToolReply.Plural(author.Commits, "commit"),-8} {author.Name} <{author.Email}>, last on {author.LastCommit:yyyy-MM-dd}\n");
+            ToolReply.AuthorRow(text, "  ",
+                new RecordedAuthor(author.Name, author.Email, author.Commits, author.LastCommit));
     }
 
 }

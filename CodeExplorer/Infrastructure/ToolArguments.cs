@@ -129,12 +129,13 @@ internal static class ToolArguments
         var unknown = Unknown(request, declared);
         if (unknown.Count == 0) return null;
 
+        // "Ignored" is the whole claim, and a clause spelling out that nothing below was narrowed by
+        // it restates it.
         string them = unknown.Count == 1 ? "it was" : "they were";
         // A tool that takes nothing declares no properties at all, and it is one of the tools this is
         // most needed at: there is no name a stray one could have been meant as.
         string takes = declared.Count == 0 ? "It takes no arguments" : $"It takes {And(declared)}";
-        return $"`{tool}` has no {Or(unknown)} argument; "
-               + $"{them} ignored and had no effect on what follows. {takes}.\n\n";
+        return $"`{tool}` has no {Or(unknown)} argument; {them} ignored. {takes}.\n\n";
     }
 
     /// <summary>
