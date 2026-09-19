@@ -81,7 +81,7 @@ Two kinds of failure, two mechanisms. Never mix them.
   abandons a slow search must not leave a query burning one of two cores on a shared replica.
 - No `.Result`, no `.Wait()`, no `GetAwaiter().GetResult()`.
 - Background work is handed off explicitly — expose the `Task` so callers can await it, as
-  `Database.PendingFtsBuild` does. Never a bare fire-and-forget.
+  `RefreshService.Pending` does. Never a bare fire-and-forget.
 
 ## Storage
 

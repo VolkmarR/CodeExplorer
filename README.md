@@ -71,6 +71,13 @@ restored once, as the application starts, in the background while the server is 
 It is off by default and is not a replacement for the cron — under scale to zero, warming every
 project on every wake is the cost attaching lazily exists to avoid.
 
+`GET /api/projects/{project}/refresh` says what the last refresh spent, phase by phase, and keeps
+saying it after the refresh has ended; the project page draws the same breakdown. Read it before
+concluding a refresh is slow for the reason it looks slow for. On a project with full-text search
+the largest phase is normally the BM25 rebuild, which runs over every line on every refresh
+including one that found nothing new — that is deliberate, and ADR-0009 says what it buys and what
+the alternatives cost.
+
 The web UI is served from `CodeExplorer/wwwroot`, which `web/` builds into. To work on it with hot
 reload, run `vp dev` in `web/` alongside the server and use <http://localhost:5173>; see
 [`web/README.md`](web/README.md).
