@@ -21,9 +21,11 @@ choosing, and neither surface accepts both.
 _Avoid_: Source, codebase
 
 **Local copy**:
-The shallow bare clone of a repository that a refresh brings up to date and reads to build the
-index. It exists for that and nothing else: no tool, endpoint or view reads it, it is temporary,
-and it may be deleted at any time without anything but the next refresh noticing.
+The bare clone of a repository that a refresh brings up to date and reads to build the index. It
+carries full history since ADR-0007, which is where the commits and the attribution come from; it
+was shallow before that. It exists for the build and nothing else: no tool, endpoint or view reads
+it, and it may be deleted at any time without anything but the next refresh noticing — which then
+pays for the transfer again.
 _Avoid_: Clone (as a noun for the thing), checkout, working copy
 
 **Index**:
@@ -161,6 +163,21 @@ Bringing a project's local copies up to date with their git remotes and rebuildi
 them. Happens on a schedule and on operator action. Agents read the index; they never cause a
 refresh.
 _Avoid_: Sync, reindex, update, pull
+
+**Step**:
+One of the five fixed stages a refresh passes through — fetching, reading, history, storing,
+swapping. There are always five and they are always in that order, which is what makes "step 3 of 5"
+a fact rather than an estimate. A step is not a unit of time: they are wildly unequal, and a first
+history import dwarfs the rest.
+_Avoid_: Stage, part
+
+**Phase**:
+A named piece of work inside a step, in an operator's words — "Building the full-text index". One
+step reports several where it does several separable things, so a phase and not a step is the
+smallest thing a refresh can be said to have spent time on. What each phase cost outlives the
+refresh and is read from its status; the step's own label would not tell an operator which piece
+of it was the expensive one.
+_Avoid_: Stage, task, activity, progress message
 
 **Shadow Index**:
 The replacement index a refresh builds alongside the one still serving queries. It takes over only
