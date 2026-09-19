@@ -27,12 +27,15 @@ public sealed record FileFilter(
     ///     The filters as a <c>WHERE</c> tail against the <c>files</c> alias <c>f</c>, starting with
     ///     <c>AND</c> so it appends to a condition the caller already has. Path terms are OR-ed (one
     ///     call over several folders), exclude terms AND-ed, both against the lower-cased qualified
-    ///     path. A term with <c>*</c> or <c>?</c> is a SQL <c>GLOB</c> over the whole path, where
-    ///     <c>*</c> crosses <c>/</c>; anything else is a plain substring.
+    ///     path. What a term means is <see cref="PathTerms" />' question, shared with the churn ranking
+    ///     so that one <c>exclude</c> cannot mean two things (#117).
     /// </summary>
     /// <param name="parameters">Every value is bound, never inlined; the caller passes the list to the command.</param>
     internal string Sql(List<DuckDBParameter> parameters)
     {
+        // What a term is matched against, lower-cased here because PathTerms matches case-insensitively
+        // by matching lower-cased text against lower-cased terms.
+        const string matched = "lower(f.qualified_path)";
         var where = new StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(Repository))
@@ -44,26 +47,22 @@ public sealed record FileFilter(
             parameters.Add(new DuckDBParameter("repo", Repository));
         }
 
-        var includes = SplitTerms(Path);
+        var includes = PathTerms.Split(Path);
         if (includes.Count > 0)
         {
             where.Append(" AND (");
             for (int i = 0; i < includes.Count; i++)
             {
                 if (i > 0) where.Append(" OR ");
-                where.Append(Match(includes[i], $"$p{i}"));
+                where.Append(PathTerms.Match(includes[i], matched, $"$p{i}"));
                 parameters.Add(new DuckDBParameter($"p{i}", includes[i]));
             }
 
             where.Append(')');
         }
 
-        var excludes = SplitTerms(Exclude);
-        for (int i = 0; i < excludes.Count; i++)
-        {
-            where.Append(" AND NOT (").Append(Match(excludes[i], $"$x{i}")).Append(')');
-            parameters.Add(new DuckDBParameter($"x{i}", excludes[i]));
-        }
+        if (PathTerms.Excluding(Exclude, matched, "x", parameters) is { } excluding)
+            where.Append(" AND ").Append(excluding);
 
         if (!string.IsNullOrWhiteSpace(Extension))
         {
@@ -72,19 +71,5 @@ public sealed record FileFilter(
         }
 
         return where.ToString();
-
-        static string Match(string term, string parameter)
-        {
-            return term.Contains('*') || term.Contains('?')
-                ? $"lower(f.qualified_path) GLOB {parameter}"
-                : $"contains(lower(f.qualified_path), {parameter})";
-        }
     }
-
-    private static List<string> SplitTerms(string? terms) =>
-    [
-        .. (terms ?? "")
-        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Select(t => t.Replace('\\', '/').ToLowerInvariant())
-    ];
 }
