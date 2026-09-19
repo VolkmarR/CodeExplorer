@@ -7,8 +7,8 @@ namespace CodeExplorer;
 
 /// <summary>
 ///     The MCP tools that answer from a project's history (CONTEXT.md): what changed, who changed a
-///     file, and which commit each line was last changed by. They live beside the other index-backed
-///     tools because that is what they are — history is tables in the project index like any other,
+///     file, which commit each line was last changed by, and what one commit did. They live beside the
+///     other index-backed tools because that is what they are — history is tables in the project index like any other,
 ///     and none of these ever opens a local copy or talks to a remote.
 ///     What each one does is <see cref="HistoryQueries" />'s, which the operator's pages ask the same
 ///     questions of; what is left here is the reply an agent reads. That split is the point: a ranking
@@ -45,7 +45,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  - `repo` scopes it to one repository, `author` to one person; `limit` and `page` walk it. Those are its only arguments.
                  - `author` matches the email address, not the display name: `grace@example.com` or `grace`, never "Grace Hopper". `authors` lists the addresses.
                  - Nothing else filters — not by message, by one commit or by date. Any other argument name, `grep` and `commit` included, is named as ignored above the answer.
-                 - For what it cannot answer: page back for older commits, authors for who has worked here, file_history for one file, blame for one line, hot_files for where the work is.
+                 - For what it cannot answer: page back for older commits, authors for who has worked here, file_history for one file, blame for one line, hot_files for where the work is, commit and commit_files for the message and the paths of one commit listed here.
                  - Merges count as one commit and their side branches are not walked, so a pull request reads as a single change.
                  - Only the default branch is recorded. A commit on a branch that was never merged is not here.
                  - History may not reach the beginning of the repository, and it is not the same as the code.
@@ -173,7 +173,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
 
                  - The path is qualified, exactly as grep and read_file print it: `main/src/Api/Foo.cs`.
                  - History is matched by path, so it begins where the file was last renamed or moved. An empty or short answer on an old file usually means a move, not that nobody touched it — the content's line-by-line history survives a move and is what blame reports.
-                 - It says who changed the file and when, never what they changed: the diffs are not indexed.
+                 - It says who changed the file and when, never what they changed: the diffs are not indexed. commit_files takes a SHA listed here and names every other path that commit touched.
                  """)]
     public async Task<string> FileHistory(
         [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
@@ -256,6 +256,91 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         if (answer.Runs.Count > MaxBlameRuns)
             text.Append(CultureInfo.InvariantCulture,
                 $"\n{answer.Runs.Count - MaxBlameRuns} further {ToolReply.Plural(answer.Runs.Count - MaxBlameRuns, "run")} not shown; narrow with startLine and endLine.\n");
+        return text.ToString();
+    }
+
+    [McpServerTool(Name = "commit", ReadOnly = true, Idempotent = true, Title = "Read one commit's record")]
+    [Description("""
+                 Reports one commit: who made it and when, its whole message — subject and body — and how much it changed. Reach for it with a SHA another history tool already printed, when the one-line subject is not enough.
+
+                 - `sha` takes as much of the SHA as you have. The eight characters git_log, file_history and blame print are enough; a prefix that fits more than one commit is refused rather than guessed at.
+                 - The message body is here and nowhere else: git_log lists subjects alone, so whatever a subject like "BugFix 558185 - Fehlermeldung" does not say is read here.
+                 - It says how many files the commit touched and how many lines it added and removed. commit_files names the paths.
+                 - It cannot show the diff. No hunks, no before-and-after, no changed line: the index records which paths a commit touched and how many lines, never the change itself. Read the file at HEAD instead.
+                 - It cannot find a commit for you. Nothing searches commit messages — not this tool and not git_log — so a ticket number is found by paging git_log or by grepping the code, and only then asked about here.
+                 - Only the default branch is recorded. A commit on a branch that was never merged is not here.
+                 """)]
+    public async Task<string> Commit(
+        [Description("The commit's SHA, whole or its first characters, e.g. \"a1b2c3d4\".")]
+        string sha,
+        CancellationToken cancellationToken = default)
+    {
+        return ToolReply.Render<CommitAnswer>(
+            await history.CommitAsync(Project, new CommitRequest(sha), cancellationToken), Record,
+            "That length is the commit's own message; commit_files lists what it touched separately.");
+    }
+
+    private static string Record(CommitAnswer answer)
+    {
+        var commit = answer.Commit;
+        var text = new StringBuilder();
+        // The whole SHA, not the eight characters the listings print: a caller that arrived with a
+        // prefix leaves with the one spelling every other surface — the API, a link, git itself —
+        // agrees on.
+        text.Append(CultureInfo.InvariantCulture,
+            $"{commit.Sha}  [{commit.RepositorySlug}]\n{commit.AuthorName} <{commit.AuthorEmail}>, {commit.AuthoredAt:yyyy-MM-dd}\n\n");
+        text.Append(CultureInfo.InvariantCulture, $"{ToolReply.Clip(commit.Subject)}\n");
+        // Said rather than left as a blank: an answer that simply stops after the subject reads as a
+        // body that was cut, and an agent that believes there is more goes looking for the tool to
+        // read it with.
+        text.Append(commit.Body.Length == 0 ? "\n(no message body)\n" : $"\n{commit.Body}\n");
+        // Built in one piece before it is joined: an interpolated string concatenated with `+` is a
+        // string and not a handler, and the culture-aware overload binds to char* instead.
+        string sums = string.Create(CultureInfo.InvariantCulture,
+            $"\n{commit.FilesChanged} {ToolReply.Plural(commit.FilesChanged, "file")} changed, +{commit.Added:N0} -{commit.Deleted:N0}. ");
+        text.Append(sums).Append("Call commit_files for the paths; the diff itself is not indexed.\n");
+        return text.ToString();
+    }
+
+    [McpServerTool(Name = "commit_files", ReadOnly = true, Idempotent = true,
+        Title = "List the paths one commit touched")]
+    [Description("""
+                 Lists every path one commit touched, with what it did to each and the lines each gained and lost. This is the tool for "what shipped under this change": one call, rather than guessing which files a commit is likely to have touched and calling file_history on each of them until one matches.
+
+                 - `sha` takes as much of the SHA as you have, like commit: the eight characters the other history tools print are enough.
+                 - Each path carries git's own word for what happened to it — added, modified, deleted, renamed.
+                 - A path HEAD still holds is named the way grep and read_file name it, so it can be opened directly. A path this commit deleted, or a later one renamed away, is named too and marked `(no longer at HEAD)`; there is nothing at it to read now.
+                 - It cannot show the diff: which paths, and how many lines, is all the index holds of a change. Read the file at HEAD to see what it says today.
+                 - It cannot find the commit for you. Nothing here searches commit messages — not this tool and not git_log — so a ticket or PR number in a subject is found by paging git_log, never by grepping the code, and only then asked about here.
+                 - Call commit for the message, the author and the totals.
+                 - Only the default branch is recorded. A commit on a branch that was never merged is not here.
+                 """)]
+    public async Task<string> CommitFiles(
+        [Description("The commit's SHA, whole or its first characters, e.g. \"a1b2c3d4\".")]
+        string sha,
+        CancellationToken cancellationToken = default)
+    {
+        return ToolReply.Render<CommitFilesAnswer>(
+            await history.CommitFilesAsync(Project, new CommitFilesRequest(sha), cancellationToken), Touched,
+            "Nothing narrows this list; call commit for the file count and the line sums without it.");
+    }
+
+    private static string Touched(CommitFilesAnswer answer)
+    {
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture,
+            $"{answer.Files.Count} {ToolReply.Plural(answer.Files.Count, "path")} changed by {answer.Sha}, in path order:\n\n");
+        foreach (var file in answer.Files)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"{file.ChangeKind,-9} +{file.Added,-7:N0} -{file.Deleted,-7:N0} ");
+            // The same mark every ranking drawn from history uses, for the same reason: one surface
+            // spelling it its own way is an agent sent to open a file that is not there.
+            ToolReply.RankedPath(text, file.QualifiedPath, file.AtHead);
+        }
+
+        text.Append("\nThe counts are lines, from this commit's own diff against its first parent; "
+                    + "the diff itself is not indexed, so what changed in a line cannot be shown.\n");
         return text.ToString();
     }
 
