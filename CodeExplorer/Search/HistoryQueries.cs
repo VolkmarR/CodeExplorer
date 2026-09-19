@@ -749,6 +749,14 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         if (directory.Repository is not { } repository)
             return (null, new Problem($"'{path}' names no file or directory to scope to."));
 
+        // `repo` and `path` naming different repositories is a contradiction, and answering it would
+        // make the quietest possible answer: two clauses that cannot both hold return no commit, and
+        // the reply names the path alone — "no commits under 'one/src'" about a folder that is busy.
+        // Refused instead, naming both, because only the caller knows which of the two it meant.
+        if (index.Repository is { } scoped && !string.Equals(scoped.Slug, repository.Slug, StringComparison.Ordinal))
+            return (null, new Problem(
+                $"repo '{scoped.Slug}' and path '{directory.QualifiedPath}' name different repositories, so nothing can be in both. Drop repo, or pass a path inside '{scoped.Slug}'."));
+
         if (!await index.HoldsPathAsync(repository.Slug, directory.PathInRepository, cancellationToken))
             return (null, new Problem(
                 await index.DirectorySlugPrefixAdviceAsync(path, cancellationToken)

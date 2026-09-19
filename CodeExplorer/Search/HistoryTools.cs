@@ -110,7 +110,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{By(answer.Author)}{Saying(answer.Message)}{where}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null && answer.Path is null);
         if (answer.Author is { } filter) Matched(text, filter, answer.Commits.Count);
-        if (answer.Path is not null) text.Append(CultureInfo.InvariantCulture, $"\n{ByRecordedPath(answer.Path).TrimStart()}\n");
+        AppendRecordedPathNote(text, answer.Path);
         return text.ToString();
     }
 
@@ -199,8 +199,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             ? string.Create(CultureInfo.InvariantCulture, $" ({answer.Authors.Count} shown, limit {answer.Limit}):\n\n")
             : ":\n\n");
         foreach (var author in answer.Authors) ToolReply.AuthorRow(text, "", author);
-        if (answer.Path is not null)
-            text.Append(CultureInfo.InvariantCulture, $"\n{ByRecordedPath(answer.Path).TrimStart()}\n");
+        AppendRecordedPathNote(text, answer.Path);
         return text.ToString();
     }
 
@@ -456,7 +455,11 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             : ToolReply.Plural(answer.Files.Count, "directory", "directories");
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{answer.Files.Count} most-changed {rows} in {answer.ScopeSpelled}, {window.Describe()}.{hidden}\n\n");
+            $"{answer.Files.Count} most-changed {rows} in {answer.ScopeSpelled}, {window.Describe()}:\n");
+        // Its own line above the ranking rather than a clause in the header: an unfiltered call must
+        // read exactly as it did before, and the rows below this are the ones that survived.
+        if (answer.Hidden > 0) text.Append(CultureInfo.InvariantCulture, $"{hidden.TrimStart()}\n");
+        text.Append('\n');
 
         foreach (var file in answer.Files) ToolReply.ChurnRow(text, "", file);
 
@@ -568,8 +571,11 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         string newest = some.Newest is { } at
             ? string.Create(CultureInfo.InvariantCulture, $", the newest from {at:yyyy-MM-dd}")
             : "";
+        // No rename claim on this branch. The path HAS a history and the window simply missed it,
+        // which is the opposite fact from the one above; saying "this is usually a rename" of a path
+        // with four hundred recorded commits would put both facts back in one sentence.
         return string.Create(CultureInfo.InvariantCulture,
-            $"{some.Commits} {ToolReply.Plural(some.Commits, "commit")} {ToolReply.Plural(some.Commits, "is", "are")} recorded under this path{newest}, all of them older than the window; raise days to reach them. {ByPath} A path that records very few commits is usually one a rename severed, and blame follows content across a rename.");
+            $"{some.Commits} {ToolReply.Plural(some.Commits, "commit")} {ToolReply.Plural(some.Commits, "is", "are")} recorded under this path{newest}, all of them older than the window; raise days to reach them. {ByPath} blame follows content across a rename and is not bounded by the window.");
     }
 
     /// <summary>
@@ -647,4 +653,15 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             ? ""
             : " The scope is matched by the path each commit recorded, so it begins where a file was "
               + "last renamed; a directory that was moved records nothing under its new name.";
+
+    /// <summary>
+    ///     The same caveat under a listing rather than after a sentence — its own paragraph, because a
+    ///     line of prose tacked onto the last row would read as part of the row. Written once: the two
+    ///     listings that carry it must not drift into two wordings of one fact.
+    /// </summary>
+    private static void AppendRecordedPathNote(StringBuilder text, PathScope? path)
+    {
+        if (path is null) return;
+        text.Append(CultureInfo.InvariantCulture, $"\n{ByRecordedPath(path).TrimStart()}\n");
+    }
 }

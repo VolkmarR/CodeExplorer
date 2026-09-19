@@ -396,8 +396,6 @@ internal static class IndexQueries
     ///     A case-insensitive substring for the reason the address is one, and escaped and bound for
     ///     the same reason too: this is caller text, and a `%` in it would widen the match rather than
     ///     fail to find one.
-    /// </summary>
-    /// <summary>
     ///     The same again, narrowed to the commits that recorded a path at or beneath
     ///     <paramref name="pathInRepository" /> of <paramref name="pathRepositorySlug" /> — a semi-join
     ///     on <c>commit_files</c>, which is the join <c>file_history</c> already makes for one exact
@@ -414,8 +412,15 @@ internal static class IndexQueries
         var parameters = new List<DuckDBParameter>(3);
         if (pathRepositorySlug is not null)
         {
-            clauses.Add("repo_slug = $pr");
-            parameters.Add(new DuckDBParameter("pr", pathRepositorySlug));
+            // Only where it says something the repository clause below does not. A `repo` that names
+            // the path's own repository is the common call, and `repo_slug = $r AND repo_slug = $pr`
+            // reads as two scopes where there is one.
+            if (!string.Equals(pathRepositorySlug, repositorySlug, StringComparison.Ordinal))
+            {
+                clauses.Add("repo_slug = $pr");
+                parameters.Add(new DuckDBParameter("pr", pathRepositorySlug));
+            }
+
             // An empty path is the repository's own root, which every commit of it is under: the
             // repository clause above is the whole scope and a semi-join matching everything is waste.
             if (!string.IsNullOrEmpty(pathInRepository))

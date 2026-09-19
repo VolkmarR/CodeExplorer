@@ -453,22 +453,23 @@ internal sealed partial class FileTools(
             text.Append(CultureInfo.InvariantCulture,
                 $"NOTE: no language profile covers this extension, so {result.QualifiedPath} was read with the conservative default shapes. What follows is thinner than a covered language's answer would be.\n");
 
-        // Paging past the last declaration is the end of the listing, not a file that declares nothing.
-        // The two say opposite things about the file, and only the offset tells them apart.
-        if (result.Declarations.Count == 0 && result.Offset > 0)
-            return text.Append(CultureInfo.InvariantCulture,
-                    $"{result.QualifiedPath} has no declaration past the first {result.Offset}: that was the end of the listing, and the file declares fewer names than the offset asked to skip.\n")
-                .ToString();
-
         if (result.Declarations.Count == 0)
-            return text.Append(result.Coverage == DeclarationCoverage.Unprofiled
-                    ? string.Create(CultureInfo.InvariantCulture,
-                        $"Those shapes found no declaration in {result.QualifiedPath}.\n")
-                    : string.Create(CultureInfo.InvariantCulture,
-                        $"{result.QualifiedPath} ({result.LanguageName}) declares nothing its language writes as a type or a routine. Its lines were scanned and none of them is a declaration.\n"))
-                // Nothing was found, so there is no evidence to derive the claim from; what a scan of
-                // line shapes can say is what it would have said had it found something.
-                .Append('\n').Append(TextualCaveat).Append('\n').ToString();
+            // Paging past the last declaration is the end of the listing, not a file that declares
+            // nothing: the two say opposite things about the file, and only the offset tells them
+            // apart. It also needs no caveat about what a textual scan can miss — the scan found
+            // plenty, on the pages before this one.
+            return result.Offset > 0
+                ? text.Append(CultureInfo.InvariantCulture,
+                        $"{result.QualifiedPath} has no declaration past the first {result.Offset}: that was the end of the listing, and the file declares fewer names than the offset asked to skip.\n")
+                    .ToString()
+                : text.Append(result.Coverage == DeclarationCoverage.Unprofiled
+                        ? string.Create(CultureInfo.InvariantCulture,
+                            $"Those shapes found no declaration in {result.QualifiedPath}.\n")
+                        : string.Create(CultureInfo.InvariantCulture,
+                            $"{result.QualifiedPath} ({result.LanguageName}) declares nothing its language writes as a type or a routine. Its lines were scanned and none of them is a declaration.\n"))
+                    // Nothing was found, so there is no evidence to derive the claim from; what a scan
+                    // of line shapes can say is what it would have said had it found something.
+                    .Append('\n').Append(TextualCaveat).Append('\n').ToString();
 
         int listed = result.Declarations.Count;
         int next = result.Offset + listed;

@@ -159,6 +159,12 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
                           SELECT l.file_id, l.line_number, l.content, f.qualified_path, f.extension
                           FROM lines l JOIN files f USING (file_id)
                           WHERE {literally} AND regexp_matches(l.content, $q, ''){fileFilter}),
+                      -- `occurrences` runs the pattern a second time over the hit lines, which the
+                      -- first pass has already narrowed the table down to: a line naming the symbol
+                      -- twice is two references, so counting rows would undercount the project total
+                      -- the reply prints beside the sample. Measured on a 516 MB index it adds about
+                      -- 10 ms to a 51 ms scan of 151,000 matching lines (#119) — cheap because it
+                      -- extracts from `hits` and never from `lines`.
                       per_file AS (
                           SELECT file_id, qualified_path, extension, count(*) AS n,
                                  sum(len(regexp_extract_all(content, $q, 0))) AS occurrences
