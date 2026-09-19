@@ -485,6 +485,47 @@ public sealed class ReferenceTests : IDisposable
         Assert.Contains($"{ReferenceSearch.DefaultMaxFiles} calls", text);
     }
 
+    /// <summary>
+    ///     The same signal find_definition now carries (#126), from the other tool and with the other
+    ///     consequence: a match in a file no profile covers is found like any other, and what it looks
+    ///     like — a call, a write, a comment — was read from shapes that are not that language's.
+    ///     An agent that trusted those labels would be trusting the weakest reading this produces.
+    /// </summary>
+    [Fact]
+    public async Task References_in_a_file_no_profile_covers_are_named_as_read_with_default_shapes()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("mixed", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Ship.cs"] = "class Ship\n{\n    void Run() => Deliver();\n    void Deliver() { }\n}\n",
+                ["lib/ship.rb"] = "def run\n  Deliver()\n  # Deliver is called above\nend\n",
+                // Prose and project metadata name the symbol too, and neither is a file a language
+                // profile would have read differently: a caveat about them would fire on every reply.
+                ["README.md"] = "`Deliver` ships the order.\n",
+                ["One.csproj"] = "<Project><Ship Include=\"Deliver\" /></Project>\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("mixed");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Deliver" });
+
+        Assert.Contains("no language profile covers", text);
+        Assert.Contains(".rb", text);
+        Assert.Contains("weaker evidence", text);
+        // One file, not three: the Markdown and the project file spell the name and are not code this
+        // failed to read. Counting them would put a caveat on nearly every reply this server gives.
+        Assert.Contains("1 file spelling the name is .rb", text);
+        // The note sits above the listing, where the reply cap cannot take it off the end.
+        Assert.True(text.IndexOf("no language profile covers", StringComparison.Ordinal)
+                    < text.IndexOf("CALLS", StringComparison.Ordinal));
+
+        // A name that lives only in profiled files says nothing about profiles.
+        string clean = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Ship" });
+        Assert.DoesNotContain("no language profile covers", clean);
+    }
+
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation()
     {

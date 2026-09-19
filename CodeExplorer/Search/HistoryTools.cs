@@ -345,6 +345,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  Lists every path one commit touched, with what it did to each and the lines each gained and lost. This is the tool for "what shipped under this change": one call, rather than guessing which files a commit is likely to have touched and calling file_history on each of them until one matches.
 
                  - `sha` takes as much of the SHA as you have, like commit: the eight characters the other history tools print are enough.
+                 - A page holds at most 300 paths, and the header always counts the whole commit. A mass rename or a version bump across a repository runs past that, so the reply says how many it listed and the `offset` that asks for the rest — where an incomplete list read as the whole commit is exactly the wrong answer to "is this everything that shipped?".
                  - Each path carries git's own word for what happened to it — added, modified, deleted, renamed.
                  - A path HEAD still holds is named the way grep and read_file name it, so it can be opened directly. A path this commit deleted, or a later one renamed away, is named too and marked `(no longer at HEAD)`; there is nothing at it to read now.
                  - It cannot show the diff: which paths, and how many lines, is all the index holds of a change. Read the file at HEAD to see what it says today.
@@ -355,26 +356,87 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     public async Task<string> CommitFiles(
         [Description("The commit's SHA, whole or its first characters, e.g. \"a1b2c3d4\".")]
         string sha,
+        [Description(
+            "Skip this many paths, in path order, and list the page after them. Default 0. Pass the offset the previous reply named to continue where it stopped.")]
+        int offset = 0,
         CancellationToken cancellationToken = default)
     {
         return ToolReply.Render<CommitFilesAnswer>(
-            await history.CommitFilesAsync(Project, new CommitFilesRequest(sha), cancellationToken), Touched,
-            "Nothing narrows this list; call commit for the file count and the line sums without it.");
+            await history.CommitFilesAsync(Project, new CommitFilesRequest(sha), cancellationToken),
+            answer => Touched(answer, Math.Max(0, offset)),
+            "Nothing narrows this list, and a page already holds at most "
+            + $"{MaxPathsListed.ToString(CultureInfo.InvariantCulture)} paths; call commit for the file count "
+            + "and the line sums without the list.");
     }
 
-    private static string Touched(CommitFilesAnswer answer)
+    /// <summary>
+    ///     The most paths one <c>commit_files</c> reply lists (#125). A mass rename or a version bump
+    ///     across a repository touches hundreds of paths, and the list was being cut by the reply
+    ///     ceiling itself, which says nothing about what it cut — an agent asking "is this everything
+    ///     that shipped?" read half a commit as the whole of it.
+    ///     The page is taken here and not in <see cref="HistoryQueries" />: it is the reply that cannot
+    ///     hold the list, and the commit page draws every path a commit touched beside a count of them
+    ///     that has to agree with it. Reading all of one commit's rows to print some of them is one
+    ///     commit's worth of work either way.
+    /// </summary>
+    internal const int MaxPathsListed = 300;
+
+    /// <summary>
+    ///     What the rows of one page may spend, under <see cref="ToolReply.MaxOutputChars" /> by the
+    ///     room the header, the note and the closing sentence need. A count alone is not enough: a row
+    ///     is a path, and three hundred of the long ones a mass rename moves — nested, marked
+    ///     <c>(no longer at HEAD)</c> — overrun the reply ceiling, which then cuts the tail of the
+    ///     page while the note still names the offset after it. Those rows would be unreachable at any
+    ///     offset, which is the silent truncation this whole change is about, arrived at from the
+    ///     inside. So the page ends at whichever comes first, and the offset it names is the one it
+    ///     actually reached.
+    /// </summary>
+    private const int MaxPathChars = 36 * 1024;
+
+    private static string Touched(CommitFilesAnswer answer, int offset)
     {
-        var text = new StringBuilder();
-        text.Append(CultureInfo.InvariantCulture,
-            $"{answer.Files.Count} {ToolReply.Plural(answer.Files.Count, "path")} changed by {answer.Sha}, in path order:\n\n");
-        foreach (var file in answer.Files)
+        int total = answer.Files.Count;
+        // Paging past the last path is the end of the list, and must not read as the empty commit
+        // CommitFilesAsync refuses outright: those are opposite facts about a commit the caller holds.
+        if (offset >= total)
+            return string.Create(CultureInfo.InvariantCulture,
+                $"{answer.Sha} touched {total} {ToolReply.Plural(total, "path")} and has no path past the first {offset}: that was the end of the list. Call commit_files without an offset for the first page.\n");
+
+        // The rows before the header, because how many of them fit is what the header has to say. One
+        // row is always taken, however long its path: a page of nothing would page forever.
+        var rows = new List<string>();
+        int spent = 0;
+        foreach (var file in answer.Files.Skip(offset).Take(MaxPathsListed))
         {
-            text.Append(CultureInfo.InvariantCulture,
+            var row = new StringBuilder();
+            row.Append(CultureInfo.InvariantCulture,
                 $"{file.ChangeKind,-9} +{file.Added,-7:N0} -{file.Deleted,-7:N0} ");
             // The same mark every ranking drawn from history uses, for the same reason: one surface
             // spelling it its own way is an agent sent to open a file that is not there.
-            ToolReply.RankedPath(text, file.QualifiedPath, file.AtHead);
+            ToolReply.RankedPath(row, file.QualifiedPath, file.AtHead);
+            if (rows.Count > 0 && spent + row.Length > MaxPathChars) break;
+            spent += row.Length;
+            rows.Add(row.ToString());
         }
+
+        var text = new StringBuilder();
+        // The commit's own count leads, whichever slice of it follows: a header counting the page is
+        // the truncation this note exists to deny, said in the one line an agent is sure to read.
+        text.Append(CultureInfo.InvariantCulture,
+            $"{total} {ToolReply.Plural(total, "path")} changed by {answer.Sha}, in path order");
+        int next = offset + rows.Count;
+        if (offset == 0 && next == total) text.Append(":\n\n");
+        else
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"; listing {rows.Count} of them, from number {offset + 1}.\n");
+            if (next < total)
+                text.Append(CultureInfo.InvariantCulture,
+                    $"NOTE: {total - next} further {ToolReply.Plural(total - next, "path")} not shown. Call commit_files again with offset={next} for the next page.\n");
+            text.Append('\n');
+        }
+
+        foreach (string row in rows) text.Append(row);
 
         text.Append("\nThe counts are lines, from this commit's own diff against its first parent; "
                     + "the diff itself is not indexed, so what changed in a line cannot be shown.\n");
@@ -482,7 +544,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
 
                  - This is evidence and not proof. Two files in one reformat share a commit without sharing anything else, and the ranking says how many commits each pair shares so you can tell a habit from an accident.
                  - The window ends at the newest commit in the index, not at today, and the reply says which dates it covered.
-                 - Commits that touched a great many paths at once are left out of the pairing: one reformat or vendor drop pairs every path it touched with every other and would swamp the answer. The reply says when that happened.
+                 - Commits that touched a great many paths at once are left out of the pairing: one reformat or vendor drop pairs every path it touched with every other and would swamp the answer. The reply says when that happened, and where a file has nothing but such commits it says there is no usable co-change history rather than that the file moves alone.
                  - Pairing never crosses a repository, because a commit does not.
                  - History is matched by path, so it begins where the file was last renamed.
                  """)]
@@ -516,6 +578,19 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             // project its slug is one the operator never assigned and no path an agent holds contains.
             return $"No commit changed {spelled} between {window.Describe()}, so there is nothing it "
                    + $"could have changed alongside. {WhyNoCommits(answer.Recorded)}";
+
+        // Before the empty ranking is read as a finding: where the ceiling excluded every commit the
+        // file has in the window, nothing was paired and nothing could have been (#127). A file whose
+        // only recorded change is a bulk rename has no co-change history to report, which is the
+        // opposite of "nothing moves with it" — and the sentence below would have said "any of the 0
+        // commits that touched it", a count that denies the commits the same reply is explaining.
+        if (coupling.Files.Count == 0 && coupling.Paired == 0)
+            return $"There is no usable co-change history for {spelled} between {window.Describe()}. "
+                   + $"{ExcludedNote(coupling, answer.MaxCommitPaths)} That leaves nothing to pair it with, "
+                   + "so this is not evidence that the file moves alone: a path whose only recorded commits "
+                   + "are mass changes — a bulk rename, a reformat, an initial import — reaches this answer "
+                   + "however strongly it is coupled. file_history lists those commits and commit_files says "
+                   + "what one of them touched; blame is what still answers who changed these lines.";
 
         if (coupling.Files.Count == 0)
             return $"No other file was changed by any of the {coupling.Paired} "
