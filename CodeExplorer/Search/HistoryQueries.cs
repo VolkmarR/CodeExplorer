@@ -66,7 +66,8 @@ public sealed record CoChanges(int Commits, int Paired, IReadOnlyList<CoChangedF
 }
 
 /// <summary>Everything a page of the log asks for. A null repository covers every one in the project.</summary>
-public sealed record LogRequest(string? Repository, int Limit, int Page, string? Author = null);
+public sealed record LogRequest(string? Repository, int Limit, int Page, string? Author = null,
+    string? Message = null);
 
 /// <summary>
 ///     What an <c>author</c> filter matched, carried beside the page it narrowed so a reply can say
@@ -107,6 +108,11 @@ public sealed record AuthorsAnswer(
 ///     carried rather than inferred from the count (CONTEXT.md, History). <see cref="Limit" /> and
 ///     <see cref="Page" /> are what the read actually used, after clamping, so a reply can say where it
 ///     stood without clamping a second time.
+///     <see cref="Message" /> is the subject text the page was narrowed by, quoted back for the reason
+///     <see cref="Author" /> is carried: a narrowed log must not introduce itself as the log. It has no
+///     counts beside it, where the address filter has several — an address matching nobody is a
+///     misspelling, worth measuring against the addresses that exist, and a subject nobody wrote is
+///     just a subject nobody wrote.
 /// </summary>
 public sealed record LogAnswer(
     bool HasHistory,
@@ -114,7 +120,8 @@ public sealed record LogAnswer(
     int Page,
     int Limit,
     IReadOnlyList<RecordedChange> Commits,
-    AuthorFilter? Author = null) : Outcome;
+    AuthorFilter? Author = null,
+    string? Message = null) : Outcome;
 
 /// <summary>Everything a page of the change log asks for.</summary>
 public sealed record ChangeLogRequest(string? Repository, int Page, int PageSize);
@@ -300,13 +307,17 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
             // commit, and be reported as a filtered log — the unfiltered answer to a filtered question
             // this tool is careful about everywhere else (#86).
             string? asked = string.IsNullOrWhiteSpace(request.Author) ? null : request.Author.Trim();
+            // Whitespace is no filter here for the same reason, and the failure would be the same
+            // shape: ILIKE '%%' matches every subject, and the reply would introduce the whole log as
+            // the commits that mention something.
+            string? mentions = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim();
             var author = hasHistory && asked is not null
                 ? await MatchedAsync(index, scope, asked, token)
                 : null;
             var commits = hasHistory && author?.Addresses != 0
-                ? await CommitsAsync(index, scope, asked, limit, (page - 1) * limit, token)
+                ? await CommitsAsync(index, scope, asked, mentions, limit, (page - 1) * limit, token)
                 : [];
-            return new LogAnswer(hasHistory, index.Repository, page, limit, commits, author);
+            return new LogAnswer(hasHistory, index.Repository, page, limit, commits, author, mentions);
         }, cancellationToken);
         if (outcome is LogAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
         else recording.Problem();
@@ -647,9 +658,9 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     an author date does not (ADR-0007).
     /// </summary>
     private static async Task<IReadOnlyList<RecordedChange>> CommitsAsync(IndexReader index, string? repositorySlug,
-        string? author, int limit, int skip, CancellationToken cancellationToken)
+        string? author, string? message, int limit, int skip, CancellationToken cancellationToken)
     {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, message);
         using var command = index.Connection.Query($"""
                                                     SELECT sha, repo_slug, author_name, author_email, authored_at,
                                                            subject

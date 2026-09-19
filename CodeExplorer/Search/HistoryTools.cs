@@ -42,10 +42,11 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     [Description("""
                  Lists commits of the project's default branch, newest first. Use it to see what changed recently, and how much of a project is moving, before asking about any one file.
 
-                 - `repo` scopes it to one repository, `author` to one person; `limit` and `page` walk it. Those are its only arguments.
+                 - `repo` scopes it to one repository, `author` to one person, `message` to what a commit says it did; `limit` and `page` walk it. Those are its only arguments.
                  - `author` matches the email address, not the display name: `grace@example.com` or `grace`, never "Grace Hopper". `authors` lists the addresses.
-                 - Nothing else filters — not by message, by one commit or by date. Any other argument name, `grep` and `commit` included, is named as ignored above the answer.
-                 - For what it cannot answer: page back for older commits, authors for who has worked here, file_history for one file, blame for one line, hot_files for where the work is, commit and commit_files for the message and the paths of one commit listed here.
+                 - `message` matches text in the subject line, case-insensitively: a ticket key, a PR number, a release name. A ticket or PR number lives in the commit message and almost never in the code, so look for it here rather than with grep. It searches the subject only, not the body, and it is text and not a pattern — `%` and `_` match themselves.
+                 - Nothing else filters — not by one commit and not by date. Any other argument name is named as ignored above the answer.
+                 - For what it cannot answer: page back for older commits, authors for who has worked here, file_history for one file, blame for one line, hot_files for where the work is, commit and commit_files for the message and the paths of one commit found here.
                  - Merges count as one commit and their side branches are not walked, so a pull request reads as a single change.
                  - Only the default branch is recorded. A commit on a branch that was never merged is not here.
                  - History may not reach the beginning of the repository, and it is not the same as the code.
@@ -56,6 +57,9 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         [Description(
             "Email address, whole or in part, e.g. \"grace@example.com\" or \"grace\". Matches the address and not the display name, case-insensitively. Default: every author.")]
         string? author = null,
+        [Description(
+            "Text in the commit's subject line, e.g. \"BugFix 558185\", \"PR 39371\" or \"release\". Matched case-insensitively as text, not as a pattern, and against the subject only. Default: every commit.")]
+        string? message = null,
         [Description("Commits to return, 1-200. Default 30.")]
         int limit = DefaultCommits,
         [Description("1-based page of results, newest first.")]
@@ -67,7 +71,8 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         // well-formed, plausible and wrong (#86). What was sent and ignored is said above this answer
         // by the call-tool filter (ToolArguments), which reads the caller's raw arguments and so
         // catches every spelling rather than the four this tool once declared to catch them.
-        var outcome = await history.LogAsync(Project, new LogRequest(repo, limit, page, author), cancellationToken);
+        var outcome = await history.LogAsync(Project, new LogRequest(repo, limit, page, author, message),
+            cancellationToken);
         return ToolReply.Render<LogAnswer>(outcome, Log,
             answer => $"Narrow with repo or author, or raise page past {answer.Page}.");
     }
@@ -82,12 +87,19 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         int skip = (answer.Page - 1) * answer.Limit;
         if (answer.Commits.Count == 0)
             return skip > 0
-                ? $"No commits on page {answer.Page}. There are fewer than {skip + 1} commits{By(answer.Author)} recorded{Scope(answer.Repository)}."
-                : $"No commits{By(answer.Author)} are recorded{Scope(answer.Repository)}.";
+                ? $"No commits on page {answer.Page}. There are fewer than {skip + 1} commits{By(answer.Author)}{Saying(answer.Message)} recorded{Scope(answer.Repository)}."
+                // A subject filter that matched nothing is named as the filter it is, and points at the
+                // half of the search this tool does not do: the message is all it reads, so a number
+                // that only ever appears in the code is a miss here and a grep somewhere else.
+                : answer.Message is { } missed
+                    ? $"No commit's subject contains '{missed}'{By(answer.Author)}{Scope(answer.Repository)}. "
+                      + "The subject is the only text searched — not the message body, and not the code. "
+                      + "grep searches the code."
+                    : $"No commits{By(answer.Author)} are recorded{Scope(answer.Repository)}.";
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{By(answer.Author)}{Scope(answer.Repository)}, newest first:\n\n");
+            $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{By(answer.Author)}{Saying(answer.Message)}{Scope(answer.Repository)}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null);
         if (answer.Author is { } filter) Matched(text, filter, answer.Commits.Count);
         return text.ToString();
@@ -126,6 +138,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
 
     /// <summary>What the count in a sentence is counting, when a filter narrowed it.</summary>
     private static string By(AuthorFilter? filter) => filter is null ? "" : $" by an address matching '{filter.Query}'";
+
+    /// <summary>
+    ///     The other half of that, for the subject filter. Written the same way and appended in the
+    ///     same places, so a log narrowed by both says so twice rather than once — a header that
+    ///     mentioned one filter and not the other would be the #86 fault with a smaller blast radius.
+    /// </summary>
+    private static string Saying(string? message) =>
+        message is null ? "" : $" whose subject contains '{message}'";
 
     [McpServerTool(Name = "authors", ReadOnly = true, Idempotent = true, Title = "List who has committed")]
     [Description("""
