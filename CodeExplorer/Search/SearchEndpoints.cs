@@ -374,7 +374,10 @@ internal static class SearchEndpoints
     private static IResult CommitFiles(CommitFilesAnswer answer) =>
         Results.Ok(new CommitFilesResponse(answer.Sha,
             answer.Files
-                .Select(f => new CommitFileResponse(f.Path, f.ChangeKind, f.Added, f.Deleted, f.QualifiedPath))
+                // Null where HEAD no longer holds the path, which is how this response says "not a
+                // link"; the read names every path either way, because a tool reply has to.
+                .Select(f => new CommitFileResponse(f.Path, f.ChangeKind, f.Added, f.Deleted,
+                    f.AtHead ? f.QualifiedPath : null))
                 .ToList()));
 
     private static IResult FileList(GlobListing listing, int pageSize) =>

@@ -30,10 +30,16 @@ public sealed record LoggedCommit(
     int Deleted);
 
 /// <summary>
-///     One path a commit touched. <see cref="QualifiedPath" /> is set when the path is still at HEAD,
-///     so a view can link to the file; null for a path the commit deleted or a later one renamed.
+///     One path a commit touched. <see cref="Path" /> is the path inside its repository, as the commit
+///     recorded it, and <see cref="QualifiedPath" /> is how the project names that path (ADR-0006) —
+///     always set, with <see cref="AtHead" /> saying whether there is still a file at it, which is the
+///     shape <see cref="ChurnedFile" /> already uses and for the same reason. A page can label a row
+///     with the bare path because the commit above it says which repository that is; a tool reply has
+///     no such column, and a bare <c>src/Old.cs</c> in a multi-repository project names a file an
+///     agent cannot ask about.
 /// </summary>
-public sealed record CommitFile(string Path, string ChangeKind, int Added, int Deleted, string? QualifiedPath);
+public sealed record CommitFile(string Path, string ChangeKind, int Added, int Deleted, string QualifiedPath,
+    bool AtHead);
 
 /// <summary>
 ///     One file that kept changing alongside another: how many of the anchor's commits also touched
@@ -473,13 +479,16 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     public async Task<Outcome> CommitAsync(string slug, CommitRequest request, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null, async (index, token) =>
-        {
-            var commit = await OneLoggedAsync(index, request.Sha, token);
-            return commit is null
-                ? new Problem($"No commit '{request.Sha}' in the history of project '{slug}'.", ProblemKind.Missing)
-                : (Outcome)new CommitAnswer(commit);
-        }, cancellationToken);
+        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null,
+            async (index, token) => await OverShaAsync(index, slug, request.Sha, async (sha, inner) =>
+            {
+                // Read back rather than carried over: the resolution and this read are two statements,
+                // and a swap between them leaves a SHA that was in the index and is not any more.
+                var commit = await OneLoggedAsync(index, sha, inner);
+                return commit is null
+                    ? new Problem(NoSuchCommit(request.Sha, slug), ProblemKind.Missing)
+                    : new CommitAnswer(commit);
+            }, token), cancellationToken);
         if (outcome is CommitAnswer) recording.Matched(Engine, 1, 0);
         else recording.Problem();
         return outcome;
@@ -488,22 +497,117 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     /// <summary>
     ///     The paths one commit touched. A SHA the index does not hold is a miss and not an empty
     ///     answer: every commit the walk records touched something, the root included, so nothing to
-    ///     list means nothing to list it for.
+    ///     list means nothing to list it for. Resolving the SHA first is what lets the two be told
+    ///     apart — a commit that really did touch nothing, an empty one or a merge that changed nothing
+    ///     against its first parent, is a miss that says which of the two it is.
     /// </summary>
     public async Task<Outcome> CommitFilesAsync(string slug, CommitFilesRequest request,
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null, async (index, token) =>
-        {
-            var files = await PathsOfAsync(index, request.Sha, token);
-            return files.Count == 0
-                ? new Problem($"No commit '{request.Sha}' in the history of project '{slug}'.", ProblemKind.Missing)
-                : (Outcome)new CommitFilesAnswer(request.Sha, files);
-        }, cancellationToken);
+        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null,
+            async (index, token) => await OverShaAsync(index, slug, request.Sha, async (sha, inner) =>
+            {
+                var files = await PathsOfAsync(index, sha, inner);
+                return files.Count == 0
+                    // Kept a miss, and so a 404 on the route the operator's page reads: a page drawn
+                    // from an empty list would say "this commit changed nothing" in its own layout,
+                    // where this says it in words and says what that means.
+                    ? new Problem(
+                        $"Commit {sha} of project '{slug}' touched no path. It is an empty commit, or a merge "
+                        + "that changed nothing against its first parent; history records what a commit did to "
+                        + "its first parent, and nothing came in by that route.", ProblemKind.Missing)
+                    : new CommitFilesAnswer(sha, files);
+            }, token), cancellationToken);
         if (outcome is CommitFilesAnswer answer) recording.Matched(Engine, answer.Files.Count, 0);
         else recording.Problem();
         return outcome;
+    }
+
+    /// <summary>
+    ///     How many commits a prefix may fit before the refusal stops naming them all. Four, because
+    ///     the list is there to be compared against what the caller has and not to be complete: a
+    ///     prefix that fits more than four is one the caller has to lengthen whatever the rest are.
+    /// </summary>
+    private const int MaxNamedShas = 4;
+
+    /// <summary>
+    ///     What git itself requires of an abbreviated SHA, and for the same reason: below four
+    ///     characters a prefix that happens to fit one commit today fits two after the next refresh,
+    ///     and the answer it gave was never about the commit the caller meant.
+    /// </summary>
+    private const int MinShaPrefix = 4;
+
+    /// <summary>
+    ///     Runs an answer against the one commit a caller meant, from as much of the SHA as they had.
+    ///     A prefix and not the whole SHA, because every reply an agent reads abbreviates to eight
+    ///     characters — git_log, file_history and blame all do — so the full forty is a thing no tool
+    ///     surface ever hands out, and a read that insisted on it could not be reached from any of
+    ///     them. The API and the operator's pages send whole SHAs and are unaffected in what they get
+    ///     back, a whole SHA being a prefix of itself; what they gain is this method's two refusals,
+    ///     for a SHA too short to be one and for one that fits several.
+    ///     More than one match is refused rather than resolved to the first. Two commits sharing eight
+    ///     characters is rare and a confident answer about the wrong one is undetectable, which is the
+    ///     trade every git client makes the same way.
+    ///     Shaped as a continuation rather than as a SHA-or-problem pair for the reason
+    ///     <see cref="IndexReader.OverFileAsync" /> is: the caller that gets a SHA is the only one that
+    ///     runs, so there is no second state for it to have to rule out first.
+    /// </summary>
+    private static async Task<Outcome> OverShaAsync(IndexReader index, string slug, string given,
+        Func<string, CancellationToken, Task<Outcome>> answer, CancellationToken cancellationToken)
+    {
+        // Lower-cased because git writes SHAs in hex lower case and a pasted one may not be, and
+        // trimmed because a SHA copied out of a reply brings its spacing with it.
+        string prefix = given.Trim().ToLowerInvariant();
+        if (prefix.Length < MinShaPrefix)
+            return new Problem(
+                (prefix.Length == 0
+                    ? $"No commit SHA was given, so no commit of project '{slug}' can be named. "
+                    : $"'{given}' is too short to name a commit of project '{slug}': give at least {MinShaPrefix} characters of the SHA. ")
+                + "git_log, file_history and blame each print the first eight, which is enough.",
+                ProblemKind.Invalid);
+
+        var matches = await ShasAsync(index, prefix, MaxNamedShas, cancellationToken);
+        if (matches.Count == 0) return new Problem(NoSuchCommit(given, slug), ProblemKind.Missing);
+        if (matches.Count == 1) return await answer(matches[0], cancellationToken);
+
+        // The candidates rather than a count: a caller holding eight characters of one of them can see
+        // which it meant and lengthen its argument, where a count only says to try again.
+        return new Problem(
+            $"'{given}' starts the SHA of more than one commit of project '{slug}': "
+            + $"{string.Join(", ", matches.Select(sha => sha[..12]))}"
+            + (matches.Count == MaxNamedShas ? ", and possibly others" : "")
+            + ". Give more of the SHA.", ProblemKind.Invalid);
+    }
+
+    /// <summary>
+    ///     The one sentence a SHA that names no commit is answered with, wherever it was asked. Written
+    ///     once because the record and the file list are two halves of one workflow: a caller that
+    ///     tries the second after the first has to read one fact, not two shapes of it.
+    /// </summary>
+    private static string NoSuchCommit(string sha, string slug) =>
+        $"No commit '{sha}' in the history of project '{slug}'.";
+
+    /// <summary>
+    ///     The commits whose SHA starts with what the caller gave, at most <paramref name="ceiling" />
+    ///     of them. Distinct, because two repositories of one project can hold the same commit and that
+    ///     is one commit to a caller rather than an ambiguous prefix.
+    ///     <c>starts_with</c> and not <c>LIKE</c>: the prefix is caller text, and under LIKE a stray
+    ///     <c>%</c> in it would widen the match instead of failing to find one.
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> ShasAsync(IndexReader index, string prefix, int ceiling,
+        CancellationToken cancellationToken)
+    {
+        using var command = index.Connection.Query($"""
+                                                    SELECT DISTINCT sha FROM commits
+                                                    WHERE starts_with(sha, $p)
+                                                    ORDER BY sha
+                                                    LIMIT {ceiling}
+                                                    """, [new DuckDBParameter("p", prefix)]);
+        using var reader = await command.ReaderAsync(cancellationToken);
+        var shas = new List<string>();
+        while (await reader.ReadAsync(cancellationToken)) shas.Add(reader.Text("sha"));
+        return shas;
     }
 
     /// <summary>
@@ -785,26 +889,36 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     }
 
     /// <summary>
-    ///     The paths one commit touched, with the qualified path of each that is still at HEAD. Matched
-    ///     by full SHA: the caller got it from a listing and has no reason to abbreviate it.
+    ///     The paths one commit touched, each named the way the project names it and marked with
+    ///     whether HEAD still holds a file there. Matched by whole SHA, which is what
+    ///     <see cref="OverShaAsync" /> has already resolved whatever the caller gave.
+    ///     The naming is built from the commit's own repository rather than read from <c>files</c>,
+    ///     because the paths that need it most are exactly the ones with no row there.
+    ///     One <c>commit_id</c> and not every row sharing the SHA: two repositories of a project can
+    ///     hold the same commit, and listing both would name every path twice and count them twice. The
+    ///     lowest id is the one <see cref="OneLoggedAsync" /> reports, so the record and the paths are
+    ///     about the same copy of it.
     /// </summary>
     private static async Task<IReadOnlyList<CommitFile>> PathsOfAsync(IndexReader index, string sha,
         CancellationToken cancellationToken)
     {
+        var paths = await index.PathsAsync(cancellationToken);
         using var command = index.Connection.Query("""
                                                    SELECT cf.path, cf.change_kind, cf.added, cf.deleted,
-                                                          f.qualified_path
+                                                          c.repo_slug, f.qualified_path
                                                    FROM commits c JOIN commit_files cf USING (commit_id)
                                                    LEFT JOIN repositories r ON r.slug = c.repo_slug
                                                    LEFT JOIN files f ON f.repo_id = r.repo_id AND f.path = cf.path
-                                                   WHERE c.sha = $sha
+                                                   WHERE c.commit_id = (SELECT min(commit_id) FROM commits
+                                                                        WHERE sha = $sha)
                                                    ORDER BY cf.path
                                                    """, [new DuckDBParameter("sha", sha)]);
         using var reader = await command.ReaderAsync(cancellationToken);
         var files = new List<CommitFile>();
         while (await reader.ReadAsync(cancellationToken))
             files.Add(new CommitFile(reader.Text("path"), reader.Text("change_kind"), reader.Int32("added"),
-                reader.Int32("deleted"), reader.IsNull("qualified_path") ? null : reader.Text("qualified_path")));
+                reader.Int32("deleted"), paths.Format(reader.Text("repo_slug"), reader.Text("path")),
+                !reader.IsNull("qualified_path")));
         return files;
     }
 
