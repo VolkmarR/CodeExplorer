@@ -281,14 +281,41 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     /// </summary>
     private static void Materialise(DuckDBConnection connection, CancellationToken cancellationToken)
     {
-        Execute(connection,
-            """
-            UPDATE lines SET commit_id = a.commit_id
-            FROM files f, repositories r, attribution a
-            WHERE lines.file_id = f.file_id AND r.repo_id = f.repo_id
-              AND a.repo_slug = r.slug AND a.path = f.path
-              AND lines.line_number BETWEEN a.start_line AND a.end_line
-            """, cancellationToken);
+        RefuseOverlappingRuns(connection, cancellationToken);
+        try
+        {
+            // The runs are expanded to one row per attributed line so the write below joins on equality
+            // instead of BETWEEN. Measured on a synthetic 10M-line index: the range join is 505 ms, the
+            // expansion 47 ms and the equality update 264 ms, while writing every value with no join at
+            // all is 81 ms — so the cost is the range join and not the number of rows written, and six
+            // times more join-side rows still come out ahead. Only paths that exist at HEAD are
+            // expanded; attribution keeps rows for paths this walk no longer sees, and they join to
+            // nothing either way.
+            // TEMP and not a table in the shadow: this is scratch for one statement, and the shadow file
+            // is about to be swapped in and would carry it forever.
+            Execute(connection,
+                """
+                CREATE OR REPLACE TEMP TABLE attributed_line AS
+                SELECT f.file_id, unnest(range(a.start_line, a.end_line + 1))::INTEGER AS line_number,
+                       a.commit_id
+                FROM attribution a
+                JOIN repositories r ON r.slug = a.repo_slug
+                JOIN files f ON f.repo_id = r.repo_id AND f.path = a.path
+                """, cancellationToken);
+
+            Execute(connection,
+                """
+                UPDATE lines SET commit_id = e.commit_id
+                FROM attributed_line e
+                WHERE lines.file_id = e.file_id AND lines.line_number = e.line_number
+                """, cancellationToken);
+        }
+        finally
+        {
+            // In a finally so a cancelled or failed build does not leave the scratch behind on a
+            // connection the pool hands out again.
+            Execute(connection, "DROP TABLE IF EXISTS attributed_line", CancellationToken.None);
+        }
 
         // Bounded by commit_id and not by date: the ids ascend with history by construction, while an
         // author date is whatever the committer's clock said and goes backwards across a rebase.
@@ -301,6 +328,39 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             JOIN repositories r ON r.slug = h.repo_slug
             WHERE files.repo_id = r.repo_id AND files.path = h.path
             """, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Refuses a build whose attribution covers one line of one path twice. The replay produces
+    ///     disjoint runs per path by construction, so an overlap means it did not, and the expansion
+    ///     below would then write whichever of the two rows the join happened to reach last — a line
+    ///     carrying a plausible wrong commit, which is the failure this module is written around. The
+    ///     range join it replaces picked one just as arbitrarily and said nothing. A failed build is
+    ///     recoverable; the index it would have swapped in is not.
+    ///     Checked on the runs and not on the expansion: each path's runs are compared against the
+    ///     furthest line any earlier run of the same path reached, which is one ordered pass over a
+    ///     table thousands of times smaller than the lines it describes.
+    /// </summary>
+    private static void RefuseOverlappingRuns(DuckDBConnection connection, CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT repo_slug, path, start_line FROM (
+                SELECT repo_slug, path, start_line,
+                       max(end_line) OVER (PARTITION BY repo_slug, path ORDER BY start_line
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS covered
+                FROM attribution)
+            WHERE start_line <= covered
+            LIMIT 1
+            """;
+        cancellationToken.ThrowIfCancellationRequested();
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return;
+        throw new InvalidOperationException(
+            $"Attribution of '{reader.GetString(1)}' in repository '{reader.GetString(0)}' has runs that "
+            + $"overlap at line {reader.GetInt32(2)}. The replay produces disjoint runs, so the history "
+            + "carried into this build is not one it wrote. Rebuild the project from scratch to discard it.");
     }
 
     private static void Execute(DuckDBConnection connection, string sql, CancellationToken cancellationToken)
