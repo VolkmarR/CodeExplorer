@@ -609,6 +609,35 @@ public sealed class IndexReader : IDisposable
         return await command.ScalarAsync(cancellationToken) is true;
     }
 
+    /// <summary>
+    ///     The path a commit recorded a file at, as git spells it, for a caller that wrote this
+    ///     repository-relative path — or null where no commit recorded one. The single-file flavour of
+    ///     <see cref="RecordsPathAsync" />, which answers about a scope and so matches everything
+    ///     beneath a directory too.
+    ///     The tools that take one file need the narrower question (#136). `one/legacy` is a scope
+    ///     git_log answers for and not a file file_history can: under the scope-shaped check it would
+    ///     read as a historical file and then list none of the commits beneath it, which is a quiet
+    ///     wrong answer where a refusal is the right one.
+    ///     Matched lower-cased on both sides, for the reason <see cref="FindFileAsync" /> gives and more
+    ///     so: the caller is asking about a file that is not there to be listed, so they are quoting a
+    ///     path from memory or from an older reply almost by definition. It returns the recorded
+    ///     spelling rather than a bool so the answer names the path git has, not the one that was typed.
+    /// </summary>
+    public async Task<string?> RecordedFilePathAsync(string repositorySlug, string pathInRepository,
+        CancellationToken cancellationToken)
+    {
+        if (pathInRepository.Length == 0) return null;
+        using var command = Connection.Query("""
+                                             SELECT cf.path
+                                             FROM commit_files cf JOIN commits c USING (commit_id)
+                                             WHERE c.repo_slug = $r AND lower(cf.path) = lower($p)
+                                             ORDER BY cf.path = $p DESC
+                                             LIMIT 1
+                                             """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
+        return await command.ScalarAsync(cancellationToken) as string;
+    }
+
     /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
     private const int MaxSuggestions = 5;
 

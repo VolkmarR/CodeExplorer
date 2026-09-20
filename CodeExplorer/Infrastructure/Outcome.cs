@@ -29,6 +29,15 @@ public enum ProblemKind
     /// </summary>
     Missing,
 
+    /// <summary>
+    ///     The request named a path this project's history records and HEAD no longer holds, asked of a
+    ///     tool that answers from the current file tree. Told apart from <see cref="Missing" /> because
+    ///     the caller spelled a real path: the answer is "that file is gone, read its history instead",
+    ///     not "no such path" (#136). A caller that cannot tell the two apart offers spelling advice for
+    ///     a spelling that was right.
+    /// </summary>
+    Historical,
+
     /// <summary>The project has no index to read from: never built, or still building the first one.</summary>
     NoIndex
 }

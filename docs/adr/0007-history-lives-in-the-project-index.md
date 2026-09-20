@@ -18,6 +18,14 @@ class of bug that cannot occur while they are written by the same build.
   never the committer: a rebase makes them disagree, and the author is who wrote the code.
 - **`commit_files`**: which paths each commit touched, with the change kind and line counts. This
   is what `files.first_commit` and `files.last_commit` fall out of, at no extra cost in the walk.
+  It also carries `old_path`: where a `renamed` or `copied` change moved the content from, and NULL
+  for every other kind. The diff is produced with libgit2's rename detection at its defaults, so the
+  walk already receives that path and already consumes it in memory to carry attribution across a
+  move; it was discarded at append time until there was a column for it. Writing it down is what
+  lets a query see that two paths were once one thing, which is how a path-scoped answer knows to
+  say what its scope was called before (#131). NULL and not a copy of `path`: "moved from nowhere"
+  is an absence, and storing the path itself would make every ordinary row look like a rename onto
+  itself.
 - **`attribution`**: line ranges per repository and path — the attribution of every text file as of
   the newest recorded commit, which is the state the next build replays new commits onto. Keyed by
   slug and path rather than by `file_id`, which is a position in the walk and does not survive a
@@ -75,3 +83,23 @@ Attribution answers the ownership question and is honest about the other one; th
   Every project's durable copy is discarded and rebuilt from git, and that rebuild is now a full
   clone of every repository in it. Version 4 followed when attribution moved from blob keying to
   slug-and-path keying; the same rule, a rebuild and no migration, and by then a rebuild was cheap.
+- **Every path-scoped history call now scans `commit_files` once more, and the scans are the price of
+  a signal nobody has to ask for.** Resolving a scope's previous path is a `GROUP BY` over
+  `commit_files` joined to `commits`, and there is no index on `path` — so a project that renamed
+  nothing pays a scan per scoped call to learn that. An opt-in `follow` argument would cost nothing
+  and help only the agent that already suspects a rename, which is not the agent that needs help: the
+  measured failure was an agent given 9 commits for a directory with 1,252 and no reason to look
+  further. The scan is bounded by the same table the churn ranking and the co-change pairing already
+  walk on every call, and it runs only where a path was named — an unscoped log or ranking pays
+  nothing. If it ever stops being affordable, the answer is an index on `commit_files(path)` or a
+  per-repository table of rename prefixes built once by the walk, not an argument.
+- **A change to a history table now costs a full re-walk per project, and that is the price of
+  carrying them over.** These three tables are the only ones a refresh inherits rather than rebuilds,
+  and they are inherited column for column from whichever copy is at hand — the durable one, or the
+  live index file on disk. So a history table that gains a column cannot be inherited by a build that
+  did not write it: the insert would be short, and where the shapes happened to line up the carried
+  rows would be blind to whatever the new column records, which is a quiet wrong answer rather than a
+  failure. Both copies are therefore refused on the same `SchemaVersion` test, and the next refresh
+  walks every commit again. Version 7, which added `commit_files.old_path`, is the first to pay it;
+  the walk it costs is the one ADR-0007 measured at 32 s for a 4,300-commit repository, once per
+  project, and it is user-visible on the first refresh after a deploy.

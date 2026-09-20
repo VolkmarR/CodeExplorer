@@ -264,6 +264,38 @@ public sealed class TestHost : IDisposable
         repo.Commit(subject, author, author);
     }
 
+    /// <summary>
+    ///     A commit that moves paths, content unchanged — one commit holding the removal of each old
+    ///     path and the addition of each new one, which is how git records a move and the only shape
+    ///     libgit2's rename detection reports as <c>renamed</c>. A remove commit followed by an add
+    ///     commit is two unrelated changes, and a test built that way proves nothing about renames
+    ///     (#131).
+    /// </summary>
+    /// <param name="name">The fixture repository.</param>
+    /// <param name="moves">Old repository-relative path to new, all in one commit.</param>
+    /// <param name="subject">The commit's subject.</param>
+    /// <param name="authorName">Who to record as the author.</param>
+    /// <param name="authorEmail">Their address.</param>
+    /// <param name="minute">Minutes past the epoch, which is how these fixtures order their history.</param>
+    public void MoveInGitRepositoryAs(string name, Dictionary<string, string> moves, string subject,
+        string authorName, string authorEmail, int minute)
+    {
+        string root = FixturePath(name);
+        using var repo = new Repository(root);
+        foreach ((string from, string to) in moves)
+        {
+            string source = Path.Combine(root, from);
+            string target = Path.Combine(root, to);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Move(source, target);
+            Commands.Remove(repo, from);
+            Commands.Stage(repo, to);
+        }
+
+        var author = new Signature(authorName, authorEmail, DateTimeOffset.UnixEpoch.AddMinutes(minute));
+        repo.Commit(subject, author, author);
+    }
+
     private static string Commit(string path, Dictionary<string, string> files, string subject = "fixture",
         Signature? author = null)
     {

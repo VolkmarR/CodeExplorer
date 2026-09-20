@@ -85,7 +85,33 @@ told nothing is told that, rather than being given an empty answer. History is s
 commit recorded and not by what HEAD holds, so a path a later commit deleted or renamed away is a
 scope with commits and nothing to open — answered, marked the way a churned path that is no longer
 at HEAD is marked, and never refused as a path that was never here.
+That holds for the reads shaped like a log: `git_log`, `authors`, `hot_files` and `file_history` all
+answer for such a path. `blame` and `co_changed` refuse it, by design and not by omission — an
+Attribution is the lines of the file as of the newest recorded commit and a path HEAD has lost has
+none, and a Co-Change reported for a path a rename severed would read as the coupling of the file
+that replaced it. Their refusal names that reason and sends the caller to the two reads that answer;
+it is never the "no such path" a misspelling gets, which every one of the six still gives for a path
+neither HEAD nor any commit holds.
+See _Previous Path_ for what a scope whose history a rename split is told.
 _Avoid_: Log, git history, timeline, audit trail
+
+**Previous Path**:
+What a path scope was called before a rename moved it, where the recorded rename edges lead back to
+an earlier spelling. It exists because History is matched by the path each commit recorded: a
+directory renamed mid-history answers for its post-rename slice alone, and the reply used to give no
+sign the rest was there — measured at 9 commits reported for a directory with 1,252.
+A previous path is derived from file-level rename rows by prefix mapping, and only where a majority
+of the paths the scope has ever recorded came from it: a directory rename moves nearly everything
+under it at once, and two files that drifted in over the years do not make somewhere else this
+scope's earlier name. It is transitive, so a path renamed twice has a chain, and capped, so a long
+one says how many earlier names it did not print.
+Renames are **signalled, never followed**. A scope's own count stays literal — the History rule
+above holds unchanged — and the note is additive: the earlier path, the commits the whole chain
+accounts for, and the call that reads the earlier path. All three, because a note that named the
+path and withheld the total would reproduce the original fault one level up.
+_Avoid_: Rename history, path history, follow, old name
+
+
 
 **Author**:
 Whoever a commit records as having written it, identified by their email address and never by the
@@ -109,6 +135,7 @@ is unstable". A path that churned and is no longer at HEAD is churn that happene
 A directory's churn is the distinct commits that touched anything beneath it, never the sum over the
 files in it: one commit touching forty of them changed that directory once, and the sum would say
 forty — wrong in the direction that decides which module looks like it is moving.
+A directory scope whose history a rename split says so; see _Previous Path_.
 _Avoid_: Hotness, activity, volatility, code age
 
 **Co-Change**:
