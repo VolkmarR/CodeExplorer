@@ -594,11 +594,16 @@ public sealed class IndexReader : IDisposable
         CancellationToken cancellationToken)
     {
         if (pathInRepository.Length == 0) return true;
+        // EXISTS and not count(*) > 0: a count cannot stop early, and commit_files is the largest
+        // table here with no index on path. The scan this saves is the one a mistyped scope pays —
+        // the common case, and the one that used to be refused after reading files alone.
         using var command = Connection.Query("""
-                                             SELECT count(*) > 0
-                                             FROM commit_files cf JOIN commits c USING (commit_id)
-                                             WHERE c.repo_slug = $r
-                                               AND (cf.path = $p OR starts_with(cf.path, $p || '/'))
+                                             SELECT EXISTS (
+                                                 SELECT 1
+                                                 FROM commit_files cf JOIN commits c USING (commit_id)
+                                                 WHERE c.repo_slug = $r
+                                                   AND (cf.path = $p OR starts_with(cf.path, $p || '/'))
+                                             )
                                              """,
             [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
         return await command.ScalarAsync(cancellationToken) is true;
