@@ -35,7 +35,7 @@ dependency and no project, and put boundaries where the coupling really is.
 ## Shape
 
 - `Control/`: `control.duckdb`, projects, repositories, credentials, their operator endpoints.
-- `Git/`: clones, tree reading, URL classification.
+- `Git/`: clones and tree reading. URL classification moved to `Control/`; see the #146 revisit.
 - `Index/`: one DuckDB file per project, attach and `USE`, ingest, Parquet durability. The
   local-or-Azure decision lives in one class here, not behind an interface.
 - `Search/`: the MCP tools and the line classifier they share.
@@ -46,9 +46,10 @@ dependency and no project, and put boundaries where the coupling really is.
 
 ## Consequences
 
-- Folders are a convention the compiler does not enforce. Once four modules exist, one reflection
-  test asserts that `Search/` types reference nothing in `Control/`, turning the convention into a
-  failing build.
+- Folders are a convention the compiler does not enforce. Once four modules exist, one test turns the
+  convention into a failing build. It began as a single assertion that `Search/` types reference
+  nothing in `Control/`; it is a sweep over every ordered pair of module folders since the #146
+  revisit below.
 - The tests project mirrors the folders, so a ticket's tests sit where its code sits.
 - `Program.cs` is the composition root. It is allowed to grow to about 150 lines of inline
   endpoints; past that, each module's endpoint group moves to a `MapX` extension in its folder and
@@ -67,8 +68,9 @@ The revisit above came due when #9 was built. Two things held and one moved.
   not. No second reason to change appeared, so no port.
 - **It does not live in `Index/`.** The Shape entry above put it there, and that was written before
   the ticket showed that the control database's backup needs the same store (ADR-0004). `Index/`
-  already depends on `Control/` — `IndexBuilder` reads a `ProjectRepository` — so putting the store
-  in `Index/` would have made the two modules depend on each other. It sits at the repository root
+  depended on `Control/` at the time — `IndexBuilder` read a `ProjectRepository` — so putting the
+  store in `Index/` would have made the two modules depend on each other. (That arrow is gone as of
+  the #146 revisit: the record moved to `Infrastructure/`.) It sits at the repository root
   instead, beside `Telemetry.cs` and `Project.cs`, which is where this codebase already keeps what
   every module is handed. The Parquet itself, `DurableIndex`, is in `Index/` as the Shape says.
 - **The warm-up is in `Refresh/`**, as the Shape says, and not in `Operator/`: it is work a cron
@@ -109,3 +111,63 @@ longer claiming a search is the only thing that has one. `Problem` carries a `Pr
 HTTP answers a missing index with a 404 the browse view draws as "nothing to browse yet" and every
 other problem with a 400, and that is the one fact about a problem a renderer needs beyond its prose.
 The result records stay in `Search/` and derive from `Outcome`; the boundary test is unchanged.
+
+## Revisited for #146, on 2026-09-20: the arrows are enumerated, and two cycles are gone
+
+The boundary test was six hand-written facts, so the arrows it did not name were unguarded, and two
+of them had closed cycles. It is now one theory over every ordered pair of the eight module folders
+against an explicit allow-list, which makes failing the default: an arrow nobody decided on fails
+the build the moment it is drawn.
+
+- **`Control/` ↔ `Index/` is gone.** The scope combinators — over an index, over a file, over a
+  directory — were static methods on `IndexReader` taking `ProjectIndexes` as their first argument,
+  so every caller named the attach-and-lease type: nine `Search/` files, plus `Control/`, `Operator/`
+  and `Refresh/`. `Control/` naming it closed a cycle with the `Index/` → `Control/` arrow this ADR
+  allowed. They are instance methods on an injected `IndexReaders` now, and
+  `Infrastructure/IndexReaders.cs` is the only module file outside `Index/` and `Refresh/` that
+  references the type — which is the one arrow this ADR already granted `Infrastructure/`, now down
+  to one file rather than spread across three modules. `Program.cs` registers it and is the
+  composition root, not a module; the sweep does not walk it.
+- **`Git/` ↔ `Control/` is gone.** `Git/` read `ProjectRepository` and the credential purpose out of
+  `Control/` while `Control/` read `Git/`'s URL classifier. The record moved to
+  `Infrastructure/Project.cs`, beside the project record it is the other half of, and the purpose
+  string to `KeyRing`, whose own doc already said Control protects credentials with it and Git
+  unprotects them. The classifier went the other way, into `Control/`: it sat in `Git/` because the
+  clone read it to decide whether it could be shallow, ADR-0007 made every clone full and took that
+  reader away, and what was left is the API's validation of a field `Control/` owns. The two modules
+  now name nothing of each other's in either direction.
+- **`Index/` → `Control/` went with it**, unplanned. The repository record was the only thing the
+  build read there, so moving it left `Index/` naming nothing in `Control/`. The Shape section above
+  still says `Index/` already depends on `Control/`; as of this revisit it does not.
+- **`Search/` → `Index/` was also real, backwards.** The `imports` table's `shape` and `evidence`
+  columns were spelled on `ImportBuilder`, so the import tools named a build type to decode a column
+  they had already read. The codec is `Infrastructure/ImportColumns.cs`: the column is what the two
+  modules share, so the column's spelling is what they are handed. That gives `Infrastructure/` an
+  arrow to `Language/`, which is fine and was always implied — being the leaf (ADR-0008) is what lets
+  anything reach it.
+- **The match is qualified to type positions.** A bare `\bName\b` was fine over six curated pairs and
+  is wrong over fifty-six: `Reference`, `Answer`, `Declared` and `Hole` are top-level types here and
+  also ordinary property and variable names elsewhere. The sweep now looks for the positions C# puts
+  a type in — after `new`, in a generic argument, in a base list, in a declaration, before a `.`, in
+  a cast — skips nested types, whose bare use inside their own file no text can tell from a
+  reference, and skips any name the reading file declares itself. Ten `[InlineData]` cases assert
+  both halves of that, because a detector that has stopped matching reports exactly what a clean tree
+  reports.
+
+The arrows this leaves, which are the allow-list in `ModuleBoundaryTests` spelled out — anything not
+on this list fails the build, and an arrow on it that nobody draws fails it too, so the list and this
+paragraph are edited together:
+
+| from             | may reference                      |
+| ---------------- | ---------------------------------- |
+| `Control/`       | `Infrastructure/`                  |
+| `Git/`           | `Infrastructure/`                  |
+| `Index/`         | `Git/`, `Infrastructure/`, `Language/` |
+| `Infrastructure/`| `Control/`, `Index/`, `Language/`  |
+| `Language/`      | nothing                            |
+| `Operator/`      | `Control/`, `Git/`, `Infrastructure/` |
+| `Refresh/`       | `Control/`, `Git/`, `Index/`, `Infrastructure/` |
+| `Search/`        | `Infrastructure/`, `Language/`     |
+
+The module folders are read off the source tree rather than listed, so a new one arrives with no
+allowed arrows at all and its first reference in either direction has to be argued for here.

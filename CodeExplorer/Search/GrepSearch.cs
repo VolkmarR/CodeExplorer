@@ -75,7 +75,7 @@ public sealed record GrepResult(
 ///     9.5-million-line project. The <c>\b…\b</c> tests here are the same rule against the same
 ///     tokeniser, which is why the answers are identical and the query is two to three times faster.
 /// </summary>
-public sealed partial class GrepSearch(ProjectIndexes indexes)
+public sealed partial class GrepSearch(IndexReaders readers)
 {
     /// <summary>
     ///     What a text query is answered by when the project's lines were tokenised: every identifier
@@ -132,7 +132,7 @@ public sealed partial class GrepSearch(ProjectIndexes indexes)
         if (regex && Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
         if (regex && request.WholeWord) query = $@"\b(?:{query})\b";
 
-        return await IndexReader.OverIndexAsync(indexes, slug, null,
+        return await readers.OverIndexAsync(slug, null,
             (index, token) => QueryAsync(index, request, query, regex, token), cancellationToken);
     }
 

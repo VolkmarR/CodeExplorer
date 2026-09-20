@@ -42,22 +42,6 @@ public sealed class ImportBuilder
     /// </summary>
     public const int MaxScanLines = 20_000;
 
-    /// <summary>What the <c>shape</c> column holds, spelled once so the writer and the readers agree.</summary>
-    public const string ModuleShape = "module";
-
-    /// <summary>How the <c>evidence</c> column spells an answer's strength (ADR-0008).</summary>
-    public static string Column(Evidence evidence) => evidence == Evidence.Parsed ? "parsed" : "text";
-
-    public static Evidence Strength(string column) => column == "parsed" ? Evidence.Parsed : Evidence.Text;
-
-    public const string PathShape = "path";
-
-    /// <summary>The column's two directions, beside each other so neither can be changed alone.</summary>
-    public static string Column(ImportShape shape) => shape == ImportShape.Module ? ModuleShape : PathShape;
-
-    public static ImportShape Shape(string column) =>
-        column == ModuleShape ? ImportShape.Module : ImportShape.Path;
-
     /// <summary>
     ///     Why an edge names no file here. They are sentences rather than codes because they are
     ///     printed to an agent as they stand: an edge marked <c>ambiguous</c> tells a reader nothing
@@ -165,7 +149,7 @@ public sealed class ImportBuilder
         // has to be written first and the hits then written over it. The two that the join does find
         // are one statement, because they read the same grouping and differ only in what it counted.
         await connection.ExecuteAsync(
-            $"UPDATE imports SET unresolved = '{Undeclared}' WHERE shape = '{ModuleShape}'",
+            $"UPDATE imports SET unresolved = '{Undeclared}' WHERE shape = '{ImportColumns.ModuleShape}'",
             cancellationToken);
         // Case-insensitively, because Delphi and X# are and a namespace that differs only in case is
         // a collision nobody writes on purpose.
@@ -179,7 +163,7 @@ public sealed class ImportBuilder
                  unresolved  = CASE WHEN d.files = 1 THEN NULL ELSE '{Several}' END
              FROM (SELECT lower(module) AS module, min(file_id) AS file_id, count(*) AS files
                    FROM files WHERE module IS NOT NULL AND module <> '' GROUP BY 1) d
-             WHERE imports.shape = '{ModuleShape}' AND lower(imports.name) = d.module
+             WHERE imports.shape = '{ImportColumns.ModuleShape}' AND lower(imports.name) = d.module
              """, cancellationToken);
     }
 
@@ -193,7 +177,7 @@ public sealed class ImportBuilder
                    $"""
                     SELECT i.import_id, i.name, f.repo_id, f.directory, f.extension
                     FROM imports i JOIN files f USING (file_id)
-                    WHERE i.shape = '{PathShape}'
+                    WHERE i.shape = '{ImportColumns.PathShape}'
                     """, []))
         using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {

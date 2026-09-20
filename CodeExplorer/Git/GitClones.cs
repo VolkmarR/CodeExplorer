@@ -40,7 +40,7 @@ public sealed class GitClones(
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
 
     private readonly string _cloneRoot = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones");
-    private readonly IDataProtector _protector = dataProtection.CreateProtector(ControlDatabase.CredentialPurpose);
+    private readonly IDataProtector _protector = dataProtection.CreateProtector(KeyRing.CredentialPurpose);
 
     /// <summary>
     ///     Opens the repository with its local copy brought up to date: a fetch when it is already

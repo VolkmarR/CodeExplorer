@@ -341,7 +341,7 @@ public sealed record CommitFilesAnswer(string Sha, IReadOnlyList<CommitFile> Fil
 ///     What stays on the reader is what more than one module asks — a file's first and last commit,
 ///     which the file read carries, and the coverage rule, which the overview needs too.
 /// </summary>
-public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration configuration)
+public sealed class HistoryQueries(IndexReaders readers, IConfiguration configuration)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell a history read apart from a scan.</summary>
     private const string Engine = "history";
@@ -432,7 +432,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     public async Task<Outcome> LogAsync(string slug, LogRequest request, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
+        var outcome = await readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             var (path, unresolved) = await ScopeAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
@@ -472,7 +472,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     public async Task<Outcome> AuthorsAsync(string slug, AuthorsRequest request, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
+        var outcome = await readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             var (path, unresolved) = await ScopeAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
@@ -497,7 +497,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
+        var outcome = await readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             int pageSize = Math.Clamp(request.PageSize, 1, MaxCommits);
             int page = Math.Max(1, request.Page);
@@ -522,7 +522,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null, async (index, token) =>
+        var outcome = await readers.OverIndexAsync(slug, null, async (index, token) =>
         {
             var (file, recorded, unresolved) = await OnePathAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
@@ -623,7 +623,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     public async Task<Outcome> BlameAsync(string slug, BlameRequest request, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null,
+        var outcome = await readers.OverIndexAsync(slug, null,
             async (index, token) =>
             {
                 var (file, recorded, unresolved) = await OnePathAsync(index, request.Path, token);
@@ -658,7 +658,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     public async Task<Outcome> ChurnAsync(string slug, ChurnRequest request, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverDirectoryAsync(indexes, slug, request.Directory,
+        var outcome = await readers.OverDirectoryAsync(slug, request.Directory,
             async (index, directory, token) =>
             {
                 bool hasHistory = await HasHistoryAsync(index, token);
@@ -718,7 +718,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null,
+        var outcome = await readers.OverIndexAsync(slug, null,
             async (index, token) =>
             {
                 var (found, historical, unresolved) = await OnePathAsync(index, request.Path, token);
@@ -766,7 +766,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     public async Task<Outcome> CommitAsync(string slug, CommitRequest request, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null,
+        var outcome = await readers.OverIndexAsync(slug, null,
             async (index, token) => await OverShaAsync(index, slug, request.Sha, async (sha, inner) =>
             {
                 // Read back rather than carried over: the resolution and this read are two statements,
@@ -792,7 +792,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, null,
+        var outcome = await readers.OverIndexAsync(slug, null,
             async (index, token) => await OverShaAsync(index, slug, request.Sha, async (sha, inner) =>
             {
                 var files = await PathsOfAsync(index, sha, inner);
@@ -837,7 +837,7 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     characters is rare and a confident answer about the wrong one is undetectable, which is the
     ///     trade every git client makes the same way.
     ///     Shaped as a continuation rather than as a SHA-or-problem pair for the reason
-    ///     <see cref="IndexReader.OverFileAsync" /> is: the caller that gets a SHA is the only one that
+    ///     <see cref="IndexReaders.OverFileAsync" /> is: the caller that gets a SHA is the only one that
     ///     runs, so there is no second state for it to have to rule out first.
     /// </summary>
     private static async Task<Outcome> OverShaAsync(IndexReader index, string slug, string given,

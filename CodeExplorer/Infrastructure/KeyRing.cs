@@ -36,6 +36,15 @@ public static class KeyRing
     /// </summary>
     public const string BlobName = "keyring/keys.xml";
 
+    /// <summary>
+    ///     The Data Protection purpose string for stored repository credentials. Ciphertext protected
+    ///     under one purpose cannot be unprotected under another, so this constant is the only shared
+    ///     secret between the writer in <c>Control/</c> and the reader in <c>Git/</c> — and it sits
+    ///     here, with the key ring both of them protect under, rather than in either of them, because
+    ///     a constant owned by one made that module a dependency of the other (ADR-0005).
+    /// </summary>
+    public const string CredentialPurpose = "CodeExplorer.RepositoryCredential";
+
     /// <summary>The Key Vault key that wraps the key ring, named next to the container it wraps.</summary>
     public const string KeyVaultKeySetting = "Storage:KeyVaultKeyUrl";
 
