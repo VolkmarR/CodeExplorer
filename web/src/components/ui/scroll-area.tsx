@@ -3,7 +3,20 @@
 import { ScrollArea as ScrollAreaPrimitive } from '@base-ui/react/scroll-area'
 import { cn } from '@/lib/utils'
 
-function ScrollArea({ className, children, ...props }: ScrollAreaPrimitive.Root.Props) {
+function ScrollArea({
+  className,
+  children,
+  viewportRef,
+  ...props
+}: ScrollAreaPrimitive.Root.Props & {
+  /**
+   * The element that actually scrolls. Handed out because the root is not it: anything that has to
+   * drive the scroll rather than sit inside it — the code view's virtualiser, which measures the
+   * visible window and scrolls to a line — needs the viewport, and a caller cannot reach it through
+   * the root. Optional, so the panes that only scroll are written as before.
+   */
+  viewportRef?: React.Ref<HTMLDivElement>
+}) {
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
@@ -11,6 +24,7 @@ function ScrollArea({ className, children, ...props }: ScrollAreaPrimitive.Root.
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
+        ref={viewportRef}
         data-slot="scroll-area-viewport"
         // `max-h-[inherit]` is what makes a bound on the root bound the thing that actually scrolls.
         // The viewport is sized `h-full`, a percentage that resolves against an auto height when the

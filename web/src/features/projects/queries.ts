@@ -23,6 +23,10 @@ export function projectOverviewQuery(slug: string) {
   return queryOptions({
     queryFn: () => api.projectOverview(slug),
     queryKey: [...projectKey(slug), 'overview'],
+    // What the build computed does not change until the next build, which invalidates this with the
+    // rest of the project. Everything under the project's key is fresh on those terms; the project's
+    // own record above is not, because its repository list and index status change without a build.
+    staleTime: Infinity,
   })
 }
 

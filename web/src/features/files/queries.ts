@@ -62,18 +62,27 @@ export function declarationsQuery(project: string, path: string) {
   })
 }
 
-/** One level of the tree. Keyed by the level, so walking back up is already in the cache. */
+/**
+ * One level of the tree. Keyed by the level, so walking back up is already in the cache — and fresh
+ * for as long as the page is open, for the reason the content above is: the tree is the index's own
+ * listing, and only a build replaces it.
+ */
 export function treeQuery(project: string, path: string) {
   return queryOptions({
     queryFn: () => api.tree(project, path),
     queryKey: [...projectKey(project), 'tree', path],
+    staleTime: Infinity,
   })
 }
 
-/** The listing behind the browse view, keyed under the project like everything else read from it. */
+/**
+ * The listing behind the browse view, keyed under the project like everything else read from it, and
+ * fixed under a given index like everything else read from it.
+ */
 export function browseQuery(project: string, parameters: BrowseParameters) {
   return queryOptions({
     queryFn: () => api.browse(project, parameters.glob, parameters.page, parameters.repository),
     queryKey: [...projectKey(project), 'browse', parameters],
+    staleTime: Infinity,
   })
 }

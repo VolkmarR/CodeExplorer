@@ -133,6 +133,20 @@ below replaced that, and the reasoning for each is recorded here rather than in 
   hand-written patterns and candidates for upstream contribution. Its `patternTokenizer` helper is
   not in the package's exports map, so `highlight/patterns.ts` carries a thirty-line copy of that
   rule and both definitions share it.
+- **@tanstack/react-virtual 3.14** for the file view, added on 2026-09-20 with #151. The index takes
+  files up to 4 MiB, and drawing one as a row per line is a hundred thousand rows of three cells that
+  the browser lays out before it paints anything. Only the rows on screen are rendered now, which is
+  also what turned a line deep-link from a ref on the row — it has to be mounted to scroll itself
+  into view, and it no longer is — into `scrollToIndex`, an instruction the virtualiser can carry out
+  for a row that does not exist yet. Same family as the router and the query client, one dependency
+  with no runtime of its own, and headless: the markup, the measurement and the scrolling stay here.
+  It is the one library React Compiler refuses to compile a component around — it returns functions
+  it replaces as it measures, and a memoized copy would report a scroll position that has passed — so
+  `CodeView` is not compiled and says why at the call. Colouring follows the same rule as the rows and
+  is done per block of lines under it (`highlight/lines.ts`), because tokenizing 4 MiB up front costs
+  a third of a second before anything is drawn. `@tanstack/highlight` is also no longer imported as
+  `allLanguages`: the grammars are imported one by one, so the chunk holds the ones the extension map
+  can actually name and not the nine it cannot.
 - **oxlint-plugin-react-doctor 0.9** on top of oxlint's own plugins, run through Vite+'s `jsPlugins`.
   Its 906 rules ship with no preset, so `web/lint.rules.ts` derives the enabled set from the
   plugin's own registry rather than listing them, at the severity each rule declares, minus rules
