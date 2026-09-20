@@ -902,12 +902,13 @@ public sealed class IndexReader : IDisposable
     }
 
     /// <summary>
-    ///     The root of a project: its repositories, which are what qualified paths begin with. The file
-    ///     and line counts are the ones the build recorded on <c>repositories</c>, not a second count
+    ///     The root of a project: its repositories, which are what qualified paths begin with.
+    ///     All three counts are the ones the build recorded on <c>repositories</c>, not a second count
     ///     over <c>files</c>: two definitions of "how many files are in this repository" would disagree
-    ///     the moment a build skips something, and the tree would then contradict the project page. Only
-    ///     the byte total has to be summed. A repository indexed from an empty tree still belongs here,
-    ///     hence the left join and the coalesce — it is a repository with no files, not an absent one.
+    ///     the moment a build skips something, and the tree would then contradict the project page.
+    ///     The byte total was the exception and was summed here, which made the root of a tree listing
+    ///     — the call an agent opens a project with — the one read that scanned <c>files</c> whole for
+    ///     a number the build already had (#149). It is a column now, so this reads one small table.
     /// </summary>
     private async Task<IReadOnlyList<TreeItem>> RepositoryLevelAsync(CancellationToken cancellationToken)
     {
@@ -915,9 +916,8 @@ public sealed class IndexReader : IDisposable
                                              SELECT r.slug,
                                                     CAST(r.file_count AS BIGINT) AS files,
                                                     CAST(r.line_count AS BIGINT) AS lines,
-                                                    CAST(coalesce(sum(f.size_bytes), 0) AS BIGINT) AS bytes
-                                             FROM repositories r LEFT JOIN files f USING (repo_id)
-                                             GROUP BY r.slug, r.file_count, r.line_count
+                                                    CAST(r.byte_count AS BIGINT) AS bytes
+                                             FROM repositories r
                                              ORDER BY r.slug
                                              """, []);
         using var reader = await command.ReaderAsync(cancellationToken);

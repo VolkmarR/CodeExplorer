@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using DuckDB.NET.Data;
 using Microsoft.AspNetCore.DataProtection;
@@ -47,6 +48,11 @@ public sealed partial class ControlDatabase : IDisposable
     // the store holding the older of the two states. Each takes its own consistent snapshot inside the
     // engine, so the wait is on the upload and not on the work.
     private readonly SemaphoreSlim _backupGate = new(1, 1);
+
+    // The projects <see cref="FindAsync" /> has resolved. Bounded by what exists, because only a
+    // project that was found goes in, and emptied of a slug by each of the two writers that can end
+    // its life. Concurrent because every request reads it and any request may be the one that fills it.
+    private readonly ConcurrentDictionary<string, Project> _bySlug = new(StringComparer.Ordinal);
 
     private readonly string _connectionString;
 
@@ -167,6 +173,11 @@ public sealed partial class ControlDatabase : IDisposable
         command.Parameters.Add(new DuckDBParameter("single", singleRepository));
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1) return CreateProjectOutcome.SlugTaken;
 
+        // Nothing positive can be cached for a slug that was free a statement ago, so this is the
+        // belt to the delete below: the rule is that every writer forgets, not that the one that
+        // matters does.
+        _bySlug.TryRemove(slug, out _);
+
         await BackupAsync();
         return CreateProjectOutcome.Created;
     }
@@ -187,16 +198,50 @@ public sealed partial class ControlDatabase : IDisposable
         return projects;
     }
 
+    /// <summary>
+    ///     The project a slug names, or null. Every request under a project route and every MCP call
+    ///     asks this once, and it opened a control-database connection to do it (#149) — so a found
+    ///     project is remembered.
+    ///     What makes that safe is that a project record cannot change: <c>name</c> and
+    ///     <c>single_repository</c> are written by <see cref="CreateAsync" /> and never updated,
+    ///     deliberately so (ADR-0006). A slug therefore has exactly two states, and the writer that
+    ///     ends one forgets it here.
+    ///     Only a project that exists is remembered. A miss is the unknown-slug path, where a stranger
+    ///     picks the key, and a cache a stranger fills is a cache with no bound — the cost of leaving
+    ///     it out is one query on a request that is about to be answered with 404 anyway.
+    /// </summary>
     public async Task<Project?> FindAsync(string slug, CancellationToken cancellationToken)
     {
+        if (_bySlug.TryGetValue(slug, out var known)) return known;
+
         using var connection = await OpenAsync(cancellationToken);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT name, single_repository FROM projects WHERE slug = $slug";
         command.Parameters.Add(new DuckDBParameter("slug", slug));
         using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken)
-            ? new Project(slug, reader.Text("name"), reader.Flag("single_repository"))
-            : null;
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+
+        var project = new Project(slug, reader.Text("name"), reader.Flag("single_repository"));
+        _bySlug[slug] = project;
+        return project;
+    }
+
+    /// <summary>
+    ///     How many repositories each project has, for the operator's list. One query rather than one
+    ///     per project: the list is a screen long, but it was a connection and a query per row on a
+    ///     page an operator refreshes (#149). A project with none is absent from the result, which is
+    ///     the caller's zero.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, int>> CountRepositoriesAsync(CancellationToken cancellationToken)
+    {
+        using var connection = await OpenAsync(cancellationToken);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT project_slug, count(*) AS repositories FROM repositories GROUP BY project_slug";
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(cancellationToken))
+            counts[reader.Text("project_slug")] = (int)reader.Int64("repositories");
+        return counts;
     }
 
     /// <summary>
@@ -282,6 +327,9 @@ public sealed partial class ControlDatabase : IDisposable
         command.CommandText = "DELETE FROM projects WHERE slug = $slug";
         int deleted = await command.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        // Forgotten whether or not a row went: the next request then asks the database, which is the
+        // only thing that knows.
+        _bySlug.TryRemove(slug, out _);
         if (deleted != 1) return false;
 
         await BackupAsync();

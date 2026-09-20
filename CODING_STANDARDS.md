@@ -89,9 +89,12 @@ Two kinds of failure, two mechanisms. Never mix them.
 ## Storage
 
 - Every connection runs `USE <project slug>` before querying, every time it is checked out. Never
-  cache a connection still bound to a project: `DETACH` succeeds regardless of who is using the
+  rely on a binding a connection already has: `DETACH` succeeds regardless of who is using the
   database, and the next statement on that connection fails with `Binder Error: Catalog does not
-  exist!`.
+  exist!`. Connections themselves are pooled per project (ADR-0003, revisited for #149) — what may
+  not be reused is the binding, not the socket — and whatever detaches a project's catalog empties
+  that project's pool, because a pooled connection bound to a catalog that is gone is that same
+  error handed to whoever borrows it next.
 - Qualify nothing against `fts_main_lines`. `match_bm25` resolves its internal tables unqualified,
   so it works only against the current database (duckdb/duckdb#13523).
 - No transaction writes to two projects. DuckDB forbids it and nothing here needs it.

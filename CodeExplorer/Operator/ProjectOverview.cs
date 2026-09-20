@@ -73,20 +73,23 @@ public sealed class ProjectOverview(ControlDatabase control, IndexReaders reader
     /// <summary>
     ///     One index read per project. An operator administers projects by hand, so the list is the
     ///     length of a screen and a single query joining across attached databases would buy nothing.
+    ///     The repository counts are the exception and are read in one query, because that one was a
+    ///     control-database connection per row of the page rather than a read of an attached index
+    ///     (#149) — and only the count is wanted here, never the rows.
     /// </summary>
     public async Task<IReadOnlyList<ProjectSummary>> ListAsync(CancellationToken cancellationToken)
     {
         var projects = await control.ListAsync(cancellationToken);
+        var repositories = await control.CountRepositoriesAsync(cancellationToken);
         var summaries = new List<ProjectSummary>(projects.Count);
         foreach (var project in projects)
         {
-            var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
             // Peeked, not opened: the list touches every project, and restoring every durable copy to
             // draw one page is exactly what lazy attach exists to avoid (#9). A project whose file the
             // last shutdown wiped reads as not indexed here until someone opens it.
             var (status, _) = await ReadIndexAsync(project.Slug, false, cancellationToken);
-            summaries.Add(new ProjectSummary(project.Slug, project.Name, project.SingleRepository, repositories.Count,
-                status));
+            summaries.Add(new ProjectSummary(project.Slug, project.Name, project.SingleRepository,
+                repositories.GetValueOrDefault(project.Slug), status));
         }
 
         return summaries;

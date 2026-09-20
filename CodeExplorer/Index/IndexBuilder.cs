@@ -1,4 +1,3 @@
-using System.Text;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer;
@@ -101,6 +100,7 @@ public sealed class IndexBuilder(
             var paths = new ProjectPaths(singleRepository, repository.Slug);
             int fileCount = 0;
             long lineCount = 0;
+            long byteCount = 0;
             // Sorted by path so a repository's files, and each file's lines, are contiguous: the zone
             // maps then prune by repo_id and file_id without an index. Materialised anyway by the sort,
             // so the count is free and the step can say how far through the tree it is.
@@ -126,6 +126,9 @@ public sealed class IndexBuilder(
                         .AppendNullValue()
                         .EndRow();
                 lineCount += text.Count;
+                // Every file the tree holds, skipped ones included: the root of a tree listing says
+                // how big a repository is, and a binary nobody indexed still takes up the disk.
+                byteCount += entry.Size;
 
                 int slash = entry.Path.LastIndexOf('/');
                 string name = entry.Path[(slash + 1)..];
@@ -166,7 +169,8 @@ public sealed class IndexBuilder(
             }
 
             repos.CreateRow().AppendValue(repoId).AppendValue(repository.Slug).AppendValue(repository.Url)
-                .AppendValue(clone.HeadSha).AppendValue(fileCount).AppendValue(lineCount).EndRow();
+                .AppendValue(clone.HeadSha).AppendValue(fileCount).AppendValue(lineCount)
+                .AppendValue(byteCount).EndRow();
         }
 
         return (fileId, lineId);
@@ -179,21 +183,35 @@ public sealed class IndexBuilder(
     private static List<string> SplitLines(string content)
     {
         var result = new List<string>();
-        var current = new StringBuilder();
-        foreach (char c in content)
-            if (c == '\n')
-            {
-                result.Add(current.ToString());
-                current.Clear();
-            }
-            else if (c != '\r')
-            {
-                // A CR is dropped wherever it stands: before an LF it is the CRLF ending, and a lone CR
-                // (classic Mac) is rare enough that treating it as no break is the lesser surprise.
-                current.Append(c);
-            }
+        int start = 0;
+        // Sliced on the newline rather than appended a character at a time through a builder: this is
+        // every byte of every file a build reads, and the builder was copying each one twice (#149).
+        while (true)
+        {
+            int newline = content.IndexOf('\n', start);
+            if (newline < 0) break;
+            result.Add(Line(content.AsSpan(start, newline - start)));
+            start = newline + 1;
+        }
 
-        if (current.Length > 0) result.Add(current.ToString());
+        // Whatever follows the last newline, where there is any. An empty tail is the ordinary case —
+        // a file ending in a newline — and is not a line.
+        if (start < content.Length && Line(content.AsSpan(start)) is { Length: > 0 } tail) result.Add(tail);
         return result;
+    }
+
+    /// <summary>
+    ///     One line's text with its carriage returns dropped. The one at the end is the CRLF ending and
+    ///     is the only one nearly any file has; a CR anywhere else is a lone CR (classic Mac), which is
+    ///     dropped where it stands rather than broken on, because treating it as no break is the lesser
+    ///     surprise. That is what this has always done, so a file indexed before this change and after
+    ///     it holds the same lines — which is the whole licence for rewriting the loop above.
+    /// </summary>
+    private static string Line(ReadOnlySpan<char> text)
+    {
+        if (text.Length > 0 && text[^1] == '\r') text = text[..^1];
+        // Replace answers with the same instance when it matches nothing, which is nearly every line
+        // once the ending above is off, so the ordinary case allocates the string and no more.
+        return new string(text).Replace("\r", "", StringComparison.Ordinal);
     }
 }

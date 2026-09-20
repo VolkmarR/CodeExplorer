@@ -707,6 +707,40 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
         CallAsync(client, "list_declarations",
             new Dictionary<string, object?> { ["path"] = path, ["offset"] = offset });
 
+    /// <summary>
+    ///     The root of a tree listing reads one small table (#149). It is what an agent opens a project
+    ///     with, and it was summing <c>size_bytes</c> over every file in the index to report a number
+    ///     the build already knew — the one read on this path that touched the largest table at all.
+    ///     Asserted on the statement the reader built, through the query-plan switch, because the
+    ///     answer is identical either way: the byte totals below would pass over the join as happily as
+    ///     over the column, which is exactly why the join survived this long.
+    /// </summary>
+    [Fact]
+    public async Task The_root_of_a_tree_listing_does_not_join_the_files_table()
+    {
+        var client = await StartAsync();
+        string plans = _host.ScratchFile("tree-plans");
+        string reply;
+        using (QueryPlan.Recording(plans))
+            reply = await ListTreeAsync(client, "", 1);
+
+        Assert.Contains("one/", reply, StringComparison.Ordinal);
+
+        string statement = Directory.EnumerateFiles(plans, "*IndexReader-RepositoryLevelAsync.sql.txt")
+            .Select(File.ReadAllText).First();
+        Assert.DoesNotContain("JOIN", statement, StringComparison.Ordinal);
+
+        // And the number it reports is the one the join used to compute, which is the half of this a
+        // plan assertion cannot see. The column sums every entry the tree held and the join summed
+        // every row of `files`, and those are the same files — a skipped binary still has a row,
+        // carrying its size — so the root must still agree with what `files` holds.
+        var root = await _host.ScalarsAsync(FileToolsFixture.Alpha,
+            "SELECT sum(byte_count)::VARCHAR FROM repositories");
+        var summed = await _host.ScalarsAsync(FileToolsFixture.Alpha,
+            "SELECT sum(size_bytes)::VARCHAR FROM files");
+        Assert.Equal(summed, root);
+    }
+
     private Task<McpClient> StartAsync() => _host.ConnectAsync(FileToolsFixture.Alpha);
 
     private static Task<string> ReadAsync(McpClient client, params string[] paths) =>
