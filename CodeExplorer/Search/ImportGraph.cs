@@ -76,24 +76,13 @@ public sealed class ImportGraph(IndexReaders readers)
     /// </summary>
     public const int MaxEdges = 500;
 
-    public async Task<Outcome> ImportsAsync(string slug, string path, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await ReadImportsAsync(slug, path, cancellationToken);
-        if (outcome is ImportsResult result) recording.Matched(Engine, 1, result.Imports.Count);
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> ImportsAsync(string slug, string path, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => ReadImportsAsync(slug, path, cancellationToken),
+            (ImportsResult result) => new Telemetry.Measured(1, result.Imports.Count));
 
-    public async Task<Outcome> DependentsAsync(string slug, string path, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await ReadDependentsAsync(slug, path, cancellationToken);
-        if (outcome is DependentsResult result)
-            recording.Matched(Engine, result.Dependents.Count, result.Dependents.Count);
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> DependentsAsync(string slug, string path, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => ReadDependentsAsync(slug, path, cancellationToken),
+            (DependentsResult result) => new Telemetry.Measured(result.Dependents.Count, result.Dependents.Count));
 
     private Task<Outcome> ReadImportsAsync(string slug, string path, CancellationToken cancellationToken) =>
         readers.OverFileAsync(slug, path, true, async (index, file, token) =>

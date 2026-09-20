@@ -337,11 +337,11 @@ public sealed class SearchEndpointTests
         using var host = await ProjectAsync(SearchEngine.Substring);
 
         // One commit per fixture repository. A page of one still says there are two.
-        var page = await GetAsync<CommitListResponse>(host, "/api/projects/alpha/commits?pageSize=1");
+        var page = await GetAsync<ChangeLogAnswer>(host, "/api/projects/alpha/commits?pageSize=1");
         Assert.Equal(2, page.Total);
         Assert.Single(page.Commits);
 
-        var scoped = await GetAsync<CommitListResponse>(host, "/api/projects/alpha/commits?repository=one");
+        var scoped = await GetAsync<ChangeLogAnswer>(host, "/api/projects/alpha/commits?repository=one");
         Assert.Equal(1, scoped.Total);
         var commit = Assert.Single(scoped.Commits);
         Assert.Equal("one", commit.RepositorySlug);
@@ -370,10 +370,10 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        var scoped = await GetAsync<CommitListResponse>(host, "/api/projects/alpha/commits?repository=one");
+        var scoped = await GetAsync<ChangeLogAnswer>(host, "/api/projects/alpha/commits?repository=one");
         var listed = Assert.Single(scoped.Commits);
 
-        var one = await GetAsync<CommitResponse>(host, $"/api/projects/alpha/commits/{listed.Sha}");
+        var one = await GetAsync<LoggedCommit>(host, $"/api/projects/alpha/commits/{listed.Sha}");
         Assert.Equal(listed, one);
 
         using var http = host.CreateClient();
@@ -484,7 +484,7 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        var log = await GetAsync<CommitListResponse>(host, "/api/projects/alpha/commits?repository=one");
+        var log = await GetAsync<ChangeLogAnswer>(host, "/api/projects/alpha/commits?repository=one");
         var commit = Assert.Single(log.Commits);
 
         var blame = await GetAsync<BlameResponse>(host,
@@ -555,7 +555,7 @@ public sealed class SearchEndpointTests
         Assert.Equal("Orders.Domain", edge.Name);
         Assert.Equal(3, edge.LineNumber);
 
-        var dependents = await GetAsync<FileDependentsResponse>(host, Route("dependents", "one/src/Orders.cs"));
+        var dependents = await GetAsync<DependentsResult>(host, Route("dependents", "one/src/Orders.cs"));
         var dependent = Assert.Single(dependents.Dependents);
         Assert.Equal("one/src/Report.cs", dependent.QualifiedPath);
         Assert.Equal(3, dependent.LineNumber);
@@ -592,7 +592,7 @@ public sealed class SearchEndpointTests
 
         // And the reverse direction's own kind of empty: a namespace two files declare resolves to
         // neither, so no edge could ever have pointed here.
-        var shared = await GetAsync<FileDependentsResponse>(host, Route("dependents", "one/src/Storage.cs"));
+        var shared = await GetAsync<DependentsResult>(host, Route("dependents", "one/src/Storage.cs"));
         Assert.Empty(shared.Dependents);
         Assert.Equal("Orders.Storage", shared.Module);
         Assert.Equal(1, shared.ShareTheModule);

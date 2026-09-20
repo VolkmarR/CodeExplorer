@@ -14,6 +14,9 @@ namespace CodeExplorer;
 [McpServerToolType]
 internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, ImportGraph graph)
 {
+    /// <summary>The project this call is bound to, read the way every tool class here reads it.</summary>
+    private Project Bound => BoundProject.Get(httpContextAccessor);
+
     /// <summary>
     ///     The sentence every reply here ends with. Said once because both tools make the same claim
     ///     and one of them wording it more confidently than the other would be the one an agent
@@ -69,8 +72,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
         string path,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
-        return ToolReply.Render<ImportsResult>(await graph.ImportsAsync(project.Slug, path, cancellationToken),
+        return ToolReply.Render<ImportsResult>(await graph.ImportsAsync(Bound.Slug, path, cancellationToken),
             Format, "Read the file's import lines directly for the rest.");
     }
 
@@ -90,8 +92,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
         string path,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
-        return ToolReply.Render<DependentsResult>(await graph.DependentsAsync(project.Slug, path, cancellationToken),
+        return ToolReply.Render<DependentsResult>(await graph.DependentsAsync(Bound.Slug, path, cancellationToken),
             Format, "Narrow by asking about a more specific file.");
     }
 

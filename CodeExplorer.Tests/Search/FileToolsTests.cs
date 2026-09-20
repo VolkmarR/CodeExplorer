@@ -153,6 +153,33 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
     }
 
     /// <summary>
+    ///     A malformed entry is that entry's answer and not the call's: the reply used to be the first
+    ///     refusal alone, so an agent that mistyped one of five ranges lost the four reads it had asked
+    ///     for and could not see which entry was the bad one.
+    /// </summary>
+    [Fact]
+    public async Task Read_file_answers_a_malformed_entry_per_entry()
+    {
+        await using var client = await StartAsync();
+
+        string mixed = await ReadAsync(client, "one/src/Orders.cs:1:3", "one/src/Orders.cs:1-1",
+            "two/lib/index.ts:4-2");
+        Assert.Contains("dash", mixed);
+        Assert.Contains("one/src/Orders.cs  -  6 lines", mixed);
+        Assert.Contains("ends before it starts", mixed);
+
+        // Nothing well-formed to read is still an answer per entry, and no query at all.
+        string none = await ReadAsync(client, "one/src/Orders.cs:1:3", "two/lib/index.ts:4-2");
+        Assert.Contains("dash", none);
+        Assert.Contains("ends before it starts", none);
+
+        // Having asked for nothing is the request's refusal and not an entry's, so it stays the query
+        // module's to word: no entries means no refusals to list, and an empty reply would say nothing.
+        string nothing = await ReadAsync(client);
+        Assert.Contains("No paths given", nothing);
+    }
+
+    /// <summary>
     ///     The mistake three agents in the Edilverso evaluation made: a path prefixed with the slug the
     ///     project is known by, in a project that names its files without one. It parses as a directory,
     ///     misses, and the miss then names the repository the agent thought it was addressing — which

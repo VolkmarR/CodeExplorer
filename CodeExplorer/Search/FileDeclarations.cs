@@ -96,15 +96,10 @@ public sealed class FileDeclarations(IndexReaders readers)
     ///     place such a read is recorded. <paramref name="offset" /> is how many declarations to skip
     ///     before the page, in file order; negative is read as none.
     /// </summary>
-    public async Task<Outcome> ForFileAsync(string slug, string path, int offset,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await ReadAsync(slug, path, Math.Max(0, offset), cancellationToken);
-        if (outcome is DeclarationsResult result) recording.Matched(Engine, 1, result.Declarations.Count);
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> ForFileAsync(string slug, string path, int offset,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => ReadAsync(slug, path, Math.Max(0, offset), cancellationToken),
+            (DeclarationsResult result) => new Telemetry.Measured(1, result.Declarations.Count));
 
     private Task<Outcome> ReadAsync(string slug, string path, int offset, CancellationToken cancellationToken) =>
         readers.OverFileAsync(slug, path, true, async (index, file, token) =>
