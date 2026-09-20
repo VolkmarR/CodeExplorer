@@ -125,15 +125,10 @@ public sealed class ReferenceSearch(IndexReaders readers)
     ///     search is recorded. It is the only public method for the same reason grep has one: a second
     ///     entry point has nothing else to call.
     /// </summary>
-    public async Task<Outcome> FindAsync(string slug, ReferenceRequest request,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await RunAsync(slug, request, cancellationToken);
-        if (outcome is ReferenceResult result) recording.Matched(Engine, result.TotalFiles, result.TotalLines);
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> FindAsync(string slug, ReferenceRequest request,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => RunAsync(slug, request, cancellationToken),
+            (ReferenceResult result) => new Telemetry.Measured(result.TotalFiles, result.TotalLines));
 
     private async Task<Outcome> RunAsync(string slug, ReferenceRequest request,
         CancellationToken cancellationToken)

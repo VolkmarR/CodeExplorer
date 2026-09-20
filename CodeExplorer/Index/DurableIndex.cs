@@ -218,12 +218,4 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     from the list above, never from a request.
     /// </summary>
     private static string Escape(string path) => path.Replace("'", "''");
-
-    private static async Task ExecuteAsync(DuckDBConnection connection, string sql,
-        CancellationToken cancellationToken)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
 }

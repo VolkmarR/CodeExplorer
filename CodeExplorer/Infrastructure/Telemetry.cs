@@ -215,11 +215,50 @@ public static class Telemetry
     }
 
     /// <summary>
-    ///     The chokepoint for one search. Called from <c>GrepSearch</c> and nowhere else, so a new
-    ///     entry point reports the same attributes by having no way to report different ones: the
-    ///     instruments above are private, so nothing outside this file can record a search at all.
+    ///     What one search answer reached, for the two counts a matched search records. Zero files is
+    ///     an answer and is recorded as one; a query with nothing to count — a page of the change log
+    ///     counts commits and no lines — passes zero for what it does not have.
     /// </summary>
-    public static SearchRecording Search(string slug) => new(slug);
+    public readonly record struct Measured(int Files, long Lines);
+
+    /// <summary>
+    ///     The chokepoint for one search: the envelope every search-shaped query used to write out for
+    ///     itself. Open the recording, run the work, and record what came back as matched or as a
+    ///     problem. It was twenty copies of those four lines across the history, file, import, grep,
+    ///     reference, definition, match-list and declaration queries, and a copy is exactly how a new
+    ///     query comes to record a different engine or to forget the problem call
+    ///     (CODING_STANDARDS, Telemetry). <see cref="SearchRecording" /> is private to this class, so
+    ///     there is no other way to record a search at all.
+    ///     <typeparamref name="TAnswer" /> is the one result type the query answers with; anything else
+    ///     is a <see cref="Problem" /> and recorded as one.
+    /// </summary>
+    /// <param name="slug">The project the query is for.</param>
+    /// <param name="engine">What answered, for the engine tag.</param>
+    /// <param name="work">The query itself.</param>
+    /// <param name="measure">What the answer reached, for the file and line counts.</param>
+    public static Task<Outcome> Search<TAnswer>(string slug, string engine, Func<Task<Outcome>> work,
+        Func<TAnswer, Measured> measure) where TAnswer : Outcome =>
+        Search(slug, _ => engine, work, measure);
+
+    /// <summary>
+    ///     The same where the answer is what decides which engine answered: grep picks full-text search
+    ///     or a substring scan at query time, and the tag has to say which of the two it got.
+    /// </summary>
+    public static async Task<Outcome> Search<TAnswer>(string slug, Func<TAnswer, string> engine,
+        Func<Task<Outcome>> work, Func<TAnswer, Measured> measure) where TAnswer : Outcome
+    {
+        using var recording = new SearchRecording(slug);
+        var outcome = await work();
+        if (outcome is not TAnswer answer)
+        {
+            recording.Problem();
+            return outcome;
+        }
+
+        var (files, lines) = measure(answer);
+        recording.Matched(engine(answer), files, lines);
+        return outcome;
+    }
 
     /// <summary>
     ///     The chokepoint for one lease on a project index, called from <c>ProjectIndexes</c> and
@@ -295,7 +334,26 @@ public static class Telemetry
             return activity;
         }
 
-        public void Finish(string outcome)
+        /// <summary>
+        ///     The end of every recording, which was the same six lines in each of them: the duration,
+        ///     tagged with the project, whatever dimension the recording owns and the outcome, and then
+        ///     the span. Written once so that a seventh recording cannot record its duration under a
+        ///     different tag set than the six before it.
+        /// </summary>
+        /// <param name="duration">The histogram this operation's seconds belong in.</param>
+        /// <param name="outcome">How it ended.</param>
+        /// <param name="own">The one dimension this recording adds of its own, before the outcome.</param>
+        /// <param name="value">What that dimension was.</param>
+        public void Complete(Histogram<double> duration, string outcome, string? own = null, object? value = null)
+        {
+            var tags = Tags;
+            if (own is not null) tags.Add(own, value);
+            tags.Add(OutcomeTag, outcome);
+            duration.Record(Seconds, tags);
+            Finish(outcome);
+        }
+
+        private void Finish(string outcome)
         {
             if (_activity is not { } activity) return;
             if (outcome == FailedOutcome) activity.SetStatus(ActivityStatusCode.Error);
@@ -326,14 +384,7 @@ public static class Telemetry
             _operation.Tag(ToolTag, _tool);
         }
 
-        public void Dispose()
-        {
-            var tags = _operation.Tags;
-            tags.Add(ToolTag, _tool);
-            tags.Add(OutcomeTag, _outcome);
-            ToolSeconds.Record(_operation.Seconds, tags);
-            _operation.Finish(_outcome);
-        }
+        public void Dispose() => _operation.Complete(ToolSeconds, _outcome, ToolTag, _tool);
 
         public void Answered() => _outcome = AnsweredOutcome;
     }
@@ -350,13 +401,7 @@ public static class Telemetry
 
         internal LeaseRecording(string slug) => _operation = new Operation(LeaseSpan, slug);
 
-        public void Dispose()
-        {
-            var tags = _operation.Tags;
-            tags.Add(OutcomeTag, _outcome);
-            LeaseSeconds.Record(_operation.Seconds, tags);
-            _operation.Finish(_outcome);
-        }
+        public void Dispose() => _operation.Complete(LeaseSeconds, _outcome);
 
         /// <summary>A lease was granted, and the caller now holds the project open against a swap.</summary>
         public void Opened() => _outcome = OpenedOutcome;
@@ -365,8 +410,13 @@ public static class Telemetry
         public void Absent() => _outcome = AbsentOutcome;
     }
 
-    /// <summary>One search. <see cref="Matched" /> and <see cref="Problem" /> are the only two answers a search has.</summary>
-    public sealed class SearchRecording : IDisposable
+    /// <summary>
+    ///     One search. <see cref="Matched" /> and <see cref="Problem" /> are the only two answers a
+    ///     search has. Private, and opened only by <see cref="Search{TAnswer}(string,string,Func{Task{Outcome}},Func{TAnswer,Measured})" />:
+    ///     the decision of which of the two an outcome is belongs to that one helper, so no query can
+    ///     make it differently.
+    /// </summary>
+    private sealed class SearchRecording : IDisposable
     {
         private readonly Operation _operation;
         private string _engine = NoEngine;
@@ -376,14 +426,7 @@ public static class Telemetry
 
         internal SearchRecording(string slug) => _operation = new Operation(SearchSpan, slug);
 
-        public void Dispose()
-        {
-            var tags = _operation.Tags;
-            tags.Add(EngineTag, _engine);
-            tags.Add(OutcomeTag, _outcome);
-            SearchSeconds.Record(_operation.Seconds, tags);
-            _operation.Finish(_outcome);
-        }
+        public void Dispose() => _operation.Complete(SearchSeconds, _outcome, EngineTag, _engine);
 
         /// <summary>A search that reached an engine. Zero files is an answer and is recorded as one.</summary>
         public void Matched(string engine, int files, long lines)
@@ -418,13 +461,7 @@ public static class Telemetry
 
         internal IndexBuildRecording(string slug) => _operation = new Operation(IndexSpan, slug);
 
-        public void Dispose()
-        {
-            var tags = _operation.Tags;
-            tags.Add(OutcomeTag, _outcome);
-            IndexSeconds.Record(_operation.Seconds, tags);
-            _operation.Finish(_outcome);
-        }
+        public void Dispose() => _operation.Complete(IndexSeconds, _outcome);
 
         public void Built(long files, long lines)
         {
@@ -448,13 +485,7 @@ public static class Telemetry
 
         internal HistoryBuildRecording(string slug) => _operation = new Operation(HistorySpan, slug);
 
-        public void Dispose()
-        {
-            var tags = _operation.Tags;
-            tags.Add(OutcomeTag, _outcome);
-            HistorySeconds.Record(_operation.Seconds, tags);
-            _operation.Finish(_outcome);
-        }
+        public void Dispose() => _operation.Complete(HistorySeconds, _outcome);
 
         public void Built(long commits, long files)
         {
@@ -486,14 +517,7 @@ public static class Telemetry
             _operation.Tag(DurableTag, operation);
         }
 
-        public void Dispose()
-        {
-            var tags = _operation.Tags;
-            tags.Add(DurableTag, _which);
-            tags.Add(OutcomeTag, _outcome);
-            DurableSeconds.Record(_operation.Seconds, tags);
-            _operation.Finish(_outcome);
-        }
+        public void Dispose() => _operation.Complete(DurableSeconds, _outcome, DurableTag, _which);
 
         /// <summary>The copy was written, or read back and loaded.</summary>
         public void Moved() => _outcome = MovedOutcome;

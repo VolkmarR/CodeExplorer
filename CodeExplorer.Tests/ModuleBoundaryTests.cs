@@ -157,6 +157,30 @@ public sealed partial class ModuleBoundaryTests
         Assert.Equal(isAReference, TypePosition("Refused").IsMatch(line));
 
     /// <summary>
+    ///     The test project mirrors the host's folders (CODING_STANDARDS, Layout), so a module's tests
+    ///     are where the module is and a reader looking for them has one place to look. A folder here
+    ///     naming no module is a stray; the files at this project's root are the harness the whole
+    ///     suite shares and are in no module, as <c>Program.cs</c> is.
+    /// </summary>
+    [Fact]
+    public void The_test_project_mirrors_the_module_folders() =>
+        Assert.Equal(Modules, TestFolders());
+
+    /// <summary>
+    ///     Every folder of this project holding tests, as a path relative to its root: relative and not
+    ///     just the name, so a folder nested inside a module's reads as the stray it is instead of
+    ///     passing for its parent. <c>bin</c> and <c>obj</c> are left out wherever they appear, for the
+    ///     reason <see cref="SourceTree.ServerFiles" /> leaves them out of the server's own.
+    /// </summary>
+    private static IEnumerable<string> TestFolders() =>
+        Directory.EnumerateDirectories(SourceTree.Tests(), "*", SearchOption.AllDirectories)
+            .Where(folder => Directory.EnumerateFiles(folder, "*.cs").Any())
+            .Select(folder => Path.GetRelativePath(SourceTree.Tests(), folder))
+            .Where(relative => !relative.Split(Path.DirectorySeparatorChar)
+                .Any(segment => segment is "bin" or "obj"))
+            .OrderBy(relative => relative, StringComparer.Ordinal);
+
+    /// <summary>
     ///     A package boundary rather than a folder one: LibGit2Sharp is how <c>Git/</c> reads a local
     ///     copy, and the refresh and the build are handed what it read as <c>LocalCopy</c> and
     ///     <c>CommittedFile</c>. Naming the namespace anywhere else is the seam turning hypothetical

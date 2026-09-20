@@ -14,6 +14,9 @@ internal sealed class SearchTools(
     DefinitionSearch definitions,
     MatchList matches)
 {
+    /// <summary>The project this call is bound to, read the way every tool class here reads it.</summary>
+    private Project Bound => BoundProject.Get(httpContextAccessor);
+
     [McpServerTool(Name = "grep", ReadOnly = true, Idempotent = true, Title = "Search the project's code")]
     [Description("""
                  Searches every indexed line of every repository in this project and returns the matching lines grouped by file, with qualified paths (`repo/path/in/repo`) and line numbers. This is the fastest way to locate code; reach for it before reading files.
@@ -69,11 +72,10 @@ internal sealed class SearchTools(
         bool withHistory = false,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
         var request = new GrepRequest(query, regex, caseSensitive, path, exclude, ext, multiline, wholeWord, context,
             filesOnly, maxLinesPerFile, page, pageSize, withHistory);
 
-        return ToolReply.Render<GrepResult>(await grep.SearchAsync(project.Slug, request, cancellationToken),
+        return ToolReply.Render<GrepResult>(await grep.SearchAsync(Bound.Slug, request, cancellationToken),
             result => result.TotalFiles == 0 ? NoMatches(request, result) : Format(request, result),
             "Narrow with path/ext/exclude, lower pageSize or maxLinesPerFile, or use filesOnly=true to see the shape of the answer first.");
     }
@@ -241,10 +243,9 @@ internal sealed class SearchTools(
         int maxFiles = ReferenceSearch.DefaultMaxFiles,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
         var request = new ReferenceRequest(symbol, new FileFilter(repo, path, exclude, ext), maxFiles);
 
-        return ToolReply.Render<ReferenceResult>(await references.FindAsync(project.Slug, request, cancellationToken),
+        return ToolReply.Render<ReferenceResult>(await references.FindAsync(Bound.Slug, request, cancellationToken),
             result => result.TotalFiles == 0
                 ? NoReferences(symbol.Trim(), result)
                 : FormatReferences(symbol.Trim(), result, writesOnly, includeNoise),
@@ -484,10 +485,9 @@ internal sealed class SearchTools(
         string? ext = null,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
         var request = new DefinitionRequest(symbol, new FileFilter(repo, path, exclude, ext));
 
-        return ToolReply.Render<DefinitionResult>(await definitions.FindAsync(project.Slug, request, cancellationToken),
+        return ToolReply.Render<DefinitionResult>(await definitions.FindAsync(Bound.Slug, request, cancellationToken),
             result => result.Sites.Count == 0
                 ? NoDefinition(symbol.Trim(), result)
                 : FormatDefinitions(symbol.Trim(), result),
@@ -661,11 +661,10 @@ internal sealed class SearchTools(
         int limit = MatchList.DefaultLimit,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
         var request = new MatchListRequest(query, new FileFilter(repo, path, exclude, ext), group, caseSensitive,
             wholeWord, limit);
 
-        return ToolReply.Render<MatchListResult>(await matches.ListAsync(project.Slug, request, cancellationToken),
+        return ToolReply.Render<MatchListResult>(await matches.ListAsync(Bound.Slug, request, cancellationToken),
             result => result.TotalDistinct == 0 ? NoValues(request, result) : FormatValues(result),
             "Lower limit, or narrow with repo/path/ext/exclude.");
     }

@@ -429,10 +429,8 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     ///     project has history at all is read first and carried, because "no commit on this page" and
     ///     "no history was imported" are answered with opposite sentences.
     /// </summary>
-    public async Task<Outcome> LogAsync(string slug, LogRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
+    public Task<Outcome> LogAsync(string slug, LogRequest request, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             var (path, unresolved) = await ScopeAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
@@ -459,20 +457,14 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
                 ? await CommitsAsync(index, scope, asked, mentions, path, limit, (page - 1) * limit, token)
                 : [];
             return new LogAnswer(hasHistory, index.Repository, page, limit, commits, author, mentions, path);
-        }, cancellationToken);
-        if (outcome is LogAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
-        else recording.Problem();
-        return outcome;
-    }
+        }, cancellationToken), (LogAnswer answer) => new Telemetry.Measured(answer.Commits.Count, 0));
 
     /// <summary>
     ///     The authors of a project or of one repository, most commits first, with how many there are
     ///     in scope so a cut listing says what it left out.
     /// </summary>
-    public async Task<Outcome> AuthorsAsync(string slug, AuthorsRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
+    public Task<Outcome> AuthorsAsync(string slug, AuthorsRequest request, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             var (path, unresolved) = await ScopeAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
@@ -483,21 +475,15 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
             var authors = hasHistory ? await AuthorsAsync(index, scope, null, path, limit, token) : [];
             long total = hasHistory ? await AuthorCountAsync(index, scope, path, token) : 0;
             return new AuthorsAnswer(hasHistory, index.Repository, total, limit, authors, path);
-        }, cancellationToken);
-        if (outcome is AuthorsAnswer answer) recording.Matched(Engine, answer.Authors.Count, 0);
-        else recording.Problem();
-        return outcome;
-    }
+        }, cancellationToken), (AuthorsAnswer answer) => new Telemetry.Measured(answer.Authors.Count, 0));
 
     /// <summary>
     ///     A page of the change log: the same commits with each one's body and the sums of what it did,
     ///     and the total in scope so a page can say how many there are.
     /// </summary>
-    public async Task<Outcome> ChangeLogAsync(string slug, ChangeLogRequest request,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
+    public Task<Outcome> ChangeLogAsync(string slug, ChangeLogRequest request,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             int pageSize = Math.Clamp(request.PageSize, 1, MaxCommits);
             int page = Math.Max(1, request.Page);
@@ -505,11 +491,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
             long total = await CommitCountAsync(index, scope, token);
             var commits = await LoggedAsync(index, scope, pageSize, (page - 1) * pageSize, token);
             return new ChangeLogAnswer(total, page, pageSize, commits);
-        }, cancellationToken);
-        if (outcome is ChangeLogAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
-        else recording.Problem();
-        return outcome;
-    }
+        }, cancellationToken), (ChangeLogAnswer answer) => new Telemetry.Measured(answer.Commits.Count, 0));
 
     /// <summary>
     ///     The commits that touched one path, newest first. The path is resolved before the history is
@@ -518,11 +500,9 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     ///     this is the log-shaped read of one path, and refusing the very path git_log had just answered
     ///     for told an agent it had made a typo it had not made.
     /// </summary>
-    public async Task<Outcome> FileHistoryAsync(string slug, FileHistoryRequest request,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, null, async (index, token) =>
+    public Task<Outcome> FileHistoryAsync(string slug, FileHistoryRequest request,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null, async (index, token) =>
         {
             var (file, recorded, unresolved) = await OnePathAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
@@ -540,11 +520,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
                     Math.Clamp(request.Limit, 1, MaxCommits), token)
                 : [];
             return new FileHistoryAnswer(scope, hasHistory, commits);
-        }, cancellationToken);
-        if (outcome is FileHistoryAnswer answer) recording.Matched(Engine, answer.Commits.Count, 0);
-        else recording.Problem();
-        return outcome;
-    }
+        }, cancellationToken), (FileHistoryAnswer answer) => new Telemetry.Measured(answer.Commits.Count, 0));
 
     /// <summary>
     ///     Where one path resolved for a tool that takes a single file. Exactly one of the three is set:
@@ -620,10 +596,8 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     ///     A path only history records is refused, and says why (#136). That is not a gap: attribution
     ///     is keyed to the newest recorded commit, so there is nothing here to attribute.
     /// </summary>
-    public async Task<Outcome> BlameAsync(string slug, BlameRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, null,
+    public Task<Outcome> BlameAsync(string slug, BlameRequest request, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null,
             async (index, token) =>
             {
                 var (file, recorded, unresolved) = await OnePathAsync(index, request.Path, token);
@@ -640,11 +614,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
                         token)
                     : [];
                 return new BlameAnswer(file, hasHistory, first, last, runs);
-            }, cancellationToken);
-        if (outcome is BlameAnswer answer) recording.Matched(Engine, answer.Runs.Count, 0);
-        else recording.Problem();
-        return outcome;
-    }
+            }, cancellationToken), (BlameAnswer answer) => new Telemetry.Measured(answer.Runs.Count, 0));
 
     /// <summary>
     ///     The files a window's commits touched, most commits first, within a scope the caller names
@@ -655,10 +625,8 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     ///     than turned into an empty ranking, because an empty ranking is a claim — that nothing changed
     ///     — and three of the four steps above would be making it falsely.
     /// </summary>
-    public async Task<Outcome> ChurnAsync(string slug, ChurnRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverDirectoryAsync(slug, request.Directory,
+    public Task<Outcome> ChurnAsync(string slug, ChurnRequest request, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverDirectoryAsync(slug, request.Directory,
             async (index, directory, token) =>
             {
                 bool hasHistory = await HasHistoryAsync(index, token);
@@ -700,11 +668,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
                     : await LineageAsync(index, repositorySlug, directoryInRepository,
                         await SpellerAsync(index, repositorySlug, token), token);
                 return new ChurnAnswer(spelled, hasHistory, window, ranked, coverage, depth, hidden, lineage);
-            }, cancellationToken);
-        if (outcome is ChurnAnswer answer) recording.Matched(Engine, answer.Files.Count, 0);
-        else recording.Problem();
-        return outcome;
-    }
+            }, cancellationToken), (ChurnAnswer answer) => new Telemetry.Measured(answer.Files.Count, 0));
 
     /// <summary>
     ///     The files a window's commits changed alongside one file, most shared commits first. Scoped to
@@ -714,11 +678,9 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     ///     gives it (#136). The pairing could read it, and deliberately does not: an agent meeting one
     ///     story from both tools is worth more than a fourth state settled by symmetry.
     /// </summary>
-    public async Task<Outcome> CoChangedAsync(string slug, CoChangeRequest request,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, null,
+    public Task<Outcome> CoChangedAsync(string slug, CoChangeRequest request,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null,
             async (index, token) =>
             {
                 var (found, historical, unresolved) = await OnePathAsync(index, request.Path, token);
@@ -749,11 +711,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
                     ? await RecordedPathAsync(index, file.RepositorySlug, anchored, token)
                     : null;
                 return new CoChangeAnswer(file, hasHistory, window, coupling, _maxCommitPaths, recorded, lineage);
-            }, cancellationToken);
-        if (outcome is CoChangeAnswer answer) recording.Matched(Engine, answer.Coupling.Files.Count, 0);
-        else recording.Problem();
-        return outcome;
-    }
+            }, cancellationToken), (CoChangeAnswer answer) => new Telemetry.Measured(answer.Coupling.Files.Count, 0));
 
     /// <summary>
     ///     One commit, by SHA. Its own read rather than a page of the log filtered down, because the
@@ -763,10 +721,8 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     ///     the message and the sums as soon as it has them, and a commit touching hundreds of paths
     ///     should not hold that back.
     /// </summary>
-    public async Task<Outcome> CommitAsync(string slug, CommitRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, null,
+    public Task<Outcome> CommitAsync(string slug, CommitRequest request, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null,
             async (index, token) => await OverShaAsync(index, slug, request.Sha, async (sha, inner) =>
             {
                 // Read back rather than carried over: the resolution and this read are two statements,
@@ -775,11 +731,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
                 return commit is null
                     ? new Problem(NoSuchCommit(request.Sha, slug), ProblemKind.Missing)
                     : new CommitAnswer(commit);
-            }, token), cancellationToken);
-        if (outcome is CommitAnswer) recording.Matched(Engine, 1, 0);
-        else recording.Problem();
-        return outcome;
-    }
+            }, token), cancellationToken), (CommitAnswer _) => new Telemetry.Measured(1, 0));
 
     /// <summary>
     ///     The paths one commit touched. A SHA the index does not hold is a miss and not an empty
@@ -788,11 +740,9 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     ///     apart — a commit that really did touch nothing, an empty one or a merge that changed nothing
     ///     against its first parent, is a miss that says which of the two it is.
     /// </summary>
-    public async Task<Outcome> CommitFilesAsync(string slug, CommitFilesRequest request,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, null,
+    public Task<Outcome> CommitFilesAsync(string slug, CommitFilesRequest request,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null,
             async (index, token) => await OverShaAsync(index, slug, request.Sha, async (sha, inner) =>
             {
                 var files = await PathsOfAsync(index, sha, inner);
@@ -805,11 +755,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
                         + "that changed nothing against its first parent; history records what a commit did to "
                         + "its first parent, and nothing came in by that route.", ProblemKind.Missing)
                     : new CommitFilesAnswer(sha, files);
-            }, token), cancellationToken);
-        if (outcome is CommitFilesAnswer answer) recording.Matched(Engine, answer.Files.Count, 0);
-        else recording.Problem();
-        return outcome;
-    }
+            }, token), cancellationToken), (CommitFilesAnswer answer) => new Telemetry.Measured(answer.Files.Count, 0));
 
     /// <summary>
     ///     How many commits a prefix may fit before the refusal stops naming them all. Four, because
@@ -1169,6 +1115,27 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         await CombinedCommitCountAsync(index, repositorySlug, [path], cancellationToken);
 
     /// <summary>
+    ///     One bound parameter per path, and the <c>$name</c> each of them got, in the order the paths
+    ///     came in. Three queries here take a rename chain — a handful of paths at most, since the walk
+    ///     is capped — and each had written the loop out for itself; a path spelled into the SQL instead
+    ///     of bound is how user text reaches the parser, so the loop is written once.
+    /// </summary>
+    /// <param name="parameters">The list being built, which the names are added to.</param>
+    /// <param name="paths">The paths to bind.</param>
+    private static List<string> BindPaths(List<DuckDBParameter> parameters, IReadOnlyList<string> paths)
+    {
+        var names = new List<string>(paths.Count);
+        for (int i = 0; i < paths.Count; i++)
+        {
+            string name = "p" + i.ToString(CultureInfo.InvariantCulture);
+            parameters.Add(new DuckDBParameter(name, paths[i]));
+            names.Add("$" + name);
+        }
+
+        return names;
+    }
+
+    /// <summary>
     ///     Distinct commits recorded at or under any of these repository-relative paths. Distinct
     ///     because one commit is very often the rename itself, which touches both sides of the chain and
     ///     would otherwise be counted once per path and inflate the very number the note exists to get
@@ -1178,12 +1145,8 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         IReadOnlyList<string> paths, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter> { new("r", repositorySlug) };
-        var clauses = new List<string>(paths.Count);
-        for (int i = 0; i < paths.Count; i++)
-        {
-            parameters.Add(new DuckDBParameter("p" + i.ToString(CultureInfo.InvariantCulture), paths[i]));
-            clauses.Add($"cf.path = $p{i} OR starts_with(cf.path, $p{i} || '/')");
-        }
+        var clauses = BindPaths(parameters, paths)
+            .Select(name => $"cf.path = {name} OR starts_with(cf.path, {name} || '/')");
 
         using var command = index.Connection.Query($"""
                                                     SELECT count(DISTINCT cf.commit_id)
@@ -1205,12 +1168,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         IReadOnlyList<string> paths, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter> { new("r", repositorySlug) };
-        var names = new List<string>(paths.Count);
-        for (int i = 0; i < paths.Count; i++)
-        {
-            parameters.Add(new DuckDBParameter("p" + i.ToString(CultureInfo.InvariantCulture), paths[i]));
-            names.Add("$p" + i.ToString(CultureInfo.InvariantCulture));
-        }
+        var names = BindPaths(parameters, paths);
 
         using var command = index.Connection.Query($"""
                                                     SELECT count(DISTINCT cf.commit_id) AS commits,
@@ -1224,7 +1182,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         return new RecordedPath(commits,
             commits == 0 || reader.IsNull("newest")
                 ? null
-                : reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("newest")));
+                : reader.Timestamp("newest"));
     }
 
     private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
@@ -1235,7 +1193,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         while (await reader.ReadAsync(cancellationToken))
             changes.Add(new RecordedChange(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
                 reader.Text("author_email"),
-                reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")), reader.Text("subject")));
+                reader.Timestamp("authored_at"), reader.Text("subject")));
         return changes;
     }
 
@@ -1269,7 +1227,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         var authors = new List<RecordedAuthor>();
         while (await reader.ReadAsync(cancellationToken))
             authors.Add(new RecordedAuthor(reader.Text("author_name"), reader.Text("author_email"),
-                reader.GetFieldValue<long>(reader.GetOrdinal("commits")),
+                reader.Int64("commits"),
                 DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("last_commit"))));
         return authors;
     }
@@ -1314,8 +1272,8 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return (0, 0);
 
-        return (reader.GetFieldValue<long>(reader.GetOrdinal("addresses")),
-            reader.GetFieldValue<long>(reader.GetOrdinal("commits")));
+        return (reader.Int64("addresses"),
+            reader.Int64("commits"));
     }
 
     /// <summary>How many commits are recorded in scope, so a page can say how many there are.</summary>
@@ -1393,7 +1351,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
 
     private static LoggedCommit Logged(DbDataReader reader) =>
         new(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
-            reader.Text("author_email"), reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
+            reader.Text("author_email"), reader.Timestamp("authored_at"),
             reader.Text("subject"), reader.Text("body"), reader.Int32("files_changed"), reader.Int32("added"),
             reader.Int32("deleted"));
 
@@ -1428,13 +1386,8 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         using var reader = await command.ReaderAsync(cancellationToken);
         var runs = new List<AttributedLines>();
         while (await reader.ReadAsync(cancellationToken))
-            runs.Add(new AttributedLines(
-                reader.GetInt32(reader.GetOrdinal("start_line")), reader.GetInt32(reader.GetOrdinal("end_line")),
-                await reader.IsDBNullAsync(reader.GetOrdinal("sha"), cancellationToken)
-                    ? null
-                    : new AttributedBy(reader.Text("sha"), reader.Text("author_name"),
-                        reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
-                        reader.Text("subject"))));
+            runs.Add(new AttributedLines(reader.Int32("start_line"), reader.Int32("end_line"),
+                reader.Attribution()));
         return runs;
     }
 
@@ -1516,17 +1469,7 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
             new("r", repositorySlug),
             new("c", maxCommitPaths)
         };
-        // One parameter per path of the chain, which is a handful at most: the walk is capped and a
-        // path is a name, so there is nothing here to build a list literal out of by hand.
-        var names = new List<string>(anchorPaths.Count);
-        for (int i = 0; i < anchorPaths.Count; i++)
-        {
-            string name = "p" + i.ToString(CultureInfo.InvariantCulture);
-            parameters.Add(new DuckDBParameter(name, anchorPaths[i]));
-            names.Add("$" + name);
-        }
-
-        string anchored = string.Join(", ", names);
+        string anchored = string.Join(", ", BindPaths(parameters, anchorPaths));
 
         using var command = index.Connection.Query($"""
                                                     -- The anchor's own commits first, and everything after

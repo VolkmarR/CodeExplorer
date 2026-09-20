@@ -559,11 +559,15 @@ public sealed class IndexReader : IDisposable
     /// </summary>
     public async Task<FileCommits> FileCommitsAsync(long fileId, CancellationToken cancellationToken)
     {
+        // Both attributions are aliased to the names ReaderColumns.Attribution reads, prefixed, so that
+        // the one helper reads them and a rename in this SELECT is a rename it follows.
         using var command = Connection.Query("""
-                                             SELECT first.sha AS first_sha, first.author_name AS first_author,
-                                                    first.authored_at AS first_at, first.subject AS first_subject,
-                                                    last.sha AS last_sha, last.author_name AS last_author,
-                                                    last.authored_at AS last_at, last.subject AS last_subject
+                                             SELECT first.sha AS first_sha, first.author_name AS first_author_name,
+                                                    first.authored_at AS first_authored_at,
+                                                    first.subject AS first_subject,
+                                                    last.sha AS last_sha, last.author_name AS last_author_name,
+                                                    last.authored_at AS last_authored_at,
+                                                    last.subject AS last_subject
                                              FROM files f
                                              LEFT JOIN commits first ON first.commit_id = f.first_commit
                                              LEFT JOIN commits last ON last.commit_id = f.last_commit
@@ -571,14 +575,7 @@ public sealed class IndexReader : IDisposable
                                              """, [new DuckDBParameter("f", fileId)]);
         using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return new FileCommits(null, null);
-        return new FileCommits(Read(reader, "first"), Read(reader, "last"));
-
-        static AttributedBy? Read(System.Data.Common.DbDataReader reader, string prefix) =>
-            reader.IsNull(prefix + "_sha")
-                ? null
-                : new AttributedBy(reader.Text(prefix + "_sha"), reader.Text(prefix + "_author"),
-                    reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal(prefix + "_at")),
-                    reader.Text(prefix + "_subject"));
+        return new FileCommits(reader.Attribution("first_"), reader.Attribution("last_"));
     }
 
     /// <summary>
@@ -967,10 +964,6 @@ public sealed class IndexReader : IDisposable
         _repositories = repositories;
     }
 
-    /// <summary>A nullable timestamp column: null for a repository whose history was never walked.</summary>
-    private static DateTimeOffset? When(DbDataReader reader, string column) =>
-        reader.IsNull(column) ? null : reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal(column));
-
     internal static async Task<IReadOnlyList<IndexedRepository>> ReadRepositoriesAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
     {
@@ -1001,13 +994,9 @@ public sealed class IndexReader : IDisposable
             result.Add(ReadRepository(reader) with
             {
                 Commits = reader.Int64("commits"),
-                NewestCommit = reader.IsNull("sha")
-                    ? null
-                    : new AttributedBy(reader.Text("sha"), reader.Text("author_name"),
-                        reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
-                        reader.Text("subject")),
-                FirstCommitAt = When(reader, "first_at"),
-                LastCommitAt = When(reader, "last_at")
+                NewestCommit = reader.Attribution(),
+                FirstCommitAt = reader.TimestampOrNull("first_at"),
+                LastCommitAt = reader.TimestampOrNull("last_at")
             });
         return result;
     }

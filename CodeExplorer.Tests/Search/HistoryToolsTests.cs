@@ -764,7 +764,7 @@ public sealed class HistoryToolsTests(HistoryToolsFixture fixture) : IClassFixtu
         await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         using var http = _host.CreateClient();
-        var page = await http.GetFromJsonAsync<CommitListResponse>(
+        var page = await http.GetFromJsonAsync<ChangeLogAnswer>(
             $"/api/projects/{HistoryToolsFixture.Mixed}/commits?repository=one", TestContext.Current.CancellationToken);
         Assert.NotNull(page);
 
@@ -1384,7 +1384,7 @@ public sealed class HistoryToolsTests(HistoryToolsFixture fixture) : IClassFixtu
         await using var client = await _host.ConnectAsync("onlyone");
 
         using var http = _host.CreateClient();
-        var page = await http.GetFromJsonAsync<CommitListResponse>("/api/projects/onlyone/commits",
+        var page = await http.GetFromJsonAsync<ChangeLogAnswer>("/api/projects/onlyone/commits",
             TestContext.Current.CancellationToken);
         Assert.NotNull(page);
 
@@ -1426,7 +1426,7 @@ public sealed class HistoryToolsTests(HistoryToolsFixture fixture) : IClassFixtu
     private async Task<string> ShaOfAsync(string project, string subject)
     {
         using var http = _host.CreateClient();
-        var page = await http.GetFromJsonAsync<CommitListResponse>($"/api/projects/{project}/commits",
+        var page = await http.GetFromJsonAsync<ChangeLogAnswer>($"/api/projects/{project}/commits",
             TestContext.Current.CancellationToken);
         Assert.NotNull(page);
         return page.Commits.Single(c => c.Subject.StartsWith(subject, StringComparison.Ordinal)).Sha;

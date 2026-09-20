@@ -85,17 +85,11 @@ public sealed class DefinitionSearch(IndexReaders readers)
     ///     Every definition search goes through here, which is what makes this the one place such a
     ///     search is recorded.
     /// </summary>
-    public async Task<Outcome> FindAsync(string slug, DefinitionRequest request,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await RunAsync(slug, request, cancellationToken);
-        if (outcome is DefinitionResult result)
-            recording.Matched(Engine, result.Sites.Select(site => site.QualifiedPath).Distinct().Count(),
-                result.TotalSites);
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> FindAsync(string slug, DefinitionRequest request,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => RunAsync(slug, request, cancellationToken),
+            (DefinitionResult result) => new Telemetry.Measured(
+                result.Sites.Select(site => site.QualifiedPath).Distinct().Count(), result.TotalSites));
 
     private async Task<Outcome> RunAsync(string slug, DefinitionRequest request,
         CancellationToken cancellationToken)
