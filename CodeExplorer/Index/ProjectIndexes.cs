@@ -118,7 +118,7 @@ public sealed class ProjectIndexes : IDisposable
     ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 7;
+    public const int SchemaVersion = 8;
 
     /// <summary>
     ///     The tables a new shadow inherits from the live index instead of rebuilding. They are the
@@ -245,6 +245,37 @@ public sealed class ProjectIndexes : IDisposable
                                       start_line INTEGER NOT NULL,
                                       end_line   INTEGER NOT NULL,
                                       commit_id  INTEGER NOT NULL);
+                                  CREATE TABLE path_lineage (
+                                      -- What every path was called before, one row per hop of the
+                                      -- chain, computed by the build that recorded the renames (#148).
+                                      -- It is a property of the index and not of a request: the walk
+                                      -- that discovered it per call ran two scans of commit_files per
+                                      -- hop and one combined count at the end, up to seventeen scans
+                                      -- of the largest history table for one scoped answer.
+                                      -- Keyed by slug and path like attribution, and for the same
+                                      -- reason: a repo_id is a position in the build's list.
+                                      repo_slug        VARCHAR NOT NULL,
+                                      -- The scope a caller named. Every path a rename leads back from
+                                      -- has rows here, files and directories alike, because either
+                                      -- can be a scope.
+                                      path             VARCHAR NOT NULL,
+                                      -- 1 is the immediately previous name, 2 the one before that.
+                                      -- Stored rather than recomputed from previous_path at read
+                                      -- time, so the rename ring and the hop cap the walk guards
+                                      -- against are settled once, here, and a read is one ordered
+                                      -- select with no recursion.
+                                      hop              INTEGER NOT NULL,
+                                      previous_path    VARCHAR NOT NULL,
+                                      -- Commits recorded at or under previous_path: the number the
+                                      -- scope's own count is missing.
+                                      previous_commits INTEGER NOT NULL,
+                                      -- Distinct commits accounted for by the scope and its whole
+                                      -- chain, the same on every row of a scope. Distinct because the
+                                      -- rename commit itself touches both sides and would otherwise
+                                      -- inflate the very number the note exists to get right, and
+                                      -- stored per scope rather than summed from the hops for that
+                                      -- reason.
+                                      combined_commits INTEGER NOT NULL);
                                   CREATE TABLE imports (
                                       -- One row per name one file imports (#55), read from the line
                                       -- walk the build already performs. The name is kept as it was

@@ -376,28 +376,6 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     private const int MaxPreviousPaths = 3;
 
     /// <summary>
-    ///     Hops the chain walk takes before it gives up, whatever it has found. Each hop is one query,
-    ///     and a repository whose paths were renamed in a ring — which a rename edge permits and git
-    ///     does not forbid — would otherwise walk forever. Visited paths are tracked as well; this is
-    ///     the second guard, and the one that bounds the cost of an honestly long chain.
-    /// </summary>
-    private const int MaxLineageHops = 8;
-
-    /// <summary>
-    ///     What makes an earlier prefix the scope's <i>previous path</i> rather than somewhere two files
-    ///     happened to move in from: <b>more</b> than this share of the paths the scope has ever
-    ///     recorded came from it — a majority. Written down rather than tuned, because the two cases it
-    ///     separates are far apart: a directory rename moves nearly everything under it at once
-    ///     (measured: 479 of 511 paths in one commit), and a stray file moved in over the years is a
-    ///     handful out of hundreds.
-    ///     A majority and not "at least half", which are the same bar everywhere except the small scopes
-    ///     where the difference decides: a folder of two files that took one in from elsewhere would
-    ///     clear "at least half" and be told it used to be elsewhere. A majority also guarantees that
-    ///     only one candidate can qualify, so the ordering the query falls back on decides nothing.
-    /// </summary>
-    private const double PreviousPathShare = 0.5;
-
-    /// <summary>
     ///     The deepest a churn ranking may be rolled up to. Ten segments below the scope is past the
     ///     depth of any layout anybody nests by hand, and past it the rollup is the file ranking with a
     ///     different name on it — which is the call the caller should be making instead.
@@ -979,146 +957,59 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
     }
 
     /// <summary>
-    ///     What the whole imported history holds for one path of one repository, matched the same way
-    ///     <see cref="PathCommitsAsync" /> matches it — on the path the commit recorded, so a rename
-    ///     severs it. That is the point: a path with zero commits here is almost always a path that was
-    ///     renamed, and a path with commits older than the window is a quiet file. The two are opposite
-    ///     facts and this is what tells them apart.
-    /// </summary>
-    /// <summary>
-    ///     What a path scope was called before, or null where nothing leads back. Walked hop by hop: the
-    ///     dominant previous prefix of the scope, then of that prefix, and so on, so
-    ///     <c>src/Model</c> ← <c>model</c> ← <c>Model</c> comes back as a chain rather than one step.
-    ///     Bounded three ways, because a rename edge is data and data can be shaped badly:
-    ///     <see cref="MaxLineageHops" /> hops, a visited set against a rename ring, and
-    ///     <see cref="MaxPreviousPaths" /> reported with the rest counted as omitted.
+    ///     What a path scope was called before, or null where nothing leads back. Read as one row per
+    ///     hop, oldest last, from <c>path_lineage</c> — the chain the build walked (#148):
+    ///     <c>src/Model</c> ← <c>model</c> ← <c>Model</c> arrives as three rows rather than as three
+    ///     round trips discovering each other. It used to be discovered here, and cost two scans of
+    ///     <c>commit_files</c> per hop and a combined count at the end — up to seventeen of the largest
+    ///     history table for one scoped answer, every time the same question was asked of the same
+    ///     index.
+    ///     The hop cap and the rename-ring guard are the build's, so nothing here has to bound a walk
+    ///     it no longer performs; <see cref="MaxPreviousPaths" /> is this side's, because it is about
+    ///     what a reply prints and not about what is true.
     ///     Signalled and not followed (#131): nothing here changes what the scope's own query counts.
-    ///     The combined total is read last and covers the whole chain the walk found, including the hops
-    ///     the cap does not name — it is the number the caller wanted, and naming fewer paths must not
-    ///     shrink it.
+    ///     The combined total covers the whole chain, including the hops the cap does not name — it is
+    ///     the number the caller wanted, and naming fewer paths must not shrink it.
     /// </summary>
-    /// <param name="index">The index being read; the walk is several queries over one open.</param>
+    /// <param name="index">The index being read.</param>
     /// <param name="repositorySlug">The repository the scope resolved to. A rename never crosses one.</param>
     /// <param name="pathInRepository">The scope inside it. Empty — a repository root — has no previous path.</param>
     /// <param name="spell">How to turn a repository-relative path back into a qualified one (ADR-0006).</param>
-    /// <param name="cancellationToken">Threaded to every query the walk runs.</param>
+    /// <param name="cancellationToken">Threaded to the command.</param>
     private static async Task<PathLineage?> LineageAsync(IndexReader index, string repositorySlug,
         string pathInRepository, Func<string, string> spell, CancellationToken cancellationToken)
     {
         if (pathInRepository.Length == 0) return null;
 
+        using var command = index.Connection.Query("""
+                                                   SELECT previous_path, previous_commits, combined_commits
+                                                   FROM path_lineage
+                                                   WHERE repo_slug = $r AND path = $p
+                                                   ORDER BY hop
+                                                   """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
+        using var reader = await command.ReaderAsync(cancellationToken);
         var found = new List<PreviousPath>();
-        var visited = new HashSet<string>(StringComparer.Ordinal) { pathInRepository };
-        string current = pathInRepository;
-        for (int hop = 0; hop < MaxLineageHops; hop++)
+        // The same on every row of a scope, so the last read wins and none has to be singled out.
+        int combined = 0;
+        while (await reader.ReadAsync(cancellationToken))
         {
-            if (await PreviousPathAsync(index, repositorySlug, current, cancellationToken) is not { } previous
-                || !visited.Add(previous))
-                break;
-            found.Add(new PreviousPath(spell(previous), previous,
-                await PathCommitCountAsync(index, repositorySlug, previous, cancellationToken)));
-            current = previous;
+            string previous = reader.Text("previous_path");
+            found.Add(new PreviousPath(spell(previous), previous, reader.Int32("previous_commits")));
+            combined = reader.Int32("combined_commits");
         }
 
         if (found.Count == 0) return null;
-        var chain = found.Select(p => p.PathInRepository).ToList();
-        int combined = await CombinedCommitCountAsync(index, repositorySlug, [pathInRepository, ..chain],
-            cancellationToken);
         return new PathLineage(found.Take(MaxPreviousPaths).ToList(),
-            Math.Max(0, found.Count - MaxPreviousPaths), combined, chain);
+            Math.Max(0, found.Count - MaxPreviousPaths), combined,
+            found.Select(previous => previous.PathInRepository).ToList());
     }
-
-    /// <summary>
-    ///     The one path a scope was renamed from, or null where no earlier prefix accounts for enough of
-    ///     it. Derived from file-level rename rows by <b>prefix mapping</b>: a row whose new path is the
-    ///     scope, or sits under it, and whose old path ends with the same remainder, differs from it by
-    ///     a leading prefix alone — and that prefix is the candidate.
-    ///     Candidates are then weighed against how many distinct paths the scope has ever recorded, not
-    ///     against how many rows were renamed, which is the denominator that separates a directory
-    ///     rename from two files that moved in: renamed rows alone would make any scope whose only
-    ///     rename edges came from one place look like it had been that place.
-    ///     <see cref="PreviousPathShare" /> is the bar and it must be cleared outright, which leaves at
-    ///     most one candidate for any scope of two paths or more. A scope of one — a file — has a
-    ///     denominator of one, so every candidate clears it, and a file renamed more than once over its
-    ///     history offers several; the newest rename wins, which is the one the caller is standing on,
-    ///     with the path itself as a last tiebreak so the answer is the same every time it is asked.
-    ///     A candidate on the scope's own branch is rejected whichever way it points. An ancestor —
-    ///     <c>src</c> offered for <c>src/Model</c>, because most of <c>src</c> was moved down into it —
-    ///     would report a combined total covering all of <c>src</c>, which is the inflated number this
-    ///     feature exists to correct, pointing backwards. A descendant is the mirror: the scope's own
-    ///     count already prefix-matches it, so "N across the whole chain" would equal "this path's
-    ///     alone" and the note would say nothing while looking like it said something.
-    ///     Only <c>renamed</c> edges count. A <c>copied</c> one is stored (ADR-0007) and is not a
-    ///     previous path: both sides still exist, so "this scope was renamed" would be false and the
-    ///     combined total would sum two live paths.
-    /// </summary>
-    private static async Task<string?> PreviousPathAsync(IndexReader index, string repositorySlug, string path,
-        CancellationToken cancellationToken)
-    {
-        using var command = index.Connection.Query("""
-                                                   WITH scoped AS (
-                                                       SELECT cf.path, cf.change_kind, cf.old_path, c.commit_id
-                                                       FROM commit_files cf JOIN commits c USING (commit_id)
-                                                       WHERE c.repo_slug = $r
-                                                         AND (cf.path = $p OR starts_with(cf.path, $p || '/'))
-                                                   ),
-                                                   -- Every path the scope has ever recorded. The share a
-                                                   -- candidate has to clear is measured against this and
-                                                   -- not against the renamed rows, so a scope of five
-                                                   -- hundred files that took two in from elsewhere does
-                                                   -- not read as having been elsewhere.
-                                                   recorded AS (SELECT count(DISTINCT path) AS paths FROM scoped),
-                                                   -- The remainder each row sits at below the scope, and
-                                                   -- the prefix its old path would have had to carry to
-                                                   -- hold the same remainder. An old path that does not
-                                                   -- end in that remainder moved sideways, not wholesale,
-                                                   -- and drops out with a NULL.
-                                                   mapped AS (
-                                                       SELECT CASE
-                                                           WHEN path = $p THEN old_path
-                                                           WHEN ends_with(old_path, '/' || substr(path, length($p) + 2))
-                                                               THEN substr(old_path, 1,
-                                                                    length(old_path) - length(substr(path, length($p) + 2)) - 1)
-                                                       END AS previous,
-                                                       path, commit_id
-                                                       FROM scoped
-                                                       -- renamed only. A copied edge is stored too and
-                                                       -- is not a previous path: both sides still exist.
-                                                       WHERE old_path IS NOT NULL AND change_kind = 'renamed'
-                                                   )
-                                                   SELECT previous
-                                                   FROM mapped, recorded
-                                                   WHERE previous IS NOT NULL AND previous <> ''
-                                                     -- Never the scope's own branch, either way up it.
-                                                     AND previous <> $p
-                                                     AND NOT starts_with(previous, $p || '/')
-                                                     AND NOT starts_with($p, previous || '/')
-                                                   GROUP BY previous, recorded.paths
-                                                   HAVING count(DISTINCT path) > recorded.paths * $share
-                                                   -- Share first, then the newest rename, then the path
-                                                   -- itself: a file scope has a denominator of one, so
-                                                   -- several candidates can qualify and the answer must
-                                                   -- not depend on the order rows came back in.
-                                                   ORDER BY count(DISTINCT path) DESC, max(commit_id) DESC, previous
-                                                   LIMIT 1
-                                                   """,
-            [
-                new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path),
-                new DuckDBParameter("share", PreviousPathShare)
-            ]);
-        return await command.ScalarAsync(cancellationToken) as string;
-    }
-
-    /// <summary>Commits recorded at or under one repository-relative path, over the whole history.</summary>
-    private static async Task<int> PathCommitCountAsync(IndexReader index, string repositorySlug, string path,
-        CancellationToken cancellationToken) =>
-        await CombinedCommitCountAsync(index, repositorySlug, [path], cancellationToken);
 
     /// <summary>
     ///     One bound parameter per path, and the <c>$name</c> each of them got, in the order the paths
-    ///     came in. Three queries here take a rename chain — a handful of paths at most, since the walk
-    ///     is capped — and each had written the loop out for itself; a path spelled into the SQL instead
-    ///     of bound is how user text reaches the parser, so the loop is written once.
+    ///     came in. The queries here that take a rename chain — a handful of paths at most, since the
+    ///     build caps it — had each written the loop out for itself; a path spelled into the SQL
+    ///     instead of bound is how user text reaches the parser, so the loop is written once.
     /// </summary>
     /// <param name="parameters">The list being built, which the names are added to.</param>
     /// <param name="paths">The paths to bind.</param>
@@ -1133,27 +1024,6 @@ public sealed class HistoryQueries(IndexReaders readers, IConfiguration configur
         }
 
         return names;
-    }
-
-    /// <summary>
-    ///     Distinct commits recorded at or under any of these repository-relative paths. Distinct
-    ///     because one commit is very often the rename itself, which touches both sides of the chain and
-    ///     would otherwise be counted once per path and inflate the very number the note exists to get
-    ///     right.
-    /// </summary>
-    private static async Task<int> CombinedCommitCountAsync(IndexReader index, string repositorySlug,
-        IReadOnlyList<string> paths, CancellationToken cancellationToken)
-    {
-        var parameters = new List<DuckDBParameter> { new("r", repositorySlug) };
-        var clauses = BindPaths(parameters, paths)
-            .Select(name => $"cf.path = {name} OR starts_with(cf.path, {name} || '/')");
-
-        using var command = index.Connection.Query($"""
-                                                    SELECT count(DISTINCT cf.commit_id)
-                                                    FROM commit_files cf JOIN commits c USING (commit_id)
-                                                    WHERE c.repo_slug = $r AND ({string.Join(" OR ", clauses)})
-                                                    """, parameters);
-        return (int)((await command.ScalarAsync(cancellationToken) as long?) ?? 0);
     }
 
     /// <param name="index">The index being read.</param>

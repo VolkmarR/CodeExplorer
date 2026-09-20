@@ -18,9 +18,31 @@ namespace CodeExplorer;
 /// </summary>
 internal static class QueryPlan
 {
-    private static readonly string? Directory = Environment.GetEnvironmentVariable("CODEEXPLORER_EXPLAIN_DIR");
+    private static volatile string? _directory = Environment.GetEnvironmentVariable("CODEEXPLORER_EXPLAIN_DIR");
 
-    public static bool Enabled => Directory is not null;
+    public static bool Enabled => _directory is not null;
+
+    /// <summary>
+    ///     The same switch, held on for the length of one test and pointed at
+    ///     <paramref name="directory" />. A test cannot use the environment variable itself: it is read
+    ///     once, when this type is initialised, so setting it would only work for a test that happened
+    ///     to run before the assembly's first index read, and nothing orders that. Asserting the query
+    ///     count through some other counter would be asserting about a mechanism no developer uses.
+    ///     Process-wide while it is held, like the variable, so a dump written during it may belong to
+    ///     any read the process was making. A test therefore identifies its own dumps by the parameters
+    ///     written into them rather than by counting the files.
+    /// </summary>
+    internal static IDisposable Recording(string directory)
+    {
+        string? previous = _directory;
+        _directory = directory;
+        return new Restore(previous);
+    }
+
+    private sealed class Restore(string? previous) : IDisposable
+    {
+        public void Dispose() => _directory = previous;
+    }
 
     /// <summary>
     ///     The plan of a command that is about to be executed, named for the method that built it:
@@ -51,18 +73,18 @@ internal static class QueryPlan
     private static async Task DumpAsync(DuckDBConnection connection, string label, string sql,
         IReadOnlyList<DuckDBParameter> parameters, CancellationToken cancellationToken)
     {
-        if (Directory is null) return;
+        if (_directory is not { } directory) return;
 
         string stamp = string.Create(CultureInfo.InvariantCulture,
             $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Safe(label)}");
         string text;
         try
         {
-            System.IO.Directory.CreateDirectory(Directory);
+            System.IO.Directory.CreateDirectory(directory);
             // JSON and not the box-drawing tree: the tree is for a person reading one plan, and this
             // is for comparing operator times across a dozen of them. The profile covers the real
             // execution, so the timings are the query's own and not an EXPLAIN's warmed repeat.
-            string json = Path.Combine(Directory, stamp + ".json").Replace('\\', '/');
+            string json = Path.Combine(directory, stamp + ".json").Replace('\\', '/');
             await SetAsync(connection, "SET enable_profiling='json'", cancellationToken);
             await SetAsync(connection, $"SET profiling_output='{json}'", cancellationToken);
             try
@@ -96,7 +118,7 @@ internal static class QueryPlan
 
         try
         {
-            await File.WriteAllTextAsync(Path.Combine(Directory, stamp + ".sql.txt"), file.ToString(),
+            await File.WriteAllTextAsync(Path.Combine(directory, stamp + ".sql.txt"), file.ToString(),
                 cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

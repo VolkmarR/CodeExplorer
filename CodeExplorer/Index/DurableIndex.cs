@@ -41,6 +41,10 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     private static readonly string[] Tables =
     [
         "index_info", "repositories", "files", "lines", "commits", "commit_files", "attribution",
+        // The rename chains the build derived (#148). Derived and still carried: a restore does not
+        // re-walk, so an index that lost this would stop telling a caller what a scope was called
+        // before — silently, because a missing chain is indistinguishable from a path nobody renamed.
+        "path_lineage",
         // The import edges the build read and resolved (#55). They travel with the tables, like the
         // overview and for the same reason: a restored index that had lost them would answer
         // `who_imports` with nothing, which reads as "nothing depends on this file".
