@@ -4,7 +4,6 @@ import {
   fetchBlame,
   fetchBrowse,
   fetchDeclarations,
-  fetchDependents,
   fetchFile,
   fetchImports,
   fetchTree,
@@ -37,22 +36,14 @@ export function blameQuery(project: string, path: string) {
 }
 
 /**
- * The two directions of the import graph, a query each because they are two requests: the rail draws
- * what a file imports as soon as that arrives rather than waiting on the reverse lookup of a hub.
- * Both are fixed under a given index, like the content and the blame beside them.
+ * What a file imports, its own request beside the file's content: the rail draws the panel when this
+ * arrives rather than holding the code back for it. Fixed under a given index, like the content and
+ * the blame beside it.
  */
 export function importsQuery(project: string, path: string) {
   return queryOptions({
     queryFn: () => fetchImports(project, path),
     queryKey: [...projectKey(project), 'imports', path],
-    staleTime: Infinity,
-  })
-}
-
-export function dependentsQuery(project: string, path: string) {
-  return queryOptions({
-    queryFn: () => fetchDependents(project, path),
-    queryKey: [...projectKey(project), 'dependents', path],
     staleTime: Infinity,
   })
 }

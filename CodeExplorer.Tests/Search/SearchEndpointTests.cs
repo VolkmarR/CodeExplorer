@@ -598,13 +598,7 @@ public sealed class SearchEndpointTests
         Assert.Equal("one/src/Orders.cs", edge.TargetPath);
         Assert.Equal("Orders.Domain", edge.Name);
         Assert.Equal(3, edge.LineNumber);
-
-        var dependents = await GetAsync<DependentsResult>(host, Route("dependents", "one/src/Orders.cs"));
-        var dependent = Assert.Single(dependents.Dependents);
-        Assert.Equal("one/src/Report.cs", dependent.QualifiedPath);
-        Assert.Equal(3, dependent.LineNumber);
-        Assert.Equal(0, dependents.ShareTheModule);
-        Assert.False(dependents.Capped);
+        Assert.False(resolved.Capped);
     }
 
     /// <summary>
@@ -633,13 +627,6 @@ public sealed class SearchEndpointTests
         var uncovered = await GetAsync<FileImportsResponse>(host, Route("imports", "one/build/notes.rst"));
         Assert.False(uncovered.Profiled);
         Assert.Empty(uncovered.Imports);
-
-        // And the reverse direction's own kind of empty: a namespace two files declare resolves to
-        // neither, so no edge could ever have pointed here.
-        var shared = await GetAsync<DependentsResult>(host, Route("dependents", "one/src/Storage.cs"));
-        Assert.Empty(shared.Dependents);
-        Assert.Equal("Orders.Storage", shared.Module);
-        Assert.Equal(1, shared.ShareTheModule);
     }
 
     /// <summary>

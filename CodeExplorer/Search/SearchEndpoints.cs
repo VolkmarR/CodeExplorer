@@ -207,17 +207,13 @@ internal static class SearchEndpoints
                 Answer<BlameAnswer>(
                     await history.BlameAsync(project.Slug, new BlameRequest(path, 1, null), ct), Blame));
 
-        // The two directions of the import graph, a route each rather than one that answers both:
-        // they are two reads, the panels draw as each arrives, and a file page that had to wait for
-        // the reverse lookup of a hub before showing what the file itself imports would be slower
-        // than either answer is.
+        // Its own route beside the file's content rather than a field on it, for the reason blame is
+        // one: the rail draws the imports when they arrive and the code does not wait for them.
+        // There was a `/file/dependents` beside this answering the reverse direction, gone with the
+        // panel that drew it (#160).
         project.MapGet("/file/imports",
             async (Project project, string path, ImportGraph graph, CancellationToken ct) =>
                 Answer<ImportsResult>(await graph.ImportsAsync(project.Slug, path, ct), Imports));
-
-        project.MapGet("/file/dependents",
-            async (Project project, string path, ImportGraph graph, CancellationToken ct) =>
-                Answer<DependentsResult>(await graph.DependentsAsync(project.Slug, path, ct), Dependents));
 
         // What the file declares, beside the two import directions, because the rail asks all three
         // of one file and draws each as it arrives. A route of its own rather than a field on /file:
@@ -370,13 +366,6 @@ internal static class SearchEndpoints
                 .Select(d => new DeclarationResponse(d.LineNumber, d.Text, d.Type, d.Member,
                     d.Role?.ToString().ToLowerInvariant(), d.Evidence.ToString().ToLowerInvariant()))
                 .ToList()));
-
-    /// <summary>
-    ///     What imports a file, as the read already holds it: <see cref="DependentsResult" /> is the
-    ///     panel's six fields exactly, down to the two counts that are why an empty list is not the
-    ///     sentence "nothing depends on this".
-    /// </summary>
-    private static IResult Dependents(DependentsResult result) => Results.Ok(result);
 
     /// <summary>
     ///     A file's attribution as runs. A file with no history answers with no runs rather than a

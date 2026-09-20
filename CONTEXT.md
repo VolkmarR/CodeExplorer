@@ -46,7 +46,11 @@ reference is strong evidence and not proof.
 A reference is of a **symbol** and never of a file. There is no such thing here as "the references
 of `Widget.cs`": answering that would mean asking the question of every name the file declares, a
 scan of the project per file opened, for a list that would still be evidence about names rather than
-about the file. What refers to a *file* is an import, and the answer to it is the file's dependents.
+about the file. What refers to a *file* is an import — but only where the language writes an import
+line and the name in it resolves to exactly one file, which the codebases this server is pointed at
+mostly do not. A reverse import lookup was offered and withdrawn for that reason (#160). So "what
+depends on this file" is answered here the long way round, by the names the file declares: list its
+declarations, then take the references of one.
 _Avoid_: Usage, call site, occurrence
 
 **Declaration**:
