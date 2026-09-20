@@ -357,7 +357,7 @@ public sealed class PathLineageTests(PathLineageFixture fixture) : IClassFixture
         Assert.Contains("its content was at 'planned/d/Thing.cs' before", reply, StringComparison.Ordinal);
         Assert.Contains("1 further earlier path not shown", reply, StringComparison.Ordinal);
 
-        var dumps = Directory.EnumerateFiles(plans, "*HistoryQueries-LineageAsync.sql.txt")
+        var dumps = Directory.EnumerateFiles(plans, "*PathLineageQueries-LineageAsync.sql.txt")
             .Where(dump => File.ReadAllText(dump).Contains("$r = planned", StringComparison.Ordinal))
             .ToList();
         Assert.Single(dumps);

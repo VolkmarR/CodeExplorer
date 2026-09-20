@@ -4,7 +4,7 @@ namespace CodeExplorer;
 ///     How the <c>imports</c> table spells the two things an edge is not a string: which shape of name
 ///     it imports, and how strongly the answer is held (ADR-0008). Each pair is written here and read
 ///     here, so neither direction can be changed without the other.
-///     It sits in <c>Infrastructure/</c> and not beside the builder that writes the rows, because the
+///     It sits in <c>Reading/</c> and not beside the builder that writes the rows, because the
 ///     writer is <c>Index/</c> and the reader is <c>Search/</c>: a codec on the builder made the import
 ///     tools name a build type to decode a column they had already read (ADR-0005). The column is what
 ///     both modules share, so the column's spelling is what they are handed.

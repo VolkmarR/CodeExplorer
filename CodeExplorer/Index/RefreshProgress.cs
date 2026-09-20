@@ -2,9 +2,10 @@ namespace CodeExplorer;
 
 /// <summary>
 ///     How far a running refresh has got, as the status endpoint reports it and the project page draws
-///     it. It lives in <c>Infrastructure/</c> and not in <c>Refresh/</c> because the steps that can
-///     count their work are in <c>Index/</c>: a refresh orchestrates a build, so the build cannot
-///     depend on it, and the vocabulary they share belongs to neither (ADR-0005).
+///     it. It lives in <c>Index/</c> and not in <c>Refresh/</c> because the steps that can count their
+///     work are the build's: a refresh orchestrates a build, so the build cannot depend on it, and a
+///     refresh already reaches <c>Index/</c> (ADR-0005). It was in <c>Infrastructure/</c> until that
+///     folder was cut back to host plumbing, which a progress report of a build is not.
 ///     <see cref="Step" /> of <see cref="TotalSteps" /> is always honest — the steps are fixed and
 ///     known before anything starts.
 ///     <see cref="Done" /> and <see cref="Total" /> are filled only by the steps that can count what
