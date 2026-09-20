@@ -113,14 +113,12 @@ public sealed partial class GrepSearch(IndexReaders readers)
     ///     next — which is what makes this the one place a search is recorded. A new entry point cannot
     ///     report a different set of attributes, because it does not record at all.
     /// </summary>
-    public async Task<Outcome> SearchAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await RunAsync(slug, request, cancellationToken);
-        if (outcome is GrepResult result) recording.Matched(result.Engine, result.TotalFiles, result.TotalLines);
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> SearchAsync(string slug, GrepRequest request, CancellationToken cancellationToken) =>
+        // The engine is read off the answer here and nowhere else: this is the one search that picks
+        // between full-text and a substring scan at query time.
+        Telemetry.Search(slug, (GrepResult result) => result.Engine,
+            () => RunAsync(slug, request, cancellationToken),
+            (GrepResult result) => new Telemetry.Measured(result.TotalFiles, result.TotalLines));
 
     private async Task<Outcome> RunAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
     {
@@ -323,11 +321,11 @@ public sealed partial class GrepSearch(IndexReaders readers)
                         // Only asked for when the caller wanted history, and null for a line the build
                         // could not attribute — which is every line of a project indexed before there
                         // was any history to attribute from.
-                        request.WithHistory && !reader.IsNull("author_name")
-                            ? new AttributedBy(reader.Text("sha"), reader.Text("author_name"),
-                                reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("authored_at")),
-                                reader.Text("subject"))
-                            : null));
+                        // Null for a line the build could not attribute — which is every line of a
+                        // project indexed before there was any history to attribute from. The
+                        // attribution's four columns come from one LEFT JOIN, so the helper's null
+                        // test on the SHA answers for all four.
+                        request.WithHistory ? reader.Attribution() : null));
             }
 
             if (currentPath is not null) files.Add(File(currentPath, currentCount, current));

@@ -74,15 +74,10 @@ public sealed class MatchList(IndexReaders readers)
     ///     is recorded. It is the only public method for the same reason grep has one: a second entry
     ///     point has nothing else to call.
     /// </summary>
-    public async Task<Outcome> ListAsync(string slug, MatchListRequest request,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await RunAsync(slug, request, cancellationToken);
-        if (outcome is MatchListResult result) recording.Matched(Engine, result.TotalFiles, result.TotalMatches);
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> ListAsync(string slug, MatchListRequest request,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => RunAsync(slug, request, cancellationToken),
+            (MatchListResult result) => new Telemetry.Measured(result.TotalFiles, result.TotalMatches));
 
     private async Task<Outcome> RunAsync(string slug, MatchListRequest request,
         CancellationToken cancellationToken)

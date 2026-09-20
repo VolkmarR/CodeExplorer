@@ -16,6 +16,9 @@ internal static partial class SourceTree
     public static string Server(string module = "") =>
         Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", "CodeExplorer", module);
 
+    /// <summary>This project's own source tree, for the rule that it mirrors the server's folders.</summary>
+    public static string Tests() => Path.GetDirectoryName(ThisFile())!;
+
     /// <summary>
     ///     Every hand-written <c>.cs</c> file of the server. <c>bin</c> and <c>obj</c> are left out:
     ///     they hold generated sources and a rule about what this code says is not about those.

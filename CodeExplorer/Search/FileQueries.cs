@@ -100,16 +100,10 @@ public sealed class FileQueries(IndexReaders readers)
     ///     The windows asked for, each answered on its own, over one open of the index. The one refusal
     ///     that is the request's rather than an entry's is having asked for nothing.
     /// </summary>
-    public async Task<Outcome> ReadAsync(string slug, ReadRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await RunReadAsync(slug, request, cancellationToken);
-        if (outcome is ReadResult result)
-            recording.Matched(Engine, result.Files.Count(f => f.File is not null),
-                result.Files.Sum(f => (long)f.Lines.Count));
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> ReadAsync(string slug, ReadRequest request, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => RunReadAsync(slug, request, cancellationToken),
+            (ReadResult result) => new Telemetry.Measured(result.Files.Count(f => f.File is not null),
+                result.Files.Sum(f => (long)f.Lines.Count)));
 
     private Task<Outcome> RunReadAsync(string slug, ReadRequest request, CancellationToken cancellationToken)
     {
@@ -146,15 +140,10 @@ public sealed class FileQueries(IndexReaders readers)
         }, cancellationToken);
     }
 
-    public async Task<Outcome> GlobAsync(string slug, GlobRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await RunGlobAsync(slug, request, cancellationToken);
-        if (outcome is GlobListing listing)
-            recording.Matched(Engine, listing.Total, listing.Files.Sum(f => (long)f.LineCount));
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> GlobAsync(string slug, GlobRequest request, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => RunGlobAsync(slug, request, cancellationToken),
+            (GlobListing listing) =>
+                new Telemetry.Measured(listing.Total, listing.Files.Sum(f => (long)f.LineCount)));
 
     private Task<Outcome> RunGlobAsync(string slug, GlobRequest request, CancellationToken cancellationToken)
     {
@@ -170,15 +159,10 @@ public sealed class FileQueries(IndexReaders readers)
         }, cancellationToken);
     }
 
-    public async Task<Outcome> TreeAsync(string slug, TreeRequest request, CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await RunTreeAsync(slug, request, cancellationToken);
-        if (outcome is TreeListing listing)
-            recording.Matched(Engine, listing.Entries.Count, listing.Entries.Sum(e => e.Lines));
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> TreeAsync(string slug, TreeRequest request, CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine, () => RunTreeAsync(slug, request, cancellationToken),
+            (TreeListing listing) =>
+                new Telemetry.Measured(listing.Entries.Count, listing.Entries.Sum(e => e.Lines)));
 
     private Task<Outcome> RunTreeAsync(string slug, TreeRequest request, CancellationToken cancellationToken)
     {
@@ -221,21 +205,17 @@ public sealed class FileQueries(IndexReaders readers)
         }, cancellationToken);
     }
 
-    public async Task<Outcome> ExtensionsAsync(string slug, ExtensionsRequest request,
-        CancellationToken cancellationToken)
-    {
-        using var recording = Telemetry.Search(slug);
-        var outcome = await readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
-            new ExtensionListing(index.Repository,
-                (await IndexQueries.ExtensionCountsAsync(index.Connection, index.Repository?.Slug, token))
-                .OrderByDescending(e => e.Files)
-                .ThenBy(e => e.Extension, StringComparer.Ordinal)
-                .ToList()), cancellationToken);
-        if (outcome is ExtensionListing listing)
-            recording.Matched(Engine, listing.Extensions.Sum(e => e.Files), listing.Extensions.Sum(e => e.Lines));
-        else recording.Problem();
-        return outcome;
-    }
+    public Task<Outcome> ExtensionsAsync(string slug, ExtensionsRequest request,
+        CancellationToken cancellationToken) =>
+        Telemetry.Search(slug, Engine,
+            () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
+                new ExtensionListing(index.Repository,
+                    (await IndexQueries.ExtensionCountsAsync(index.Connection, index.Repository?.Slug, token))
+                    .OrderByDescending(e => e.Files)
+                    .ThenBy(e => e.Extension, StringComparer.Ordinal)
+                    .ToList()), cancellationToken),
+            (ExtensionListing listing) => new Telemetry.Measured(listing.Extensions.Sum(e => e.Files),
+                listing.Extensions.Sum(e => e.Lines)));
 
     /// <summary>
     ///     Glob shapes the SQL operator accepts and matches nothing with. Malformed input must never look

@@ -44,6 +44,14 @@ internal sealed partial class FileTools(
     /// </summary>
     private const int MaxLabelWidth = 40;
 
+    /// <summary>
+    ///     The project this call is bound to, as every tool class in this server reads it: one member
+    ///     per class, named and typed the same way in each, rather than the binder called inline at
+    ///     every tool. A tool that wants the slug asks this for it — which is what nearly all of them
+    ///     want, and what four classes were spelling out five different times between them.
+    /// </summary>
+    private Project Bound => BoundProject.Get(httpContextAccessor);
+
     [McpServerTool(Name = "read_file", ReadOnly = true, Idempotent = true, Title = "Read files from the index")]
     [Description("""
                  Returns one or more indexed files with line numbers, so the numbers line up with what grep reports. Paths are qualified: the repository slug, then the path inside it (`main/src/Api/Foo.cs`), exactly as grep, glob and list_tree print them.
@@ -69,40 +77,57 @@ internal sealed partial class FileTools(
         bool withHistory = false,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
-
         startLine = Math.Max(1, startLine);
         maxLines = Math.Clamp(maxLines, 1, MaxLinesPerRead);
-        var targets = new List<ReadTarget>();
-        foreach (string entry in paths)
-        {
-            var parsed = ReadTarget.Parse(entry, startLine, maxLines);
-            if (parsed.Problem is not null) return parsed.Problem;
-            targets.Add(parsed);
-        }
+        // An entry the parser refuses is that entry's answer and not the call's: returning the first
+        // refusal dropped every other entry, so an agent that mistyped one of five ranges lost the four
+        // reads it had asked for and could not see which entry was the bad one. A refusal is rendered
+        // in place, beside the reads, the same way a miss on a path already is.
+        var targets = paths.Select(entry => ReadTarget.Parse(entry, startLine, maxLines)).ToList();
+        var windows = targets.Where(target => target.Problem is null)
+            .Select(target => new FileWindow(target.Path, target.Start, target.End))
+            .ToList();
+
+        // Every entry refused: the refusals are the whole reply, and asking the index for no windows
+        // would answer "you asked for nothing" over the top of them. Having asked for nothing at all is
+        // a different answer and still the query module's to give, so it goes through below.
+        if (targets.Count > 0 && windows.Count == 0) return ToolReply.Cap(Format(new ReadResult([])), ReadAdvice);
 
         return ToolReply.Render<ReadResult>(
-            await files.ReadAsync(project.Slug,
-                new ReadRequest(targets.Select(t => new FileWindow(t.Path, t.Start, t.End)).ToList(), withHistory,
-                    true), cancellationToken),
-            Format, "Read fewer paths at once, or pass a narrower line range.");
+            await files.ReadAsync(Bound.Slug, new ReadRequest(windows, withHistory, true), cancellationToken),
+            Format, ReadAdvice);
 
         string Format(ReadResult result)
         {
             var reads = result.Files;
             var text = new StringBuilder();
-            for (int i = 0; i < reads.Count; i++)
+            // Which read answers the next well-formed entry: the read answers one window each, in the
+            // order they were asked in (FileQueries walks the request's windows), and a refused entry
+            // has none. With every entry refused there are no reads and this never advances, which is
+            // why the allowance below — which divides by what is left — is not reached there.
+            int read = 0;
+            foreach (var target in targets)
             {
                 if (text.Length > 0) text.Append('\n');
+                if (target.Problem is { } problem)
+                {
+                    text.Append(problem).Append('\n');
+                    continue;
+                }
+
                 // Whatever the entries before this one left unused is handed on, so four small windows
                 // and one large one read in full where an equal split would truncate the large one.
-                int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (reads.Count - i);
-                Append(text, reads[i], targets[i].ExplicitRange, allowance);
+                int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (reads.Count - read);
+                Append(text, reads[read], target.ExplicitRange, allowance);
+                read++;
             }
 
             return text.ToString();
         }
     }
+
+    /// <summary>How a caller gets the rest of a read that hit the reply ceiling.</summary>
+    private const string ReadAdvice = "Read fewer paths at once, or pass a narrower line range.";
 
     private static void Append(StringBuilder text, FileRead read, bool explicitRange, int allowance)
     {
@@ -200,9 +225,8 @@ internal sealed partial class FileTools(
         int limit = DefaultGlobFiles,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
         return ToolReply.Render<GlobListing>(
-            await files.GlobAsync(project.Slug, new GlobRequest(glob, repo, limit), cancellationToken), Format,
+            await files.GlobAsync(Bound.Slug, new GlobRequest(glob, repo, limit), cancellationToken), Format,
             "Narrow the glob, or lower limit.");
 
         string Format(GlobListing listing)
@@ -213,13 +237,13 @@ internal sealed partial class FileTools(
             {
                 if (repository is null)
                     return
-                        $"No indexed file matches \"{pattern}\" in project '{project.Slug}' ({listing.Repositories.Sum(r => r.FileCount)} files in repositories {string.Join(", ", listing.Repositories.Select(r => r.Slug))}). "
+                        $"No indexed file matches \"{pattern}\" in project '{Bound.Slug}' ({listing.Repositories.Sum(r => r.FileCount)} files in repositories {string.Join(", ", listing.Repositories.Select(r => r.Slug))}). "
                         + "Remember `*` crosses directories, so a bare \"*Commands.cs\" is usually the right shape, and the first path segment is the repository slug.";
 
                 return $"No indexed file matches \"{pattern}\" in repository '{repository.Slug}'. "
                        + (listing.MatchesInOtherRepositories > 0
-                           ? $"{listing.MatchesInOtherRepositories} {ToolReply.Plural(listing.MatchesInOtherRepositories.Value, "file")} match in the other repositories of project '{project.Slug}'; drop `repo` to see them."
-                           : $"Nothing matches in the other repositories of project '{project.Slug}' either; try a wider glob.");
+                           ? $"{listing.MatchesInOtherRepositories} {ToolReply.Plural(listing.MatchesInOtherRepositories.Value, "file")} match in the other repositories of project '{Bound.Slug}'; drop `repo` to see them."
+                           : $"Nothing matches in the other repositories of project '{Bound.Slug}' either; try a wider glob.");
             }
 
             var text = new StringBuilder();
@@ -295,9 +319,8 @@ internal sealed partial class FileTools(
         int depth = 1,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
         return ToolReply.Render<TreeListing>(
-            await files.TreeAsync(project.Slug, new TreeRequest(path, depth), cancellationToken), Format,
+            await files.TreeAsync(Bound.Slug, new TreeRequest(path, depth), cancellationToken), Format,
             "List a subdirectory, or use a smaller depth.");
 
         string Format(TreeListing listing)
@@ -305,17 +328,17 @@ internal sealed partial class FileTools(
             string listed = listing.Directory.QualifiedPath;
             if (listing.Entries.Count == 0)
                 return
-                    $"{(listed.Length == 0 ? $"Project '{project.Slug}'" : $"Repository '{listed}'")} has no indexed files. Call repo_info to see what the index holds.";
+                    $"{(listed.Length == 0 ? $"Project '{Bound.Slug}'" : $"Repository '{listed}'")} has no indexed files. Call repo_info to see what the index holds.";
 
             var text = new StringBuilder();
             if (listing.RepositoryLevel)
                 text.Append(CultureInfo.InvariantCulture,
-                    $"{project.Slug} (depth {depth}, {listing.Repositories} {ToolReply.Plural(listing.Repositories, "repository", "repositories")})\n");
+                    $"{Bound.Slug} (depth {depth}, {listing.Repositories} {ToolReply.Plural(listing.Repositories, "repository", "repositories")})\n");
             else
                 // A single-repository project's root formats as the empty path (ADR-0006); it is headed by
                 // the project, which is what the caller asked for.
                 text.Append(CultureInfo.InvariantCulture,
-                    $"{(listed.Length == 0 ? project.Slug : listed + "/")} (depth {depth}, {listing.Entries.Count} entries)\n");
+                    $"{(listed.Length == 0 ? Bound.Slug : listed + "/")} (depth {depth}, {listing.Entries.Count} entries)\n");
 
             // Entries are printed relative to what was listed, as `tree` does; at the repository level the
             // qualified path already starts with the slug and nothing is stripped.
@@ -345,9 +368,8 @@ internal sealed partial class FileTools(
         string? repo = null,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
         return ToolReply.Render<ExtensionListing>(
-            await files.ExtensionsAsync(project.Slug, new ExtensionsRequest(repo), cancellationToken), Format,
+            await files.ExtensionsAsync(Bound.Slug, new ExtensionsRequest(repo), cancellationToken), Format,
             "Scope to one repository with repo.");
 
         string Format(ExtensionListing listing)
@@ -356,14 +378,14 @@ internal sealed partial class FileTools(
             var extensions = listing.Extensions;
             if (extensions.Count == 0)
                 return repository is null
-                    ? $"Project '{project.Slug}' has no files in its index. Its repositories may be empty; repo_info shows what was indexed."
-                    : $"Repository '{repository.Slug}' has no files in the index of project '{project.Slug}'.";
+                    ? $"Project '{Bound.Slug}' has no files in its index. Its repositories may be empty; repo_info shows what was indexed."
+                    : $"Repository '{repository.Slug}' has no files in the index of project '{Bound.Slug}'.";
 
             var text = new StringBuilder();
             int total = extensions.Sum(e => e.Files);
             text.Append(repository is null
-                ? $"Extensions in project '{project.Slug}'"
-                : $"Extensions in repository '{repository.Slug}' of project '{project.Slug}'");
+                ? $"Extensions in project '{Bound.Slug}'"
+                : $"Extensions in repository '{repository.Slug}' of project '{Bound.Slug}'");
             text.Append(CultureInfo.InvariantCulture, $" ({total} {ToolReply.Plural(total, "file")}), most files first:\n");
             int width = Math.Max(6, extensions.Max(e => Label(e).Length));
             foreach (var extension in extensions)
@@ -409,9 +431,8 @@ internal sealed partial class FileTools(
         int offset = 0,
         CancellationToken cancellationToken = default)
     {
-        var project = BoundProject.Get(httpContextAccessor);
         return ToolReply.Render<DeclarationsResult>(
-            await declarations.ForFileAsync(project.Slug, path, offset, cancellationToken), Format,
+            await declarations.ForFileAsync(Bound.Slug, path, offset, cancellationToken), Format,
             "Ask about a smaller file, or read the ranges you need with read_file.");
     }
 

@@ -5,6 +5,12 @@ namespace CodeExplorer;
 ///     committed but has no lines in the index, so <paramref name="Content" /> is empty for a reason
 ///     the view can name.
 /// </summary>
+/// <remarks>
+///     The two commits are <see cref="AttributedBy" />, the read's own record, rather than a copy of
+///     it: both are null where no history was imported, which the view says rather than drawing an
+///     empty field, and that is the read's distinction and not this layer's to restate
+///     (CONTEXT.md, History).
+/// </remarks>
 internal sealed record FileContentResponse(
     string QualifiedPath,
     string RepositorySlug,
@@ -12,27 +18,16 @@ internal sealed record FileContentResponse(
     long SizeBytes,
     string? SkipReason,
     string Content,
-    FileCommitResponse? FirstCommit,
-    FileCommitResponse? LastCommit);
-
-/// <summary>
-///     The commit a file was first or last changed by, as the file view names it. Both are null where
-///     no history was imported, which the view says rather than drawing an empty field: "no history"
-///     and "never changed" are opposite claims (CONTEXT.md, History).
-/// </summary>
-internal sealed record FileCommitResponse(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
-
-/// <summary>
-///     One run of consecutive lines sharing an attribution, for the blame gutter.
-///     <paramref name="By" /> is null for a run the build could not attribute.
-/// </summary>
-internal sealed record BlameRunResponse(int StartLine, int EndLine, FileCommitResponse? By);
+    AttributedBy? FirstCommit,
+    AttributedBy? LastCommit);
 
 /// <summary>
 ///     A file's blame. Its own response and its own request, because it is the one history read whose
 ///     size is the file's rather than a row's, and the file view draws the code without waiting for it.
+///     The runs are the read's own <see cref="AttributedLines" />: a run and a run of the gutter are
+///     the same three fields, and a second spelling of them would be a mapper that only re-typed.
 /// </summary>
-internal sealed record BlameResponse(string QualifiedPath, IReadOnlyList<BlameRunResponse> Runs);
+internal sealed record BlameResponse(string QualifiedPath, IReadOnlyList<AttributedLines> Runs);
 
 /// <summary>
 ///     One name a file imports. <paramref name="TargetPath" /> and <paramref name="Unresolved" /> are
@@ -59,23 +54,6 @@ internal sealed record FileImportsResponse(
     string? Module,
     bool Capped,
     IReadOnlyList<ImportEdgeResponse> Imports);
-
-/// <summary>One file that imports the file asked about, and the line that does it.</summary>
-internal sealed record DependentResponse(string QualifiedPath, string Name, int LineNumber);
-
-/// <summary>
-///     What imports a file. <paramref name="ShareTheModule" /> and <paramref name="Unplaced" /> are
-///     why an empty list is not the sentence "nothing depends on this": a module several files declare
-///     resolves to none of them, and an unresolved edge spelling this file's name may be a dependency
-///     the index could not place. Both are zero where the question does not arise.
-/// </summary>
-internal sealed record FileDependentsResponse(
-    string QualifiedPath,
-    string? Module,
-    int ShareTheModule,
-    int Unplaced,
-    bool Capped,
-    IReadOnlyList<DependentResponse> Dependents);
 
 /// <summary>
 ///     One declaration the file page's rail lists. <paramref name="Type" /> and
@@ -109,42 +87,10 @@ internal sealed record FileDeclarationsResponse(
     bool Capped,
     IReadOnlyList<DeclarationResponse> Declarations);
 
-/// <summary>One commit of the change log, with the message body and what it did to the tree in sums.</summary>
-internal sealed record CommitResponse(
-    string Sha,
-    string RepositorySlug,
-    string AuthorName,
-    string AuthorEmail,
-    DateTimeOffset AuthoredAt,
-    string Subject,
-    string Body,
-    int FilesChanged,
-    int Added,
-    int Deleted);
-
-/// <summary>
-///     A page of the change log. <see cref="Total" /> counts every commit in scope, so the page can say
-///     how many there are; zero is a project or repository without history, not an error.
-/// </summary>
-internal sealed record CommitListResponse(long Total, int Page, int PageSize, IReadOnlyList<CommitResponse> Commits);
-
 /// <summary>One path a commit touched; <see cref="QualifiedPath" /> links to the file when it is still at HEAD.</summary>
 internal sealed record CommitFileResponse(string Path, string ChangeKind, int Added, int Deleted, string? QualifiedPath);
 
 internal sealed record CommitFilesResponse(string Sha, IReadOnlyList<CommitFileResponse> Files);
-
-/// <summary>
-///     One file of the churn ranking. <see cref="QualifiedPath" /> is how the project names the path
-///     (ADR-0006) and is always set, because a window ranks paths that are no longer at HEAD and those
-///     have to be named too; <see cref="AtHead" /> is what says whether there is a file there to open.
-/// </summary>
-internal sealed record ChurnFileResponse(
-    string QualifiedPath,
-    string RepositorySlug,
-    bool AtHead,
-    int Commits,
-    long Added,
-    long Deleted);
 
 /// <summary>
 ///     A churn ranking and the window it covers. <see cref="Since" /> and <see cref="Until" /> are
@@ -160,7 +106,7 @@ internal sealed record ChurnFileResponse(
 internal sealed record ChurnResponse(
     DateTimeOffset? Since,
     DateTimeOffset? Until,
-    IReadOnlyList<ChurnFileResponse> Files,
+    IReadOnlyList<ChurnedFile> Files,
     IReadOnlyList<string> WithoutHistory);
 
 /// <summary>One file in a listing. The index's internal file id is deliberately not in it.</summary>
@@ -180,18 +126,6 @@ internal sealed record FileListEntry(
 internal sealed record FileListResponse(int Total, int Page, int PageSize, IReadOnlyList<FileListEntry> Files);
 
 /// <summary>
-///     One row of a tree listing. <paramref name="Files" /> is null for a file and counts everything
-///     beneath for a directory, which is how the view tells them apart without a second field.
-/// </summary>
-internal sealed record TreeEntryResponse(
-    string Name,
-    string QualifiedPath,
-    int? Files,
-    long Lines,
-    long SizeBytes,
-    string? SkipReason);
-
-/// <summary>
 ///     One level of the tree. <paramref name="Path" /> echoes the level that was asked for — empty at
 ///     the project root — so the view can draw a breadcrumb from the response alone.
 ///     <paramref name="RepositoryLevel" /> says whether the entries are repositories rather than
@@ -201,7 +135,7 @@ internal sealed record TreeEntryResponse(
 internal sealed record TreeResponse(
     string Path,
     bool RepositoryLevel,
-    IReadOnlyList<TreeEntryResponse> Entries);
+    IReadOnlyList<TreeItem> Entries);
 
 /// <summary>
 ///     Browsing, searching and file reads for the operator UI. The same services answer the MCP tools;
@@ -327,18 +261,12 @@ internal static class SearchEndpoints
     /// <summary>Commits per page of the change log when the caller does not say. A screen and a bit.</summary>
     private const int DefaultCommitPage = 50;
 
-    private static IResult Commits(ChangeLogAnswer answer) =>
-        Results.Ok(new CommitListResponse(answer.Total, answer.Page, answer.PageSize,
-            answer.Commits.Select(Logged).ToList()));
-
     /// <summary>
-    ///     One logged commit as the API spells it. Written once because a page of the log and a commit's
-    ///     own page answer the same ten fields, and the read behind them already goes to the trouble of
-    ///     counting them once — two spellings here would undo that a layer up.
+    ///     A page of the change log, as the read already holds it: the total, the page, its size and the
+    ///     commits. A response record here would have been those four fields again and ten more per
+    ///     commit, copied across with nothing decided on the way.
     /// </summary>
-    private static CommitResponse Logged(LoggedCommit commit) =>
-        new(commit.Sha, commit.RepositorySlug, commit.AuthorName, commit.AuthorEmail, commit.AuthoredAt,
-            commit.Subject, commit.Body, commit.FilesChanged, commit.Added, commit.Deleted);
+    private static IResult Commits(ChangeLogAnswer answer) => Results.Ok(answer);
 
     /// <summary>
     ///     Files in a churn ranking when the caller does not say. A screenful: the ranking is read from
@@ -354,18 +282,16 @@ internal static class SearchEndpoints
     ///     nothing changed.
     /// </summary>
     private static IResult Churn(ChurnAnswer answer) =>
-        Results.Ok(new ChurnResponse(answer.Window?.Since, answer.Window?.Until,
-            answer.Files
-                .Select(f => new ChurnFileResponse(f.QualifiedPath, f.RepositorySlug, f.AtHead, f.Commits, f.Added,
-                    f.Deleted))
-                .ToList(), answer.Coverage.Without));
+        Results.Ok(new ChurnResponse(answer.Window?.Since, answer.Window?.Until, answer.Files,
+            answer.Coverage.Without));
 
     /// <summary>
     ///     One commit, in the same shape the change log lists it in, so the page a link opens and the row
-    ///     it was linked from read the same commit the same way. That sameness is <see cref="Logged" />
-    ///     and not a second spelling of the projection, for the reason the read behind it gives.
+    ///     it was linked from read the same commit the same way. That sameness is the read's own
+    ///     <see cref="LoggedCommit" /> on both routes, which is what makes it sameness rather than two
+    ///     projections that happen to agree today.
     /// </summary>
-    private static IResult OneCommit(CommitAnswer answer) => Results.Ok(Logged(answer.Commit));
+    private static IResult OneCommit(CommitAnswer answer) => Results.Ok(answer.Commit);
 
     /// <summary>
     ///     The paths one commit touched. A SHA the index does not hold is a problem of kind
@@ -394,11 +320,7 @@ internal static class SearchEndpoints
     ///     rather than shown an empty tree, and the view draws the same "nothing here" for both.
     /// </summary>
     private static IResult Tree(TreeListing listing) =>
-        Results.Ok(new TreeResponse(listing.Directory.QualifiedPath, listing.RepositoryLevel,
-            listing.Entries
-                .Select(e => new TreeEntryResponse(e.Name, e.QualifiedPath, e.Files, e.Lines, e.SizeBytes,
-                    e.SkipReason))
-                .ToList()));
+        Results.Ok(new TreeResponse(listing.Directory.QualifiedPath, listing.RepositoryLevel, listing.Entries));
 
     /// <summary>
     ///     The one file the view asked for. A read answers per entry, so the miss is on the entry and not
@@ -409,8 +331,8 @@ internal static class SearchEndpoints
         var read = result.Files[0];
         if (read.File is not { } file) return Status(read.Problem!);
         return Results.Ok(new FileContentResponse(file.QualifiedPath, file.RepositorySlug, file.LineCount,
-            file.SizeBytes, file.SkipReason, string.Join('\n', read.Lines), Commit(read.History?.First),
-            Commit(read.History?.Last)));
+            file.SizeBytes, file.SkipReason, string.Join('\n', read.Lines), read.History?.First,
+            read.History?.Last));
     }
 
     private static IResult Imports(ImportsResult result) =>
@@ -432,12 +354,12 @@ internal static class SearchEndpoints
                     d.Role?.ToString().ToLowerInvariant(), d.Evidence.ToString().ToLowerInvariant()))
                 .ToList()));
 
-    private static IResult Dependents(DependentsResult result) =>
-        Results.Ok(new FileDependentsResponse(result.QualifiedPath, result.Module,
-            result.ShareTheModule, result.Unplaced, result.Capped,
-            result.Dependents
-                .Select(d => new DependentResponse(d.QualifiedPath, d.Name, d.LineNumber))
-                .ToList()));
+    /// <summary>
+    ///     What imports a file, as the read already holds it: <see cref="DependentsResult" /> is the
+    ///     panel's six fields exactly, down to the two counts that are why an empty list is not the
+    ///     sentence "nothing depends on this".
+    /// </summary>
+    private static IResult Dependents(DependentsResult result) => Results.Ok(result);
 
     /// <summary>
     ///     A file's attribution as runs. A file with no history answers with no runs rather than a
@@ -445,8 +367,7 @@ internal static class SearchEndpoints
     ///     file the build kept without lines, which the query module answers the same way.
     /// </summary>
     private static IResult Blame(BlameAnswer answer) =>
-        Results.Ok(new BlameResponse(answer.File.QualifiedPath,
-            answer.Runs.Select(r => new BlameRunResponse(r.StartLine, r.EndLine, Commit(r.By))).ToList()));
+        Results.Ok(new BlameResponse(answer.File.QualifiedPath, answer.Runs));
 
     /// <summary>
     ///     An outcome as JSON: a problem becomes the status its kind says, and a result the shape the
@@ -457,9 +378,6 @@ internal static class SearchEndpoints
     /// </summary>
     private static IResult Answer<T>(Outcome outcome, Func<T, IResult> answer) where T : Outcome =>
         outcome is Problem problem ? Status(problem) : answer((T)outcome);
-
-    private static FileCommitResponse? Commit(AttributedBy? by) =>
-        by is null ? null : new FileCommitResponse(by.Sha, by.AuthorName, by.AuthoredAt, by.Subject);
 
     /// <summary>
     ///     No index is a 404 — the view renders it as the starting state a new project is in — and so is

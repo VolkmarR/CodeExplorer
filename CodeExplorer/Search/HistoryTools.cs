@@ -36,7 +36,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     /// </summary>
     private const int MaxBlameRuns = 400;
 
-    private string Project => BoundProject.Get(httpContextAccessor).Slug;
+    private Project Bound => BoundProject.Get(httpContextAccessor);
 
     [McpServerTool(Name = "git_log", ReadOnly = true, Idempotent = true, Title = "List the project's commits")]
     [Description("""
@@ -77,7 +77,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         // well-formed, plausible and wrong (#86). What was sent and ignored is said above this answer
         // by the call-tool filter (ToolArguments), which reads the caller's raw arguments and so
         // catches every spelling rather than the four this tool once declared to catch them.
-        var outcome = await history.LogAsync(Project, new LogRequest(repo, limit, page, author, message, path),
+        var outcome = await history.LogAsync(Bound.Slug, new LogRequest(repo, limit, page, author, message, path),
             cancellationToken);
         return ToolReply.Render<LogAnswer>(outcome, Log,
             answer => $"Narrow with repo, path or author, or raise page past {answer.Page}.");
@@ -184,7 +184,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         CancellationToken cancellationToken = default)
     {
         return ToolReply.Render<AuthorsAnswer>(
-            await history.AuthorsAsync(Project, new AuthorsRequest(repo, limit, path), cancellationToken),
+            await history.AuthorsAsync(Bound.Slug, new AuthorsRequest(repo, limit, path), cancellationToken),
             AuthorList, "Lower limit to see fewer, or scope with repo or path.");
     }
 
@@ -229,7 +229,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         CancellationToken cancellationToken = default)
     {
         return ToolReply.Render<FileHistoryAnswer>(
-            await history.FileHistoryAsync(Project, new FileHistoryRequest(path, limit), cancellationToken),
+            await history.FileHistoryAsync(Bound.Slug, new FileHistoryRequest(path, limit), cancellationToken),
             Changes, "Lower limit to see fewer.");
     }
 
@@ -284,7 +284,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         CancellationToken cancellationToken = default)
     {
         return ToolReply.Render<BlameAnswer>(
-            await history.BlameAsync(Project, new BlameRequest(path, startLine, endLine), cancellationToken),
+            await history.BlameAsync(Bound.Slug, new BlameRequest(path, startLine, endLine), cancellationToken),
             Attribution, "Narrow with startLine and endLine.");
     }
 
@@ -338,7 +338,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         CancellationToken cancellationToken = default)
     {
         return ToolReply.Render<CommitAnswer>(
-            await history.CommitAsync(Project, new CommitRequest(sha), cancellationToken), Record,
+            await history.CommitAsync(Bound.Slug, new CommitRequest(sha), cancellationToken), Record,
             "That length is the commit's own message; commit_files lists what it touched separately.");
     }
 
@@ -387,7 +387,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         CancellationToken cancellationToken = default)
     {
         return ToolReply.Render<CommitFilesAnswer>(
-            await history.CommitFilesAsync(Project, new CommitFilesRequest(sha), cancellationToken),
+            await history.CommitFilesAsync(Bound.Slug, new CommitFilesRequest(sha), cancellationToken),
             answer => Touched(answer, Math.Max(0, offset)),
             "Nothing narrows this list, and a page already holds at most "
             + $"{MaxPathsListed.ToString(CultureInfo.InvariantCulture)} paths; call commit for the file count "
@@ -504,7 +504,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         string? exclude = null,
         CancellationToken cancellationToken = default)
     {
-        string project = Project;
+        string project = Bound.Slug;
         return ToolReply.Render<ChurnAnswer>(
             await history.ChurnAsync(project, new ChurnRequest(directory, days, limit, depth, exclude),
                 cancellationToken),
@@ -596,7 +596,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         int limit = DefaultRankedFiles,
         CancellationToken cancellationToken = default)
     {
-        string project = Project;
+        string project = Bound.Slug;
         return ToolReply.Render<CoChangeAnswer>(
             await history.CoChangedAsync(project, new CoChangeRequest(path, days, limit), cancellationToken),
             answer => Coupling(answer, project), "Lower limit to see fewer.");
