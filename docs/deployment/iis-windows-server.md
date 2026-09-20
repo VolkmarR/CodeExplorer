@@ -6,9 +6,9 @@ the server in; everything the app needs from Azure is selected by configuration,
 selects a local default (ADR-0004), so an entirely on-premises install is a supported shape rather
 than a degraded one.
 
-Nothing here is covered by the tests, and no part of the repository is built for Windows hosting —
-the `Dockerfile` is the only deployment artefact that exists. Read this as a worked procedure, not as
-something CI proves.
+Nothing here is covered by the tests. `build.cs` packages sections 1 and 2 of what follows into a zip
+— that much is a build artefact like the image — but everything from section 3 on is a worked
+procedure, not something CI proves.
 
 What you give up by not being in Azure is one thing and it is significant: with no blob container, the
 Data Protection key ring is local to this machine and this application pool identity. What follows
@@ -33,10 +33,30 @@ On a build machine — which can be the server, but does not have to be:
 
 - The .NET 10 SDK, and Node 24 with pnpm through corepack, because the UI is a `vite-plus` build that
   runs outside msbuild and nothing in the .NET build produces it.
+- **Windows, and outbound access.** Not because the app needs either — the publish is portable and
+  builds anywhere — but because of the extension in section 2: it is stamped with the platform that
+  will load it, so a Linux build machine produces one this server ignores. `build.cs` refuses to
+  package there rather than shipping it.
 
 ## 1. Build the publish output
 
-The UI first, because the publish copies its output:
+Sections 1 and 2 are what `build.cs` does, on a Windows build machine with the network:
+
+```powershell
+.\build.ps1 --target=Package-Zip
+```
+
+It writes `artifacts\codeexplorer-<commit>-win-x64.zip`, laid out for this guide's paths, so on the
+server it is one command and sections 2 to 5 already point at what comes out:
+
+```powershell
+Expand-Archive codeexplorer-<commit>-win-x64.zip -DestinationPath C:\CodeExplorer
+```
+
+`app`, `duckdb\extensions` and a copy of this guide. Skip to section 3 if you took this route; the
+rest of section 1 and section 2 are what the script did.
+
+By hand, then, the UI first, because the publish copies its output:
 
 ```powershell
 cd web
@@ -56,6 +76,9 @@ in-process hosting model. Keep in-process — it is the default and the faster o
 needs the out-of-process model.
 
 ## 2. Install the `fts` extension for Windows
+
+`build.cs` did this if you unpacked the zip — it is the step that makes the package Windows-only —
+and what follows is the same two commands by hand.
 
 This step has no equivalent in the container guide because the image does it during its own build,
 and its result cannot be reused: a DuckDB extension is stamped with the version and the platform of
@@ -260,7 +283,7 @@ work.
 | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | HTTP 500.19, or the site will not start                          | The hosting bundle was installed before IIS. Reinstall it, then `iisreset`. |
 | HTTP 500.30 with nothing else                                    | Turn on `stdoutLogEnabled` in `web.config` briefly; a configuration error that stops the app names itself there. |
-| `DllNotFoundException` or `BadImageFormatException`, `duckdb.dll` | The VC++ redistributable, or a publish that dropped `runtimes\win-x64\native`. |
+| `DllNotFoundException` or `BadImageFormatException`, `duckdb.dll` | The VC++ redistributable, or a publish that dropped `runtimes\win-x64\native` — which `build.cs` fails on, so from the zip it is the redistributable. |
 | Startup stops naming `Index:SearchEngine`                        | The extension directory has no `windows_amd64` copy. Section 2 — and note that the image's Linux copy will not do. |
 | Credentials stopped decrypting after maintenance                 | The application pool identity changed. Section 6.                          |
 | `IOException` on an index file, intermittently                   | Two worker processes. Check `maxProcesses` and overlapped recycling in section 3. |

@@ -5,6 +5,9 @@
 **/node_modules
 **/dist
 CodeExplorer/wwwroot
+# `build.cs` stages the Windows zip here, and it is a whole publish output: uploading it as build
+# context would cost more than the image build itself.
+artifacts/
 
 # Local state and tooling output: a developer's data directory holds clones, indexes and DuckDB spill
 # files, and none of it is small.

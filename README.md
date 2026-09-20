@@ -128,6 +128,27 @@ turned on:
 Neither is covered by the tests, for the reason the Azure half of the settings above is not: nothing
 in them reaches an account or a server.
 
+`build.cs` packages both, from a clean checkout:
+
+```
+.\build.ps1                              # both
+.\build.ps1 --target=Package-Container   # the image, tagged with the commit and latest
+.\build.ps1 --target=Package-Zip         # artifacts/codeexplorer-<commit>-win-x64.zip
+```
+
+It is a [Cake.Sdk](https://cakebuild.net/docs/running-builds/runners/cake-sdk) file-based build:
+`#:sdk Cake.Sdk` at the top of a `.cs` file and no project around it, so the only prerequisite is the
+.NET 10 SDK that builds the app anyway. `build.ps1` bootstraps nothing — there is nothing left to
+bootstrap — and only passes its arguments to `dotnet run build.cs -- …`, which is the same thing to
+type when you would rather not go through it. `--registry=<name>.azurecr.io` tags the image for a
+registry and `--push` sends it, which is the alternative the Azure guide names to `az acr build`.
+
+The zip is the asymmetric half. The image builds the UI and bakes the `fts` extension in its own
+stages; the zip has to do both on the build machine, and the extension is stamped with the platform
+that will load it — so packaging a Windows zip on Linux would bake a copy no Windows host loads. The
+target refuses to run there rather than shipping one, and `--no-fts` is how you say you will install
+it on the server instead.
+
 ## Layout
 
 | Path                 | What it is                                                        |
@@ -138,5 +159,7 @@ in them reaches an account or a server.
 | `docs/adr/`          | The decisions the code follows from.                               |
 | `docs/deployment/`   | One guide per host: Azure Container Apps, IIS on Windows Server.   |
 | `Dockerfile`         | UI, API and the baked `fts` extension in one build.                |
+| `build.cs`           | Cake.Sdk: packages the image and the Windows zip.                   |
+| `build.ps1`          | A wrapper around it. Passes its arguments through, nothing else.    |
 
 `CONTEXT.md` holds the vocabulary; `CODING_STANDARDS.md` holds the rules tooling cannot check.
