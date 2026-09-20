@@ -24,8 +24,10 @@ verification section at the end as part of the deployment rather than as an opti
 ## Before you start
 
 - The Azure CLI, signed in, with the `containerapp` extension: `az extension add --name containerapp`.
-- Docker, to build the image. The build needs the network — the `fts` bake is deliberately the one
-  step that fails the build rather than degrading at runtime (ADR-0004, #14).
+- Docker, to build the image — and the .NET 10 SDK if you drive it through `build.cs` rather than
+  calling `docker` yourself. Neither is needed for the `az acr build` in section 2, which builds in
+  ACR Tasks. The build needs the network — the `fts` bake is deliberately the one step that fails
+  the build rather than degrading at runtime (ADR-0004, #14).
 - Permission to create role assignments on the storage account and the key vault. The app
   authenticates with `DefaultAzureCredential` and no connection string, so RBAC is the whole of its
   access (`DurableStore.Credential`).
@@ -70,7 +72,13 @@ az acr build -g $RG -r $ACR -t codeexplorer:$(git rev-parse --short HEAD) -t cod
 
 `az acr build` runs the same `Dockerfile` in ACR Tasks, which saves pushing an image over your
 connection. `docker build` and `az acr login && docker push` do the same thing if you would rather
-build locally.
+build locally, and
+
+```bash
+dotnet run build.cs -- --target=Package-Container --registry=$ACR.azurecr.io --push
+```
+
+is those two with the same two tags as above, after `az acr login -n $ACR`.
 
 One build from a clean checkout produces both halves: the UI through `vite-plus` into
 `CodeExplorer/wwwroot`, then the framework-dependent publish, then the `fts` bake. The image sets

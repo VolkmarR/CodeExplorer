@@ -41,3 +41,7 @@ Thumbs.db
 # Vite+ / oxlint caches
 .vite/
 .vp/
+
+# Build output of `dotnet run build.cs` — the container image goes to the daemon, the Windows zip
+# and its staging folder come here.
+artifacts/
