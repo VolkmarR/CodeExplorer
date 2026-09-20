@@ -34,9 +34,11 @@ public sealed record DefinitionSite(
 ///     "this particular answer happened to contain both" — a routine found only in an implementation
 ///     section is still an implementation, and a caller inferring the split from the sites would print
 ///     it unlabelled.
-///     <see cref="Unprofiled" /> is the extensions among the files naming the symbol that no profile
-///     covers (#126). It is carried whether or not sites were found: a declaration form the default
-///     shapes do not know is missing from a full answer exactly as silently as from an empty one.
+///     <see cref="Uncovered" /> is the languages among the files naming the symbol that this scan was
+///     not equipped to read — the extensions no profile covers (#126) and the profiled languages that
+///     declare no declaration shapes, whose files no branch of the query asked for at all (#129). It
+///     is carried whether or not sites were found: a declaration the scan could not see is missing
+///     from a full answer exactly as silently as from an empty one.
 /// </summary>
 public sealed record DefinitionResult(
     IReadOnlyList<DefinitionSite> Sites,
@@ -44,7 +46,7 @@ public sealed record DefinitionResult(
     bool Separated,
     int FilesNamingIt,
     int? FilesNamingItWithoutFilters,
-    IReadOnlyList<UnprofiledFiles> Unprofiled) : Outcome;
+    IReadOnlyList<UncoveredFiles> Uncovered) : Outcome;
 
 /// <summary>
 ///     Where a symbol is declared (#54), answered in one call instead of a reference search read past
@@ -114,7 +116,8 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
         var symbolPattern = new DuckDBParameter("q", SymbolText.WholeWordPattern(symbol));
         var parameters = new List<DuckDBParameter> { symbolPattern };
         string literally = SearchQuery.Literally(symbol, parameters);
-        string declarationShapes = await ShapesAsync(connection, parameters, cancellationToken);
+        var shapes = await ShapesAsync(connection, parameters, cancellationToken);
+        string declarationShapes = shapes.Sql;
         string fileFilter = filter.Sql(parameters);
 
         var candidates = new List<Candidate>();
@@ -201,12 +204,14 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
 
         // What the scan was not equipped to read, over the files that spell the name. After the sites
         // and not instead of them: an answer that found three declarations may still be missing the
-        // one written in a language no profile covers, and the reply says so either way (#126).
-        var unprofiled = await ScopeCoverage.OfMatchesAsync(connection,
-            $"{literally} AND regexp_matches(l.content, $q, '')", fileFilter, parameters, cancellationToken);
+        // one written in a language no profile covers, and the reply says so either way (#126) — or
+        // in one this asked the engine for no lines of at all (#129).
+        var uncovered = await ScopeCoverage.OfMatchesAsync(connection,
+            $"{literally} AND regexp_matches(l.content, $q, '')", fileFilter, parameters, shapes.Unreadable,
+            cancellationToken);
 
         return new DefinitionResult([.. ranked.Take(MaxSites)], ranked.Count, separated, naming,
-            namingWithoutFilters, unprofiled);
+            namingWithoutFilters, uncovered);
     }
 
     /// <summary>One line the engine offered, before the file's language says what it declares.</summary>
@@ -229,9 +234,12 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
     ///     remainder that no profile covers — <see cref="LanguageRegistry.For" /> answers for those
     ///     like any other, which is what keeps the extension-to-language table on its own side of the
     ///     seam.
+    ///     The extensions that contributed no branch come back beside the clause, because this is the
+    ///     one place that knows them and a reply owes them a sentence: a file no branch asked for is
+    ///     not a file that was searched and held nothing (#129).
     /// </summary>
-    private static async Task<string> ShapesAsync(DuckDBConnection connection, List<DuckDBParameter> parameters,
-        CancellationToken cancellationToken)
+    private static async Task<(string Sql, IReadOnlyList<string> Unreadable)> ShapesAsync(
+        DuckDBConnection connection, List<DuckDBParameter> parameters, CancellationToken cancellationToken)
     {
         var extensions = new List<string>();
         using (var command = connection.Query("SELECT DISTINCT extension FROM files", []))
@@ -241,11 +249,15 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
         }
 
         var branches = new List<string>();
+        var unreadable = new List<string>();
         foreach (var language in extensions.GroupBy(Languages.Default.For))
         {
             if (SearchQuery.Narrowing(language.Key.DeclarationCandidates, $"d{parameters.Count}", parameters)
                 is not { } narrowing)
+            {
+                unreadable.AddRange(language);
                 continue;
+            }
             var names = new List<string>();
             foreach (string extension in language)
             {
@@ -261,6 +273,6 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
 
         // An empty project, or one whose every language declares it can read no declarations, answers
         // nothing rather than everything — which is what an empty alternation would have meant.
-        return branches.Count == 0 ? "false" : string.Join(" OR ", branches);
+        return (branches.Count == 0 ? "false" : string.Join(" OR ", branches), unreadable);
     }
 }
