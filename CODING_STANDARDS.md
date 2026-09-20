@@ -148,10 +148,21 @@ Two kinds of failure, two mechanisms. Never mix them.
 - Named function declarations for components, not arrow consts. One component per file, PascalCase
   filename matching the export.
 - **The web app mirrors the server's module folders** (ADR-0005): `web/src/features/<concept>/`
-  holds that concept's components and its query definitions, `web/src/routes/` the file-based
-  routes, `web/src/components/` only what every feature uses, `web/src/lib/` the API client, the
-  shared query-key roots and the URL contracts in `lib/urls/`, and `web/src/hooks/` what more than
-  one feature reuses. A feature folder is a boundary, not a bucket. Neither `components/` nor `lib/`
+  holds that concept's components, its query definitions, and in `api.ts` the calls it makes and the
+  shapes they answer with, `web/src/routes/` the file-based routes, `web/src/components/` only what
+  every feature uses, `web/src/lib/` the HTTP client and its hooks in `http.ts`, the auth read the
+  frame and that client both need, the shared query-key roots and the URL contracts in `lib/urls/`,
+  and `web/src/hooks/` what more than one feature reuses. A feature folder is a boundary, not a
+  bucket.
+- **A response shape is declared by the feature that reads it**, never in `lib/`: the shapes are
+  hand-mirrored from the C# records with no OpenAPI document to generate them from, so drift is
+  caught at runtime, and the feature that would see it is the one that should hold the declaration.
+  A shape two features read is imported from the feature that owns the concept — `CommitRef` from
+  `features/history` — and a shared component under `components/`, which may not reach into a
+  feature at all, declares the fields it renders as its own prop type. The one exception is the auth
+  read in `lib/auth.ts`: it is the session the frame is drawn inside rather than any concept's
+  answer, and it sits beside the client with the 401 hook and the sign-in URL, which are the rest of
+  the same decision about who may call `/api`. Neither `components/` nor `lib/`
   may import from `features/`, and a lint rule fails `vp check` on one that does, as
   `ModuleBoundaryTests` does for the server. `web/src/app/` is the frame — the sidebar, the top bar,
   the root layout and the navigation table — and is the one shared folder that may depend on

@@ -7,7 +7,8 @@ import { RailPanel } from '@/features/files/RailPanel'
 import { RailPending } from '@/features/files/RailPending'
 import { CommitLine } from '@/components/CommitLine'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import type { CommitRef, FileContent } from '@/lib/api'
+import type { CommitRef } from '@/features/history/api'
+import type { FileContent } from '@/features/files/api'
 
 /**
  * How many commits the rail names. Enough to recognise the stretch of work a file is in the middle

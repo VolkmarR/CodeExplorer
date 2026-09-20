@@ -1,4 +1,4 @@
-import type { CommitRef } from '@/lib/api'
+import type { CommitRef } from '@/features/history/api'
 
 /**
  * When the history this project holds ends.

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { api } from '@/lib/api'
+import { removeProject } from '@/features/projects/api'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { ProjectCard } from '@/features/projects/ProjectCard'
@@ -26,7 +26,7 @@ export function ProjectSettings() {
   const navigate = useNavigate()
 
   const remove = useMutation({
-    mutationFn: () => api.removeProject(slug),
+    mutationFn: () => removeProject(slug),
     onSuccess: async () => {
       await queryClient.invalidateQueries(projectsQuery())
       // The toast outlives the page, which is the point: the list this lands on shows the project

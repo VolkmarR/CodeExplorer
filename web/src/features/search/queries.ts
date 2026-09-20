@@ -1,7 +1,7 @@
 import { queryOptions } from '@tanstack/react-query'
 import type { SearchParameters } from '@/lib/urls/searchParams'
-import type { GrepResult } from '@/lib/api'
-import { api } from '@/lib/api'
+import type { GrepResult } from '@/features/search/api'
+import { fetchSearch } from '@/features/search/api'
 import { projectKey } from '@/lib/queryKeys'
 
 /**
@@ -26,7 +26,7 @@ export function searchQuery(project: string, query: SearchParameters) {
   return queryOptions({
     queryFn: async (): Promise<TimedSearch> => {
       const started = performance.now()
-      const result = await api.search(project, query)
+      const result = await fetchSearch(project, query)
       return { elapsedMs: Math.round(performance.now() - started), result }
     },
     queryKey: [...projectKey(project), 'search', query],

@@ -1,4 +1,4 @@
-import type { Declaration, FileDeclarations } from '@/lib/api'
+import type { Declaration, FileDeclarations } from '@/features/files/api'
 
 /**
  * What the declarations panel has to say beside its list, or null when the list speaks for itself.

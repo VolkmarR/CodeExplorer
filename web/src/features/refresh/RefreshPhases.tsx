@@ -1,4 +1,4 @@
-import type { PhaseCost } from '@/lib/api'
+import type { PhaseCost } from '@/features/refresh/api'
 
 /**
  * What a refresh spent, phase by phase. The status holds one phase at a time, so until #92 a refresh

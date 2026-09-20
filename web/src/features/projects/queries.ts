@@ -1,15 +1,15 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { queryOptions } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { fetchProject, fetchProjectOverview, fetchProjects } from '@/features/projects/api'
 import { projectKey, projectsKey } from '@/lib/queryKeys'
 
 /** The list of what exists. MCP has no discovery, so this is the only place a project is visible. */
 export function projectsQuery() {
-  return queryOptions({ queryFn: () => api.projects(), queryKey: projectsKey })
+  return queryOptions({ queryFn: () => fetchProjects(), queryKey: projectsKey })
 }
 
 export function projectQuery(slug: string) {
-  return queryOptions({ queryFn: () => api.project(slug), queryKey: projectKey(slug) })
+  return queryOptions({ queryFn: () => fetchProject(slug), queryKey: projectKey(slug) })
 }
 
 /**
@@ -21,7 +21,7 @@ export function projectQuery(slug: string) {
  */
 export function projectOverviewQuery(slug: string) {
   return queryOptions({
-    queryFn: () => api.projectOverview(slug),
+    queryFn: () => fetchProjectOverview(slug),
     queryKey: [...projectKey(slug), 'overview'],
     // What the build computed does not change until the next build, which invalidates this with the
     // rest of the project. Everything under the project's key is fresh on those terms; the project's
