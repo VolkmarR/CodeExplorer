@@ -4,20 +4,6 @@ using Microsoft.AspNetCore.DataProtection;
 
 namespace CodeExplorer;
 
-/// <summary>
-///     A repository of a project. <paramref name="ProtectedCredential" /> is <c>IDataProtector</c>
-///     ciphertext or null; it leaves this record only through <see cref="GitClones" />, never through
-///     a response, a log or an error message.
-/// </summary>
-public sealed record ProjectRepository(string ProjectSlug, string Slug, string Url, string? ProtectedCredential)
-{
-    public bool HasCredential => ProtectedCredential is not null;
-
-    /// <summary>Keeps the ciphertext out of anything that stringifies the record, such as a log scope.</summary>
-    public override string ToString() =>
-        $"{ProjectSlug}/{Slug} ({Url}, credential {(HasCredential ? "set" : "not set")})";
-}
-
 /// <summary>Outcome of creating a project. The handler maps each case to a status code and nothing more.</summary>
 public enum CreateProjectOutcome
 {
@@ -51,13 +37,6 @@ public sealed partial class ControlDatabase : IDisposable
         "Slug must be 1-64 lowercase letters, digits or hyphens, starting and ending with a letter or digit.";
 
     /// <summary>
-    ///     The Data Protection purpose string for stored credentials. Ciphertext protected under one
-    ///     purpose cannot be unprotected under another, so this constant is the only shared secret between
-    ///     the writer here and the reader in <see cref="GitClones" />.
-    /// </summary>
-    public const string CredentialPurpose = "CodeExplorer.RepositoryCredential";
-
-    /// <summary>
     ///     Where the control database's backup lives in the durable store. It is backed up as a file
     ///     and never exported to Parquet (ADR-0004): it is not shadow-rebuilt, it is small, and what is
     ///     in it — credentials above all — cannot be rebuilt from anything else if it is lost.
@@ -80,7 +59,7 @@ public sealed partial class ControlDatabase : IDisposable
     public ControlDatabase(IConfiguration configuration, IDataProtectionProvider dataProtection, DurableStore store,
         ILogger<ControlDatabase> logger)
     {
-        _protector = dataProtection.CreateProtector(CredentialPurpose);
+        _protector = dataProtection.CreateProtector(KeyRing.CredentialPurpose);
         _store = store;
 
         // Absent configuration selects a local folder, so `dotnet run` needs no settings at all.

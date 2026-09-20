@@ -26,3 +26,21 @@ public sealed record Project(string Slug, string Name, bool SingleRepository)
     /// </summary>
     public static ValueTask<Project?> BindAsync(HttpContext context) => ValueTask.FromResult(BoundProject.Bound(context));
 }
+
+/// <summary>
+///     A repository of a project. <paramref name="ProtectedCredential" /> is <c>IDataProtector</c>
+///     ciphertext or null; it leaves this record only where a clone is opened, never through a
+///     response, a log or an error message.
+///     It sits beside <see cref="Project" /> for the same reason and one more: the control database
+///     writes it, the clones read it and the refresh carries it from one to the other, so a home in
+///     <c>Control/</c> made <c>Git/</c> depend on <c>Control/</c> while <c>Control/</c> was already
+///     reading <c>Git/</c>'s URL classifier — the one cycle ADR-0005's arrows do not allow.
+/// </summary>
+public sealed record ProjectRepository(string ProjectSlug, string Slug, string Url, string? ProtectedCredential)
+{
+    public bool HasCredential => ProtectedCredential is not null;
+
+    /// <summary>Keeps the ciphertext out of anything that stringifies the record, such as a log scope.</summary>
+    public override string ToString() =>
+        $"{ProjectSlug}/{Slug} ({Url}, credential {(HasCredential ? "set" : "not set")})";
+}

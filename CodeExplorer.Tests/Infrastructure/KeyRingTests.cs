@@ -144,7 +144,7 @@ public sealed class KeyRingTests
         Assert.NotNull(repository.ProtectedCredential);
         // Through the same purpose GitClones unprotects with, so a purpose that drifted fails here too.
         var protector = host.Services.GetRequiredService<IDataProtectionProvider>()
-            .CreateProtector(ControlDatabase.CredentialPurpose);
+            .CreateProtector(KeyRing.CredentialPurpose);
         Assert.Equal("a-token", protector.Unprotect(repository.ProtectedCredential));
     }
 

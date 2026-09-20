@@ -16,8 +16,13 @@ public enum RepositoryUrlKind
 }
 
 /// <summary>
-///     The one place that knows which URL shapes libgit2 accepts, so the API's validation and the
-///     clone's shallow decision cannot drift apart.
+///     The one place that knows which URL shapes libgit2 accepts, which is what decides whether a
+///     repository may be added at all.
+///     It lived in <c>Git/</c> while the clone was its second reader — the shape decided whether a
+///     clone could be shallow — and ADR-0007 made every clone full, so that reader went away and the
+///     API's validation was the only one left. A rule about what a repository may be is a rule about
+///     a repository, and <c>Control/</c> is the module named after that (ADR-0005); leaving it in
+///     <c>Git/</c> kept <c>Control/</c> pointing at <c>Git/</c> for a regex.
 /// </summary>
 public static partial class RepositoryUrl
 {

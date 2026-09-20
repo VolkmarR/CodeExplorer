@@ -60,7 +60,7 @@ public sealed record DefinitionResult(
 ///     anyway, while a form invented to be thorough costs a call reported as a declaration. Every
 ///     reply says which it is.
 /// </summary>
-public sealed class DefinitionSearch(ProjectIndexes indexes)
+public sealed class DefinitionSearch(IndexReaders readers)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell this apart from a reference scan.</summary>
     public const string Engine = "declaration scan";
@@ -103,7 +103,7 @@ public sealed class DefinitionSearch(ProjectIndexes indexes)
         string symbol = request.Symbol.Trim();
         if (SearchQuery.Unusable(symbol, "find_definition") is { } unusable) return new Problem(unusable);
 
-        return await IndexReader.OverIndexAsync(indexes, slug, request.Filter.Repository,
+        return await readers.OverIndexAsync(slug, request.Filter.Repository,
             (index, token) => QueryAsync(index, request, symbol, token), cancellationToken);
     }
 

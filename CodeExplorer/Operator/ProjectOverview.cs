@@ -68,7 +68,7 @@ public sealed record ProjectDetail(
 ///     putting the composition here keeps <c>Control/</c> from depending on <c>Index/</c>, which
 ///     already depends on it (ADR-0005).
 /// </summary>
-public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes indexes, GitClones clones)
+public sealed class ProjectOverview(ControlDatabase control, IndexReaders readers, GitClones clones)
 {
     /// <summary>
     ///     One index read per project. An operator administers projects by hand, so the list is the
@@ -120,7 +120,7 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
     /// </summary>
     public async Task<ProjectOverviewDetail> OverviewAsync(Project project, CancellationToken cancellationToken)
     {
-        return await IndexReader.OverIndexAsync(indexes, project.Slug, null,
+        return await readers.OverIndexAsync(project.Slug, null,
             async (index, token) => new ProjectOverviewDetail(await index.OverviewAsync(token), null),
             problem => new ProjectOverviewDetail(null, problem.Explanation), cancellationToken);
     }
@@ -134,7 +134,7 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
     public async Task DeleteAsync(Project project, CancellationToken cancellationToken)
     {
         await control.DeleteProjectAsync(project.Slug, cancellationToken);
-        await indexes.DiscardAsync(project.Slug, cancellationToken);
+        await readers.DiscardAsync(project.Slug, cancellationToken);
         await clones.RemoveAsync(project.Slug, null, cancellationToken);
     }
 
@@ -162,7 +162,7 @@ public sealed class ProjectOverview(ControlDatabase control, ProjectIndexes inde
     {
         // Null is no index, and also a file left behind by an interrupted build: it reads as not built,
         // which is what it is and what the operator fixes by building again.
-        var status = await IndexReader.StatusAsync(indexes, slug, restore, cancellationToken);
+        var status = await readers.StatusAsync(slug, restore, cancellationToken);
         return status is null
             ? (ProjectIndexStatus.None, [])
             : (new ProjectIndexStatus(status.BuiltAt, status.FtsIndexed, status.Files, status.Lines),

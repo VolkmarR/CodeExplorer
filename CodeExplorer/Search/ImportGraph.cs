@@ -63,7 +63,7 @@ public sealed record DependentsResult(
 ///     file declared itself to be. It says so, and it says which edges it could not place rather than
 ///     leaving them out.
 /// </summary>
-public sealed class ImportGraph(ProjectIndexes indexes)
+public sealed class ImportGraph(IndexReaders readers)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell this apart from a line scan.</summary>
     public const string Engine = "import graph";
@@ -96,7 +96,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
     }
 
     private Task<Outcome> ReadImportsAsync(string slug, string path, CancellationToken cancellationToken) =>
-        IndexReader.OverFileAsync(indexes, slug, path, true, async (index, file, token) =>
+        readers.OverFileAsync(slug, path, true, async (index, file, token) =>
         {
             string extension = Languages.ExtensionOf(file.QualifiedPath);
             var analyzer = Languages.Default.For(extension);
@@ -116,9 +116,9 @@ public sealed class ImportGraph(ProjectIndexes indexes)
                                                         """, [new DuckDBParameter("f", file.FileId)]);
             using var reader = await command.ReaderAsync(token);
             while (await reader.ReadAsync(token))
-                edges.Add(new ImportedFrom(reader.Text("name"), ImportBuilder.Shape(reader.Text("shape")),
+                edges.Add(new ImportedFrom(reader.Text("name"), ImportColumns.Shape(reader.Text("shape")),
                     reader.Int32("line_number"), reader.TextOrNull("target_path"),
-                    reader.TextOrNull("unresolved"), ImportBuilder.Strength(reader.Text("evidence"))));
+                    reader.TextOrNull("unresolved"), ImportColumns.Strength(reader.Text("evidence"))));
 
             bool capped = Trim(edges);
             return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, file.Module,
@@ -127,7 +127,7 @@ public sealed class ImportGraph(ProjectIndexes indexes)
 
     private Task<Outcome> ReadDependentsAsync(string slug, string path,
         CancellationToken cancellationToken) =>
-        IndexReader.OverFileAsync(indexes, slug, path, true, async (index, file, token) =>
+        readers.OverFileAsync(slug, path, true, async (index, file, token) =>
         {
             var dependents = new List<Dependent>();
             using (var command = index.Connection.Query($"""

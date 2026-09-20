@@ -39,6 +39,9 @@ builder.Services.AddSingleton<ControlDatabase>();
 builder.Services.AddSingleton<GitClones>();
 builder.Services.AddSingleton<DurableIndex>();
 builder.Services.AddSingleton<ProjectIndexes>();
+// The one way into an index from outside Index/ (ADR-0005). Every reader takes this; only the
+// refresh and the build take ProjectIndexes itself.
+builder.Services.AddSingleton<IndexReaders>();
 builder.Services.AddSingleton<HistoryBuilder>();
 builder.Services.AddSingleton<OverviewBuilder>();
 builder.Services.AddSingleton<ImportBuilder>();
