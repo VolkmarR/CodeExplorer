@@ -30,14 +30,42 @@ test('an attribute is meta, which needs its pattern to run before names are clai
 })
 
 /**
- * Known, and not fixed here: strings are claimed before attributes on purpose, so an attribute
- * carrying a string argument is cut open and its name reads as a call. `[Obsolete("gone")]` comes
- * back as `[`, `Obsolete` (function), `(`, `"gone"` (string), `)]`. Every attribute with a message
- * or a route template is affected, which is most of them in an ASP.NET file. Un-skip once the
- * attribute rule runs before the string rule, or is taught to survive a string inside it.
+ * Strings and comments are claimed before attributes and directives on purpose, so those two rules
+ * fill what is left of their span rather than claiming all of it (`patterns.ts`, `fill`). Before
+ * that, an attribute carrying a string was cut open and its name read as a call.
  */
-test.skip('an attribute carrying a string argument is still meta', () => {
-  expect(classOf('[Obsolete("gone")]\nclass A { }', '[Obsolete("gone")]')).toBe('meta')
+test('an attribute carrying a string argument is still meta, and the string is still a string', () => {
+  // Not one token: the string was claimed first and keeps its own colour, so the attribute fills
+  // what is left around it. That is what an editor shows, and it is why the rule fills instead of
+  // claiming the whole span — all-or-nothing gave the entire attribute up over the four characters
+  // of `"gone"`, and `Obsolete` then read as a call.
+  expect(classes('[Obsolete("gone")]\nclass A { }')).toEqual(
+    expect.arrayContaining([
+      ['[Obsolete(', 'meta'],
+      ['"gone"', 'string'],
+      [')]', 'meta'],
+    ]),
+  )
+  expect(classOf('[Obsolete("gone")]\nclass A { }', 'Obsolete')).toBeUndefined()
+  // The route template an ASP.NET file is full of, which was the case that made this worth fixing.
+  expect(classes('[Route("api/projects/{slug}")]\nclass C { }')).toEqual(
+    expect.arrayContaining([
+      ['[Route(', 'meta'],
+      ['"api/projects/{slug}"', 'string'],
+      [')]', 'meta'],
+    ]),
+  )
+})
+
+test('a preprocessor directive keeps its colour when a comment follows it on the line', () => {
+  // The same defect as the attribute above: the comment is claimed first, and before the directive
+  // rule filled, the whole `#pragma` gave way to it and `warning` read as a keyword.
+  expect(classes('#pragma warning disable CS0618 // obsolete on purpose')).toEqual(
+    expect.arrayContaining([
+      ['#pragma warning disable CS0618 ', 'meta'],
+      ['// obsolete on purpose', 'comment'],
+    ]),
+  )
 })
 
 test('an attribute must start upper-case, which keeps the rule off array indexers', () => {
