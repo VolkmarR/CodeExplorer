@@ -31,7 +31,14 @@ public sealed class IndexReaders(ProjectIndexes indexes)
         CancellationToken cancellationToken)
     {
         var lease = await indexes.OpenAsync(projectSlug, cancellationToken);
-        if (lease is null) return refused(new Problem(IndexReader.NoIndex(projectSlug), ProblemKind.NoIndex));
+        // Two ways to be handed no lease, one kind of problem: there is nothing to read either way, and
+        // a refresh is the remedy either way, but only one of them is worth telling an agent the index
+        // exists (#164).
+        if (lease is null)
+            return refused(new Problem(
+                indexes.SchemaOutdated(projectSlug)
+                    ? IndexReader.OutdatedIndex(projectSlug)
+                    : IndexReader.NoIndex(projectSlug), ProblemKind.NoIndex));
 
         using var reader = new IndexReader(lease.Connection, lease.FullTextLoaded, lease, projectSlug);
         try
