@@ -32,7 +32,7 @@ public sealed record UncoveredFiles(string Language, int Files, CoverageGap Gap)
 
 /// <summary>
 ///     How much of what a symbol search looked at it was in a position to read (#126, #129). `imports`,
-///     `who_imports` and `list_declarations` each say outright when a file's extension has no profile,
+///     and `list_declarations` each say outright when a file's extension has no profile,
 ///     so their empty answers cannot be read as "this file has none of what you asked about";
 ///     `find_definition` and `find_references` had no such signal, and they are the two tools an agent
 ///     reaches for most — the place where mistaking "not searched the way this language writes it" for

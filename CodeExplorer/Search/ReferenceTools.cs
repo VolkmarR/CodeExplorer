@@ -59,7 +59,7 @@ internal sealed partial class SearchTools
 
     /// <summary>
     ///     What a symbol search could not read the way its language writes it (#126). `imports`,
-    ///     `who_imports` and `list_declarations` all say outright when an extension has no profile, so
+    ///     and `list_declarations` both say outright when an extension has no profile, so
     ///     an empty answer from them is never mistaken for a fact about the file; these two tools —
     ///     the two an agent reaches for most — said nothing, and a file read with the conservative
     ///     default shapes contributed the same silence as a file that was searched and held nothing.

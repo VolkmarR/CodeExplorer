@@ -57,8 +57,7 @@ public sealed class ToolReplyTests : IDisposable
         ["project_overview"] = [],
         ["read_file"] = new() { ["paths"] = new[] { "one/src/Widget.cs" } },
         ["repo_info"] = [],
-        ["which_project"] = [],
-        ["who_imports"] = new() { ["path"] = "one/src/Widget.cs" }
+        ["which_project"] = []
     };
 
     /// <summary>

@@ -36,28 +36,15 @@ public sealed record ImportsResult(
     bool Capped,
     IReadOnlyList<ImportedFrom> Imports) : Outcome;
 
-/// <summary>One file that imports the file asked about, and the line that does it.</summary>
-public sealed record Dependent(string QualifiedPath, string Name, int LineNumber);
-
 /// <summary>
-///     What imports a file. <see cref="ShareTheModule" /> is how many other files declare the same
-///     module name as this one: where it is more than zero, a name importing that module resolves to
-///     none of them, and the reverse lookup is thinner than the project is — which the reply has to
-///     say rather than answer with a short list that reads as complete.
-/// </summary>
-public sealed record DependentsResult(
-    string QualifiedPath,
-    string? Module,
-    int ShareTheModule,
-    int Unplaced,
-    bool Capped,
-    IReadOnlyList<Dependent> Dependents) : Outcome;
-
-/// <summary>
-///     The two directions of the import graph the build recorded (#55): what a file imports, and what
-///     imports it. Both are reads of one table, which is why they are one service — and the second is
-///     the half that cannot be got any other way, since an agent can read the top of a file for the
-///     first.
+///     What a file imports, read from the edges the build recorded (#55).
+///     The reverse direction was a tool here too and is gone (#160). It resolved a name only where
+///     exactly one file declared it, and across three evaluation runs on two real codebases that
+///     condition almost never held: X# names types by global visibility and writes no import line at
+///     all, a C# namespace spread over sibling files resolved to none of them, and a TypeScript path
+///     alias resolved to nothing. It answered empty or ambiguous every time it was asked, and every
+///     agent that asked fell back to <c>list_declarations</c> plus <c>find_references</c> — which is
+///     the lookup that does not depend on a name resolving, and is now the only one offered.
 ///     Every answer is evidence and not proof, in the sense CONTEXT.md gives the word: an import line
 ///     is text, a text profile is what read it, and a name that resolved did so against what another
 ///     file declared itself to be. It says so, and it says which edges it could not place rather than
@@ -71,18 +58,14 @@ public sealed class ImportGraph(IndexReaders readers)
     /// <summary>
     ///     How many edges one answer carries. A file with more imports than this is generated or is a
     ///     barrel that re-exports a package, and past the first few hundred the list has stopped being
-    ///     the answer to "what does this depend on". Both queries read one row past it, which is what
-    ///     tells a list that ends here from one that was cut short — see <see cref="Trim{T}" />.
+    ///     the answer to "what does this depend on". The query reads one row past it, which is what
+    ///     tells a list that ends here from one that was cut short — see <see cref="Trim" />.
     /// </summary>
     public const int MaxEdges = 500;
 
     public Task<Outcome> ImportsAsync(string slug, string path, CancellationToken cancellationToken) =>
         Telemetry.Search(slug, Engine, () => ReadImportsAsync(slug, path, cancellationToken),
             (ImportsResult result) => new Telemetry.Measured(1, result.Imports.Count));
-
-    public Task<Outcome> DependentsAsync(string slug, string path, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => ReadDependentsAsync(slug, path, cancellationToken),
-            (DependentsResult result) => new Telemetry.Measured(result.Dependents.Count, result.Dependents.Count));
 
     private Task<Outcome> ReadImportsAsync(string slug, string path, CancellationToken cancellationToken) =>
         readers.OverFileAsync(slug, path, true, async (index, file, token) =>
@@ -114,79 +97,16 @@ public sealed class ImportGraph(IndexReaders readers)
                 capped, edges);
         }, cancellationToken);
 
-    private Task<Outcome> ReadDependentsAsync(string slug, string path,
-        CancellationToken cancellationToken) =>
-        readers.OverFileAsync(slug, path, true, async (index, file, token) =>
-        {
-            var dependents = new List<Dependent>();
-            using (var command = index.Connection.Query($"""
-                                                         SELECT f.qualified_path, i.name, i.line_number
-                                                         FROM imports i JOIN files f USING (file_id)
-                                                         WHERE i.target_file = $f
-                                                         ORDER BY f.qualified_path, i.line_number
-                                                         LIMIT {MaxEdges + 1}
-                                                         """, [new DuckDBParameter("f", file.FileId)]))
-            using (var reader = await command.ReaderAsync(token))
-            {
-                while (await reader.ReadAsync(token))
-                    dependents.Add(new Dependent(reader.Text("qualified_path"), reader.Text("name"),
-                        reader.Int32("line_number")));
-            }
-
-            // What makes a short list mean less than it looks: a module several files declare resolves
-            // to none of them, so every import of it was left unresolved. Answered from the index
-            // rather than guessed at, because "nothing depends on this" is the one sentence a
-            // dependency tool must never say by accident.
-            int sharing = file.Module is null
-                ? 0
-                : (int)await index.Connection.CountAsync(
-                    "SELECT count(*) FROM files WHERE module IS NOT NULL AND lower(module) = lower($m) AND file_id <> $f",
-                    [new DuckDBParameter("m", file.Module), new DuckDBParameter("f", file.FileId)], token);
-
-            // Only when the answer is empty and the module rule has nothing to say about it, which is
-            // the one branch the reply prints it in — and it is a scan of the largest new table.
-            // Narrowed to the edges whose last path segment spells this file, because a project-wide
-            // count is the same number for every file in it: true, and no use to the reader.
-            int unplaced = dependents.Count > 0 || sharing > 0
-                ? 0
-                : (int)await index.Connection.CountAsync(
-                    """
-                    SELECT count(*) FROM imports
-                    WHERE unresolved IS NOT NULL
-                      AND lower(split_part(name, '/', -1)) IN (lower($stem), lower($leaf))
-                    """,
-                    [
-                        new DuckDBParameter("stem", Stem(file.QualifiedPath)),
-                        new DuckDBParameter("leaf", Leaf(file.QualifiedPath))
-                    ], token);
-
-            bool capped = Trim(dependents);
-            return new DependentsResult(file.QualifiedPath, file.Module, sharing, unplaced, capped,
-                dependents);
-        }, cancellationToken);
-
     /// <summary>
-    ///     Cuts a list back to <see cref="MaxEdges" /> and says whether there was anything to cut.
-    ///     Both queries ask for one row more than they report, because a list that merely reaches the
+    ///     Cuts the list back to <see cref="MaxEdges" /> and says whether there was anything to cut.
+    ///     The query asks for one row more than it reports, because a list that merely reaches the
     ///     ceiling is indistinguishable from one the ceiling cut short: a file with exactly
     ///     <see cref="MaxEdges" /> imports would otherwise be told there are more.
     /// </summary>
-    private static bool Trim<T>(List<T> rows)
+    private static bool Trim(List<ImportedFrom> edges)
     {
-        if (rows.Count <= MaxEdges) return false;
-        rows.RemoveRange(MaxEdges, rows.Count - MaxEdges);
+        if (edges.Count <= MaxEdges) return false;
+        edges.RemoveRange(MaxEdges, edges.Count - MaxEdges);
         return true;
-    }
-
-    /// <summary>The file's own name, which is the last thing an unresolved path would have spelled.</summary>
-    private static string Leaf(string qualifiedPath) =>
-        qualifiedPath[(qualifiedPath.LastIndexOf('/') + 1)..];
-
-    /// <summary>The same without its extension, which is how a module-style specifier spells it.</summary>
-    private static string Stem(string qualifiedPath)
-    {
-        string leaf = Leaf(qualifiedPath);
-        int dot = leaf.LastIndexOf('.');
-        return dot > 0 ? leaf[..dot] : leaf;
     }
 }

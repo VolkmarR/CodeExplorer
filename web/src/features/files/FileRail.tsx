@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import type { Origin } from '@/lib/urls/views'
 import { DeclarationPanel } from '@/features/files/DeclarationPanel'
-import { ImportPanels } from '@/features/files/ImportPanels'
+import { ImportPanel } from '@/features/files/ImportPanel'
 import { blameQuery } from '@/features/files/queries'
 import { RailPanel } from '@/features/files/RailPanel'
 import { RailPending } from '@/features/files/RailPending'
@@ -18,15 +18,18 @@ import type { FileContent } from '@/features/files/api'
 const RECENT_COMMITS = 6
 
 /**
- * What else is known about the file beside it: what it declares, what imports it and what it
- * imports, and what has been done to it lately.
+ * What else is known about the file beside it: what it declares, what it imports, and what has been
+ * done to it lately.
  *
  * It exists because the page answered less than the MCP tools over the same index do, and because
  * the import and declaration panels had nowhere to go — a single-column file page has no room for
- * them. Every panel here draws an answer; it carried one that drew a paragraph explaining that the
- * index answers references of a symbol rather than of a file, which cost a reader a heading and a
- * box to learn nothing about this file and pushed the answers that exist further down. Dependents
- * is the answer to "what refers to this file", and the distinction the paragraph made now lives in
+ * them.
+ *
+ * Every panel here draws an answer, which is the rule two panels have now been dropped for. The
+ * first drew a paragraph explaining that the index answers references of a symbol rather than of a
+ * file, which cost a reader a heading and a box to learn nothing about this file; the second was
+ * Dependents (#160), which asked a request per file opened and drew an empty list and a note saying
+ * why almost every time. What refers to a file, and why the question is harder than it reads, is in
  * CONTEXT.md under _Reference_, where the vocabulary is.
  */
 export function FileRail({
@@ -38,8 +41,8 @@ export function FileRail({
   file: FileContent
   /**
    * How this file page was reached, carried into the links that stay in the reader's trail: a
-   * declaration's own line, and a commit of this file. An import or a dependent opens a different
-   * file, which the reader did not reach from this page's commit, so those start a trail of their own.
+   * declaration's own line, and a commit of this file. A resolved import opens a different file,
+   * which the reader did not reach from this page's commit, so it starts a trail of its own.
    */
   origin?: Origin
 }) {
@@ -66,7 +69,7 @@ export function FileRail({
       <aside className="space-y-4 p-1 xl:pr-2.5">
         <DeclarationPanel project={project} path={file.qualifiedPath} origin={origin} />
 
-        <ImportPanels project={project} path={file.qualifiedPath} />
+        <ImportPanel project={project} path={file.qualifiedPath} />
 
         <RecentCommits project={project} file={file} origin={origin} />
       </aside>
