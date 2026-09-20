@@ -105,7 +105,8 @@ of the paths the scope has ever recorded came from it: a directory rename moves 
 under it at once, and two files that drifted in over the years do not make somewhere else this
 scope's earlier name. It is transitive, so a path renamed twice has a chain, and capped, so a long
 one says how many earlier names it did not print.
-Renames are **signalled, never followed**. A scope's own count stays literal — the History rule
+Renames are **signalled, never followed** — with one exception, _Co-Change_, which pairs an anchor
+over its earlier paths because nothing else answers coupling for them. A scope's own count stays literal — the History rule
 above holds unchanged — and the note is additive: the earlier path, the commits the whole chain
 accounts for, and the call that reads the earlier path. All three, because a note that named the
 path and withheld the total would reproduce the original fault one level up.
@@ -145,6 +146,13 @@ it — and it is evidence rather than proof, because two files in one reformat s
 sharing anything else. Pairing never crosses a repository, because a commit does not, and commits
 that touched more paths than a configured ceiling are left out of it: a mass commit pairs every path
 it touched with every other, which is one commit and not a relationship between any two files in it.
+Co-Change is the **one** answer here that follows a rename rather than signalling it (see _Previous
+Path_): an anchor is paired over its earlier paths as well as its current one, so coupling survives
+a move. The exception exists because every other path-scoped read has somewhere to send a caller for
+the earlier path and this one does not — nothing else answers coupling. Inside the commit that did
+the renaming, a file that moved alongside the anchor is not a Co-Change of it, for the reason a mass
+commit is not: moving together is one commit and not a relationship. A file that commit *edited*
+is one, and is kept — a rename that updates its callers is the strongest evidence the anchor has.
 _Avoid_: Coupling, correlation, related files, change coupling
 
 **Overview**:
