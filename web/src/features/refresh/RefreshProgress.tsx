@@ -1,6 +1,5 @@
 import type { RefreshProgress as Step, RefreshStatus } from '@/features/refresh/api'
 import { ErrorPanel } from '@/components/ErrorPanel'
-import { RefreshPhases } from '@/features/refresh/RefreshPhases'
 import { RefreshSummary } from '@/features/refresh/RefreshSummary'
 import { isRefreshRunning } from '@/features/refresh/queries'
 import { Progress, ProgressValue } from '@/components/ui/progress'
@@ -15,25 +14,14 @@ import { formatCount } from '@/lib/format'
 export function RefreshProgress({ status }: { status: RefreshStatus }) {
   if (status.state === 'NeverRun') return null
 
-  return (
-    <>
-      <Panel status={status} />
-      {/* Beside the panel and never inside it, so the breakdown is one card in every state rather
-          than a card nested in the running one. While a refresh runs these are the phases already
-          behind it, which is what tells someone watching whether the phase on screen is the
-          expensive one or whether that is still coming; afterwards it is the whole refresh. */}
-      <RefreshPhases phases={status.phases} wallSeconds={wallSeconds(status)} />
-    </>
-  )
+  // The per-phase breakdown #92 added beside this panel is gone: a running refresh already names the
+  // step it is on and counts its work, and a finished one is read for what it produced, not for how
+  // its seconds divided. `phases` stays on the status, where `/api/projects/{slug}/refresh` and the
+  // telemetry still carry it for anyone measuring a refresh rather than watching one.
+  return <Panel status={status} />
 }
 
-/** How long the refresh took, or null while it is still running and there is no whole to measure. */
-function wallSeconds(status: RefreshStatus): number | null {
-  if (!status.startedAt || !status.finishedAt) return null
-  return (Date.parse(status.finishedAt) - Date.parse(status.startedAt)) / 1000
-}
-
-/** What the refresh is doing or did, above the breakdown of what it spent. */
+/** What the refresh is doing or did. */
 function Panel({ status }: { status: RefreshStatus }) {
   if (isRefreshRunning(status)) {
     const progress = status.progress
