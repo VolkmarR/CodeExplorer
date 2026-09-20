@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { ChurnList } from '@/features/churn/ChurnList'
 import type { IndexOverview } from '@/lib/api'
 import { formatDate } from '@/lib/format'
+import { churnSearch } from '@/lib/urls/churnParams'
 import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -36,7 +37,7 @@ export function MostChangedCard({
               <Link
                 to="/projects/$project/churn"
                 params={{ project }}
-                search={{ days: churn.days }}
+                search={churnSearch(churn.days)}
                 className="hover:text-primary hover:underline"
               >
                 See the whole ranking

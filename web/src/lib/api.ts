@@ -1,5 +1,5 @@
 import ky, { HTTPError } from 'ky'
-import type { SearchParameters } from '@/features/search/searchParams'
+import type { SearchParameters } from '@/lib/urls/searchParams'
 
 /** The shapes `/api` answers with. Each mirrors a record in the C# host; nothing is invented here. */
 

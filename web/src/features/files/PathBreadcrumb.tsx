@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
-import { treeSearch } from '@/features/files/browseParams'
+import { treeSearch } from '@/lib/urls/browseParams'
 
 /**
  * Where in a project's tree the reader stands, every segment a link to that level. The tree and the

@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
-import type { Origin } from '@/components/appNavigation'
-import { fileSearch } from '@/features/files/fileParams'
+import type { Origin } from '@/lib/urls/views'
+import { fileSearch } from '@/lib/urls/fileParams'
 
 /**
  * A path that opens the file when there is still a file there, and is named and struck through when

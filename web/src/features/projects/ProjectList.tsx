@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Plus, Settings } from 'lucide-react'
-import { treeSearch } from '@/features/files/browseParams'
+import { treeSearch } from '@/lib/urls/browseParams'
 import { IndexStatus } from '@/features/projects/IndexStatus'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'

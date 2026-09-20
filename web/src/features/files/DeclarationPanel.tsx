@@ -1,14 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import type { Origin } from '@/components/appNavigation'
+import type { Origin } from '@/lib/urls/views'
 import {
   DECLARATION_EVIDENCE,
   declarationLabel,
   declarationsNote,
 } from '@/features/files/declarations'
-import { fileSearch } from '@/features/files/fileParams'
+import { fileSearch } from '@/lib/urls/fileParams'
 import { declarationsQuery } from '@/features/files/queries'
-import { RailEntries, RailPanelAnswer, RailWaiting, tally } from '@/features/files/RailPanel'
+import { RailEntries } from '@/features/files/RailEntries'
+import { RailPanelAnswer } from '@/features/files/RailPanelAnswer'
+import { RailWaiting } from '@/features/files/RailWaiting'
+import { tally } from '@/features/files/tally'
 
 /**
  * What the file declares, read from the index rather than from the file on screen. It is the same

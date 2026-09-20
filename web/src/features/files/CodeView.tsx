@@ -1,11 +1,10 @@
 import type { HighlightRenderNode } from '@tanstack/highlight'
 import { renderTokens } from '@tanstack/highlight'
 import { Link } from '@tanstack/react-router'
-import { useCallback, useMemo } from 'react'
 import { highlighter, languageFor } from '@/highlight/highlighter'
-import type { Origin } from '@/components/appNavigation'
-import { fileSearch } from '@/features/files/fileParams'
-import { commitSearch } from '@/features/history/commitParams'
+import type { Origin } from '@/lib/urls/views'
+import { fileSearch } from '@/lib/urls/fileParams'
+import { commitSearch } from '@/lib/urls/commitParams'
 import type { BlameRun } from '@/lib/api'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { formatDate, shortSha } from '@/lib/format'
@@ -46,37 +45,8 @@ export function CodeView({
    */
   blame?: BlameRun[] | null
 }) {
-  const lines = useMemo(() => {
-    const { tokens } = highlighter.tokenize(content, { lang: languageFor(path) })
-    // `lineNumbers` is what makes the renderer wrap each line in its own node, and the renderer also
-    // stamps each with its number; the numbers are read back from there rather than counted here, so
-    // the row's key is the line's own identity and not its position in an array.
-    const numbered: { children: HighlightRenderNode[]; number: number }[] = []
-    for (const node of renderTokens(tokens, { lineNumbers: true })) {
-      // The renderer puts a text node holding the newline between lines; only the elements are lines.
-      if (isLineElement(node))
-        numbered.push({ children: node.children, number: Number(node.data?.line) })
-    }
-    return numbered
-  }, [content, path])
-
-  // The run each line is in, looked up by line number, with whether it is the run's first line. A
-  // map and not a search per row: the table has as many rows as the file has lines.
-  const runs = useMemo(() => {
-    const byLine = new Map<number, { run: BlameRun; first: boolean; index: number }>()
-    blame?.forEach((run, index) => {
-      for (let number = run.startLine; number <= run.endLine; number++)
-        byLine.set(number, { first: number === run.startLine, index, run })
-    })
-    return byLine
-  }, [blame])
-
-  // A ref callback rather than an effect: it fires exactly when the row the URL names is mounted,
-  // which is also when a different file has just replaced the rows.
-  const reveal = useCallback((row: HTMLTableRowElement | null) => {
-    row?.scrollIntoView({ block: 'center' })
-  }, [])
-
+  const lines = highlight(content, path)
+  const runs = blameByLine(blame)
   const gutter = blame !== undefined
 
   return (
@@ -93,7 +63,11 @@ export function CodeView({
               <tr
                 key={number}
                 id={`L${number}`}
-                ref={number === line ? reveal : undefined}
+                // A ref callback rather than an effect: it fires exactly when the row the URL names
+                // is mounted, which is also when a different file has just replaced the rows.
+                ref={
+                  number === line ? (row) => row?.scrollIntoView({ block: 'center' }) : undefined
+                }
                 className={cn('group', number === line && 'bg-primary/15')}
               >
                 {gutter ? (
@@ -170,6 +144,40 @@ export function CodeView({
       </table>
     </ScrollArea>
   )
+}
+
+/**
+ * The file, tokenized and split into the lines the table draws a row each of.
+ *
+ * A function of its own rather than a block in the component, so the compiler has a call to cache on
+ * the two values it reads — re-tokenizing a file on every keystroke elsewhere on the page is the one
+ * thing here that would be felt.
+ */
+function highlight(content: string, path: string) {
+  const { tokens } = highlighter.tokenize(content, { lang: languageFor(path) })
+  // `lineNumbers` is what makes the renderer wrap each line in its own node, and the renderer also
+  // stamps each with its number; the numbers are read back from there rather than counted here, so
+  // the row's key is the line's own identity and not its position in an array.
+  const numbered: { children: HighlightRenderNode[]; number: number }[] = []
+  for (const node of renderTokens(tokens, { lineNumbers: true })) {
+    // The renderer puts a text node holding the newline between lines; only the elements are lines.
+    if (isLineElement(node))
+      numbered.push({ children: node.children, number: Number(node.data?.line) })
+  }
+  return numbered
+}
+
+/**
+ * The run each line is in, looked up by line number, with whether it is the run's first line. A map
+ * and not a search per row: the table has as many rows as the file has lines.
+ */
+function blameByLine(blame: BlameRun[] | null | undefined) {
+  const byLine = new Map<number, { run: BlameRun; first: boolean; index: number }>()
+  blame?.forEach((run, index) => {
+    for (let number = run.startLine; number <= run.endLine; number++)
+      byLine.set(number, { first: number === run.startLine, index, run })
+  })
+  return byLine
 }
 
 function isLineElement(

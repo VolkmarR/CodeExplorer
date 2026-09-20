@@ -3,7 +3,7 @@ import { PageCard } from '@/components/PageCard'
 import { BrowseFilter } from '@/features/files/BrowseFilter'
 import { FileList } from '@/features/files/FileList'
 import { FileTree } from '@/features/files/FileTree'
-import { treeSearch } from '@/features/files/browseParams'
+import { globSearch, treeSearch } from '@/lib/urls/browseParams'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 /**
@@ -44,10 +44,15 @@ export function BrowsePage() {
                 <Link
                   to="/projects/$project/files"
                   params={{ project }}
-                  // A glob that finds everything, so the tab lands on a listing rather than on the
-                  // tree it is supposed to be the alternative to — at its first page, because
-                  // arriving from the tree is arriving at a listing not yet walked.
-                  search={{ ...search, glob: search.glob === '' ? '*' : search.glob, page: 1 }}
+                  // A glob that finds everything where there is none yet, so the tab lands on a
+                  // listing rather than on the tree it is supposed to be the alternative to. The
+                  // builder starts it at page 1, because arriving from the tree is arriving at a
+                  // listing not yet walked.
+                  search={globSearch(
+                    search.glob === '' ? '*' : search.glob,
+                    search.repository,
+                    search.path,
+                  )}
                 >
                   By glob
                 </Link>

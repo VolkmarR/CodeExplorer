@@ -42,11 +42,24 @@ web/
   lint.rules.ts           Which React Doctor rules are on, derived from the plugin's registry
   src/
     routes/               File-based routes; `validateSearch` types the URL state
+    app/                  The frame every page sits in — sidebar, top bar, the navigation table
     features/             One folder per concept, mirroring the server's modules (ADR-0005)
-      projects/           The project list, a project's page, repository management
-      search/             The search form and its results
+      auth/               Who is signed in, where the server has a tenant
+      churn/              What changed most over a window
       files/              Browsing the index, and the file view
+      history/            The change log and a commit's own page
+      projects/           The project list, a project's page, repository management
+      refresh/            Building an index, and the progress of a build in flight
+      search/             The search form and its results
     components/           Only what every feature uses, plus shadcn source in components/ui
+    hooks/                The hooks more than one feature uses
     highlight/            The C# and X# language definitions and the highlighter they register in
     lib/                  The ky API client, the shared query-key roots, formatters
+      urls/               Every view's URL: its parameters, their validator, and the link builders
 ```
+
+`components/` and `lib/` are shared by every feature and may not import from `features/` — a lint
+rule in `vite.config.ts` fails `vp check` on one that does, the way the server has a test for the
+boundary between its modules. `app/` is the exception and is a folder of its own for that reason:
+the frame draws a project's index state and its account, so it does depend on features, and nothing
+depends on it but the root route.

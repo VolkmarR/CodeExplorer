@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
-import type { View } from '@/components/appNavigation'
-import { commitSearch } from '@/features/history/commitParams'
+import type { View } from '@/lib/urls/views'
+import { commitSearch } from '@/lib/urls/commitParams'
 import type { CommitRef } from '@/lib/api'
 import { formatDate, shortSha } from '@/lib/format'
 import { cn } from '@/lib/utils'

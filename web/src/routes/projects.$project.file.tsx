@@ -1,7 +1,7 @@
 import { createFileRoute, notFound } from '@tanstack/react-router'
 import { RouteError } from '@/components/RouteError'
 import { FilePage } from '@/features/files/FilePage'
-import { validateFileSearch } from '@/features/files/fileParams'
+import { validateFileSearch } from '@/lib/urls/fileParams'
 import { fileQuery } from '@/features/files/queries'
 
 export const Route = createFileRoute('/projects/$project/file')({

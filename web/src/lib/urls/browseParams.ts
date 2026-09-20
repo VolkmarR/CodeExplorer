@@ -24,6 +24,19 @@ export function treeSearch(path = ''): BrowseParameters {
   return { glob: '', page: 1, path }
 }
 
+/**
+ * The URL of the flat listing a glob matches, narrowed to one repository where it is narrowed at
+ * all, at its first page — a page number belongs to the glob it was reached under.
+ *
+ * The select that narrows it speaks in slugs and says "every repository" with the empty string,
+ * which is not what this parameter means by one: absent is every repository, and `repository=` is a
+ * repository with no name. That translation is made here rather than at each place that offers the
+ * select.
+ */
+export function globSearch(glob: string, repository?: string, path = ''): BrowseParameters {
+  return { glob, page: 1, path, repository: repository === '' ? undefined : repository }
+}
+
 export function validateBrowseSearch(search: Record<string, unknown>): BrowseParameters {
   const page = Number(search.page)
   return {

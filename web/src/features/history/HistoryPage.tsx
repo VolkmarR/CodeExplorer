@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { CommitList } from '@/features/history/CommitList'
 import { newestImportedAt } from '@/features/history/historyWindow'
 import { commitsQuery } from '@/features/history/queries'
+import { historySearch } from '@/lib/urls/historyParams'
 import { projectQuery } from '@/features/projects/queries'
 import { RepositorySelect } from '@/features/projects/RepositorySelect'
 import { PageCard } from '@/components/PageCard'
@@ -65,10 +66,9 @@ export function HistoryPage() {
                   repositories={detail.repositories}
                   value={search.repository ?? ''}
                   onChange={(repository) =>
-                    // Back to the first page: page 7 of one repository is not page 7 of another.
                     void navigate({
                       params: { project },
-                      search: { page: 1, repository: repository === '' ? undefined : repository },
+                      search: historySearch(repository),
                       to: '/projects/$project/history',
                     })
                   }

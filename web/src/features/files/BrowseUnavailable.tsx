@@ -1,5 +1,5 @@
 import { Link, useParams } from '@tanstack/react-router'
-import { treeSearch } from '@/features/files/browseParams'
+import { treeSearch } from '@/lib/urls/browseParams'
 import { ApiError } from '@/lib/api'
 import { RouteError } from '@/components/RouteError'
 import { Button } from '@/components/ui/button'

@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { FilePathLink } from '@/components/FilePathLink'
 import type { IndexOverview, OverviewEntry } from '@/lib/api'
 import { formatBytes, formatCount } from '@/lib/format'
-import { treeSearch } from '@/features/files/browseParams'
+import { treeSearch } from '@/lib/urls/browseParams'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
