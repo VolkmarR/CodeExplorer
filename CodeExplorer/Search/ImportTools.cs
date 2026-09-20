@@ -34,9 +34,14 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
     ///     project-local dependency expressed by global visibility, inheritance, reflection, dynamic
     ///     construction or a project-level reference writes no import line to find, and the answer that
     ///     does not depend on one is the reverse lookup on the names the file declares.
+    ///     An instruction and not a description (#133). It used to say that the two tools exist, which
+    ///     reads as background beside the listing above it; the parallel guidance in the tool
+    ///     descriptions was already imperative, and one pivot stated two ways is how an agent decides
+    ///     the weaker one is optional. One sentence for all three call sites, so the register cannot
+    ///     drift branch by branch.
     /// </summary>
     private const string WayIn =
-        "list_declarations on it names what it declares, and find_references on one of those names finds the files that use it.";
+        "Run list_declarations on it, then find_references on one of the names it declares, to find the files that use it.";
 
     /// <summary>
     ///     How the edges were read, which decides the lead clause of the caveat. Derived from the
@@ -76,7 +81,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
 
                  - Use it before changing or deleting a file, to see what would notice; use imports for what the file itself depends on.
                  - The answer is what RESOLVED to this file. A name that named several files, or none, was left unresolved and is not counted here — so the reply says how many such edges there are rather than letting a short list read as complete.
-                 - A file whose declared namespace or unit is shared with other files cannot be the sole target of an import of that name, and the reply says so instead of answering with an empty list.
+                 - A file whose declared namespace or unit is shared with other files cannot be the sole target of an import of that name, and the reply says so instead of answering with an empty list. That branch can arrive alongside resolved importers, so it is not covered by the empty-answer advice below: run list_declarations on the file and find_references on a name it declares, which is the lookup that does not depend on a name resolving.
                  - IMPORTANT: this is read from import lines, not from a compiler. A dependency expressed some other way — reflection, a generated file, a name in configuration — is not an import edge and is not here.
                  - IMPORTANT: an empty answer means no import edge resolved to this file, NOT that nothing depends on it. Where a language or dialect makes project-local names visible without an import line, a file every other file calls answers empty here. Before concluding a file is unused, run list_declarations on it and find_references on a name it declares.
                  """)]

@@ -100,7 +100,7 @@ public sealed class ImportTests : IDisposable
         Assert.Contains("No import edge in this project resolved to one/src/Storage.cs", text);
         Assert.Contains("this file declares `Orders.Storage`, and 1 other file declares it too", text);
         // The pivot that answers the question, not a grep the caller has to turn into one (#114).
-        Assert.Contains("list_declarations on it names what it declares", text);
+        Assert.Contains("Run list_declarations on it, then find_references on one of the names it declares", text);
         Assert.DoesNotContain("grep for `Orders.Storage`", text);
     }
 
@@ -118,7 +118,7 @@ public sealed class ImportTests : IDisposable
 
         Assert.Contains("none of the 2 names resolved to a file in this project", text);
         Assert.Contains("not evidence the file has no project-local dependencies", text);
-        Assert.Contains("find_references on one of those names", text);
+        Assert.Contains("Run list_declarations on it, then find_references on one of the names it declares", text);
 
         // A file whose imports do resolve is unaffected: no note, no hedging.
         string resolving = await ImportsAsync(client, "one/src/Report.cs");
@@ -138,7 +138,7 @@ public sealed class ImportTests : IDisposable
 
         Assert.Contains("No import edge in this project resolved to one/src/Report.cs", text);
         Assert.Contains("not the same as nothing depending on it", text);
-        Assert.Contains("find_references on one of those names", text);
+        Assert.Contains("Run list_declarations on it, then find_references on one of the names it declares", text);
     }
 
     [Fact]
@@ -266,6 +266,35 @@ public sealed class ImportTests : IDisposable
         string invoices = await WhoImportsAsync(client, "one/src/Invoices.pas");
         Assert.Contains("1 file imports one/src/Invoices.pas", invoices);
         Assert.Contains("one/src/Main.pas:7", invoices);
+    }
+
+    /// <summary>
+    ///     The pivot has to be readable before the call, not only in the reply (#133). who_imports named
+    ///     it in the bullet about an EMPTY answer alone, and a shared namespace can be reported
+    ///     alongside resolved importers — so the bullet that covers this branch named no next step, and
+    ///     an agent that read the description and got a non-empty answer never met one.
+    ///     Asserted against the reply in the same test: the description and the note are one story, and
+    ///     a change to either that left the other behind is what this pins.
+    /// </summary>
+    [Fact]
+    public async Task The_shared_namespace_branch_names_the_pivot_in_the_description_as_well_as_the_reply()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string described = (await client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken))
+            .Single(tool => tool.Name == "who_imports").Description ?? "";
+        Assert.Contains("A file whose declared namespace or unit is shared with other files", described);
+        Assert.Contains("run list_declarations on the file and find_references on a name it declares", described);
+
+        string text = await WhoImportsAsync(client, "one/src/Storage.cs");
+        Assert.Contains("this file declares `Orders.Storage`, and 1 other file declares it too", text);
+        // An instruction, not a description of two tools that happen to exist.
+        Assert.Contains("Run list_declarations on it, then find_references on one of the names it declares", text);
+
+        // A file whose namespace is its own gains no note and no pivot.
+        string unique = await WhoImportsAsync(client, "one/src/Orders.cs");
+        Assert.DoesNotContain("other file declares it too", unique);
+        Assert.DoesNotContain("Run list_declarations", unique);
     }
 
     [Fact]
