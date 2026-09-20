@@ -18,6 +18,49 @@ public sealed class ProjectEndpointTests : IDisposable
 
     public void Dispose() => _host.Dispose();
 
+    /// <summary>
+    ///     Binding a project reads the control database once and then remembers it (#149). Every
+    ///     request under a project route and every MCP call asked "does this slug name a project", and
+    ///     each one opened a control-database connection to find out.
+    ///     Proved by taking the database away. The file is deleted after the first resolution, so a
+    ///     second call that went back to it would open a fresh, empty one and fail on the missing
+    ///     table — there is no way for this to pass except by not asking.
+    ///     <c>which_project</c> is the call, because it is the one that reads the bound project and
+    ///     nothing else. Its neighbours here legitimately read the control database again — a project's
+    ///     page lists its repositories — and this is about the binding, not about them.
+    /// </summary>
+    [Fact]
+    public async Task Binding_a_project_reads_the_control_database_once()
+    {
+        await _host.CreateProjectAsync("alpha", name: "Alpha Project");
+        await using var client = await _host.ConnectAsync("alpha");
+        Assert.Contains("Alpha Project", await WhichProjectAsync(client));
+
+        _host.DeleteControlDatabase();
+
+        Assert.Contains("Alpha Project", await WhichProjectAsync(client));
+    }
+
+    /// <summary>
+    ///     The other half of remembering: the writer that ends a project's life forgets it, so the very
+    ///     next request is refused. A cache that outlived a delete would keep answering for a project
+    ///     whose index and clones the same call had already removed.
+    /// </summary>
+    [Fact]
+    public async Task A_deleted_project_is_refused_on_the_next_request()
+    {
+        await _host.CreateProjectAsync("alpha", name: "Alpha Project");
+        using var http = _host.CreateClient();
+        using (var bound = await http.GetAsync("/api/projects/alpha", Ct))
+            Assert.Equal(HttpStatusCode.OK, bound.StatusCode);
+
+        using (var deleted = await http.DeleteAsync("/api/projects/alpha", Ct))
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+
+        using var gone = await http.GetAsync("/api/projects/alpha", Ct);
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+    }
+
     [Fact]
     public async Task Mcp_client_lists_and_calls_the_tool_on_a_project_route()
     {

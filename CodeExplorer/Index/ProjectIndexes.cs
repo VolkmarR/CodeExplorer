@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer;
@@ -24,8 +25,10 @@ public enum SearchEngine
 ///     it: a swap detaches the catalog underneath, and the next statement on a connection that held
 ///     <c>USE</c> across it fails with <c>Catalog does not exist</c> (ADR-0003).
 /// </summary>
-public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded, Action release) : IDisposable
+public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded, Action<bool> release)
+    : IDisposable
 {
+    private volatile bool _broken;
     private int _released;
 
     public DuckDBConnection Connection { get; } = connection;
@@ -37,12 +40,24 @@ public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded,
     /// </summary>
     public bool FullTextLoaded { get; } = fullTextLoaded;
 
+    /// <summary>
+    ///     Says this connection must not be handed to anyone else: the work on it threw or was
+    ///     cancelled, and a statement that ended that way can leave a result part-read behind it. Every
+    ///     connection used to be closed after one call, so pooling is what makes this need saying, and
+    ///     <see cref="IndexReaders.OverIndexAsync{T}" /> is the one seam that says it.
+    /// </summary>
+    public void Broken() => _broken = true;
+
     public void Dispose()
     {
-        Connection.Dispose();
+        // The connection is not closed here: unless it was reported broken it goes back to its
+        // project's pool, and releasing is what puts it there and only then lets a swap through
+        // (#149). The order is the point — a connection handed back after the drain had counted this
+        // reader out would land in a pool the swap had already emptied, and the next caller would get
+        // a binding to a detached catalog.
         // Guarded, because a double dispose would let a swap through while another lease still holds
         // the project — the one thing the drain exists to prevent.
-        if (Interlocked.Exchange(ref _released, 1) == 0) release();
+        if (Interlocked.Exchange(ref _released, 1) == 0) release(!_broken);
     }
 }
 
@@ -118,7 +133,7 @@ public sealed class ProjectIndexes : IDisposable
     ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 8;
+    public const int SchemaVersion = 9;
 
     /// <summary>
     ///     The tables a new shadow inherits from the live index instead of rebuilding. They are the
@@ -161,7 +176,13 @@ public sealed class ProjectIndexes : IDisposable
                                       url         VARCHAR NOT NULL,
                                       head_commit VARCHAR NOT NULL,
                                       file_count  INTEGER NOT NULL,
-                                      line_count  BIGINT NOT NULL);
+                                      line_count  BIGINT NOT NULL,
+                                      -- What the tree at this repository weighs, skipped files
+                                      -- included. Recorded beside the other two counts rather than
+                                      -- summed over `files` per call: the root of a list_tree asked
+                                      -- for it on every call and was the only reason that read
+                                      -- joined the largest table in the index at all (#149).
+                                      byte_count  BIGINT NOT NULL);
                                   CREATE TABLE files (
                                       file_id        BIGINT PRIMARY KEY,
                                       repo_id        INTEGER NOT NULL,
@@ -321,8 +342,15 @@ public sealed class ProjectIndexes : IDisposable
 
     // ATTACH is instance-wide, so two connections attaching the same slug at once race on the same
     // file. The gate serialises attach and detach; the set remembers what the instance already holds.
+    // The set is concurrent so that "is this already attached" can be asked without taking the gate,
+    // which is what stopped two reads of two different projects serialising on it (#149). It is still
+    // only written under the gate, so the ordering rule the gate exists for is unchanged.
     private readonly SemaphoreSlim _attachGate = new(1, 1);
-    private readonly HashSet<string> _attached = [];
+    private readonly ConcurrentDictionary<string, byte> _attached = new(StringComparer.Ordinal);
+
+    // One pool per project, because a pooled connection is handed back still bound to that project and
+    // USE is what rebinds it on the way out. Kept for the life of the process like the gates beside it.
+    private readonly ConcurrentDictionary<string, ConnectionPool> _pools = new(StringComparer.Ordinal);
     private readonly string _connectionString;
 
     private readonly DurableIndex _durable;
@@ -374,6 +402,9 @@ public sealed class ProjectIndexes : IDisposable
 
     public void Dispose()
     {
+        // The pools before the anchor: the anchor is what keeps the instance alive, and a pooled
+        // connection outliving it would be a connection on an instance that is tearing itself down.
+        foreach (var pool in _pools.Values) pool.Discard();
         _anchor.Dispose();
         _attachGate.Dispose();
     }
@@ -453,15 +484,29 @@ public sealed class ProjectIndexes : IDisposable
                 return null;
             }
 
-            var connection = await ConnectAsync(cancellationToken);
+            // Opening a connection is most of what a lease used to cost. One is borrowed instead, and
+            // bound again whatever it was last bound to, which is what CODING_STANDARDS asks for: what
+            // may not be reused is the binding, not the socket. The generation is read with it, so a
+            // connection borrowed before a swap is thrown away rather than handed back into a pool the
+            // swap has emptied.
+            var pool = PoolFor(slug);
+            var connection = pool.Rent(out int generation) ?? await ConnectAsync(cancellationToken);
             try
             {
-                await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
-                await connection.ExecuteAsync($"USE {Quote(slug)}", cancellationToken);
-                return new IndexLease(connection, FtsAvailable, gate.Leave);
+                await BindAsync(connection, slug, cancellationToken);
+                return new IndexLease(connection, FtsAvailable, reusable =>
+                {
+                    if (reusable) pool.Return(connection, generation);
+                    // Closed rather than pooled: the reader said the work on it threw, and the next
+                    // borrower must not inherit whatever that left.
+                    else connection.Dispose();
+                    gate.Leave();
+                });
             }
             catch
             {
+                // Closed rather than pooled: a connection that failed its ATTACH or its USE is one
+                // nothing here can say anything about.
                 connection.Dispose();
                 throw;
             }
@@ -509,10 +554,10 @@ public sealed class ProjectIndexes : IDisposable
                     // Whatever an abandoned restore left is worthless, for the reason an abandoned
                     // shadow is: the file is written from the Parquet from scratch every time.
                     await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-                    _attached.Remove(catalog);
+                    _attached.TryRemove(catalog, out _);
                     DeleteIndexFile(path);
                     await connection.ExecuteAsync($"ATTACH {Literal(path)} AS {Quote(catalog)}", cancellationToken);
-                    _attached.Add(catalog);
+                    _attached[catalog] = 0;
                 }, cancellationToken);
 
                 await connection.ExecuteAsync($"USE {Quote(catalog)}", cancellationToken);
@@ -525,9 +570,9 @@ public sealed class ProjectIndexes : IDisposable
             await ReplaceFileAsync(slug, "the restored index was put in place anyway", async connection =>
             {
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-                _attached.Remove(catalog);
+                _attached.TryRemove(catalog, out _);
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
-                _attached.Remove(slug);
+                _attached.TryRemove(slug, out _);
                 File.Move(path, FilePath(slug), true);
                 File.Delete(FilePath(slug) + ".wal");
                 File.Delete(path + ".wal");
@@ -559,11 +604,11 @@ public sealed class ProjectIndexes : IDisposable
                 // Whatever a previous refresh left behind is worthless: the shadow is written from
                 // scratch every time, and an abandoned one is only a file in the way.
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-                _attached.Remove(catalog);
+                _attached.TryRemove(catalog, out _);
                 DeleteIndexFile(ShadowPath(slug));
                 await connection.ExecuteAsync($"ATTACH {Literal(ShadowPath(slug))} AS {Quote(catalog)}",
                     cancellationToken);
-                _attached.Add(catalog);
+                _attached[catalog] = 0;
             }, cancellationToken);
 
             await connection.ExecuteAsync($"USE {Quote(catalog)}", cancellationToken);
@@ -653,9 +698,9 @@ public sealed class ProjectIndexes : IDisposable
                 // Both catalogs go first: DETACH is what closes the file handles, and neither file can
                 // be deleted or moved while the instance holds one.
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-                _attached.Remove(catalog);
+                _attached.TryRemove(catalog, out _);
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
-                _attached.Remove(slug);
+                _attached.TryRemove(slug, out _);
                 // One overwriting move, never delete-then-move: a move that fails after the old file was
                 // deleted would leave the project with no index at all, and the caller's cleanup would
                 // then take the shadow too. Overwrite replaces the file or leaves it exactly as it was.
@@ -680,7 +725,7 @@ public sealed class ProjectIndexes : IDisposable
         {
             string catalog = ShadowCatalog(slug);
             await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-            _attached.Remove(catalog);
+            _attached.TryRemove(catalog, out _);
             DeleteIndexFile(ShadowPath(slug));
         }, cancellationToken);
     }
@@ -697,9 +742,14 @@ public sealed class ProjectIndexes : IDisposable
             async connection =>
             {
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
-                _attached.Remove(slug);
+                _attached.TryRemove(slug, out _);
                 DeleteIndexFile(FilePath(slug));
             }, cancellationToken);
+
+        // The pool goes too, and not only its connections: the swap above already closed those, and
+        // this is the one thing here a project can be finished with. Its gate stays, because a gate
+        // holds a reader count somebody may still be waiting on; a pool holds nothing once emptied.
+        if (_pools.TryRemove(slug, out var pool)) pool.Discard();
 
         // The durable copy goes with it. Left behind, it would restore a deleted project's files the
         // first time someone connected to a project that reused the slug — the one case where the
@@ -765,6 +815,12 @@ public sealed class ProjectIndexes : IDisposable
             }
 
         gate.Shut();
+        // Every idle connection of this project is closed, and the ones still out are marked not to
+        // come back: the file below is about to be detached, and a pooled connection bound to a
+        // catalog that no longer exists is exactly the "Catalog does not exist" ADR-0003 describes,
+        // handed to whoever borrowed it next. Done after the gate is shut, so nothing can borrow one
+        // between here and the detach, and after the drain, so this closes connections nobody holds.
+        PoolFor(slug).Discard();
         try
         {
             using var connection = await ConnectAsync(cancellationToken);
@@ -811,15 +867,66 @@ public sealed class ProjectIndexes : IDisposable
         }
     }
 
+    /// <summary>The project's pool, created on first use and kept for the same reason its gate is.</summary>
+    private ConnectionPool PoolFor(string slug) => _pools.GetOrAdd(slug, _ => new ConnectionPool());
+
+    /// <summary>
+    ///     Attaches the project if the instance does not hold it, and binds this connection to it.
+    ///     The retry is for the window ADR-0003 already describes and the fast path made sharper: a
+    ///     lease taken between the drain and the shut gate, or one the drain timed out on, can read
+    ///     the catalog as attached and then find the swap has detached it. Before the fast path that
+    ///     caller queued on the attach gate behind the swap and came out the other side attached to
+    ///     the file that replaced it; skipping the gate is what turned that into a failure.
+    ///     So it is retried once, through the gate, which is the same wait it used to do. Only when
+    ///     the catalog really has gone — anything else is this caller's own error and is rethrown
+    ///     untouched. A second failure means the project is being replaced faster than a lease can be
+    ///     taken, and that throws, because at that point there is nothing to read.
+    /// </summary>
+    private async Task BindAsync(DuckDBConnection connection, string slug, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
+            await connection.ExecuteAsync($"USE {Quote(slug)}", cancellationToken);
+        }
+        catch (DuckDBException) when (!_attached.ContainsKey(slug) && !cancellationToken.IsCancellationRequested)
+        {
+            await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
+            await connection.ExecuteAsync($"USE {Quote(slug)}", cancellationToken);
+        }
+    }
+
+    /// <summary>
+    ///     Attaches a catalog unless the instance already holds it. The check is made twice: once
+    ///     without the gate, because a read of an attached project is the ordinary case and taking a
+    ///     process-wide semaphore for it made every project's reads queue behind every other project's
+    ///     (#149), and once inside, because two callers can arrive at an unattached catalog together.
+    ///     Reading the set outside the gate is safe for the one thing this asks of it. A catalog is
+    ///     removed only by a detach, and every detach of a project's own catalog runs with that
+    ///     project's swap gate shut — which the caller of this is holding open. So "attached" cannot
+    ///     turn false underneath a reader, and a stale "not attached" only costs the gate it would
+    ///     have taken anyway.
+    /// </summary>
     private Task AttachAsync(DuckDBConnection connection, string catalog, string path,
         CancellationToken cancellationToken) =>
-        UnderAttachGateAsync(async () =>
+        _attached.ContainsKey(catalog)
+            ? Task.CompletedTask
+            : Gated(catalog, connection, path, cancellationToken);
+
+    private Task Gated(string catalog, DuckDBConnection connection, string path,
+        CancellationToken cancellationToken)
+    {
+        // Recorded before the wait and not after it: what this counts is how often the gate is
+        // reached at all, and a caller that then waited on it is the contention the count is read for.
+        Telemetry.AttachGated(catalog);
+        return UnderAttachGateAsync(async () =>
         {
-            if (_attached.Contains(catalog)) return;
+            if (_attached.ContainsKey(catalog)) return;
             await connection.ExecuteAsync($"ATTACH IF NOT EXISTS {Literal(path)} AS {Quote(catalog)}",
                 cancellationToken);
-            _attached.Add(catalog);
+            _attached[catalog] = 0;
         }, cancellationToken);
+    }
 
     private async Task<DuckDBConnection> ConnectAsync(CancellationToken cancellationToken)
     {
@@ -866,6 +973,73 @@ public sealed class ProjectIndexes : IDisposable
 
     /// <summary>A file path as a SQL string literal. Paths come from configuration and the slug, never from a request.</summary>
     private static string Literal(string path) => $"'{path.Replace("'", "''")}'";
+
+    /// <summary>
+    ///     One project's idle connections. Opening a DuckDB connection and binding it was most of what
+    ///     a lease cost, and every read opened a new one (#149); a lease borrows one instead and hands
+    ///     it back, with <c>USE</c> re-run on every checkout so nothing is ever read through a binding
+    ///     it did not just make.
+    ///     The generation is what makes handing one back safe. A swap detaches the catalog
+    ///     these are bound to, so it calls <see cref="Discard" />; a connection borrowed before that —
+    ///     which the drain's timeout allows — comes back carrying the older generation and is closed
+    ///     instead of pooled. Without it, one orphaned reader would poison the pool for everyone after
+    ///     the swap.
+    /// </summary>
+    private sealed class ConnectionPool
+    {
+        /// <summary>
+        ///     Idle connections kept per project. Four, because a replica has two cores (ADR-0003) and
+        ///     a read is mostly engine work: past a handful, the connections are not being reused,
+        ///     they are being held. A burst beyond it is served and its connections closed on the way
+        ///     back rather than refused.
+        /// </summary>
+        private const int MaxIdle = 4;
+
+        private readonly ConcurrentBag<DuckDBConnection> _idle = [];
+        private int _generation;
+
+        // Counted rather than asked of the bag: ConcurrentBag.Count walks its per-thread queues and
+        // takes their locks, and this is read on the way out of every lease.
+        private int _idleCount;
+
+        /// <summary>
+        ///     An idle connection and the generation it belongs to, read together so that what is
+        ///     handed back is weighed against the state the pool was in when it was handed out.
+        /// </summary>
+        public DuckDBConnection? Rent(out int generation)
+        {
+            generation = Volatile.Read(ref _generation);
+            if (!_idle.TryTake(out var connection)) return null;
+            Interlocked.Decrement(ref _idleCount);
+            return connection;
+        }
+
+        public void Return(DuckDBConnection connection, int generation)
+        {
+            if (generation != Volatile.Read(ref _generation) || Volatile.Read(ref _idleCount) >= MaxIdle)
+            {
+                connection.Dispose();
+                return;
+            }
+
+            Interlocked.Increment(ref _idleCount);
+            _idle.Add(connection);
+        }
+
+        /// <summary>
+        ///     Closes every idle connection and marks the ones still out as not to be returned. Called
+        ///     where the project's catalog is about to be detached, and on shutdown.
+        /// </summary>
+        public void Discard()
+        {
+            Interlocked.Increment(ref _generation);
+            while (_idle.TryTake(out var connection))
+            {
+                Interlocked.Decrement(ref _idleCount);
+                connection.Dispose();
+            }
+        }
+    }
 
     /// <summary>
     ///     Lets any number of readers hold a project at once, says when the ones in flight have

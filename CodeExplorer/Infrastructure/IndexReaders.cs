@@ -34,9 +34,22 @@ public sealed class IndexReaders(ProjectIndexes indexes)
         if (lease is null) return refused(new Problem(IndexReader.NoIndex(projectSlug), ProblemKind.NoIndex));
 
         using var reader = new IndexReader(lease.Connection, lease.FullTextLoaded, lease, projectSlug);
-        if (await reader.ScopeToAsync(repository, cancellationToken) is { } unknown) return refused(unknown);
+        try
+        {
+            if (await reader.ScopeToAsync(repository, cancellationToken) is { } unknown) return refused(unknown);
 
-        return await read(reader, cancellationToken);
+            return await read(reader, cancellationToken);
+        }
+        catch
+        {
+            // The connection goes no further. Since #149 a lease hands its connection back to a pool
+            // instead of closing it, and a statement that threw or was abandoned mid-read can leave
+            // something on it the next borrower would inherit — an agent cancelling a slow search is
+            // the ordinary way that happens. Said here because this is the seam every read crosses,
+            // so no reader can forget to say it.
+            lease.Broken();
+            throw;
+        }
     }
 
     /// <summary>The same for a caller whose answer is an <see cref="Outcome" />, which a problem already is.</summary>

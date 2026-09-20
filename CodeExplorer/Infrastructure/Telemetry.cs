@@ -57,6 +57,9 @@ public static class Telemetry
     public const string HistoryFiles = "codeexplorer.index.history.files";
     public const string DurableDuration = "codeexplorer.index.durable.duration";
 
+    /// <summary>How many attaches had to take the instance-wide gate. See <see cref="AttachGated" />.</summary>
+    public const string AttachGate = "codeexplorer.index.attach.gated";
+
     // Span names are prefixed like the metric names, though only metrics and tags are held to it by
     // CODING_STANDARDS: a trace view shows these beside ASP.NET Core's own spans, and "search" alone
     // does not say whose.
@@ -171,6 +174,10 @@ public static class Telemetry
     private static readonly Histogram<long> HistoryFileCount =
         Meter.CreateHistogram<long>(HistoryFiles, "{file}", "Files blamed by one history pass.");
 
+    private static readonly Counter<long> AttachGateEntries =
+        Meter.CreateCounter<long>(AttachGate, "{attach}",
+            "Attaches that had to take the instance-wide ATTACH gate.");
+
     private static readonly Histogram<double> DurableSeconds =
         Meter.CreateHistogram<double>(DurableDuration, "s",
             "How long a project's durable copy took to store or to fetch.");
@@ -266,6 +273,18 @@ public static class Telemetry
     ///     way of asking for one is timed and a new caller cannot forget to be.
     /// </summary>
     public static LeaseRecording Lease(string slug) => new(slug);
+
+    /// <summary>
+    ///     One project's attach taking the instance-wide gate. <c>ATTACH</c> is a property of the
+    ///     DuckDB instance, so one semaphore serialises it across every project, and a lease that took
+    ///     it to learn the project was already attached made every project's reads queue behind every
+    ///     other project's (#149). A read of an attached project now takes no gate at all, so this
+    ///     counts what is left: a first attach, a re-attach after a swap, and the loser of a race
+    ///     between two callers arriving at the same unattached project.
+    ///     Rising steadily on a busy replica is the symptom worth an alert — it means projects are
+    ///     being detached as fast as they are attached, which is a swap loop rather than contention.
+    /// </summary>
+    public static void AttachGated(string slug) => AttachGateEntries.Add(1, new TagList { { ProjectTag, slug } });
 
     /// <summary>
     ///     Wraps the call-tool pipeline in a span and a duration, so that what an agent waits for is

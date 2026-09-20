@@ -86,3 +86,36 @@ which decides empty and LFS once and hands the refresh a `LocalCopy` of plain re
 LibGit2Sharp type leaves `Git/` and `ModuleBoundaryTests` keeps it that way. Nothing may depend on the
 clone existing between refreshes: it is temporary, and deleting it after a build is a decision this
 ADR leaves open, to be taken on the storage figures above rather than on convenience.
+
+## Revisited for #149, on 2026-09-20
+
+Connections to the instance are pooled per project, and the instance-wide `ATTACH` gate is taken
+only by an attach that has work to do. Neither weakens the rule above. `USE` still runs on every
+checkout, so nothing is ever read through a binding the lease did not just make; what is reused is
+the open connection, not the binding. A pooled connection is bound to a catalog a swap detaches, so
+the swap empties that project's pool while the gate is shut — and marks the connections still out,
+which the drain's timeout permits, so that one orphaned reader cannot hand a dead binding back into
+a pool everyone else draws from.
+
+The gate was the sharper problem. `ATTACH` is a property of the instance, so one semaphore
+serialises it across every project; a lease took that semaphore before it had looked at whether the
+project was attached, which made a read of one project wait on every other project's. The attached
+set is read without the gate now, and a stale "not attached" costs only the gate the caller would
+have taken anyway.
+
+A stale "attached" is the direction that matters, and it is possible. Shutting the gate keeps new
+readers out but does not evict the ones already through it — a lease taken between the drain and
+the shut, or one the drain timed out on, is the orphaned reader this ADR already describes. Such a
+reader can see the catalog as attached, skip the `ATTACH`, and meet a catalog the swap has since
+detached. Before the fast path it queued on the attach gate behind the swap and came out bound to
+the file that replaced it, so it survived; skipping the gate is what would have turned that into a
+failure. So `USE` is retried once through the gate when, and only when, the catalog has gone —
+which is the same wait it used to do. The orphaned reader whose *query* is already in flight is
+unchanged and still fails, as it always has.
+
+`codeexplorer.index.attach.gated` counts what still reaches the gate. Rising steadily means
+projects are being detached as fast as they are attached, which is a swap loop rather than
+contention.
+
+Measured on this machine, over 200 calls after a warm-up: `repo_info` on a warm project went from
+26.0 ms to 15.2 ms.

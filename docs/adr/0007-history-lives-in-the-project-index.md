@@ -106,8 +106,9 @@ Attribution answers the ownership question and is honest about the other one; th
   rows would be blind to whatever the new column records, which is a quiet wrong answer rather than a
   failure. Both copies are therefore refused on the same `SchemaVersion` test, and the next refresh
   walks every commit again. Version 7, which added `commit_files.old_path`, was the first to pay it,
-  and version 8, which added `path_lineage`, pays it again for a table it does not even carry — the
+  version 8, which added `path_lineage`, pays it again for a table it does not even carry, and
+  version 9 pays it for `repositories.byte_count`, which is not a history table at all — the
   test is on the whole schema, because a version meaning "the history tables in particular" would be
   a second version number to keep honest. The walk it costs is the one ADR-0007 measured at 32 s for
-  a 4,300-commit repository, once per
-  project, and it is user-visible on the first refresh after a deploy.
+  a 4,300-commit repository, once per project, and it is user-visible on the first refresh after a
+  deploy.

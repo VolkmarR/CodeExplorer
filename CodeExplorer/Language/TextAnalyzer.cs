@@ -288,14 +288,14 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             ? MatchesNothing
             : $@"^\s*(\w+)\s*=\s*(?:{typeKeywords})\b";
 
-        _memberDeclaration = new Regex(flag + memberDeclarationPattern, RegexOptions.CultureInvariant);
-        _keywordDeclaration = new Regex(flag + keywordPattern, RegexOptions.CultureInvariant);
-        _typeDeclaration = new Regex(flag + typePattern, RegexOptions.CultureInvariant);
+        _memberDeclaration = new Regex(flag + memberDeclarationPattern, PatternOptions);
+        _keywordDeclaration = new Regex(flag + keywordPattern, PatternOptions);
+        _typeDeclaration = new Regex(flag + typePattern, PatternOptions);
         // Null rather than a pattern that matches nothing: this is asked of every line of every file
         // a reference search reads, and the languages that write this shape are the minority.
         _precedingTypeDeclaration = precedingTypePattern == MatchesNothing
             ? null
-            : new Regex(flag + precedingTypePattern, RegexOptions.CultureInvariant);
+            : new Regex(flag + precedingTypePattern, PatternOptions);
         // Only the shapes this language actually writes. A language that declares nothing this can
         // read asks the engine for no lines at all, rather than for the lines a pattern that matches
         // nothing would return.
@@ -304,26 +304,40 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             ? CandidateLines.None
             : CandidateLines.Matching($"{flag}{string.Join("|", shapes.Select(p => $"(?:{p})"))}");
 
-        _declarationPrefix = new Regex(DeclarationPrefixPattern, RegexOptions.CultureInvariant);
-        _assignment = new Regex(AssignmentPattern(profile.AssignmentOperators), RegexOptions.CultureInvariant);
+        _declarationPrefix = new Regex(DeclarationPrefixPattern, PatternOptions);
+        _assignment = new Regex(AssignmentPattern(profile.AssignmentOperators), PatternOptions);
         // "Symbol x", "Symbol? x", "Symbol[] x", "Symbol<T> x" — a type followed by the thing it types.
-        _typedDeclarationTail = new Regex(@"^(\??(\[\])?|<[^<>]*>)\s+\w", RegexOptions.CultureInvariant);
+        _typedDeclarationTail = new Regex(@"^(\??(\[\])?|<[^<>]*>)\s+\w", PatternOptions);
         _generated = profile.GeneratedPathPatterns.Count == 0
             ? null
             : new Regex(
                 "^(?:" + string.Join("|", profile.GeneratedPathPatterns.Select(GlobToPattern)) + ")$",
                 // A path is compared without regard to case, the way a file system does.
-                RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+                PatternOptions | RegexOptions.IgnoreCase);
     }
 
+    /// <summary>
+    ///     How every pattern here is built. <see cref="RegexOptions.Compiled" /> because these run
+    ///     against every line of every file a build ingests and every candidate line a reference or
+    ///     definition search reads, which is the one place in this system where a regex is hot.
+    ///     Measured on this machine, over the ten analysers (#149): building all of them went from
+    ///     25 ms to 29 ms, and a scan of 120,000 lines from 244 ms to 110 ms. Four milliseconds once,
+    ///     for a bit over twice the speed on every line after — and the once is the first touch of
+    ///     <see cref="Languages.Default" />, which is a lazy static, so a replica waking up pays it on
+    ///     the first request that reads a line rather than at startup.
+    ///     The pattern strings are built per profile and the analysers are process-wide singletons, so
+    ///     there is nothing here a source generator could do instead.
+    /// </summary>
+    private const RegexOptions PatternOptions = RegexOptions.CultureInvariant | RegexOptions.Compiled;
+
     /// <summary>Call parentheses, with an optional generic argument list in front of them.</summary>
-    private static readonly Regex Invocation = new(@"^\s*(<[^<>()]*>)?\s*\(", RegexOptions.CultureInvariant);
+    private static readonly Regex Invocation = new(@"^\s*(<[^<>()]*>)?\s*\(", PatternOptions);
 
     /// <summary>
     ///     A declaration head is followed by a parameter list, a generic list, a property body or an
     ///     initialiser — never by an operator or the end of an expression.
     /// </summary>
-    private static readonly Regex DeclarationTail = new(@"^\s*([\(<{;=]|=>)", RegexOptions.CultureInvariant);
+    private static readonly Regex DeclarationTail = new(@"^\s*([\(<{;=]|=>)", PatternOptions);
 
     public string? Language => _profile.Name;
 
