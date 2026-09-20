@@ -9,7 +9,7 @@ namespace CodeExplorer.Tests;
 ///     <c>list_tree</c>, <c>list_extensions</c> and <c>repo_info</c>. None of them matches text, so the
 ///     engine is pinned to Substring once rather than run twice.
 /// </summary>
-public sealed class FileToolsTests : IDisposable
+public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<FileToolsFixture>
 {
     private const string Orders =
         "class Orders\n{\n    void Needle() {}\n    // needle in a comment\n    int Count;\n}\n";
@@ -28,7 +28,7 @@ public sealed class FileToolsTests : IDisposable
         }
     };
 
-    private static readonly Dictionary<string, Dictionary<string, string>> TwoRepositories = new()
+    internal static readonly Dictionary<string, Dictionary<string, string>> TwoRepositories = new()
     {
         ["one"] = new Dictionary<string, string>
         {
@@ -53,7 +53,7 @@ public sealed class FileToolsTests : IDisposable
     ///     declaration/implementation split. Its own fixture rather than more files in
     ///     <see cref="TwoRepositories" />, whose counts half the assertions above are written against.
     /// </summary>
-    private static readonly Dictionary<string, Dictionary<string, string>> Declaring = new()
+    internal static readonly Dictionary<string, Dictionary<string, string>> Declaring = new()
     {
         ["one"] = new Dictionary<string, string>
         {
@@ -72,15 +72,13 @@ public sealed class FileToolsTests : IDisposable
     ///     so a glob can be run past the page both within reach of a higher <c>limit</c> and far beyond
     ///     it. The files are one line each: what is under test is the count and the reply around it.
     /// </summary>
-    private static readonly Dictionary<string, Dictionary<string, string>> Wide = new()
+    internal static readonly Dictionary<string, Dictionary<string, string>> Wide = new()
     {
         ["radix"] = Enumerable.Range(0, 2100).ToDictionary(
             i => $"src/g{i / 700}/f{i:0000}.cs", i => $"class F{i};\n")
     };
 
-    private TestHost? _host;
-
-    public void Dispose() => _host?.Dispose();
+    private readonly TestHost _host = fixture.Host;
 
     [Fact]
     public async Task Read_file_returns_numbered_content_and_honours_line_ranges()
@@ -164,9 +162,11 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task A_path_prefixed_with_the_slug_is_diagnosed_in_a_single_repository_project()
     {
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("alpha", OneRepository, singleRepository: true);
-        await using var client = await _host.ConnectAsync("alpha");
+        // Its own server: OneRepository names its repository `one`, which the shared fixture has
+        // already committed under that name, and a fixture directory belongs to the host.
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", OneRepository, singleRepository: true);
+        await using var client = await host.ConnectAsync("alpha");
 
         // 'alpha' is both slugs at once: the one repository of such a project is named after the
         // project (ADR-0006), so the slug read off a project list and the slug read off a path are the
@@ -212,10 +212,10 @@ public sealed class FileToolsTests : IDisposable
         Assert.Contains("No indexed file 'one/src/Nope.cs' in repository 'one' of project 'alpha'", real);
         Assert.DoesNotContain("is the repository, not a directory in it", real);
 
-        _host!.Dispose();
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("beta", OneRepository, singleRepository: true);
-        await using var single = await _host.ConnectAsync("beta");
+        // Its own server, for the reason the single-repository test above takes one.
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("beta", OneRepository, singleRepository: true);
+        await using var single = await host.ConnectAsync("beta");
 
         // A path with no slug prefix keeps today's wording, "did you mean" and all.
         string typo = await ReadAsync(single, "Orders.cs");
@@ -270,7 +270,7 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task Glob_past_the_page_offers_a_higher_limit_only_when_one_could_reach_the_total()
     {
-        await using var client = await StartAsync(Wide);
+        await using var client = await _host.ConnectAsync(FileToolsFixture.Wide);
 
         // A one-level shell glob that matched the whole repository: "raise limit" cannot reach 2100.
         string swallowed = await CallAsync(client, "glob", new Dictionary<string, object?> { ["glob"] = "radix/*" });
@@ -428,7 +428,7 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task List_tree_of_a_single_repository_project_starts_inside_the_repository()
     {
-        _host = new TestHost(SearchEngine.Substring);
+        // On the shared server: its repository is called `main`, which nothing else commits.
         await _host.IndexedProjectAsync("solo", new Dictionary<string, Dictionary<string, string>>
         {
             ["main"] = new() { ["src/Program.cs"] = "class P {}\n", ["README.md"] = "hello\n" }
@@ -444,11 +444,13 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task Repo_info_reports_each_repository_its_commit_and_the_index_time()
     {
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("alpha", TwoRepositories);
-        string later = _host.CreateGitRepository("later", new Dictionary<string, string> { ["a.txt"] = "a\n" });
-        await _host.AddRepositoryAsync("alpha", "later", later);
-        await using var client = await _host.ConnectAsync("alpha");
+        // Its own server: this adds a repository after the build, which the shared project must not
+        // have, and rebuilding TwoRepositories needs the fixture names the shared one holds.
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", TwoRepositories);
+        string later = host.CreateGitRepository("later", new Dictionary<string, string> { ["a.txt"] = "a\n" });
+        await host.AddRepositoryAsync("alpha", "later", later);
+        await using var client = await host.ConnectAsync("alpha");
 
         string text = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
         Assert.Contains("Project 'alpha'", text);
@@ -458,7 +460,7 @@ public sealed class FileToolsTests : IDisposable
         Assert.Contains("4 files", text);
         Assert.Contains("two  ", text);
         Assert.Contains("3 files", text);
-        using (var repo = new Repository(_host.FixturePath("one")))
+        using (var repo = new Repository(host.FixturePath("one")))
         {
             Assert.Contains(repo.Head.Tip.Sha[..12], text);
         }
@@ -476,16 +478,17 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task Repo_info_reports_how_much_history_each_repository_holds_and_what_it_spans()
     {
-        _host = new TestHost(SearchEngine.Substring);
-        string source = _host.CreateEmptyGitRepository("one");
-        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/A.cs"] = "a\n" },
+        // Its own server: it commits its own history into a repository called `one`.
+        using var host = new TestHost(SearchEngine.Substring);
+        string source = host.CreateEmptyGitRepository("one");
+        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/A.cs"] = "a\n" },
             "Import the old code", "Ada", "ada@example.invalid", 0);
-        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/A.cs"] = "a2\n" },
+        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/A.cs"] = "a2\n" },
             "Change it later", "Grace", "grace@example.invalid", 60 * 24 * 40);
-        await _host.CreateProjectAsync("alpha");
-        await _host.AddRepositoryAsync("alpha", "one", source);
-        await _host.RefreshAsync("alpha");
-        await using var client = await _host.ConnectAsync("alpha");
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "one", source);
+        await host.RefreshAsync("alpha");
+        await using var client = await host.ConnectAsync("alpha");
 
         string text = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
 
@@ -502,10 +505,11 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task Repo_info_says_when_a_repository_has_no_imported_history()
     {
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("alpha", TwoRepositories);
-        await _host.ExecuteAsync("alpha", "DELETE FROM commits WHERE repo_slug = 'two'");
-        await using var client = await _host.ConnectAsync("alpha");
+        // Its own server: it deletes rows from the index it reads, which the shared one must keep.
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", TwoRepositories);
+        await host.ExecuteAsync("alpha", "DELETE FROM commits WHERE repo_slug = 'two'");
+        await using var client = await host.ConnectAsync("alpha");
 
         string text = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
 
@@ -518,9 +522,9 @@ public sealed class FileToolsTests : IDisposable
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation_from_every_tool()
     {
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.CreateProjectAsync("alpha");
-        await using var client = await _host.ConnectAsync("alpha");
+        // On the shared server: a project nothing ever builds, which needs no repository at all.
+        await _host.CreateProjectAsync("unbuilt");
+        await using var client = await _host.ConnectAsync("unbuilt");
 
         foreach ((string tool, var arguments) in new[]
                  {
@@ -533,7 +537,7 @@ public sealed class FileToolsTests : IDisposable
         {
             string text = await CallAsync(client, tool, arguments);
             Assert.Contains("no index", text);
-            Assert.Contains("POST /api/projects/alpha/refresh", text);
+            Assert.Contains("POST /api/projects/unbuilt/refresh", text);
         }
     }
 
@@ -604,7 +608,9 @@ public sealed class FileToolsTests : IDisposable
         // The refusal the index reader writes for every file-scoped tool, pinned rather than merely
         // asserted to be silent about declarations: a bare or wrong sentence naming the path would
         // pass a negative assertion, and this is the reply an agent reads most often after a typo.
-        Assert.Contains("No indexed file 'one/src/Nowhere.cs' in repository 'one' of project 'alpha'", text);
+        Assert.Contains(
+            $"No indexed file 'one/src/Nowhere.cs' in repository 'one' of project '{FileToolsFixture.Declaring}'",
+            text);
         Assert.Contains("glob or list_tree", text);
         Assert.DoesNotContain("declares", text);
     }
@@ -621,8 +627,9 @@ public sealed class FileToolsTests : IDisposable
     {
         // One declaration past a full second page, so three pages: full, full, and a remainder.
         const int routines = (2 * FileDeclarations.MaxDeclarations) + 1;
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        // Its own server: its repository is called `one`, which the shared fixture already holds.
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
         {
             ["one"] = new()
             {
@@ -633,7 +640,7 @@ public sealed class FileToolsTests : IDisposable
                                  + "}\n"
             }
         });
-        await using var client = await _host.ConnectAsync("alpha");
+        await using var client = await host.ConnectAsync("alpha");
 
         string first = await DeclarationsAsync(client, "one/src/Big.cs");
         Assert.Contains($"declares {FileDeclarations.MaxDeclarations} names, in file order", first);
@@ -664,7 +671,7 @@ public sealed class FileToolsTests : IDisposable
         Assert.DoesNotContain("declares nothing its language writes", past);
     }
 
-    private Task<McpClient> DeclaringAsync() => StartAsync(Declaring);
+    private Task<McpClient> DeclaringAsync() => _host.ConnectAsync(FileToolsFixture.Declaring);
 
     private static Task<string> DeclarationsAsync(McpClient client, string path) =>
         CallAsync(client, "list_declarations", new Dictionary<string, object?> { ["path"] = path });
@@ -673,14 +680,7 @@ public sealed class FileToolsTests : IDisposable
         CallAsync(client, "list_declarations",
             new Dictionary<string, object?> { ["path"] = path, ["offset"] = offset });
 
-    private Task<McpClient> StartAsync() => StartAsync(TwoRepositories);
-
-    private async Task<McpClient> StartAsync(Dictionary<string, Dictionary<string, string>> repositories)
-    {
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("alpha", repositories);
-        return await _host.ConnectAsync("alpha");
-    }
+    private Task<McpClient> StartAsync() => _host.ConnectAsync(FileToolsFixture.Alpha);
 
     private static Task<string> ReadAsync(McpClient client, params string[] paths) =>
         CallAsync(client, "read_file", new Dictionary<string, object?> { ["paths"] = paths });
@@ -693,4 +693,44 @@ public sealed class FileToolsTests : IDisposable
 
     private static Task<string> CallAsync(McpClient client, string tool, Dictionary<string, object?> arguments) =>
         TestHost.CallAsync(client, tool, arguments);
+}
+
+/// <summary>
+///     The one server this class runs against, and the three projects its read-only tests share.
+///     A server per test meant seventeen of them, each booting an in-process host before it built
+///     anything; the host is built once here instead, and so are the fixtures nothing writes to.
+///     <see cref="Wide" /> is the reason this matters most: two thousand one hundred files committed
+///     and indexed, which is most of what this class costs, and it was being paid where it is now
+///     built once.
+///     Five tests still take a server of their own, and say so where they do. They need a second copy
+///     of a repository this fixture has already committed — <c>TwoRepositories</c> and
+///     <c>OneRepository</c> both name theirs <c>one</c>, and a fixture directory belongs to the host
+///     rather than to the project — so a shared host would have them committing the same content into
+///     the same repository, which git answers with "nothing to commit".
+/// </summary>
+public sealed class FileToolsFixture : IAsyncLifetime
+{
+    /// <summary>Two repositories, one of them holding a binary and a generated file.</summary>
+    public const string Alpha = "alpha";
+
+    /// <summary>The list_declarations fixture: five languages and one unit with a split.</summary>
+    public const string Declaring = "declaring";
+
+    /// <summary>More files than one glob page holds, in three directories.</summary>
+    public const string Wide = "wide";
+
+    public TestHost Host { get; } = new(SearchEngine.Substring);
+
+    public async ValueTask InitializeAsync()
+    {
+        await Host.IndexedProjectAsync(Alpha, FileToolsTests.TwoRepositories);
+        await Host.IndexedProjectAsync(Declaring, FileToolsTests.Declaring);
+        await Host.IndexedProjectAsync(Wide, FileToolsTests.Wide);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Host.Dispose();
+        return ValueTask.CompletedTask;
+    }
 }
