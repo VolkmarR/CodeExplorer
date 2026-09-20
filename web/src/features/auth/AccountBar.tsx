@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useLocation } from '@tanstack/react-router'
 import { LogIn, LogOut } from 'lucide-react'
-import { signInHref, signOutAction } from '@/lib/api'
+import { signInHref, signOutAction } from '@/lib/http'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { authQuery } from './queries'
 import { initials } from './initials'

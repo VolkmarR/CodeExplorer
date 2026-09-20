@@ -1,4 +1,4 @@
-import type { RepositoryDetail } from '@/lib/api'
+import type { RepositoryDetail } from '@/features/projects/api'
 import {
   Select,
   SelectContent,

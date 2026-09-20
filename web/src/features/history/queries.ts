@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import type { HistoryParameters } from '@/lib/urls/historyParams'
-import { api } from '@/lib/api'
+import { fetchCommit, fetchCommitFiles, fetchCommits } from '@/features/history/api'
 import { projectKey } from '@/lib/queryKeys'
 
 /**
@@ -10,7 +10,7 @@ import { projectKey } from '@/lib/queryKeys'
  */
 export function commitsQuery(project: string, parameters: HistoryParameters) {
   return queryOptions({
-    queryFn: () => api.commits(project, parameters.page, parameters.repository),
+    queryFn: () => fetchCommits(project, parameters.page, parameters.repository),
     queryKey: [...projectKey(project), 'commits', parameters],
     staleTime: Infinity,
   })
@@ -22,7 +22,7 @@ export function commitsQuery(project: string, parameters: HistoryParameters) {
  */
 export function commitQuery(project: string, sha: string) {
   return queryOptions({
-    queryFn: () => api.commit(project, sha),
+    queryFn: () => fetchCommit(project, sha),
     queryKey: [...projectKey(project), 'commit', sha, 'detail'],
     staleTime: Infinity,
   })
@@ -39,7 +39,7 @@ export function commitQuery(project: string, sha: string) {
  */
 export function commitFilesQuery(project: string, sha: string) {
   return queryOptions({
-    queryFn: () => api.commitFiles(project, sha),
+    queryFn: () => fetchCommitFiles(project, sha),
     queryKey: [...projectKey(project), 'commit', sha, 'files'],
     staleTime: Infinity,
   })

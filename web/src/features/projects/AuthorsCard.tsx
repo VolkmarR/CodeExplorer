@@ -1,4 +1,4 @@
-import type { IndexOverview } from '@/lib/api'
+import type { IndexOverview } from '@/features/projects/api'
 import { formatCount, formatDate } from '@/lib/format'
 import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'

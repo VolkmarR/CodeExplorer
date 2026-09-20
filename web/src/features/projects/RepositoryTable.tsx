@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { MoreHorizontal, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import type { ProjectDetail } from '@/lib/api'
-import { api } from '@/lib/api'
+import type { ProjectDetail } from '@/features/projects/api'
+import { removeRepository } from '@/features/projects/api'
 import { formatCount, formatTime, shortSha } from '@/lib/format'
 import { shortUrl } from './repositoryUrl'
 import { CommitLine } from '@/components/CommitLine'
@@ -52,7 +52,7 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
   const [removing, setRemoving] = useState<string | null>(null)
 
   const remove = useMutation({
-    mutationFn: (repository: string) => api.removeRepository(slug, repository),
+    mutationFn: (repository: string) => removeRepository(slug, repository),
     onSuccess: async (_, repository) => {
       await invalidateProject(queryClient, slug)
       toast.add({

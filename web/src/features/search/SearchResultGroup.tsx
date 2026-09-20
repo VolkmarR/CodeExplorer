@@ -4,7 +4,7 @@ import { fileSearch } from '@/lib/urls/fileParams'
 import { MatchedLine } from '@/features/search/MatchedLine'
 import { matchRanges } from '@/features/search/matchRanges'
 import { languageFor } from '@/highlight/highlighter'
-import type { GrepFile } from '@/lib/api'
+import type { GrepFile } from '@/features/search/api'
 import { directoryOf, fileName, formatCount } from '@/lib/format'
 
 /** One shared empty array for context lines, so a row without marks does not get a new prop each render. */

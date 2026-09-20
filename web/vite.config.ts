@@ -63,7 +63,7 @@ export default defineConfig({
     },
     // The one boundary the folder layout rests on, checked rather than remembered — the server has a
     // test for the same rule between its modules. `components/` is what every feature uses and
-    // `lib/` is the API client, the URL contracts and the query-key roots: a feature may reach into
+    // `lib/` is the HTTP client, the URL contracts and the query-key roots: a feature may reach into
     // either, and neither may reach back, or the shared half of the app depends on the half that is
     // allowed to change. The app frame lives in `src/app/` precisely because it does depend on
     // features, and is deliberately outside this list.
@@ -78,7 +78,7 @@ export default defineConfig({
                 {
                   group: ['@/features/*', '@/features/**'],
                   message:
-                    'components/ and lib/ are shared by every feature and may not depend on one. Move what is shared into lib/ (a URL contract, the API client) or components/, or move the file into src/app/, which may depend on features.',
+                    'components/ and lib/ are shared by every feature and may not depend on one. Move what is shared into lib/ (a URL contract, the HTTP client) or components/, declare the fields a shared component renders as its own prop type rather than importing a feature response shape, or move the file into src/app/, which may depend on features.',
                 },
               ],
             },

@@ -1,4 +1,4 @@
-import type { IndexSummary } from '@/lib/api'
+import type { IndexSummary } from '@/features/refresh/api'
 import { formatCount } from '@/lib/format'
 
 /**

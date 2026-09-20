@@ -1,9 +1,26 @@
 import { Link } from '@tanstack/react-router'
 import type { View } from '@/lib/urls/views'
 import { commitSearch } from '@/lib/urls/commitParams'
-import type { CommitRef } from '@/lib/api'
 import { formatDate, shortSha } from '@/lib/format'
 import { cn } from '@/lib/utils'
+
+/**
+ * The four fields this line draws, declared here rather than imported: `components/` is shared by
+ * every feature and may not depend on one, and the change log's `CommitRef` — which this matches
+ * field for field — belongs to `features/history`. Anything with these four fields may be drawn,
+ * which is what lets a blame run, a repository's newest and a file's first and last all pass theirs.
+ *
+ * The two are kept honest by the three call sites rather than by a test: each passes a shape read
+ * from the API, so a field this line names that `CommitRef` stops carrying fails to typecheck there.
+ * A field added to `CommitRef` and not drawn here is no drift — this is what the line renders, not a
+ * copy of the record.
+ */
+interface Commit {
+  sha: string
+  authorName: string
+  authoredAt: string
+  subject: string
+}
 
 /**
  * One commit in one line: the abbreviated id, the day, the author, and the subject when there is
@@ -23,7 +40,7 @@ export function CommitLine({
   sha = true,
   className,
 }: {
-  commit: CommitRef
+  commit: Commit
   /** The project the commit is in. Given, the line links to it; left out, it is plain text. */
   project?: string
   /** Which view the reader is on, so the commit page's trail says where they came from. */

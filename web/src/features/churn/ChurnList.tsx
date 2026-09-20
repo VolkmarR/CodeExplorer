@@ -1,6 +1,6 @@
 import { DiffStat } from '@/components/DiffStat'
 import { FilePathLink } from '@/components/FilePathLink'
-import type { ChurnFile } from '@/lib/api'
+import type { ChurnFile } from '@/features/churn/api'
 import { formatCount } from '@/lib/format'
 
 /**

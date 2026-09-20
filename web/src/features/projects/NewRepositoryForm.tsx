@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { api } from '@/lib/api'
+import { addRepository } from '@/features/projects/api'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -29,7 +29,7 @@ export function NewRepositoryForm({
 
   const add = useMutation({
     mutationFn: () =>
-      api.addRepository(project, slug.trim(), url.trim(), credential === '' ? null : credential),
+      addRepository(project, slug.trim(), url.trim(), credential === '' ? null : credential),
     onSuccess: async (created) => {
       setSlug('')
       setUrl('')

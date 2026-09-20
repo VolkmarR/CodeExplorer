@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { ChurnList } from '@/features/churn/ChurnList'
-import type { IndexOverview } from '@/lib/api'
+import type { IndexOverview } from '@/features/projects/api'
 import { formatDate } from '@/lib/format'
 import { churnSearch } from '@/lib/urls/churnParams'
 import { NO_HISTORY } from '@/features/projects/noHistory'

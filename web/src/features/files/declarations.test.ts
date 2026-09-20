@@ -1,6 +1,6 @@
 import { expect, test } from 'vite-plus/test'
 import { declarationsNote } from '@/features/files/declarations'
-import type { Declaration, FileDeclarations } from '@/lib/api'
+import type { Declaration, FileDeclarations } from '@/features/files/api'
 
 const declaration = (member: string): Declaration => ({
   evidence: 'text',

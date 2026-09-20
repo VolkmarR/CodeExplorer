@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { expect, test } from 'vite-plus/test'
 import { RefreshPhases } from '@/features/refresh/RefreshPhases'
-import type { PhaseCost } from '@/lib/api'
+import type { PhaseCost } from '@/features/refresh/api'
 
 /**
  * Two invariants this panel states in prose. A row's key is counted rather than positional, because

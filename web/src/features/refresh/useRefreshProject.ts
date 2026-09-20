@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { startRefresh } from '@/features/refresh/api'
 import { refreshStatusQuery } from '@/features/refresh/queries'
 
 /**
@@ -19,7 +19,7 @@ export function useRefreshProject(slug: string) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: () => api.refresh(slug),
+    mutationFn: () => startRefresh(slug),
     onSuccess: (started) => queryClient.setQueryData(refreshStatusQuery(slug).queryKey, started),
   })
 }

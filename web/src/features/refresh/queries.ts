@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
-import type { RefreshStatus } from '@/lib/api'
-import { api } from '@/lib/api'
+import type { RefreshStatus } from '@/features/refresh/api'
+import { fetchRefreshStatus } from '@/features/refresh/api'
 import { refreshKey } from '@/lib/queryKeys'
 
 /**
@@ -43,7 +43,7 @@ const INTERVALS = {
  */
 export function refreshStatusQuery(slug: string, watcher: keyof typeof INTERVALS = 'page') {
   return queryOptions({
-    queryFn: () => api.refreshStatus(slug),
+    queryFn: () => fetchRefreshStatus(slug),
     queryKey: refreshKey(slug),
     refetchInterval: (query) => (isRefreshRunning(query.state.data) ? INTERVALS[watcher] : false),
   })

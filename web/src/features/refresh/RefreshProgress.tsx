@@ -1,4 +1,4 @@
-import type { RefreshProgress as Step, RefreshStatus } from '@/lib/api'
+import type { RefreshProgress as Step, RefreshStatus } from '@/features/refresh/api'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { RefreshPhases } from '@/features/refresh/RefreshPhases'
 import { RefreshSummary } from '@/features/refresh/RefreshSummary'
