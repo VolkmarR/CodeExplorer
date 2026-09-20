@@ -13,9 +13,9 @@ namespace CodeExplorer.Tests;
 ///     who to ask about a line — and a reply that reads as authorship when it means "last touched" is
 ///     the failure mode, not a wrong row.
 /// </summary>
-public sealed class HistoryToolsTests : IDisposable
+public sealed class HistoryToolsTests(HistoryToolsFixture fixture) : IClassFixture<HistoryToolsFixture>
 {
-    private readonly TestHost _host = new(SearchEngine.Substring);
+    private readonly TestHost _host = fixture.Host;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -28,8 +28,6 @@ public sealed class HistoryToolsTests : IDisposable
     private const string Caveat =
         "`git_log` has no `committer` argument; it was ignored. "
         + "It takes `repo`, `author`, `message`, `limit`, `page` and `path`.";
-
-    public void Dispose() => _host.Dispose();
 
     [Fact]
     public async Task Git_log_lists_the_commits_newest_first_with_their_authors()
@@ -58,8 +56,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_scopes_to_one_author_by_address()
     {
-        await BuildChurnProjectAsync("mixed", true);
-        await using var client = await _host.ConnectAsync("mixed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["author"] = "grace" });
@@ -79,8 +76,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_lists_the_addresses_a_filter_caught_when_it_caught_more_than_the_page_shows()
     {
-        await BuildChurnProjectAsync("mixed", true);
-        await using var client = await _host.ConnectAsync("mixed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["author"] = "example.invalid", ["limit"] = 2 });
@@ -125,8 +121,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_finds_a_commit_by_text_in_its_subject()
     {
-        await BuildChurnProjectAsync("tickets", true);
-        await using var client = await _host.ConnectAsync("tickets");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["message"] = "the module" });
@@ -150,8 +145,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_combines_the_subject_filter_with_author_and_repo()
     {
-        await BuildChurnProjectAsync("both", true);
-        await using var client = await _host.ConnectAsync("both");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["message"] = "it", ["author"] = "grace", ["repo"] = "one" });
@@ -176,8 +170,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_says_a_subject_filter_missed_and_treats_a_wildcard_as_text()
     {
-        await BuildChurnProjectAsync("miss", false);
-        await using var client = await _host.ConnectAsync("miss");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Churn);
 
         string missed = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["message"] = "BugFix 558185" });
@@ -204,8 +197,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Authors_lists_who_committed_with_the_address_each_commits_from()
     {
-        await BuildChurnProjectAsync("mixed", true);
-        await using var client = await _host.ConnectAsync("mixed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         string scoped = await TestHost.CallAsync(client, "authors",
             new Dictionary<string, object?> { ["repo"] = "one" });
@@ -228,8 +220,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Authors_says_how_many_there_are_when_the_limit_cuts_the_list()
     {
-        await BuildChurnProjectAsync("mixed", false);
-        await using var client = await _host.ConnectAsync("mixed");
+        // The single-repository fixture: this is about the limit, not about spanning repositories.
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Churn);
 
         string reply = await TestHost.CallAsync(client, "authors", new Dictionary<string, object?> { ["limit"] = 1 });
 
@@ -247,8 +239,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Authors_says_an_index_without_history_has_none_in_the_shared_words()
     {
-        await _host.IndexedProjectAsync("empty",
-            new Dictionary<string, Dictionary<string, string>> { ["only"] = new() { ["a.cs"] = "class A;\n" } });
+        await OnlyRepositoryProjectAsync(_host, "empty",
+            new Dictionary<string, string> { ["a.cs"] = "class A;\n" });
         await _host.ExecuteAsync("empty", "DELETE FROM commits");
         await using var client = await _host.ConnectAsync("empty");
 
@@ -360,10 +352,10 @@ public sealed class HistoryToolsTests : IDisposable
         Assert.Contains("No commits on page 9", pastTheEnd, StringComparison.Ordinal);
 
         // No history: the reply is the absence itself, which must not be introduced as a log.
-        await _host.IndexedProjectAsync("empty",
-            new Dictionary<string, Dictionary<string, string>> { ["only"] = new() { ["a.cs"] = "class A;\n" } });
-        await _host.ExecuteAsync("empty", "DELETE FROM commits");
-        await using var bare = await _host.ConnectAsync("empty");
+        await OnlyRepositoryProjectAsync(_host, "blanked",
+            new Dictionary<string, string> { ["a.cs"] = "class A;\n" });
+        await _host.ExecuteAsync("blanked", "DELETE FROM commits");
+        await using var bare = await _host.ConnectAsync("blanked");
         string noHistory = await TestHost.CallAsync(bare, "git_log", ignoredArgument);
         Assert.StartsWith(Caveat, noHistory, StringComparison.Ordinal);
         Assert.Contains("holds no history", noHistory, StringComparison.Ordinal);
@@ -379,8 +371,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_reports_the_old_repository_spelling_instead_of_binding_it()
     {
-        await BuildChurnProjectAsync("mixed", true);
-        await using var client = await _host.ConnectAsync("mixed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["repository"] = "one" });
 
@@ -400,8 +391,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_scopes_to_repo_and_drops_the_per_line_repository_tag()
     {
-        await BuildChurnProjectAsync("mixed", true);
-        await using var client = await _host.ConnectAsync("mixed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         string whole = await TestHost.CallAsync(client, "git_log", []);
         Assert.Contains("[one]", whole, StringComparison.Ordinal);
@@ -422,8 +412,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_keeps_its_scope_while_saying_what_it_ignored()
     {
-        await BuildChurnProjectAsync("mixed", true);
-        await using var client = await _host.ConnectAsync("mixed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["repo"] = "one", ["committer"] = "Grace" });
 
@@ -480,11 +469,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_project_without_history_says_so_rather_than_answering_nothing()
     {
-        await _host.IndexedProjectAsync("beta",
-            new Dictionary<string, Dictionary<string, string>>
-            {
-                ["only"] = new() { ["a.cs"] = "class A;\n" }
-            });
+        await OnlyRepositoryProjectAsync(_host, "beta",
+            new Dictionary<string, string> { ["a.cs"] = "class A;\n" });
         // The fixture's own commits are real history, so the tables are emptied to make the index look
         // like one built before history was imported — which is exactly what every existing index is.
         await _host.ExecuteAsync("beta", "DELETE FROM commits");
@@ -654,8 +640,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Hot_files_rolled_up_to_the_first_segment_ranks_repositories()
     {
-        await BuildChurnProjectAsync("rolled", withSecondRepository: true);
-        await using var client = await _host.ConnectAsync("rolled");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         string reply = await TestHost.CallAsync(client, "hot_files",
             new Dictionary<string, object?> { ["days"] = 30, ["depth"] = 1 });
@@ -776,11 +761,11 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_and_the_change_log_page_agree_about_a_repository()
     {
-        await BuildChurnProjectAsync("agree", true);
-        await using var client = await _host.ConnectAsync("agree");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         using var http = _host.CreateClient();
-        var page = await http.GetFromJsonAsync<CommitListResponse>("/api/projects/agree/commits?repository=one", TestContext.Current.CancellationToken);
+        var page = await http.GetFromJsonAsync<CommitListResponse>(
+            $"/api/projects/{HistoryToolsFixture.Mixed}/commits?repository=one", TestContext.Current.CancellationToken);
         Assert.NotNull(page);
 
         string reply = await TestHost.CallAsync(client, "git_log",
@@ -803,7 +788,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Hot_files_says_which_repositories_have_history_and_which_have_none()
     {
-        await BuildChurnProjectAsync("gamma", withSecondRepository: true);
+        await BuildChurnProjectAsync(_host, "gamma", withSecondRepository: true);
         // What a repository whose walk found nothing leaves behind: files in the index, no commits.
         await _host.ExecuteAsync("gamma", "DELETE FROM commits WHERE repo_slug = 'two'");
 
@@ -822,8 +807,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Hot_files_names_paths_the_way_a_single_repository_project_does()
     {
-        await _host.IndexedProjectAsync("solo", new Dictionary<string, Dictionary<string, string>>
-            { ["only"] = new() { ["src/Widget.cs"] = "class Widget { }\n" } }, true);
+        await OnlyRepositoryProjectAsync(_host, "solo",
+            new Dictionary<string, string> { ["src/Widget.cs"] = "class Widget { }\n" }, true);
 
         await using var client = await _host.ConnectAsync("solo");
         string reply = await TestHost.CallAsync(client, "hot_files", []);
@@ -840,11 +825,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Hot_files_on_a_project_without_history_says_so_rather_than_ranking_nothing()
     {
-        await _host.IndexedProjectAsync("delta",
-            new Dictionary<string, Dictionary<string, string>>
-            {
-                ["only"] = new() { ["a.cs"] = "class A;\n" }
-            });
+        await OnlyRepositoryProjectAsync(_host, "delta",
+            new Dictionary<string, string> { ["a.cs"] = "class A;\n" });
         await _host.ExecuteAsync("delta", "DELETE FROM commits");
 
         await using var client = await _host.ConnectAsync("delta");
@@ -863,8 +845,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Co_changed_ranks_the_files_that_keep_moving_with_a_file()
     {
-        await BuildCoupledProjectAsync(_host, "coupled");
-        await using var client = await _host.ConnectAsync("coupled");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Coupled);
         string reply = await TestHost.CallAsync(client, "co_changed",
             new Dictionary<string, object?> { ["path"] = "one/src/Api.cs", ["days"] = 30 });
 
@@ -886,8 +867,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Co_changed_marks_a_path_that_is_no_longer_at_head()
     {
-        await BuildCoupledProjectAsync(_host, "gone");
-        await using var client = await _host.ConnectAsync("gone");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Coupled);
         string reply = await TestHost.CallAsync(client, "co_changed",
             new Dictionary<string, object?> { ["path"] = "one/src/Api.cs", ["days"] = 30 });
 
@@ -905,8 +885,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Co_changed_leaves_a_mass_commit_out_of_the_pairing_and_says_it_did()
     {
-        await BuildCoupledProjectAsync(_host, "bulk");
-        await using var wide = await _host.ConnectAsync("bulk");
+        await using var wide = await _host.ConnectAsync(HistoryToolsFixture.Coupled);
         string included = await TestHost.CallAsync(wide, "co_changed",
             new Dictionary<string, object?> { ["path"] = "one/src/Api.cs", ["days"] = 30 });
         // Under the shipped ceiling the reformat is an ordinary commit, and every path it touched
@@ -915,8 +894,8 @@ public sealed class HistoryToolsTests : IDisposable
         Assert.DoesNotContain("left out of the pairing", included, StringComparison.Ordinal);
 
         using var tight = new TestHost(SearchEngine.Substring, maxCommitPaths: 5);
-        await BuildCoupledProjectAsync(tight, "bulk");
-        await using var client = await tight.ConnectAsync("bulk");
+        await BuildCoupledProjectAsync(tight, HistoryToolsFixture.Coupled);
+        await using var client = await tight.ConnectAsync(HistoryToolsFixture.Coupled);
         string reply = await TestHost.CallAsync(client, "co_changed",
             new Dictionary<string, object?> { ["path"] = "one/src/Api.cs", ["days"] = 30 });
 
@@ -942,8 +921,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Co_changed_says_a_file_moves_alone_rather_than_answering_nothing()
     {
-        await BuildCoupledProjectAsync(_host, "alone");
-        await using var client = await _host.ConnectAsync("alone");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Coupled);
         string reply = await TestHost.CallAsync(client, "co_changed",
             new Dictionary<string, object?> { ["path"] = "one/src/Lonely.cs", ["days"] = 30 });
 
@@ -992,8 +970,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Co_changed_says_when_the_window_reached_none_of_a_files_commits()
     {
-        await BuildCoupledProjectAsync(_host, "narrow");
-        await using var client = await _host.ConnectAsync("narrow");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Coupled);
         string reply = await TestHost.CallAsync(client, "co_changed",
             new Dictionary<string, object?> { ["path"] = "one/old/Ancient.cs", ["days"] = 1 });
 
@@ -1039,11 +1016,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Co_changed_on_a_project_without_history_says_so_rather_than_pairing_nothing()
     {
-        await _host.IndexedProjectAsync("epsilon",
-            new Dictionary<string, Dictionary<string, string>>
-            {
-                ["only"] = new() { ["a.cs"] = "class A;\n" }
-            });
+        await OnlyRepositoryProjectAsync(_host, "epsilon",
+            new Dictionary<string, string> { ["a.cs"] = "class A;\n" });
         await _host.ExecuteAsync("epsilon", "DELETE FROM commits");
 
         await using var client = await _host.ConnectAsync("epsilon");
@@ -1072,9 +1046,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_answers_one_commits_own_record_with_the_body_git_log_omits()
     {
-        await BuildCommitProjectAsync("touched");
-        await using var client = await _host.ConnectAsync("touched");
-        string sha = await ShaOfAsync("touched", "BugFix 558185");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Commits);
+        string sha = await ShaOfAsync(HistoryToolsFixture.Commits, "BugFix 558185");
 
         string reply = await TestHost.CallAsync(client, "commit", new Dictionary<string, object?> { ["sha"] = sha });
 
@@ -1097,11 +1070,10 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_says_when_a_message_is_its_subject_alone()
     {
-        await BuildCommitProjectAsync("bodyless");
-        await using var client = await _host.ConnectAsync("bodyless");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Commits);
 
         string reply = await TestHost.CallAsync(client, "commit",
-            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync("bodyless", "Add the module") });
+            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync(HistoryToolsFixture.Commits, "Add the module") });
 
         Assert.Contains("no message body", reply, StringComparison.Ordinal);
     }
@@ -1114,9 +1086,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_takes_the_abbreviated_sha_the_other_history_tools_print()
     {
-        await BuildCommitProjectAsync("short");
-        await using var client = await _host.ConnectAsync("short");
-        string sha = await ShaOfAsync("short", "BugFix 558185");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Commits);
+        string sha = await ShaOfAsync(HistoryToolsFixture.Commits, "BugFix 558185");
 
         string log = await TestHost.CallAsync(client, "git_log", []);
         Assert.Contains(sha[..8], log, StringComparison.Ordinal);
@@ -1140,7 +1111,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_refuses_a_prefix_that_fits_more_than_one_commit()
     {
-        await BuildCommitProjectAsync("twins");
+        await BuildCommitProjectAsync(_host, "twins");
         await _host.ExecuteAsync("twins",
             "UPDATE commits SET sha = 'aaaa1111111111111111111111111111111111aa' WHERE subject = 'Add the module'");
         await _host.ExecuteAsync("twins",
@@ -1177,8 +1148,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_refuses_a_sha_too_short_to_name_a_commit()
     {
-        await BuildCommitProjectAsync("stub");
-        await using var client = await _host.ConnectAsync("stub");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Commits);
 
         string tooShort = await TestHost.CallAsync(client, "commit",
             new Dictionary<string, object?> { ["sha"] = "ab" });
@@ -1200,7 +1170,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_files_tells_a_commit_that_touched_nothing_from_a_sha_that_names_none()
     {
-        await BuildCommitProjectAsync("hollow");
+        await BuildCommitProjectAsync(_host, "hollow");
         string sha = await ShaOfAsync("hollow", "Drop the dead file");
         // What an empty commit leaves behind: the commit row, and no paths under it. A fixture cannot
         // make one through libgit2's staging, so the rows are removed instead.
@@ -1224,8 +1194,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_and_commit_files_answer_an_unknown_sha_in_the_same_words()
     {
-        await BuildCommitProjectAsync("absent");
-        await using var client = await _host.ConnectAsync("absent");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Commits);
         var unknown = new Dictionary<string, object?> { ["sha"] = new string('0', 40) };
 
         string record = await TestHost.CallAsync(client, "commit", unknown);
@@ -1233,7 +1202,7 @@ public sealed class HistoryToolsTests : IDisposable
 
         Assert.Equal(record, files);
         Assert.Contains("No commit '0000000000000000000000000000000000000000'", record, StringComparison.Ordinal);
-        Assert.Contains("project 'absent'", record, StringComparison.Ordinal);
+        Assert.Contains($"project '{HistoryToolsFixture.Commits}'", record, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1243,11 +1212,10 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_files_lists_every_path_with_its_change_kind_and_line_sums()
     {
-        await BuildCommitProjectAsync("paths");
-        await using var client = await _host.ConnectAsync("paths");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Commits);
 
         string reply = await TestHost.CallAsync(client, "commit_files",
-            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync("paths", "BugFix 558185") });
+            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync(HistoryToolsFixture.Commits, "BugFix 558185") });
 
         Assert.Contains("2 paths", reply, StringComparison.Ordinal);
         // A path HEAD still holds is named the way read_file and grep name it, so it can be opened.
@@ -1350,11 +1318,10 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_files_says_nothing_about_paging_when_the_whole_commit_fits()
     {
-        await BuildCommitProjectAsync("whole");
-        await using var client = await _host.ConnectAsync("whole");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Commits);
 
         string reply = await TestHost.CallAsync(client, "commit_files",
-            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync("whole", "BugFix 558185") });
+            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync(HistoryToolsFixture.Commits, "BugFix 558185") });
 
         Assert.DoesNotContain("offset=", reply, StringComparison.Ordinal);
         Assert.DoesNotContain("NOTE", reply, StringComparison.Ordinal);
@@ -1368,11 +1335,10 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_files_marks_a_path_that_is_no_longer_at_head()
     {
-        await BuildCommitProjectAsync("gone");
-        await using var client = await _host.ConnectAsync("gone");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Commits);
 
         string reply = await TestHost.CallAsync(client, "commit_files",
-            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync("gone", "Drop the dead file") });
+            new Dictionary<string, object?> { ["sha"] = await ShaOfAsync(HistoryToolsFixture.Commits, "Drop the dead file") });
 
         Assert.Contains("deleted", reply, StringComparison.Ordinal);
         Assert.Contains("one/src/Gone.cs  (no longer at HEAD)", reply, StringComparison.Ordinal);
@@ -1386,7 +1352,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_files_marks_a_path_a_later_commit_renamed_away()
     {
-        await BuildCommitProjectAsync("renamed");
+        await BuildCommitProjectAsync(_host, "renamed");
         // A rename as git records one: the content at the new path, and the old path gone.
         _host.CommitToGitRepositoryAs("renamed-one",
             new Dictionary<string, string> { ["docs/Readme.md"] = "note\n" },
@@ -1413,8 +1379,8 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Commit_files_names_paths_the_way_a_single_repository_project_does()
     {
-        await _host.IndexedProjectAsync("onlyone", new Dictionary<string, Dictionary<string, string>>
-            { ["only"] = new() { ["src/Widget.cs"] = "class Widget { }\n" } }, true);
+        await OnlyRepositoryProjectAsync(_host, "onlyone",
+            new Dictionary<string, string> { ["src/Widget.cs"] = "class Widget { }\n" }, true);
         await using var client = await _host.ConnectAsync("onlyone");
 
         using var http = _host.CreateClient();
@@ -1434,23 +1400,23 @@ public sealed class HistoryToolsTests : IDisposable
     ///     file it modified and one it added, and a later commit that deletes the second so a path the
     ///     index no longer holds is in the list.
     /// </summary>
-    private async Task BuildCommitProjectAsync(string project)
+    internal static async Task BuildCommitProjectAsync(TestHost host, string project)
     {
         string name = project + "-one";
-        string source = _host.CreateEmptyGitRepository(name);
-        _host.CommitToGitRepositoryAs(name,
+        string source = host.CreateEmptyGitRepository(name);
+        host.CommitToGitRepositoryAs(name,
             new Dictionary<string, string> { ["docs/Note.md"] = "note\n", ["src/Api.cs"] = "a\n" },
             "Add the module", "Ada", "ada@example.invalid", 0);
-        _host.CommitToGitRepositoryAs(name,
+        host.CommitToGitRepositoryAs(name,
             new Dictionary<string, string> { ["src/Api.cs"] = "a2\n", ["src/Gone.cs"] = "gone\n" },
             "BugFix 558185 - tighten the check\n\nThe validator accepted an empty name.\n",
             "Grace", "grace@example.invalid", 1);
-        _host.RemoveInGitRepositoryAs(name, ["src/Gone.cs"], "Drop the dead file", "Grace",
+        host.RemoveInGitRepositoryAs(name, ["src/Gone.cs"], "Drop the dead file", "Grace",
             "grace@example.invalid", 2);
 
-        await _host.CreateProjectAsync(project);
-        await _host.AddRepositoryAsync(project, "one", source);
-        await _host.RefreshAsync(project);
+        await host.CreateProjectAsync(project);
+        await host.AddRepositoryAsync(project, "one", source);
+        await host.RefreshAsync(project);
     }
 
     /// <summary>
@@ -1472,7 +1438,7 @@ public sealed class HistoryToolsTests : IDisposable
     ///     reformat touches Api.cs and a dozen vendored paths at once, which is the mass commit the
     ///     ceiling exists for. Ancient.cs sits ten days before the rest so a narrow window can miss it.
     /// </summary>
-    private static async Task BuildCoupledProjectAsync(TestHost host, string project)
+    internal static async Task BuildCoupledProjectAsync(TestHost host, string project)
     {
         const int tenDays = 10 * 24 * 60;
         string name = project + "-one";
@@ -1525,8 +1491,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Authors_and_git_log_scope_to_a_path()
     {
-        await BuildChurnProjectAsync("scoped", withSecondRepository: false);
-        await using var client = await _host.ConnectAsync("scoped");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Churn);
 
         // src holds the four recent commits; old/Ancient.cs holds the one import, by Ada alone.
         string owners = await TestHost.CallAsync(client, "authors",
@@ -1559,7 +1524,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_path_scope_with_no_commits_is_told_apart_from_a_path_that_is_not_there()
     {
-        await BuildChurnProjectAsync("quiet", withSecondRepository: false);
+        await BuildChurnProjectAsync(_host, "quiet", withSecondRepository: false);
         await _host.ExecuteAsync("quiet", "DELETE FROM commit_files WHERE path LIKE 'docs/%'");
 
         await using var client = await _host.ConnectAsync("quiet");
@@ -1585,8 +1550,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Git_log_and_authors_scope_to_a_path_that_history_records_and_head_no_longer_holds()
     {
-        await BuildChurnProjectAsync("deleted", withSecondRepository: false);
-        await using var client = await _host.ConnectAsync("deleted");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Churn);
 
         string ranked = await TestHost.CallAsync(client, "hot_files",
             new Dictionary<string, object?> { ["days"] = 30 });
@@ -1621,8 +1585,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task File_history_lists_a_path_history_records_and_head_no_longer_holds()
     {
-        await BuildChurnProjectAsync("gonefile", withSecondRepository: false);
-        await using var client = await _host.ConnectAsync("gonefile");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Churn);
 
         string listed = await TestHost.CallAsync(client, "file_history",
             new Dictionary<string, object?> { ["path"] = "one/src/Gone.cs" });
@@ -1663,7 +1626,7 @@ public sealed class HistoryToolsTests : IDisposable
     {
         // A project slug takes no underscore, and `co_changed` has one.
         string slug = "goneread" + tool.Replace("_", "", StringComparison.Ordinal);
-        await BuildChurnProjectAsync(slug, withSecondRepository: false);
+        await BuildChurnProjectAsync(_host, slug, withSecondRepository: false);
         await using var client = await _host.ConnectAsync(slug);
 
         string refused = await TestHost.CallAsync(client, tool,
@@ -1692,7 +1655,7 @@ public sealed class HistoryToolsTests : IDisposable
     public async Task A_path_neither_head_nor_history_holds_keeps_the_not_here_refusal(string tool)
     {
         string slug = "nowhere" + tool.Replace("_", "", StringComparison.Ordinal);
-        await BuildChurnProjectAsync(slug, withSecondRepository: false);
+        await BuildChurnProjectAsync(_host, slug, withSecondRepository: false);
         await using var client = await _host.ConnectAsync(slug);
 
         string refused = await TestHost.CallAsync(client, tool,
@@ -1712,7 +1675,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_renamed_away_directory_is_not_a_historical_file()
     {
-        await BuildChurnProjectAsync("emptied", withSecondRepository: false);
+        await BuildChurnProjectAsync(_host, "emptied", withSecondRepository: false);
         _host.CommitToGitRepositoryAs("emptied-one",
             new Dictionary<string, string> { ["legacy/Mover.cs"] = "m\n" },
             "Add the legacy helper", "Ada", "ada@example.invalid", 20000);
@@ -1752,8 +1715,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task An_author_miss_under_a_path_names_the_path_and_says_it_is_gone()
     {
-        await BuildChurnProjectAsync("missed", withSecondRepository: false);
-        await using var client = await _host.ConnectAsync("missed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Churn);
 
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["path"] = "one/src/Gone.cs", ["author"] = "holger" });
@@ -1778,7 +1740,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_directory_a_rename_emptied_is_scopeable_by_its_recorded_path()
     {
-        await BuildChurnProjectAsync("moved", withSecondRepository: false);
+        await BuildChurnProjectAsync(_host, "moved", withSecondRepository: false);
         // A rename as git records one, written the way Commit_files_marks_a_path_a_later_commit_renamed_away
         // writes it: the content at the new path, and then the old path gone.
         _host.CommitToGitRepositoryAs("moved-one",
@@ -1821,7 +1783,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task The_four_path_scope_answers_are_four_different_sentences()
     {
-        await BuildChurnProjectAsync("states", withSecondRepository: false);
+        await BuildChurnProjectAsync(_host, "states", withSecondRepository: false);
         await _host.ExecuteAsync("states", "DELETE FROM commit_files WHERE path LIKE 'docs/%'");
         await using var client = await _host.ConnectAsync("states");
 
@@ -1858,8 +1820,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task The_read_side_still_refuses_a_path_only_history_records()
     {
-        await BuildChurnProjectAsync("readside", withSecondRepository: false);
-        await using var client = await _host.ConnectAsync("readside");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Churn);
 
         string read = await TestHost.CallAsync(client, "read_file",
             new Dictionary<string, object?> { ["paths"] = Paths("one/src/Gone.cs") });
@@ -1882,8 +1843,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_repo_and_a_path_naming_different_repositories_are_refused_rather_than_answered_quietly()
     {
-        await BuildChurnProjectAsync("crossed", withSecondRepository: true);
-        await using var client = await _host.ConnectAsync("crossed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Mixed);
 
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["repo"] = "two", ["path"] = "one/src" });
@@ -1900,7 +1860,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Hot_files_takes_an_exclude_filter_and_says_how_much_it_hid()
     {
-        await BuildGeneratedProjectAsync("generated");
+        await BuildGeneratedProjectAsync(_host, "generated");
         await using var client = await _host.ConnectAsync("generated");
 
         string unfiltered = await TestHost.CallAsync(client, "hot_files",
@@ -1935,7 +1895,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Hot_files_reads_a_bracketed_directory_scope_as_a_name()
     {
-        await BuildRoutedProjectAsync("routed");
+        await BuildRoutedProjectAsync(_host, "routed");
         await using var client = await _host.ConnectAsync("routed");
 
         string scoped = await TestHost.CallAsync(client, "hot_files",
@@ -1986,8 +1946,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_directory_renamed_in_one_commit_is_signalled_by_every_path_scoped_tool()
     {
-        await BuildRenamedProjectAsync("cutover");
-        await using var client = await _host.ConnectAsync("cutover");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Renames);
 
         string ranked = await TestHost.CallAsync(client, "hot_files",
             new Dictionary<string, object?> { ["days"] = 3650, ["directory"] = "one/src/Model" });
@@ -2032,7 +1991,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task An_empty_answer_still_says_what_the_scope_was_called_before()
     {
-        await BuildRenamedProjectAsync("quietened");
+        await BuildRenamedProjectAsync(_host, "quietened");
         // Work elsewhere, long after the cutover: the window ends at the repository's newest commit, so
         // this is what puts the rename out of reach of a short one — which is the situation an agent
         // asking "what is busy here" with the default window actually meets.
@@ -2107,8 +2066,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Co_changed_pairs_an_anchor_over_the_paths_it_was_renamed_from()
     {
-        await BuildRenamedProjectAsync("coupled");
-        await using var client = await _host.ConnectAsync("coupled");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Renames);
 
         string reply = await TestHost.CallAsync(client, "co_changed",
             new Dictionary<string, object?> { ["path"] = "one/src/Model/Contact.cs", ["days"] = 3650 });
@@ -2123,7 +2081,7 @@ public sealed class HistoryToolsTests : IDisposable
 
         // The anchor's own earlier name is not a file it co-changed with. Asserted against the ranking
         // rows and not the whole reply: the prose legitimately names the earlier path — twice, once to
-        // say what the anchor was called and once to say the ranking spans it — so "absent" is the
+        // say what the anchor was called and once to say the ranking spans it — so paths is the
         // wrong claim and "absent from the ranking" is the right one.
         var ranked = reply.Split('\n').Where(line => line.Contains("shared commit", StringComparison.Ordinal))
             .ToList();
@@ -2180,8 +2138,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task Only_co_changed_follows_a_rename_and_its_description_says_so()
     {
-        await BuildRenamedProjectAsync("carveout");
-        await using var client = await _host.ConnectAsync("carveout");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Renames);
 
         var listed = (await client.ListToolsAsync(cancellationToken: Ct))
             .ToDictionary(tool => tool.Name, tool => tool.Description ?? "", StringComparer.Ordinal);
@@ -2209,7 +2166,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_path_renamed_twice_reports_its_chain_oldest_last()
     {
-        await BuildRenamedProjectAsync("twice");
+        await BuildRenamedProjectAsync(_host, "twice");
         _host.MoveInGitRepositoryAs("twice-one",
             new Dictionary<string, string>
             {
@@ -2237,8 +2194,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_scope_with_no_previous_path_says_nothing_about_one()
     {
-        await BuildRenamedProjectAsync("stayed");
-        await using var client = await _host.ConnectAsync("stayed");
+        await using var client = await _host.ConnectAsync(HistoryToolsFixture.Renames);
 
         foreach (string reply in new[]
                  {
@@ -2268,7 +2224,7 @@ public sealed class HistoryToolsTests : IDisposable
     [Fact]
     public async Task A_single_file_moved_in_is_not_a_previous_path()
     {
-        await BuildRenamedProjectAsync("stray");
+        await BuildRenamedProjectAsync(_host, "stray");
         _host.MoveInGitRepositoryAs("stray-one",
             new Dictionary<string, string> { ["src/Odds/Helper.cs"] = "src/Api/Helper.cs" },
             "Move the helper where it is used", "Grace", "grace@example.invalid", 32000);
@@ -2286,10 +2242,10 @@ public sealed class HistoryToolsTests : IDisposable
     ///     A cutover: `model/` built up over several commits, then moved to `src/Model` wholesale in one,
     ///     beside an `src/Api` that never moved and an `src/Odds` that one file later leaves.
     /// </summary>
-    private async Task BuildRenamedProjectAsync(string project)
+    internal static async Task BuildRenamedProjectAsync(TestHost host, string project)
     {
-        string source = _host.CreateEmptyGitRepository(project + "-one");
-        _host.CommitToGitRepositoryAs(project + "-one",
+        string source = host.CreateEmptyGitRepository(project + "-one");
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string>
             {
                 ["model/Contact.cs"] = "contact\n",
@@ -2298,23 +2254,23 @@ public sealed class HistoryToolsTests : IDisposable
                 ["src/Odds/Helper.cs"] = "helper\n"
             },
             "Import the model", "Ada", "ada@example.invalid", 30000);
-        _host.CommitToGitRepositoryAs(project + "-one",
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string> { ["model/Contact.cs"] = "contact\nmore\n" },
             "Add the contact feature", "Ada", "ada@example.invalid", 30001);
-        _host.CommitToGitRepositoryAs(project + "-one",
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string> { ["model/Order.cs"] = "order\nmore\n" },
             "Extend the order", "Grace", "grace@example.invalid", 30002);
-        _host.CommitToGitRepositoryAs(project + "-one",
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string> { ["src/Api/Handler.cs"] = "handler\nmore\n" },
             "Tighten the handler", "Grace", "grace@example.invalid", 30003);
         // Alone in its own commit, so the only commit it ever shares with Contact.cs is the cutover.
         // It is what says the rename is excluded from the pairing rather than merely diluted: a file
         // that moved beside the anchor and nothing more must not rank as coupled to it.
-        _host.CommitToGitRepositoryAs(project + "-one",
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string> { ["model/Solo.cs"] = "solo\n" },
             "Add the solo model", "Ada", "ada@example.invalid", 30004);
         // The cutover, as the real one arrived: one commit, every path renamed, no content changed.
-        _host.MoveInGitRepositoryAs(project + "-one",
+        host.MoveInGitRepositoryAs(project + "-one",
             new Dictionary<string, string>
             {
                 ["model/Contact.cs"] = "src/Model/Contact.cs",
@@ -2323,18 +2279,18 @@ public sealed class HistoryToolsTests : IDisposable
             },
             "Merged PR 39331: Moved Model to src\\Model", "Grace", "grace@example.invalid", 31000);
 
-        await _host.CreateProjectAsync(project);
-        await _host.AddRepositoryAsync(project, "one", source);
-        await _host.RefreshAsync(project);
+        await host.CreateProjectAsync(project);
+        await host.AddRepositoryAsync(project, "one", source);
+        await host.RefreshAsync(project);
     }
 
     /// <summary>A repository whose regenerated output and migrations outrank its hand-written code.</summary>
-    private async Task BuildGeneratedProjectAsync(string project)
+    private static async Task BuildGeneratedProjectAsync(TestHost host, string project)
     {
         const int tenDays = 10 * 24 * 60;
         string name = project + "-one";
-        string source = _host.CreateEmptyGitRepository(name);
-        _host.CommitToGitRepositoryAs(name,
+        string source = host.CreateEmptyGitRepository(name);
+        host.CommitToGitRepositoryAs(name,
             new Dictionary<string, string>
             {
                 ["src/Service.cs"] = "a\n",
@@ -2345,28 +2301,28 @@ public sealed class HistoryToolsTests : IDisposable
         // Two regenerations and one migration against one hand-written change: the shape the ranking
         // gets wrong, and it gets it wrong by counting correctly.
         for (int i = 1; i <= 3; i++)
-            _host.CommitToGitRepositoryAs(name,
+            host.CommitToGitRepositoryAs(name,
                 new Dictionary<string, string>
                 {
                     ["src/Model.g.cs"] = $"g{i}\n",
                     ["migrations/0001.sql"] = $"create table t (id integer, c{i} integer);\n"
                 },
                 "Regenerate", "Ada", "ada@example.invalid", tenDays + i);
-        _host.CommitToGitRepositoryAs(name, new Dictionary<string, string> { ["src/Service.cs"] = "a2\n" },
+        host.CommitToGitRepositoryAs(name, new Dictionary<string, string> { ["src/Service.cs"] = "a2\n" },
             "Change the service", "Grace", "grace@example.invalid", tenDays + 4);
 
-        await _host.CreateProjectAsync(project);
-        await _host.AddRepositoryAsync(project, "one", source);
-        await _host.RefreshAsync(project);
+        await host.CreateProjectAsync(project);
+        await host.AddRepositoryAsync(project, "one", source);
+        await host.RefreshAsync(project);
     }
 
     /// <summary>A repository with a route directory and the sibling its character class would match.</summary>
-    private async Task BuildRoutedProjectAsync(string project)
+    private static async Task BuildRoutedProjectAsync(TestHost host, string project)
     {
         const int tenDays = 10 * 24 * 60;
         string name = project + "-one";
-        string source = _host.CreateEmptyGitRepository(name);
-        _host.CommitToGitRepositoryAs(name,
+        string source = host.CreateEmptyGitRepository(name);
+        host.CommitToGitRepositoryAs(name,
             new Dictionary<string, string>
             {
                 ["app/[slug]/page.tsx"] = "export default function Page() {}\n",
@@ -2375,13 +2331,13 @@ public sealed class HistoryToolsTests : IDisposable
             "Add the routes", "Ada", "ada@example.invalid", tenDays);
         // The sibling churns harder, so a scope that took it in would rank it first and look right.
         for (int i = 1; i <= 3; i++)
-            _host.CommitToGitRepositoryAs(name,
+            host.CommitToGitRepositoryAs(name,
                 new Dictionary<string, string> { ["app/s/page.tsx"] = $"export default function S{i}() {{}}\n" },
                 "Work on the sibling", "Grace", "grace@example.invalid", tenDays + i);
 
-        await _host.CreateProjectAsync(project);
-        await _host.AddRepositoryAsync(project, "one", source);
-        await _host.RefreshAsync(project);
+        await host.CreateProjectAsync(project);
+        await host.AddRepositoryAsync(project, "one", source);
+        await host.RefreshAsync(project);
     }
 
     /// <summary>
@@ -2389,21 +2345,17 @@ public sealed class HistoryToolsTests : IDisposable
     ///     three files unequally, then one that deletes a fourth. Every date is decades before today, so
     ///     a window measured from the clock rather than from the history would rank nothing at all.
     /// </summary>
-    private async Task<McpClient> ChurnAsync()
-    {
-        await BuildChurnProjectAsync("churn", false);
-        return await _host.ConnectAsync("churn");
-    }
+    private Task<McpClient> ChurnAsync() => _host.ConnectAsync(HistoryToolsFixture.Churn);
 
     /// <inheritdoc cref="ChurnAsync" />
-    private async Task BuildChurnProjectAsync(string project, bool withSecondRepository)
+    internal static async Task BuildChurnProjectAsync(TestHost host, string project, bool withSecondRepository)
     {
         const int tenDays = 10 * 24 * 60;
-        string source = _host.CreateEmptyGitRepository(project + "-one");
-        _host.CommitToGitRepositoryAs(project + "-one",
+        string source = host.CreateEmptyGitRepository(project + "-one");
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string> { ["old/Ancient.cs"] = "one\n" },
             "Import the old code", "Ada", "ada@example.invalid", 0);
-        _host.CommitToGitRepositoryAs(project + "-one",
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string>
             {
                 ["docs/Note.md"] = "note\n",
@@ -2412,37 +2364,103 @@ public sealed class HistoryToolsTests : IDisposable
                 ["src/Hot.cs"] = "a\nb\nc\n"
             },
             "Add the module", "Ada", "ada@example.invalid", tenDays);
-        _host.CommitToGitRepositoryAs(project + "-one",
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string> { ["src/Hot.cs"] = "a\nb2\nc\n" },
             "Fix the check", "Grace", "grace@example.invalid", tenDays + 1);
-        _host.CommitToGitRepositoryAs(project + "-one",
+        host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string> { ["src/Hot.cs"] = "a\nb3\nc\n", ["src/Cold.cs"] = "cold2\n" },
             "Tighten it again", "Grace", "grace@example.invalid", tenDays + 2);
-        _host.RemoveInGitRepositoryAs(project + "-one", ["src/Gone.cs"], "Drop the dead file", "Grace",
+        host.RemoveInGitRepositoryAs(project + "-one", ["src/Gone.cs"], "Drop the dead file", "Grace",
             "grace@example.invalid", tenDays + 3);
 
-        await _host.CreateProjectAsync(project);
-        await _host.AddRepositoryAsync(project, "one", source);
+        await host.CreateProjectAsync(project);
+        await host.AddRepositoryAsync(project, "one", source);
         if (withSecondRepository)
-            await _host.AddRepositoryAsync(project, "two",
-                _host.CreateGitRepository(project + "-two", new Dictionary<string, string>
+            await host.AddRepositoryAsync(project, "two",
+                host.CreateGitRepository(project + "-two", new Dictionary<string, string>
                     { ["src/Other.cs"] = "other\n" }));
-        await _host.RefreshAsync(project);
+        await host.RefreshAsync(project);
     }
 
-    private async Task<McpClient> StartAsync()
+    private Task<McpClient> StartAsync() => _host.ConnectAsync(HistoryToolsFixture.Alpha);
+
+    /// <summary>
+    ///     A project of one repository called <c>only</c>, which is what the tests about an index with
+    ///     no history are built on. <c>TestHost.IndexedProjectAsync</c> would do it, but it names the
+    ///     fixture directory after the repository slug, and a slug is unique only within its project
+    ///     while the fixture directory is shared by every project on the host. Seven tests here ask for
+    ///     a repository called <c>only</c>, which was seven directories while each had a host of its
+    ///     own and is one now: the second commit into it is "no changes; nothing to commit". The slug
+    ///     stays <c>only</c>, because the qualified paths these tests assert on are spelled with it.
+    /// </summary>
+    private static async Task OnlyRepositoryProjectAsync(TestHost host, string project,
+        Dictionary<string, string> files, bool singleRepository = false)
     {
-        string source = _host.CreateEmptyGitRepository("one");
-        _host.CommitToGitRepositoryAs("one",
+        await host.CreateProjectAsync(project, singleRepository);
+        await host.AddRepositoryAsync(project, "only", host.CreateGitRepository($"{project}-only", files));
+        await host.RefreshAsync(project);
+    }
+}
+
+/// <summary>
+///     The one server this class runs against, and the projects more than one of its tests reads.
+///     Both are built once. The class used to build a whole server per test — xunit constructs the
+///     test class for every <c>[Fact]</c>, so <c>new TestHost(...)</c> ran 87 times — and then a git
+///     repository and an index on top of it. Measured on this machine: the first client costs 265ms
+///     because that is where the host actually boots, and a project on an already-booted host costs
+///     430ms against 1150ms on a cold one. Nothing about what the tests assert needed either.
+///     A project is shared only where every test that reads it is a reader. The history tools answer
+///     from the index and write nothing, so most are; the ones that hollow a commit out with SQL, or
+///     refresh again over new commits, still build a project of their own, on this host rather than
+///     on a server of their own. CODING_STANDARDS asks for a temp directory and a real database file
+///     per test <em>class</em>, which is what this now is, rather than the per-test one it had drifted
+///     into.
+/// </summary>
+public sealed class HistoryToolsFixture : IAsyncLifetime
+{
+    /// <summary>One repository, two commits, one file changed by the second. The plainest log there is.</summary>
+    public const string Alpha = "alpha";
+
+    /// <summary>Something to rank: one ancient commit, four ten days later, one deletion.</summary>
+    public const string Churn = "churn";
+
+    /// <summary><see cref="Churn" /> with a second repository, for the answers that span both.</summary>
+    public const string Mixed = "mixed";
+
+    /// <summary>Three commits with a body, a rename and a deletion: what <c>commit</c> is asked about.</summary>
+    public const string Commits = "commits";
+
+    /// <summary>Files that move together, one that moves alone, and one mass commit.</summary>
+    public const string Coupled = "coupled";
+
+    /// <summary>A directory cutover: every path renamed in one commit, no content changed.</summary>
+    public const string Renames = "renames";
+
+    public TestHost Host { get; } = new(SearchEngine.Substring);
+
+    public async ValueTask InitializeAsync()
+    {
+        string source = Host.CreateEmptyGitRepository("one");
+        Host.CommitToGitRepositoryAs("one",
             new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond\nthird\n" },
             "Add the validator", "Ada", "ada@example.invalid", 0);
-        _host.CommitToGitRepositoryAs("one",
+        Host.CommitToGitRepositoryAs("one",
             new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond-changed\nthird\n" },
             "Tighten the check", "Grace", "grace@example.invalid", 1);
+        await Host.CreateProjectAsync(Alpha);
+        await Host.AddRepositoryAsync(Alpha, "one", source);
+        await Host.RefreshAsync(Alpha);
 
-        await _host.CreateProjectAsync("alpha");
-        await _host.AddRepositoryAsync("alpha", "one", source);
-        await _host.RefreshAsync("alpha");
-        return await _host.ConnectAsync("alpha");
+        await HistoryToolsTests.BuildChurnProjectAsync(Host, Churn, false);
+        await HistoryToolsTests.BuildChurnProjectAsync(Host, Mixed, true);
+        await HistoryToolsTests.BuildCommitProjectAsync(Host, Commits);
+        await HistoryToolsTests.BuildCoupledProjectAsync(Host, Coupled);
+        await HistoryToolsTests.BuildRenamedProjectAsync(Host, Renames);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Host.Dispose();
+        return ValueTask.CompletedTask;
     }
 }
