@@ -70,6 +70,9 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
             RefreshProgress.AttributionPhase));
         Materialise(connection, cancellationToken);
+        // After Materialise and not before it: both read the completed commit_files, and this one is
+        // what the scoped history reads replace seventeen scans of that table with (#148).
+        PathLineageBuilder.Fill(connection, cancellationToken);
         return new HistorySummary(appended, attributed);
     }
 
@@ -82,10 +85,10 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         string kept = slugs.Length == 0 ? "false" : $"repo_slug IN ({slugs})";
         // commit_files hangs off commit_id, so it follows whatever commits keeps. The delete is written
         // as a subquery rather than a join because DuckDB's DELETE takes no USING.
-        Execute(connection, $"DELETE FROM commit_files WHERE commit_id NOT IN (SELECT commit_id FROM commits WHERE {kept})",
+        connection.Execute($"DELETE FROM commit_files WHERE commit_id NOT IN (SELECT commit_id FROM commits WHERE {kept})",
             cancellationToken);
-        Execute(connection, $"DELETE FROM attribution WHERE NOT ({kept})", cancellationToken);
-        Execute(connection, $"DELETE FROM commits WHERE NOT ({kept})", cancellationToken);
+        connection.Execute($"DELETE FROM attribution WHERE NOT ({kept})", cancellationToken);
+        connection.Execute($"DELETE FROM commits WHERE NOT ({kept})", cancellationToken);
     }
 
     /// <summary>
@@ -179,7 +182,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             foreach (var change in commit.Files) Apply(state, change, id);
         }
 
-        Execute(connection, $"DELETE FROM attribution WHERE repo_slug = {Literal(slug)}", cancellationToken);
+        connection.Execute($"DELETE FROM attribution WHERE repo_slug = {Literal(slug)}", cancellationToken);
         using var appender = connection.CreateAppender(catalog, "main", "attribution");
         foreach (var (path, lines) in state)
         {
@@ -310,7 +313,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             // no longer sees, and they join to nothing either way.
             // TEMP and not a table in the shadow: this is scratch for one statement, and the shadow file
             // is about to be swapped in and would carry it forever.
-            Execute(connection,
+            connection.Execute(
                 """
                 CREATE OR REPLACE TEMP TABLE attributed_lines AS
                 SELECT f.file_id, unnest(range(a.start_line, a.end_line + 1))::INTEGER AS line_number,
@@ -320,7 +323,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
                 JOIN files f ON f.repo_id = r.repo_id AND f.path = a.path
                 """, cancellationToken);
 
-            Execute(connection,
+            connection.Execute(
                 """
                 UPDATE lines SET commit_id = e.commit_id
                 FROM attributed_lines e
@@ -331,12 +334,12 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         {
             // In a finally so a cancelled or failed build does not leave the scratch behind on a
             // connection the pool hands out again.
-            Execute(connection, "DROP TABLE IF EXISTS attributed_lines", CancellationToken.None);
+            connection.Execute("DROP TABLE IF EXISTS attributed_lines", CancellationToken.None);
         }
 
         // Bounded by commit_id and not by date: the ids ascend with history by construction, while an
         // author date is whatever the committer's clock said and goes backwards across a rebase.
-        Execute(connection,
+        connection.Execute(
             """
             UPDATE files SET first_commit = h.first_commit, last_commit = h.last_commit
             FROM (SELECT c.repo_slug, cf.path, min(c.commit_id) AS first_commit, max(c.commit_id) AS last_commit
@@ -394,14 +397,6 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             $"Attribution of '{reader.GetString(1)}' in repository '{reader.GetString(0)}' has runs that "
             + $"overlap at line {reader.GetInt32(2)}. The replay produces disjoint runs, so the history "
             + "carried into this build is not one it wrote. Rebuild the project from scratch to discard it.");
-    }
-
-    private static void Execute(DuckDBConnection connection, string sql, CancellationToken cancellationToken)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        cancellationToken.ThrowIfCancellationRequested();
-        command.ExecuteNonQuery();
     }
 
     private static int Scalar(DuckDBConnection connection, string sql, CancellationToken cancellationToken)
