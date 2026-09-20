@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -28,6 +30,12 @@ public static class Telemetry
     /// <summary>Which engine answered a search, or <see cref="NoEngine" /> when none was reached.</summary>
     public const string EngineTag = "codeexplorer.search.engine";
 
+    /// <summary>
+    ///     Which MCP tool was called. The one dimension a per-call duration is worth grouping by, and
+    ///     the one #90 could only get by differencing transcript timestamps.
+    /// </summary>
+    public const string ToolTag = "codeexplorer.tool.name";
+
     public const string OutcomeTag = "codeexplorer.outcome";
     public const string FilesTag = "codeexplorer.files";
     public const string LinesTag = "codeexplorer.lines";
@@ -36,6 +44,8 @@ public static class Telemetry
     /// <summary>Which way the durable copy moved: <see cref="StoreOperation" /> or <see cref="FetchOperation" />.</summary>
     public const string DurableTag = "codeexplorer.index.durable.operation";
 
+    public const string ToolDuration = "codeexplorer.tool.duration";
+    public const string LeaseDuration = "codeexplorer.index.lease.duration";
     public const string SearchDuration = "codeexplorer.search.duration";
     public const string SearchFiles = "codeexplorer.search.files";
     public const string SearchLines = "codeexplorer.search.lines";
@@ -50,6 +60,22 @@ public static class Telemetry
     // Span names are prefixed like the metric names, though only metrics and tags are held to it by
     // CODING_STANDARDS: a trace view shows these beside ASP.NET Core's own spans, and "search" alone
     // does not say whose.
+    /// <summary>
+    ///     One MCP tool call, from the moment the call-tool pipeline receives it to the moment it hands
+    ///     a result back. The span #90 asked for: <see cref="SearchSpan" /> wraps the query, and the
+    ///     query turned out to be the part that is nearly free — a glob returning 41 KB and a glob that
+    ///     failed argument binding and ran no query at all cost the same 1.5 s. What dominates is
+    ///     whatever this covers and that does not, so the pair of them is the measurement.
+    /// </summary>
+    public const string ToolSpan = "codeexplorer.tool";
+
+    /// <summary>
+    ///     Acquiring one lease on a project index: the restore if the disk lost it, the swap gate, the
+    ///     <c>ATTACH</c>, the connection and the <c>USE</c>. The first candidate #90 names for the
+    ///     floor, and a child of <see cref="ToolSpan" /> whenever a tool is what asked for it.
+    /// </summary>
+    public const string LeaseSpan = "codeexplorer.index.lease";
+
     public const string SearchSpan = "codeexplorer.search";
     public const string IndexSpan = "codeexplorer.index.build";
 
@@ -70,6 +96,17 @@ public static class Telemetry
 
     /// <summary>The work threw. Recorded rather than dropped, so a failing project is visible as one.</summary>
     public const string FailedOutcome = "failed";
+
+    /// <summary>
+    ///     A tool call that returned a result. Not <see cref="MatchedOutcome" />: a tool that refuses a
+    ///     path and a tool that answers with rows both returned, and from out here the difference is the
+    ///     tool's business. What this dimension is for is telling a call that came back from one that
+    ///     threw.
+    /// </summary>
+    public const string AnsweredOutcome = "answered";
+
+    /// <summary>A lease that was granted. <see cref="AbsentOutcome" /> is a project with no index to lease.</summary>
+    public const string OpenedOutcome = "opened";
 
     /// <summary>An index build that finished. A build has no second answer: it either completed or threw.</summary>
     public const string BuiltOutcome = "built";
@@ -101,6 +138,12 @@ public static class Telemetry
 
     // Seconds, which is what OTLP's semantic conventions use for a duration histogram; a backend's
     // default bucket boundaries assume it.
+    private static readonly Histogram<double> ToolSeconds =
+        Meter.CreateHistogram<double>(ToolDuration, "s", "How long one MCP tool call took inside the server.");
+
+    private static readonly Histogram<double> LeaseSeconds =
+        Meter.CreateHistogram<double>(LeaseDuration, "s", "How long acquiring one lease on a project index took.");
+
     private static readonly Histogram<double> SearchSeconds =
         Meter.CreateHistogram<double>(SearchDuration, "s", "How long a search took, end to end.");
 
@@ -178,6 +221,38 @@ public static class Telemetry
     /// </summary>
     public static SearchRecording Search(string slug) => new(slug);
 
+    /// <summary>
+    ///     The chokepoint for one lease on a project index, called from <c>ProjectIndexes</c> and
+    ///     nowhere else. Inside the method that grants a lease rather than at its callers, so that every
+    ///     way of asking for one is timed and a new caller cannot forget to be.
+    /// </summary>
+    public static LeaseRecording Lease(string slug) => new(slug);
+
+    /// <summary>
+    ///     Wraps the call-tool pipeline in a span and a duration, so that what an agent waits for is
+    ///     measured where it happens rather than differenced out of a transcript afterwards (#90).
+    ///     A filter and not an attribute on each tool: one registration covers every tool, including the
+    ///     ones not written yet, and it is the outermost thing in the pipeline — so the gap between this
+    ///     duration and the search duration inside it is exactly the unaccounted-for time the issue is
+    ///     about, with no third measurement needed to find it.
+    ///     A call with no project bound is not recorded at all. Every measurement here carries the slug
+    ///     (CODING_STANDARDS, Telemetry), and an untagged one would be worth less than none; in practice
+    ///     the transport binds one, because it is reached through <c>/projects/{project}/mcp</c>.
+    ///     Telemetry never changes an answer: the result is returned and a throw rethrown exactly as
+    ///     they arrived, and the recording is the only thing in between.
+    /// </summary>
+    public static McpRequestHandler<CallToolRequestParams, CallToolResult> ToolFilter(
+        McpRequestHandler<CallToolRequestParams, CallToolResult> next) =>
+        async (request, cancellationToken) =>
+        {
+            if (BoundProject.SlugOrNull(request.Services) is not { } slug) return await next(request, cancellationToken);
+
+            using var recording = new ToolRecording(slug, request.Params?.Name);
+            var result = await next(request, cancellationToken);
+            recording.Answered();
+            return result;
+        };
+
     /// <summary>The chokepoint for one index build, called from <c>IndexBuilder</c> and nowhere else.</summary>
     public static IndexBuildRecording IndexBuild(string slug) => new(slug);
 
@@ -227,6 +302,67 @@ public static class Telemetry
             activity.SetTag(OutcomeTag, outcome);
             activity.Dispose();
         }
+    }
+
+    /// <summary>
+    ///     One MCP tool call. Two outcomes only — it came back, or it threw — because what a tool made
+    ///     of its arguments is the tool's own recording to make.
+    /// </summary>
+    public sealed class ToolRecording : IDisposable
+    {
+        private readonly Operation _operation;
+
+        /// <summary>Left at <see cref="FailedOutcome" /> by a throw, which is the one path that sets nothing.</summary>
+        private string _outcome = FailedOutcome;
+
+        private readonly string _tool;
+
+        internal ToolRecording(string slug, string? tool)
+        {
+            // A call the transport could not even name is still a call that cost time, and dropping it
+            // would hide exactly the cheap-but-slow case #90 is chasing.
+            _tool = string.IsNullOrEmpty(tool) ? "unknown" : tool;
+            _operation = new Operation(ToolSpan, slug);
+            _operation.Tag(ToolTag, _tool);
+        }
+
+        public void Dispose()
+        {
+            var tags = _operation.Tags;
+            tags.Add(ToolTag, _tool);
+            tags.Add(OutcomeTag, _outcome);
+            ToolSeconds.Record(_operation.Seconds, tags);
+            _operation.Finish(_outcome);
+        }
+
+        public void Answered() => _outcome = AnsweredOutcome;
+    }
+
+    /// <summary>
+    ///     One attempt to lease a project index. Timed whether or not there was an index to lease: a
+    ///     project whose disk was wiped pays a restore here, and that is the expensive case worth seeing
+    ///     apart from the cheap one rather than an absence of data.
+    /// </summary>
+    public sealed class LeaseRecording : IDisposable
+    {
+        private readonly Operation _operation;
+        private string _outcome = FailedOutcome;
+
+        internal LeaseRecording(string slug) => _operation = new Operation(LeaseSpan, slug);
+
+        public void Dispose()
+        {
+            var tags = _operation.Tags;
+            tags.Add(OutcomeTag, _outcome);
+            LeaseSeconds.Record(_operation.Seconds, tags);
+            _operation.Finish(_outcome);
+        }
+
+        /// <summary>A lease was granted, and the caller now holds the project open against a swap.</summary>
+        public void Opened() => _outcome = OpenedOutcome;
+
+        /// <summary>There was no index to lease, which is an answer for the caller to phrase.</summary>
+        public void Absent() => _outcome = AbsentOutcome;
     }
 
     /// <summary>One search. <see cref="Matched" /> and <see cref="Problem" /> are the only two answers a search has.</summary>

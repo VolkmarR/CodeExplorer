@@ -91,6 +91,89 @@ public sealed class TelemetryTests
     }
 
     /// <summary>
+    ///     What an agent waits for is the whole call, and only the query inside it was ever instrumented
+    ///     — which is why #90 could measure the ~1.2 s floor from transcript timestamps and not from the
+    ///     server. A tool call now records its own duration and span, carrying the project and the tool
+    ///     name, and the search span sits inside it: the gap between the two is the time the issue is
+    ///     about, and this is the pair of numbers that names it.
+    /// </summary>
+    [Fact]
+    public async Task A_tool_call_records_its_whole_duration_with_the_query_span_inside_it()
+    {
+        const string slug = "tele-call";
+        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+
+        using var probe = new TelemetryProbe(slug);
+        await using (var client = await host.ConnectAsync(slug))
+            await TestHost.CallAsync(client, "grep", new Dictionary<string, object?> { ["query"] = "Widget" });
+
+        var call = Assert.Single(probe.For(Telemetry.ToolDuration));
+        Assert.Equal(
+            new[] { Telemetry.OutcomeTag, Telemetry.ProjectTag, Telemetry.ToolTag },
+            call.Tags.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal("grep", call.Tags[Telemetry.ToolTag]);
+        Assert.Equal(Telemetry.AnsweredOutcome, call.Tags[Telemetry.OutcomeTag]);
+        Assert.True(call.Value >= 0);
+
+        // The whole point of the pair: each is a share of the one above it, so a trace view subtracts
+        // them rather than showing three unrelated measurements. call > query > lease, because the
+        // search recording wraps the read and the read is what asks for the lease.
+        var tool = probe.Span(Telemetry.ToolSpan);
+        var search = probe.Span(Telemetry.SearchSpan);
+        Assert.Equal("grep", tool.GetTagItem(Telemetry.ToolTag));
+        Assert.Equal(tool.SpanId, search.ParentSpanId);
+        Assert.Equal(search.SpanId, probe.Span(Telemetry.LeaseSpan).ParentSpanId);
+    }
+
+    /// <summary>
+    ///     Leasing the index is the first candidate #90 names for the floor — a connection per lease,
+    ///     and an ATTACH and USE on every call — and none of it was under an instrument. It is timed
+    ///     inside the method that grants the lease, so the operator's endpoints report it too and a new
+    ///     caller cannot forget to.
+    /// </summary>
+    [Fact]
+    public async Task Leasing_an_index_is_timed_wherever_it_is_asked_for()
+    {
+        const string slug = "tele-lease";
+        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+
+        using var probe = new TelemetryProbe(slug);
+        await SearchAsync(host, $"/api/projects/{slug}/search?q=Widget");
+
+        var lease = Assert.Single(probe.For(Telemetry.LeaseDuration));
+        Assert.Equal(
+            new[] { Telemetry.OutcomeTag, Telemetry.ProjectTag },
+            lease.Tags.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(Telemetry.OpenedOutcome, lease.Tags[Telemetry.OutcomeTag]);
+        Assert.True(lease.Value >= 0);
+    }
+
+    /// <summary>
+    ///     The tool span is the outermost thing in the call-tool pipeline, which is what makes the gap
+    ///     between it and the query span mean anything. Asserted through a call the argument filter
+    ///     answers on its own (#85): the tool method never runs, there is no search to record — and the
+    ///     call still cost an agent a round trip, so it is still timed.
+    /// </summary>
+    [Fact]
+    public async Task A_call_the_argument_filter_answers_is_still_timed()
+    {
+        const string slug = "tele-unbound";
+        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+
+        using var probe = new TelemetryProbe(slug);
+        await using (var client = await host.ConnectAsync(slug))
+            // `grep` without its required `query`: refused before the tool is invoked.
+            await TestHost.CallAsync(client, "grep", []);
+
+        var call = Assert.Single(probe.For(Telemetry.ToolDuration));
+        Assert.Equal("grep", call.Tags[Telemetry.ToolTag]);
+        Assert.Equal(Telemetry.AnsweredOutcome, call.Tags[Telemetry.OutcomeTag]);
+        // Nothing reached an engine, so there is no search to have recorded — which is exactly the
+        // case the transcript in #90 showed costing 1479 ms.
+        Assert.Empty(probe.For(Telemetry.SearchDuration));
+    }
+
+    /// <summary>
     ///     The three heuristic searches (#11, #54) are searches and report as ones: same instrument, same
     ///     tags, and an engine name of their own so a dashboard can tell a reference scan from a grep
     ///     rather than seeing one undivided search rate.
