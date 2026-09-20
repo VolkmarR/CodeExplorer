@@ -118,7 +118,7 @@ public sealed class ProjectIndexes : IDisposable
     ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 6;
+    public const int SchemaVersion = 7;
 
     /// <summary>
     ///     The tables a new shadow inherits from the live index instead of rebuilding. They are the
@@ -225,7 +225,15 @@ public sealed class ProjectIndexes : IDisposable
                                       path        VARCHAR NOT NULL,
                                       change_kind VARCHAR NOT NULL,
                                       added       INTEGER NOT NULL,
-                                      deleted     INTEGER NOT NULL);
+                                      deleted     INTEGER NOT NULL,
+                                      -- Where a renamed or copied change moved the content from, and
+                                      -- NULL for every other kind. libgit2's rename detection is on by
+                                      -- default and the walk already reads this to carry attribution
+                                      -- across a move; writing it down is what lets a query see that
+                                      -- two paths were once one thing (#131). Nullable and not a
+                                      -- sentinel: "this change moved nothing" is an absence, and a
+                                      -- path equal to `path` is what a non-rename used to look like.
+                                      old_path    VARCHAR);
                                   CREATE TABLE attribution (
                                       -- The attribution of every text file at the newest recorded
                                       -- commit, as runs. It is the state the next build replays new
@@ -539,23 +547,54 @@ public sealed class ProjectIndexes : IDisposable
     ///     what no longer belongs — a repository since removed — because only it knows what was read.
     ///     Nothing to carry is the ordinary case for a first build, and for a live file an older schema
     ///     wrote: the tables are checked for rather than the failure caught, so a real error still throws.
+    ///     An older <see cref="SchemaVersion" /> carries nothing at all. The durable copy is already
+    ///     refused on that test, and the live file on disk needs the same one for the same reason: these
+    ///     tables are copied column for column, so a history table that gained a column would be
+    ///     inserted short — and where the shapes did happen to match, the carried rows would be blind to
+    ///     whatever the new column records, which is the quiet wrong answer a version bump exists to
+    ///     prevent (#131). Carrying nothing costs one full re-walk per project, once.
     /// </summary>
     private async Task CarryHistoryAsync(DuckDBConnection connection, string slug,
         CancellationToken cancellationToken)
     {
         if (!HasIndex(slug)) return;
         await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
+        if (!await LiveSchemaMatchesAsync(connection, slug, cancellationToken)) return;
 
         foreach (string table in HistoryTables)
         {
-            using var exists = connection.CreateCommand();
-            exists.CommandText =
-                $"SELECT count(*) FROM duckdb_tables() WHERE database_name = '{slug.Replace("'", "''")}' "
-                + $"AND schema_name = 'main' AND table_name = '{table}'";
-            if (await exists.ExecuteScalarAsync(cancellationToken) is not > 0L) continue;
+            if (!await HasTableAsync(connection, slug, table, cancellationToken)) continue;
             await connection.ExecuteAsync(
                 $"INSERT INTO {table} SELECT * FROM {Quote(slug)}.main.{table}", cancellationToken);
         }
+    }
+
+    /// <summary>
+    ///     Whether the attached live index was written by this build's schema. Anything else reads as
+    ///     "no", which is the safe direction in every case it covers — an interrupted build that wrote
+    ///     the tables and never the <c>index_info</c> row, a file with no tables at all, an older
+    ///     version: a re-walk is slow, and a carry-over from a shape this build does not know is either
+    ///     a failed refresh or a quietly wrong answer. The table is probed the way the carry-over probes
+    ///     the three it copies, rather than the failure caught, so a real error still throws.
+    /// </summary>
+    private static async Task<bool> LiveSchemaMatchesAsync(DuckDBConnection connection, string slug,
+        CancellationToken cancellationToken)
+    {
+        if (!await HasTableAsync(connection, slug, "index_info", cancellationToken)) return false;
+        using var version = connection.CreateCommand();
+        version.CommandText = $"SELECT max(schema_version) FROM {Quote(slug)}.main.index_info";
+        return await version.ExecuteScalarAsync(cancellationToken) is int found && found == SchemaVersion;
+    }
+
+    /// <summary>Whether the attached catalog holds this table, which an interrupted build may not have written.</summary>
+    private static async Task<bool> HasTableAsync(DuckDBConnection connection, string slug, string table,
+        CancellationToken cancellationToken)
+    {
+        using var exists = connection.CreateCommand();
+        exists.CommandText =
+            $"SELECT count(*) FROM duckdb_tables() WHERE database_name = '{slug.Replace("'", "''")}' "
+            + $"AND schema_name = 'main' AND table_name = '{table}'";
+        return await exists.ExecuteScalarAsync(cancellationToken) is > 0L;
     }
 
     /// <summary>

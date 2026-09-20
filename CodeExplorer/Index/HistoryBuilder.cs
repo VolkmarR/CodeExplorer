@@ -135,7 +135,11 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
                     .EndRow();
                 foreach (var change in commit.Files)
                     files.CreateRow().AppendValue(id).AppendValue(change.Path).AppendValue(change.ChangeKind)
-                        .AppendValue(change.Added).AppendValue(change.Deleted).EndRow();
+                        .AppendValue(change.Added).AppendValue(change.Deleted)
+                        // Null for every kind that moved nothing. The walk carries OldPath equal to Path
+                        // for those, and storing that would make every row look like a rename onto
+                        // itself — a value no query could tell from a real edge (#131).
+                        .AppendValue(MovedFrom(change)).EndRow();
             }
         }
 
@@ -195,6 +199,17 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
 
         return state.Count;
     }
+
+    /// <summary>
+    ///     The path a change moved its content from, or null where it moved none. The two kinds that
+    ///     carry one are the two the replay below already treats as a move; every other kind has
+    ///     <c>OldPath</c> equal to <c>Path</c>, which is the walk's way of saying "nowhere" and would be
+    ///     indistinguishable from a rename onto itself once written down.
+    /// </summary>
+    private static string? MovedFrom(ChangedPath change) =>
+        change.ChangeKind is "renamed" or "copied" && !string.Equals(change.OldPath, change.Path, StringComparison.Ordinal)
+            ? change.OldPath
+            : null;
 
     /// <summary>
     ///     One path of one commit onto the state. A deletion forgets the path; a rename moves its lines

@@ -463,10 +463,13 @@ internal static class SearchEndpoints
 
     /// <summary>
     ///     No index is a 404 — the view renders it as the starting state a new project is in — and so is
-    ///     a file or commit that is not there, because a link to it is a page that is not there. Every
-    ///     other problem is a 400: the project is there and the request asked it something wrong.
+    ///     a file or commit that is not there, because a link to it is a page that is not there. A path
+    ///     only history records is a 404 for the same reason: the page is about a file at HEAD, and
+    ///     there is none. Every other problem is a 400: the project is there and the request asked it
+    ///     something wrong.
     /// </summary>
-    private static IResult Status(Problem problem) => problem.Kind is ProblemKind.NoIndex or ProblemKind.Missing
+    private static IResult Status(Problem problem) =>
+        problem.Kind is ProblemKind.NoIndex or ProblemKind.Missing or ProblemKind.Historical
         ? Results.NotFound(new { error = problem.Explanation })
         : Results.BadRequest(new { error = problem.Explanation });
 }

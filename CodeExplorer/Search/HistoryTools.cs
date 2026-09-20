@@ -48,6 +48,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  - `message` matches text in the subject line, case-insensitively: a ticket key, a PR number, a release name. A ticket or PR number lives in the commit message and almost never in the code, so look for it here rather than with grep. It searches the subject only, not the body, and it is text and not a pattern — `%` and `_` match themselves.
                  - Nothing else filters — not by one commit and not by date. Any other argument name is named as ignored above the answer.
                  - It is not project-wide only: `repo` and `path` narrow it, and `file_history` is the same read for one exact path.
+                 - A scope whose history was split by a rename says so: the reply names what the path was called before, the commits the whole chain accounts for, and the call that reads the earlier name. Renames are signalled, never followed — the count is still this path's alone.
                  - For what it cannot answer: page back for older commits, authors for who has worked here, file_history for one file, blame for one line, hot_files for where the work is, commit and commit_files for the message and the paths of one commit found here.
                  - Merges count as one commit and their side branches are not walked, so a pull request reads as a single change.
                  - Only the default branch is recorded. A commit on a branch that was never merged is not here.
@@ -103,14 +104,14 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                              + "The subject is the only text searched — not the message body, and not the code. "
                              + "grep searches the code."
                            : $"No commits{By(answer.Author)} are recorded{where}.")
-                   + ByRecordedPath(answer.Path);
+                   + ByRecordedPath(answer.Path, Reads("git_log"));
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
             $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{By(answer.Author)}{Saying(answer.Message)}{where}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null && answer.Path is null);
         if (answer.Author is { } filter) Matched(text, filter, answer.Commits.Count);
-        AppendRecordedPathNote(text, answer.Path);
+        AppendRecordedPathNote(text, answer.Path, Reads("git_log"));
         return text.ToString();
     }
 
@@ -128,7 +129,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     private static string NoSuchAuthor(AuthorFilter filter, IndexedRepository? repository, PathScope? path) =>
         string.Create(CultureInfo.InvariantCulture,
             $"No address contains '{filter.Query}'{Scope(repository, path)} — `author` matches the address, not the name. {filter.AuthorsInScope} {ToolReply.Plural(filter.AuthorsInScope, "address", "addresses")} recorded; call authors to list them.")
-        + ByRecordedPath(path);
+        + ByRecordedPath(path, Reads("git_log"));
 
     /// <summary>
     ///     Who the filter matched, under the log it narrowed. Said where the header cannot already have
@@ -169,6 +170,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  - `path` is a qualified path, exactly as grep, glob and list_tree print one: `main/src/Api`, or `main/src/Api/Orders.cs` for one file. Scoping is by the path each commit recorded, so it begins where a file was last renamed — a folder that was moved reads as a quiet one unless you know that. A path HEAD no longer holds is still scopeable: a deleted or renamed-away path has authors to list and nothing to open, and the answer says so.
                  - One row is one address: two addresses are two rows, and a respelled name is one row under the newest spelling. Git records the address as the identity.
                  - Counts are commits over the whole imported history, not lines and not a recent window. hot_files is what is moving now; this is who has been here.
+                 - A scope whose history was split by a rename says so, naming the earlier path and the commits the whole chain accounts for. Renames are signalled, never followed.
                  - It says who touched the code, never who wrote it: a reformat is a commit, so a mass change makes its author look expert in files they only reindented.
                  """)]
     public async Task<string> Authors(
@@ -194,7 +196,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         string where = Scope(answer.Repository, answer.Path);
         if (answer.Authors.Count == 0)
             return $"No commits are recorded{where}, so no authors are."
-                   + ByRecordedPath(answer.Path);
+                   + ByRecordedPath(answer.Path, Reads("authors"));
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
@@ -204,7 +206,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             ? string.Create(CultureInfo.InvariantCulture, $" ({answer.Authors.Count} shown, limit {answer.Limit}):\n\n")
             : ":\n\n");
         foreach (var author in answer.Authors) ToolReply.AuthorRow(text, "", author);
-        AppendRecordedPathNote(text, answer.Path);
+        AppendRecordedPathNote(text, answer.Path, Reads("authors"));
         return text.ToString();
     }
 
@@ -215,6 +217,8 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
 
                  - The path is qualified, exactly as grep and read_file print it: `main/src/Api/Foo.cs`.
                  - History is matched by path, so it begins where the file was last renamed or moved. An empty or short answer on an old file usually means a move, not that nobody touched it — the content's line-by-line history survives a move and is what blame reports.
+                 - A path HEAD no longer holds is still listed: a file a later commit deleted, or renamed away, has commits to list and nothing to open, and the answer says so. blame and co_changed refuse such a path, because their answers are about the file that is there.
+                 - A file that reached this path by a rename says so: the reply names what it was called before, the commits the whole chain accounts for, and the call that reads the earlier name.
                  - It says who changed the file and when, never what they changed: the diffs are not indexed. commit_files takes a SHA listed here and names every other path that commit touched.
                  """)]
     public async Task<string> FileHistory(
@@ -229,11 +233,22 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             Changes, "Lower limit to see fewer.");
     }
 
-    private static string Changes(FileHistoryAnswer answer)
+    /// <summary>
+    ///     The commits, with the previous-path note after whichever shape the answer took. Wrapped for
+    ///     the reason <see cref="Coupling" /> is: the branch that matters most here is the empty one,
+    ///     which tells the reader its history "reached this path by a rename" — and used to drop the
+    ///     very rename it was describing, along with the count and the call (#131).
+    /// </summary>
+    private static string Changes(FileHistoryAnswer answer) =>
+        WithPreviousPath(ChangesBody(answer), answer.Path.Lineage, Reads("file_history"));
+
+    private static string ChangesBody(FileHistoryAnswer answer)
     {
         if (!answer.HasHistory) return ToolReply.NoHistory;
 
-        string spelled = answer.File.QualifiedPath;
+        string spelled = answer.Path.Spelled;
+        // Only reachable for a path HEAD holds: one it does not is here because a commit recorded it,
+        // so it has commits by construction.
         if (answer.Commits.Count == 0)
             return $"No commit in the recorded history changed '{spelled}'. "
                    + "The file is in the index, so this means its history is older than what was imported, or it "
@@ -243,6 +258,10 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         text.Append(CultureInfo.InvariantCulture,
             $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")} changed {spelled}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, false);
+        // The sentence git_log and authors end a gone scope with, word for word. One fact, one wording:
+        // a second spelling of it is how an agent ends up believing there are two.
+        if (NotAtHead(answer.Path) is { Length: > 0 } gone)
+            text.Append(CultureInfo.InvariantCulture, $"\n{gone.TrimStart()}\n");
         return text.ToString();
     }
 
@@ -253,6 +272,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  - This is who touched a line LAST, not who wrote the logic. A reformat, a rename or a whitespace fix is a change, and it becomes the answer. Treat a result as "ask this person", never as "this person introduced it".
                  - It cannot say when something was introduced: only the current content is indexed, so a line that was moved or reformatted points at that change and not at the original one.
                  - Lines with no commit are ones the build could not attribute; they are reported as such rather than left out.
+                 - A path HEAD no longer holds is refused: attribution is the lines of the file as of the newest recorded commit, and a deleted or renamed-away path has none. git_log and file_history still list its commits.
                  """)]
     public async Task<string> Blame(
         [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
@@ -461,9 +481,10 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  Ranks the files that changed most over a window of history, most commits first, with the lines each gained and lost. Use it to find where a project is actually moving before reading any of it, and to tell a file that is edited constantly from one nobody has touched in a year.
 
                  - The window ends at the newest commit in the index, not at today: an index is built by a refresh and may be behind its remotes. The reply says which dates it covered, so a stale index shows as one.
-                 - Scope it with `directory`, a qualified path: `main/src/Api` for one area, or a bare repository slug for one repository.
+                 - Scope it with `directory`, a qualified path: `main/src/Api` for one area, or a bare repository slug for one repository. Scoping is by the path each commit recorded, so it begins where a directory was last renamed or moved — a folder that was moved reads as a quiet one unless you know that.
                  - Ranking is by number of commits, then by lines changed. A reformat counts as a change, the same way blame does — this is where work happened, not where the logic changed.
                  - Files a later commit deleted or renamed away are ranked too and marked; there is nothing at those paths to read now.
+                 - A directory whose history was split by a rename says so: the reply names what it was called before, the commits the whole chain accounts for, and the call that ranks the earlier name. The ranking itself is unchanged — renames are signalled, never followed.
                  - `depth` ranks **directories** instead of files. Reach for it when the question is which module, package or app is moving rather than which file — that is one call, where ranking files and then scoping the tool to each candidate directory in turn is one call per directory. Then call it again without `depth`, scoped to the directory that won, for the files inside it.
                  - IMPORTANT: a machine-authored commit counts exactly like a hand-written one. Regenerated output, a mechanical version bump across unrelated modules and a bulk rename all rank like real work, and a directory of generated files can outrank the code that generates it. `exclude` is the answer, in grep's syntax: `exclude="*.g.ts,*.generated.*,/migrations/,package-lock.json"`. Nothing is excluded by default and no naming convention is assumed — look at the top of an unfiltered ranking first, then exclude what the project turns out to regenerate. The reply says how many paths the filter hid.
                  """)]
@@ -471,7 +492,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
         int days = HistoryWindow.DefaultDays,
         [Description(
-            "Qualified path of a directory to rank within, e.g. \"main/src/Api\", or a repository slug alone for one repository. Default: the whole project.")]
+            "Qualified path of a directory to rank within, e.g. \"main/src/Api\", or a repository slug alone for one repository. Matched by the path each commit recorded, so it begins where a directory was last renamed or moved. Default: the whole project.")]
         string? directory = null,
         [Description("Rows to return — files, or directories under `depth` — 1-100. Default 20.")]
         int limit = DefaultRankedFiles,
@@ -491,7 +512,18 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             "Lower limit, narrow with directory, or roll the ranking up with depth.");
     }
 
-    private static string Ranking(ChurnAnswer answer, string projectSlug)
+    /// <summary>
+    ///     The ranking, with the previous-path note after whichever shape the answer took. The empty
+    ///     branches are the ones this exists for: a directory renamed longer ago than the window reports
+    ///     no rows and says "raise days to look further back", and a scope whose whole history sits
+    ///     under its previous name has no window at all. Both read as a quiet directory, which is the
+    ///     fault #131 is — so a note appended only under a ranking would miss the two answers that need
+    ///     it most.
+    /// </summary>
+    private static string Ranking(ChurnAnswer answer, string projectSlug) =>
+        WithPreviousPath(RankingBody(answer, projectSlug), answer.Lineage, RanksPrevious);
+
+    private static string RankingBody(ChurnAnswer answer, string projectSlug)
     {
         if (!answer.HasHistory) return ToolReply.NoHistory;
         // The project has history and this scope has none: a repository whose walk found nothing, which
@@ -552,6 +584,8 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  - Commits that touched a great many paths at once are left out of the pairing: one reformat or vendor drop pairs every path it touched with every other and would swamp the answer. The reply says when that happened, and where a file has nothing but such commits it says there is no usable co-change history rather than that the file moves alone.
                  - Pairing never crosses a repository, because a commit does not.
                  - History is matched by path, so it begins where the file was last renamed.
+                 - A path HEAD no longer holds is refused: an anchor a rename severed would report the coupling of a path, read as the coupling of the file that replaced it. git_log and file_history still list its commits.
+                 - An anchor that reached its path by a rename says so, naming the earlier path and the commits the whole chain accounts for. It redirects to git_log and file_history for it, because the earlier path is one this tool refuses.
                  """)]
     public async Task<string> CoChanged(
         [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
@@ -568,7 +602,18 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             answer => Coupling(answer, project), "Lower limit to see fewer.");
     }
 
-    private static string Coupling(CoChangeAnswer answer, string projectSlug)
+    /// <summary>
+    ///     The coupling answer, with the previous-path note after whichever of its six shapes was
+    ///     reached. Wrapped rather than repeated in each branch: the thin answers are where the note
+    ///     matters most, and a note added branch by branch is a note the next branch forgets. Nothing is
+    ///     appended where the scope has no previous path, so every other reply is what it was.
+    ///     The call it spells out is git_log's and file_history's, not its own: co_changed refuses a
+    ///     path HEAD no longer holds by design (#136), and a previous path is one by definition.
+    /// </summary>
+    private static string Coupling(CoChangeAnswer answer, string projectSlug) =>
+        WithPreviousPath(CouplingBody(answer, projectSlug), answer.Lineage, RedirectsFromCoChanged);
+
+    private static string CouplingBody(CoChangeAnswer answer, string projectSlug)
     {
         if (!answer.HasHistory) return ToolReply.NoHistory;
 
@@ -728,12 +773,15 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     ///     would otherwise read as a directory nobody works in — the same fact file_history states, and
     ///     the reason an empty scoped answer is never a finding about the people who work there.
     /// </summary>
-    private static string ByRecordedPath(PathScope? path) =>
+    private static string ByRecordedPath(PathScope? path, Func<PreviousPath, string> call) =>
         path is null
             ? ""
             : NotAtHead(path)
               + " The scope is matched by the path each commit recorded, so it begins where a file was "
-              + "last renamed; a directory that was moved records nothing under its new name.";
+              + "last renamed; a directory that was moved records nothing under its new name."
+              // Where this index can say what the previous name was, the general caveat above is
+              // followed by the particular fact, which is the one worth acting on (#131).
+              + (PreviousPathNote(path.Lineage, call) is { Length: > 0 } chain ? " " + chain : "");
 
     /// <summary>
     ///     The sentence a scope that history records and HEAD no longer holds carries, and the whole
@@ -756,9 +804,99 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     ///     line of prose tacked onto the last row would read as part of the row. Written once: the two
     ///     listings that carry it must not drift into two wordings of one fact.
     /// </summary>
-    private static void AppendRecordedPathNote(StringBuilder text, PathScope? path)
+    private static void AppendRecordedPathNote(StringBuilder text, PathScope? path,
+        Func<PreviousPath, string> call)
     {
         if (path is null) return;
-        text.Append(CultureInfo.InvariantCulture, $"\n{ByRecordedPath(path).TrimStart()}\n");
+        text.Append(CultureInfo.InvariantCulture, $"\n{ByRecordedPath(path, call).TrimStart()}\n");
     }
+
+    /// <summary>
+    ///     The call each reply spells out against a previous path. Four of the five name their own tool,
+    ///     because the previous path is a path they answer for. <c>co_changed</c> does not: a path HEAD
+    ///     no longer holds is refused there by design (#136), so recommending its own call would hand an
+    ///     agent one specified never to work — it redirects to the same two reads its refusal names, and
+    ///     an agent meets one story from both directions.
+    /// </summary>
+    private static Func<PreviousPath, string> Reads(string tool) =>
+        previous => $"Call {tool} with path=\"{previous.Spelled}\" to read it.";
+
+    /// <inheritdoc cref="Reads" />
+    private static readonly Func<PreviousPath, string> RanksPrevious =
+        previous => $"Call hot_files with directory=\"{previous.Spelled}\" to rank it.";
+
+    /// <inheritdoc cref="Reads" />
+    /// <remarks>
+    ///     It says what this tool is not the read for, and never why. "Which HEAD no longer holds" was
+    ///     the obvious reason and is not checked: a partial rename, or a new file later created at the
+    ///     old path, leaves HEAD holding it — and an agent told a false fact is steered off a call that
+    ///     would have worked. What holds either way is that coupling reported for the earlier path is
+    ///     that path's and not this file's.
+    /// </remarks>
+    private static readonly Func<PreviousPath, string> RedirectsFromCoChanged =
+        previous =>
+            $"co_changed is not the read for an earlier path — its coupling would be '{previous.Spelled}''s "
+            + $"and not this file's. Call git_log or file_history with path=\"{previous.Spelled}\" to read "
+            + "its history.";
+
+    /// <summary>
+    ///     What a scope was called before, said without being asked (#131). A scope whose history was
+    ///     split by a rename answers for its post-rename slice alone — measured at 9 commits reported
+    ///     for a directory with 1,252 — and nothing in the reply used to suggest the rest was there.
+    ///     Three things, and all three or it is not worth saying: the previous path, the combined total
+    ///     across the chain, and the call that reads the previous path. Naming the path and withholding
+    ///     the total reproduces the original fault one level up, and describing the reads rather than
+    ///     spelling the call leaves the work with the reader.
+    ///     Empty for a scope with no previous path, which is what keeps every other reply byte-for-byte
+    ///     what it was.
+    /// </summary>
+    /// <param name="lineage">The chain the scope's query found, or null where there is none.</param>
+    /// <param name="call">
+    ///     The call to spell out against the previous path, already written — its own tool's for the
+    ///     four that answer for a historical path, and another's for <c>co_changed</c>, which does not.
+    /// </param>
+    private static string PreviousPathNote(PathLineage? lineage, Func<PreviousPath, string> call)
+    {
+        if (lineage is not { Previous.Count: > 0 } chain) return "";
+
+        var text = new StringBuilder();
+        var first = chain.Previous[0];
+        // "recorded under it" and not "further commits": this count is every commit at or under the
+        // earlier path, and the rename itself touched both sides, so the two counts overlap by at least
+        // one. The combined total below de-duplicates; a sentence claiming these were all additional
+        // would be arithmetic the next sentence contradicts.
+        text.Append(CultureInfo.InvariantCulture,
+            $"This scope was renamed: its content was at '{first.Spelled}' before, where {first.Commits} "
+            + $"{ToolReply.Plural(first.Commits, "commit")} {ToolReply.Plural(first.Commits, "is", "are")} recorded. ");
+        // Every hop after the first, oldest last. A path renamed twice has a chain and an agent that
+        // read only the newest hop would stop one rename short of the history it asked for.
+        foreach (var older in chain.Previous.Skip(1))
+            text.Append(CultureInfo.InvariantCulture,
+                $"Before that, '{older.Spelled}' ({older.Commits} {ToolReply.Plural(older.Commits, "commit")}). ");
+        if (chain.Omitted > 0)
+            text.Append(CultureInfo.InvariantCulture,
+                $"{chain.Omitted} further earlier {ToolReply.Plural(chain.Omitted, "path")} not shown. ");
+
+        // The number the caller actually wanted, and the reason a path alone is not an answer.
+        int total = chain.CombinedCommits;
+        text.Append(CultureInfo.InvariantCulture,
+            $"{total} {ToolReply.Plural(total, "commit")} {ToolReply.Plural(total, "is", "are")} recorded across the whole chain; ");
+        text.Append("the count above is this path's alone, because scoping is by the path each commit "
+                    + "recorded and renames are signalled here, not followed. ");
+        text.Append(call(first));
+        return text.ToString();
+    }
+
+    /// <summary>
+    ///     A finished reply with the previous-path note after it, as its own paragraph — a line of prose
+    ///     tacked onto the last row would read as part of the row. Applied to the whole reply rather
+    ///     than inside each branch, because the branches that need the note most are the empty ones and
+    ///     a note added branch by branch is a note the next branch forgets.
+    ///     A scope with no previous path gets back exactly what it had, which is what keeps every other
+    ///     reply byte-for-byte what it was.
+    /// </summary>
+    private static string WithPreviousPath(string reply, PathLineage? lineage, Func<PreviousPath, string> call) =>
+        PreviousPathNote(lineage, call) is { Length: > 0 } note
+            ? reply.TrimEnd('\n') + "\n\n" + note + "\n"
+            : reply;
 }

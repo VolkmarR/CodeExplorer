@@ -412,6 +412,71 @@ public sealed class HistoryTests : IDisposable
     ///     Two commits on one file: the first writes three lines, the second rewrites the middle one.
     ///     Every attribution assertion here rests on that shape, so it is built once.
     /// </summary>
+    /// <summary>
+    ///     A rename is persisted as the path it moved from, and nothing else is (#131). It is the edge
+    ///     libgit2 already detects and the walk already consumes to carry attribution across a move; it
+    ///     was thrown away at append time until there was a column for it.
+    /// </summary>
+    [Fact]
+    public async Task A_rename_records_the_path_it_moved_from_and_no_other_change_does()
+    {
+        await IndexTwoCommitProjectAsync();
+        _host.MoveInGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "src/Domain/Check.cs" },
+            "Move the validator", "Linus", "linus@example.invalid", 2);
+        await _host.RefreshAsync("alpha");
+
+        var rows = await _host.ScalarsAsync("alpha",
+            """
+            SELECT cf.change_kind || ' ' || cf.path || ' <- ' || coalesce(cf.old_path, 'nothing')
+            FROM commit_files cf JOIN commits c USING (commit_id)
+            ORDER BY c.commit_id, cf.path
+            """);
+        Assert.Equal([
+            "added src/Check.cs <- nothing",
+            "modified src/Check.cs <- nothing",
+            "renamed src/Domain/Check.cs <- src/Check.cs"
+        ], rows);
+    }
+
+    /// <summary>
+    ///     The history tables are the only ones a refresh inherits, and they are inherited column for
+    ///     column — so a live index an older schema wrote must be inherited from not at all (ADR-0007).
+    ///     Asserted by planting a row no walk would produce and then declaring the index old: a refresh
+    ///     that carried it over would keep it, and a re-walk cannot.
+    /// </summary>
+    [Fact]
+    public async Task A_live_index_of_an_older_schema_is_re_walked_rather_than_carried_over()
+    {
+        await IndexTwoCommitProjectAsync();
+        await _host.ExecuteAsync("alpha",
+            "INSERT INTO commits VALUES (9999, 'one', 'deadbeef', 'Ghost', 'ghost@example.invalid', "
+            + "now(), 'Carried over from an older schema', '')");
+        await _host.ExecuteAsync("alpha", "UPDATE index_info SET schema_version = schema_version - 1");
+        await _host.RefreshAsync("alpha");
+
+        var subjects = await _host.ScalarsAsync("alpha", "SELECT subject FROM commits ORDER BY commit_id");
+        Assert.Equal(["Add the validator", "Tighten the check"], subjects);
+    }
+
+    /// <summary>
+    ///     And the other direction, which is what makes the guard a guard rather than a switch that
+    ///     turned carry-over off: an index of the current schema is still inherited, so a refresh
+    ///     appends to the history it has instead of walking it again (ADR-0007).
+    /// </summary>
+    [Fact]
+    public async Task A_live_index_of_this_schema_is_still_carried_over()
+    {
+        await IndexTwoCommitProjectAsync();
+        await _host.ExecuteAsync("alpha",
+            "INSERT INTO commits VALUES (9999, 'one', 'deadbeef', 'Ghost', 'ghost@example.invalid', "
+            + "now(), 'Carried over from this schema', '')");
+        await _host.RefreshAsync("alpha");
+
+        var subjects = await _host.ScalarsAsync("alpha", "SELECT subject FROM commits ORDER BY commit_id");
+        Assert.Contains("Carried over from this schema", subjects);
+    }
+
     private async Task IndexTwoCommitProjectAsync()
     {
         string source = _host.CreateEmptyGitRepository("one");
