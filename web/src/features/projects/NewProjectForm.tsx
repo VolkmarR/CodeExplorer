@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { api } from '@/lib/api'
+import { createProject } from '@/features/projects/api'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -19,7 +19,7 @@ export function NewProjectForm({ onCancel, onCreated }: NewProjectFormProps) {
   const [single, setSingle] = useState(false)
 
   const create = useMutation({
-    mutationFn: () => api.createProject(slug.trim(), name.trim(), single),
+    mutationFn: () => createProject(slug.trim(), name.trim(), single),
     onSuccess: async () => {
       setSlug('')
       setName('')

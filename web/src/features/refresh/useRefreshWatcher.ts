@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { RefreshStatus } from '@/lib/api'
+import type { RefreshStatus } from '@/features/refresh/api'
 import { invalidateProject } from '@/features/projects/queries'
 
 /** What the watcher remembers between polls: which refresh it has already acted on. */

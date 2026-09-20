@@ -1,4 +1,4 @@
-import { ApiError } from '@/lib/api'
+import { ApiError } from '@/lib/http'
 
 /**
  * Whatever went wrong, said in the server's own words where there are any. The API answers a

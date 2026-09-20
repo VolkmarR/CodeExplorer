@@ -1,6 +1,14 @@
 import { queryOptions } from '@tanstack/react-query'
 import type { BrowseParameters } from '@/lib/urls/browseParams'
-import { api } from '@/lib/api'
+import {
+  fetchBlame,
+  fetchBrowse,
+  fetchDeclarations,
+  fetchDependents,
+  fetchFile,
+  fetchImports,
+  fetchTree,
+} from '@/features/files/api'
 import { projectKey } from '@/lib/queryKeys'
 
 /**
@@ -9,7 +17,7 @@ import { projectKey } from '@/lib/queryKeys'
  */
 export function fileQuery(project: string, path: string) {
   return queryOptions({
-    queryFn: () => api.file(project, path),
+    queryFn: () => fetchFile(project, path),
     queryKey: [...projectKey(project), 'file', path],
     staleTime: Infinity,
   })
@@ -22,7 +30,7 @@ export function fileQuery(project: string, path: string) {
  */
 export function blameQuery(project: string, path: string) {
   return queryOptions({
-    queryFn: () => api.blame(project, path),
+    queryFn: () => fetchBlame(project, path),
     queryKey: [...projectKey(project), 'blame', path],
     staleTime: Infinity,
   })
@@ -35,7 +43,7 @@ export function blameQuery(project: string, path: string) {
  */
 export function importsQuery(project: string, path: string) {
   return queryOptions({
-    queryFn: () => api.imports(project, path),
+    queryFn: () => fetchImports(project, path),
     queryKey: [...projectKey(project), 'imports', path],
     staleTime: Infinity,
   })
@@ -43,7 +51,7 @@ export function importsQuery(project: string, path: string) {
 
 export function dependentsQuery(project: string, path: string) {
   return queryOptions({
-    queryFn: () => api.dependents(project, path),
+    queryFn: () => fetchDependents(project, path),
     queryKey: [...projectKey(project), 'dependents', path],
     staleTime: Infinity,
   })
@@ -56,7 +64,7 @@ export function dependentsQuery(project: string, path: string) {
  */
 export function declarationsQuery(project: string, path: string) {
   return queryOptions({
-    queryFn: () => api.declarations(project, path),
+    queryFn: () => fetchDeclarations(project, path),
     queryKey: [...projectKey(project), 'declarations', path],
     staleTime: Infinity,
   })
@@ -69,7 +77,7 @@ export function declarationsQuery(project: string, path: string) {
  */
 export function treeQuery(project: string, path: string) {
   return queryOptions({
-    queryFn: () => api.tree(project, path),
+    queryFn: () => fetchTree(project, path),
     queryKey: [...projectKey(project), 'tree', path],
     staleTime: Infinity,
   })
@@ -81,7 +89,7 @@ export function treeQuery(project: string, path: string) {
  */
 export function browseQuery(project: string, parameters: BrowseParameters) {
   return queryOptions({
-    queryFn: () => api.browse(project, parameters.glob, parameters.page, parameters.repository),
+    queryFn: () => fetchBrowse(project, parameters.glob, parameters.page, parameters.repository),
     queryKey: [...projectKey(project), 'browse', parameters],
     staleTime: Infinity,
   })

@@ -1,4 +1,4 @@
-import type { ProjectIndexStatus } from '@/lib/api'
+import type { ProjectIndexStatus } from '@/features/projects/api'
 import { formatCount, formatTime } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 

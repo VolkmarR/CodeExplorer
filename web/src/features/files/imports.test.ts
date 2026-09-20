@@ -1,6 +1,6 @@
 import { expect, test } from 'vite-plus/test'
 import { dependentsNote, importsNote } from '@/features/files/imports'
-import type { FileDependents, FileImports, ImportEdge } from '@/lib/api'
+import type { FileDependents, FileImports, ImportEdge } from '@/features/files/api'
 
 const edge = (name: string, targetPath: string | null): ImportEdge => ({
   lineNumber: 1,

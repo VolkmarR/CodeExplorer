@@ -1,4 +1,4 @@
-import type { FileDependents, FileImports } from '@/lib/api'
+import type { FileDependents, FileImports } from '@/features/files/api'
 
 /**
  * What both panels say about the strength of what they show. One sentence, said the same in both

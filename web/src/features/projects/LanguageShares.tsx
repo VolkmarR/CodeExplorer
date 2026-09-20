@@ -1,4 +1,4 @@
-import type { IndexOverview, LanguageShare } from '@/lib/api'
+import type { IndexOverview, LanguageShare } from '@/features/projects/api'
 import { formatCount } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
