@@ -132,7 +132,7 @@ function useProjectIndex(project: string | undefined): ProjectIndex {
   // that can notice a refresh finishing whatever page is open — and a finished refresh is what makes
   // every answer under the project stale. The frame watches; the invalidation itself is the refresh
   // feature's (`useRefreshWatcher`).
-  useRefreshWatcher(project, status?.state)
+  useRefreshWatcher(project, status)
 
   return {
     builtAt,
