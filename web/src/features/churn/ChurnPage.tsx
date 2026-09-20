@@ -1,20 +1,15 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
+import { ChurnControls } from '@/features/churn/ChurnControls'
 import { ChurnList } from '@/features/churn/ChurnList'
-import { CHURN_WINDOWS, churnSearch, describeWindow } from '@/lib/urls/churnParams'
+import { ChurnNotes } from '@/features/churn/ChurnNotes'
+import { ChurnScopeTrail } from '@/features/churn/ChurnScopeTrail'
+import { ExtensionFilter } from '@/features/churn/ExtensionFilter'
+import { churnSearch, type ChurnParameters } from '@/lib/urls/churnParams'
 import { churnQuery } from '@/features/churn/queries'
 import { projectQuery } from '@/features/projects/queries'
-import { RepositorySelect } from '@/features/projects/RepositorySelect'
 import { PageCard } from '@/components/PageCard'
 import { WindowNote } from '@/components/WindowNote'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { formatDate } from '@/lib/format'
 
 /**
@@ -23,7 +18,10 @@ import { formatDate } from '@/lib/format'
  * and this is what has been worked on, ranked — and the ranking is worth a window of its own rather
  * than whichever span a page of fifty commits happens to cover.
  *
- * The window and the repository come from the URL and nowhere else, so a ranking can be pasted.
+ * Every control here is a search param and nothing else, so a ranking can be pasted. That matters
+ * most for what #161 added: an unfiltered ranking of a real project is mostly project files and
+ * translations, so the ranking worth sending someone is a narrowed one — and a filter held in
+ * component state would be the one part of it a link could not carry.
  */
 export function ChurnPage() {
   const { project } = useParams({ from: '/projects/$project/churn' })
@@ -32,8 +30,17 @@ export function ChurnPage() {
   const { data: detail } = useSuspenseQuery(projectQuery(project))
   const { data: ranking } = useSuspenseQuery(churnQuery(project, search))
 
-  // One repository needs no filter; the choice is offered only where there is one to make.
-  const filterable = detail.repositories.length > 1
+  // What the rows ARE, off the answer rather than off the request: it is what the query grouped by,
+  // and a depth the server clamped would have the two disagree.
+  const rolledUp = ranking.depth !== null
+
+  function show(change: Partial<ChurnParameters>) {
+    void navigate({
+      params: { project },
+      search: churnSearch(search, change),
+      to: '/projects/$project/churn',
+    })
+  }
 
   return (
     <>
@@ -48,84 +55,63 @@ export function ChurnPage() {
 
       <PageCard
         title="Churn"
-        hint="files by how much they changed, most commits first"
+        hint={`${rolledUp ? 'directories' : 'files'} by how much they changed, most commits first`}
         actions={
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Label htmlFor="churn-window" className="text-xs text-muted-foreground">
-                Window
-              </Label>
-              <Select
-                value={String(search.days)}
-                onValueChange={(next) =>
-                  void navigate({
-                    params: { project },
-                    search: churnSearch(Number(next), search.repository),
-                    to: '/projects/$project/churn',
-                  })
-                }
-              >
-                <SelectTrigger id="churn-window" className="w-36">
-                  <SelectValue>{describeWindow(search.days)}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {/* A hand-written `days` outside the offered set still shows as itself rather than
-                      snapping the select to a value the URL does not carry. */}
-                  {(CHURN_WINDOWS.includes(search.days as (typeof CHURN_WINDOWS)[number])
-                    ? CHURN_WINDOWS
-                    : [...CHURN_WINDOWS, search.days].toSorted((a, b) => a - b)
-                  ).map((days) => (
-                    <SelectItem key={days} value={String(days)}>
-                      {describeWindow(days)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {filterable ? (
-              <div className="flex items-center gap-2">
-                <Label htmlFor="churn-repository" className="text-xs text-muted-foreground">
-                  Repository
-                </Label>
-                <div className="w-48">
-                  <RepositorySelect
-                    id="churn-repository"
-                    repositories={detail.repositories}
-                    value={search.repository ?? ''}
-                    onChange={(repository) =>
-                      void navigate({
-                        params: { project },
-                        search: churnSearch(search.days, repository),
-                        to: '/projects/$project/churn',
-                      })
-                    }
-                  />
-                </div>
-              </div>
-            ) : null}
-          </div>
+          <ChurnControls search={search} repositories={detail.repositories} onChange={show} />
         }
       >
         <div className="space-y-4">
+          {/* Where the reader is, above everything that changes what is in it: drilling in is one
+              click and this is the only way back out that keeps the window and the filter. */}
+          <ChurnScopeTrail project={project} search={search} />
+
+          {/* The filter, above the ranking it narrows, drawn from what this window holds. */}
+          <ExtensionFilter
+            extensions={ranking.extensions}
+            value={search.extensions ?? ''}
+            onChange={(extensions) => show({ extensions })}
+          />
+
           {ranking.files.length > 0 ? (
-            <ChurnList project={project} files={ranking.files} />
+            <ChurnList
+              project={project}
+              files={ranking.files}
+              // A rolled-up row is a directory and narrows the ranking; a file row opens the file.
+              // The repository is cleared with it because the qualified path carries one.
+              drillInto={
+                rolledUp
+                  ? (directory) => churnSearch(search, { directory, repository: '' })
+                  : undefined
+              }
+            />
           ) : (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              {ranking.since
-                ? 'No commit in this window changed a file. Widen the window to look further back.'
-                : 'Churn is read from imported history, which arrives with a refresh. If the project has been refreshed and this is still empty, its repositories’ history could not be walked.'}
+              {emptyReason(search, ranking.since !== null, ranking.hidden)}
             </p>
           )}
 
-          {ranking.withoutHistory.length > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              No history was imported for {ranking.withoutHistory.join(', ')}, so nothing from{' '}
-              {ranking.withoutHistory.length === 1 ? 'it' : 'those'} can appear here however much{' '}
-              {ranking.withoutHistory.length === 1 ? 'it' : 'they'} changed.
-            </p>
-          ) : null}
+          <ChurnNotes ranking={ranking} />
         </div>
       </PageCard>
     </>
   )
+}
+
+/**
+ * Why a ranking came back empty, which after #161 is four different facts and four different next
+ * steps. No window at all is a project whose history was never imported and no window will fix it;
+ * a filter that hid everything sends the reader to the filter, where telling them to look further
+ * back would be advice that cannot work; a scope with nothing in it sends them up the trail; and
+ * only the last of the four is the plain "widen the window".
+ */
+function emptyReason(search: ChurnParameters, hasWindow: boolean, hidden: number): string {
+  if (!hasWindow) {
+    return 'Churn is read from imported history, which arrives with a refresh. If the project has been refreshed and this is still empty, its repositories’ history could not be walked.'
+  }
+  if (hidden > 0) {
+    return `Every one of the ${hidden} paths that changed in this window is filtered out. Clear an extension, or widen the window.`
+  }
+  return search.directory === undefined
+    ? 'No commit in this window changed a file. Widen the window to look further back.'
+    : 'No commit in this window changed anything here. Widen the window, or step back up to a wider scope.'
 }
