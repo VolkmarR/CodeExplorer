@@ -87,7 +87,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         if (!answer.HasHistory) return ToolReply.NoHistory;
         // Before the empty-page reading, because an address that matches nobody and a page past the
         // end of a real author's commits are opposite facts and the second sentence would fit both.
-        if (answer.Author is { Addresses: 0 } miss) return NoSuchAuthor(miss, answer.Repository);
+        if (answer.Author is { Addresses: 0 } miss) return NoSuchAuthor(miss, answer.Repository, answer.Path);
 
         int skip = (answer.Page - 1) * answer.Limit;
         string where = Scope(answer.Repository, answer.Path);
@@ -120,10 +120,15 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     ///     unqualified empty answer says (CODING_STANDARDS, Errors). The count is what makes it
     ///     actionable — a project with authors and no match is a misspelling — and the rule it was
     ///     probably broken against is the one the name-shaped guess breaks.
+    ///     It carries the <c>path</c> scope for the reason the count makes it actionable at all: the
+    ///     addresses were counted under that scope, so a sentence that named only the repository would
+    ///     offer a number of a narrower thing as the project's. And a scope HEAD no longer holds has to
+    ///     say so here too — a miss under a path that is gone must not read as a miss under a live one.
     /// </summary>
-    private static string NoSuchAuthor(AuthorFilter filter, IndexedRepository? repository) =>
+    private static string NoSuchAuthor(AuthorFilter filter, IndexedRepository? repository, PathScope? path) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"No address contains '{filter.Query}'{Scope(repository)} — `author` matches the address, not the name. {filter.AuthorsInScope} {ToolReply.Plural(filter.AuthorsInScope, "address", "addresses")} recorded; call authors to list them.");
+            $"No address contains '{filter.Query}'{Scope(repository, path)} — `author` matches the address, not the name. {filter.AuthorsInScope} {ToolReply.Plural(filter.AuthorsInScope, "address", "addresses")} recorded; call authors to list them.")
+        + ByRecordedPath(path);
 
     /// <summary>
     ///     Who the filter matched, under the log it narrowed. Said where the header cannot already have

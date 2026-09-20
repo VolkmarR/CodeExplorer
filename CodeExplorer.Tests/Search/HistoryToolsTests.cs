@@ -1610,6 +1610,32 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
+    ///     An address that matches nobody is answered before the scope is described, and the count it
+    ///     offers was taken under that scope. Naming only the repository would hand an agent the
+    ///     addresses of a path as the project's — and under a path HEAD no longer holds, a miss that
+    ///     did not say so reads as a miss under a live one.
+    /// </summary>
+    [Fact]
+    public async Task An_author_miss_under_a_path_names_the_path_and_says_it_is_gone()
+    {
+        await BuildChurnProjectAsync("missed", withSecondRepository: false);
+        await using var client = await _host.ConnectAsync("missed");
+
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Gone.cs", ["author"] = "holger" });
+
+        Assert.StartsWith("No address contains 'holger'", reply, StringComparison.Ordinal);
+        Assert.Contains("under 'one/src/Gone.cs'", reply, StringComparison.Ordinal);
+        Assert.Contains("Nothing is at 'one/src/Gone.cs' now (no longer at HEAD)", reply, StringComparison.Ordinal);
+
+        // A live path says the scope without the gone sentence, so the two misses stay apart.
+        string live = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Hot.cs", ["author"] = "holger" });
+        Assert.Contains("under 'one/src/Hot.cs'", live, StringComparison.Ordinal);
+        Assert.DoesNotContain("no longer at HEAD", live, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     The other two halves of the same case: a path a rename rather than a deletion took away, and a
     ///     directory prefix rather than an exact file. A moved folder is the scope an agent asks about
     ///     most and the one a refusal misleads it about worst — "one/legacy names nothing" reads as a
