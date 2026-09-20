@@ -86,6 +86,16 @@ internal static class BoundProject
     /// <summary>What a handler's <see cref="Project" /> parameter reads; null on an endpoint no group bound.</summary>
     public static Project? Bound(HttpContext http) => http.Items[ItemKey] as Project;
 
+    /// <summary>
+    ///     The bound project's slug, or null where there is none. The reading <see cref="Get" /> refuses
+    ///     to make, for the one caller that must not throw: telemetry. A measurement is not worth an
+    ///     exception on a call that would otherwise have answered, and an untagged one is not worth
+    ///     recording (CODING_STANDARDS, Telemetry) — so a null here means the recording is skipped
+    ///     rather than made without a project.
+    /// </summary>
+    public static string? SlugOrNull(IServiceProvider? services) =>
+        (services?.GetService<IHttpContextAccessor>()?.HttpContext?.Items[ItemKey] as Project)?.Slug;
+
     /// <summary>Endpoint metadata: this endpoint is one project's. One instance, because it carries nothing.</summary>
     private sealed class BindsProject
     {
