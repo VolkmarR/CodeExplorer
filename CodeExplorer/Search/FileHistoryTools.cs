@@ -305,11 +305,14 @@ internal sealed partial class HistoryTools
         [Description(
             "Drop files whose qualified path matches any of these comma-separated terms, e.g. \"*.g.cs,/migrations/\". Same syntax as grep: a term with * or ? is a glob over the whole qualified path, anything else a plain substring, and matching is case-insensitive. Default: rank everything.")]
         string? exclude = null,
+        [Description(
+            "Rank ONLY files with these extensions, comma-separated: \"cs,ts\" or \".cs,.ts\". The other polarity of `exclude` and usually the shorter question: where a project's churn is dominated by project files and translations, naming the two or three extensions that are the code beats listing what is not. The reply lists the extensions the window actually holds, most-changed first, so a first unfiltered call shows what there is to ask for. Default: rank every extension.")]
+        string? extensions = null,
         CancellationToken cancellationToken = default)
     {
         string project = Bound.Slug;
         return ToolReply.Render<ChurnAnswer>(
-            await history.ChurnAsync(project, new ChurnRequest(directory, days, limit, depth, exclude),
+            await history.ChurnAsync(project, new ChurnRequest(directory, days, limit, depth, exclude, extensions),
                 cancellationToken),
             answer => Ranking(answer, project),
             "Lower limit, narrow with directory, or roll the ranking up with depth.");
@@ -338,13 +341,13 @@ internal sealed partial class HistoryTools
         // the one most likely to conclude that nothing changed.
         string? coverage = Coverage(answer.Coverage);
 
-        // What the exclude kept out, said wherever there is an answer to misread: an excluded ranking
-        // must never read as an unfiltered one, and an empty excluded ranking must never read as a
+        // What the filters kept out, said wherever there is an answer to misread: a filtered ranking
+        // must never read as an unfiltered one, and an empty filtered ranking must never read as a
         // scope where nothing changed.
         string hidden = answer.Hidden == 0
             ? ""
             : string.Create(CultureInfo.InvariantCulture,
-                $" exclude hid {answer.Hidden} {ToolReply.Plural(answer.Hidden, "path")}, so this is a filtered ranking.");
+                $" The filter hid {answer.Hidden} {ToolReply.Plural(answer.Hidden, "path")}, so this is a filtered ranking.");
 
         if (answer.Files.Count == 0)
             return $"No commit changed a file in {answer.ScopeSpelled} between {window.Describe()}. "
@@ -365,6 +368,13 @@ internal sealed partial class HistoryTools
 
         foreach (var file in answer.Files) ToolReply.ChurnRow(text, "", file);
 
+        // What the window is written in, under the ranking rather than over it (#161). An agent that
+        // has just read twenty `.csproj` rows needs to know that `extensions` is the one call that
+        // fixes it, and needs the spellings this scope actually holds rather than the ones it would
+        // guess — a project whose code is `.prg` is exactly the project where guessing `.cs` returns
+        // an empty ranking that reads as a quiet repository.
+        if (answer.Extensions.Count > 1) Extensions(text, answer.Extensions);
+
         // Said under every rollup and not only a surprising one: a count that looks low beside the
         // files under it is the reading to head off, and an agent that adds the rows up to check has
         // already learnt the wrong fact. The lines do sum, which is why only the commits are said.
@@ -377,4 +387,22 @@ internal sealed partial class HistoryTools
         return text.ToString();
     }
 
+    /// <summary>
+    ///     The extensions the scope holds, most-changed first, as the menu for the <c>extensions</c>
+    ///     argument (#161). Written only where there is more than one, because a scope written in one
+    ///     extension offers no choice and the line would be noise on every reply.
+    ///     The counts are commits and paths, both: a handful of generated files accounting for
+    ///     hundreds of commits is exactly the shape this line exists to make visible, and the commit
+    ///     count alone reads as a busy area rather than as a busy generator.
+    /// </summary>
+    private static void Extensions(StringBuilder text, IReadOnlyList<ChurnedExtension> extensions)
+    {
+        text.Append("\nExtensions changed in this window, most commits first — pass any of these as ")
+            .Append("`extensions` to rank only those:\n  ");
+        text.AppendJoin(", ", extensions.Select(e => string.Create(CultureInfo.InvariantCulture,
+            // The empty extension is a real answer and needs a name a reader can read; it is not a
+            // spelling anyone can pass back, so it says so rather than printing as nothing at all.
+            $"{(e.Extension.Length == 0 ? "(no extension)" : e.Extension)} {e.Commits}c/{e.Files}f")));
+        text.Append('\n');
+    }
 }

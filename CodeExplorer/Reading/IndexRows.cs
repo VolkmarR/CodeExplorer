@@ -88,6 +88,18 @@ public sealed record ChurnedFile(
     long Deleted);
 
 /// <summary>
+///     One extension a churn window's scope holds, and how much of the window it is (#161).
+///     <see cref="Commits" /> is the commits that touched a path spelled this way and is what the list
+///     is ranked by; <see cref="Files" /> is how many distinct paths those were, which is the number
+///     that says a handful of generated files can account for a great many commits.
+///     Not <see cref="ExtensionCount" />, which counts the whole index at HEAD: this one is about a
+///     window and counts paths a later commit deleted, because those are what a churn ranking ranks.
+///     <see cref="Extension" /> is empty for a path whose last segment has no dot, which is a file
+///     with no extension and not a missing answer.
+/// </summary>
+public sealed record ChurnedExtension(string Extension, int Commits, int Files);
+
+/// <summary>
 ///     Which repositories of a project an answer drawn from history can speak for, and which it
 ///     cannot. Both sides, because "says which is which" is the point: naming only the repositories
 ///     that were not walked leaves a reader to infer the rest from a ranking, which is the inference

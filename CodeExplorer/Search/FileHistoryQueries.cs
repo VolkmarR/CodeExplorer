@@ -62,9 +62,17 @@ public sealed record BlameAnswer(
 ///     ranking needs them more than a search does: a machine-authored commit counts exactly like a
 ///     hand-written one, so regenerated output, a mechanical version bump or a bulk rename outranks
 ///     the code that drives it (#117).
+///     <c>Extensions</c> is the other polarity, and the one a reader reaches for first (#161): a
+///     project whose top twenty churned paths are all <c>.csproj</c> and <c>.xlf</c> is one where
+///     naming the handful of extensions that are the code is shorter than listing what is not. Both
+///     apply, and <c>exclude</c> narrows what <c>extensions</c> selected.
 /// </remarks>
 public sealed record ChurnRequest(string? Directory, int Days, int Limit, int? Depth = null,
-    string? Exclude = null);
+    string? Exclude = null, string? Extensions = null)
+{
+    /// <summary>The two filters as the one record the ranking, the rollup and the hidden count take.</summary>
+    public ChurnFilters Filters => new(Extensions, Exclude);
+}
 
 /// <summary>
 ///     The most-changed files of a window, and everything needed to say what the ranking does not
@@ -79,15 +87,21 @@ public sealed record ChurnRequest(string? Directory, int Days, int Limit, int? D
 ///     <see cref="Depth" /> is the depth the rows were rolled up to, or null where they are files. It
 ///     is carried rather than inferred from the request, because what a reply calls its rows has to be
 ///     what the query grouped them by.
-///     <see cref="Hidden" /> is how many paths the <c>exclude</c> terms kept out, zero where there were
+///     <see cref="Hidden" /> is how many paths the filters kept out, zero where there were
 ///     none. A filtered ranking reads exactly like an unfiltered one, so the number is carried and said
 ///     rather than left for the caller to remember it asked.
+///     <see cref="Extensions" /> is what the window's scope is written in, ranked like the files are
+///     and carried whether or not a filter was asked for (#161): it is how a surface offers the
+///     extension filter instead of making a reader guess, and how one already filtered still shows
+///     the way back out. Counted before the extension filter and after <c>exclude</c>, so selecting
+///     <c>.cs</c> does not delete <c>.xlf</c> from the list that would let a reader add it back.
 /// </summary>
 public sealed record ChurnAnswer(
     string ScopeSpelled,
     bool HasHistory,
     HistoryWindow? Window,
     IReadOnlyList<ChurnedFile> Files,
+    IReadOnlyList<ChurnedExtension> Extensions,
     HistoryCoverage Coverage,
     // Not defaulted: an answer always knows its own grain, and a default is a later construction
     // quietly calling a ranking of directories a ranking of files.
@@ -203,17 +217,27 @@ public sealed partial class HistoryQueries
                 int? depth = request.Depth is { } requested ? Math.Clamp(requested, 1, MaxRollupDepth) : null;
                 int limit = Math.Clamp(request.Limit, 1, MaxRankedFiles);
                 var paths = await index.PathsAsync(token);
+                var filters = request.Filters;
                 IReadOnlyList<ChurnedFile> ranked = window is null
                     ? []
                     : depth is { } rollup
                         ? await IndexQueries.RankDirectoriesAsync(index.Connection, paths, window, repositorySlug,
-                            directoryInRepository, rollup, request.Exclude, limit, token)
+                            directoryInRepository, rollup, filters, limit, token)
                         : await IndexQueries.RankAsync(index.Connection, paths, window, repositorySlug,
-                            directoryInRepository, request.Exclude, limit, token);
+                            directoryInRepository, filters, limit, token);
                 int hidden = window is null
                     ? 0
-                    : await IndexQueries.HiddenByExcludeAsync(index.Connection, paths, window, repositorySlug,
-                        directoryInRepository, request.Exclude, token);
+                    : await IndexQueries.HiddenAsync(index.Connection, paths, window, repositorySlug,
+                        directoryInRepository, filters, token);
+
+                // Whether or not a filter was asked for: this is the list a surface offers the filter
+                // from, so a reader who has not filtered yet is exactly the reader who needs it. Read
+                // at the same scope as the ranking, because "what is this directory written in" is a
+                // different answer per directory and that is the point of asking it here.
+                IReadOnlyList<ChurnedExtension> extensions = window is null
+                    ? []
+                    : await IndexQueries.ChurnedExtensionsAsync(index.Connection, paths, window, repositorySlug,
+                        directoryInRepository, request.Exclude, MaxRankedExtensions, token);
 
                 // A ranking of a scope that does not exist is the emptiest kind of empty answer, and a
                 // path prefixed with the project's slug is the commonest way to ask for one (#111). The
@@ -229,7 +253,8 @@ public sealed partial class HistoryQueries
                     ? null
                     : await LineageAsync(index, repositorySlug, directoryInRepository,
                         await SpellerAsync(index, repositorySlug, token), token);
-                return new ChurnAnswer(spelled, hasHistory, window, ranked, coverage, depth, hidden, lineage);
+                return new ChurnAnswer(spelled, hasHistory, window, ranked, extensions, coverage, depth, hidden,
+                    lineage);
             }, cancellationToken), (ChurnAnswer answer) => new Telemetry.Measured(answer.Files.Count, 0));
 
     /// <summary>

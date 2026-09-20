@@ -66,6 +66,14 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     private const int MaxRankedFiles = 100;
 
     /// <summary>
+    ///     How many extensions a churn answer offers as a filter. A window holds far fewer distinct
+    ///     extensions than files, and past a couple of dozen the list has stopped being a menu and
+    ///     become a second thing to search — the tail of it is one-off fixtures, not what the project
+    ///     is written in.
+    /// </summary>
+    private const int MaxRankedExtensions = 24;
+
+    /// <summary>
     ///     Previous paths a reply names before it starts counting the rest. Three is a rename, a
     ///     reorganisation and the thing before that, which is more history than any reply is read for;
     ///     past it the note would be a listing and the combined total — the number the agent actually

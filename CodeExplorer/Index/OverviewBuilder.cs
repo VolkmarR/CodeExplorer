@@ -215,7 +215,7 @@ public sealed class OverviewBuilder
         var window = await IndexQueries.WindowAsync(connection, HistoryWindow.DefaultDays, null, cancellationToken);
         if (window is null) return OverviewChurn.None(HistoryWindow.DefaultDays);
 
-        var ranked = await IndexQueries.RankAsync(connection, paths, window, null, null, null, ChurnFilesShown,
+        var ranked = await IndexQueries.RankAsync(connection, paths, window, null, null, ChurnFilters.None, ChurnFilesShown,
             cancellationToken);
         return new OverviewChurn(window.Days, window.Since, window.Until, ranked);
     }

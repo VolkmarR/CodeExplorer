@@ -1,9 +1,12 @@
 import { expect, test } from 'vite-plus/test'
 import { validateBrowseSearch } from '@/lib/urls/browseParams'
 import {
+  CHURN_DEFAULTS,
   CHURN_WINDOWS,
+  churnSearch,
   DEFAULT_CHURN_DAYS,
   describeWindow,
+  MAX_CHURN_DEPTH,
   validateChurnSearch,
 } from '@/lib/urls/churnParams'
 import { validateCommitSearch } from '@/lib/urls/commitParams'
@@ -232,6 +235,89 @@ test('every offered churn window survives its own URL', () => {
   for (const days of CHURN_WINDOWS) {
     expect(validateChurnSearch(fromUrl(`days=${days}`)).days).toBe(days)
   }
+})
+
+/**
+ * The rollup depth, which is the one churn param where absent and zero are different rankings: the
+ * server reads no depth as "rank files" and clamps a 0 up to 1, so a URL carrying one would open a
+ * ranking of directories where the link meant files (#161).
+ */
+test('churn: a depth is a positive integer or is not there at all', () => {
+  const cases: [Record<string, unknown>, number | undefined][] = [
+    [{}, undefined],
+    [{ depth: '1' }, 1],
+    [{ depth: 3 }, 3],
+    [{ depth: '0' }, undefined],
+    [{ depth: '-2' }, undefined],
+    [{ depth: '1.5' }, undefined],
+    [{ depth: 'deep' }, undefined],
+    [{ depth: '' }, undefined],
+    // Clamped rather than refused: the server clamps too, and a link asking to go deeper than the
+    // page offers is a question, not a broken URL.
+    [{ depth: '99' }, MAX_CHURN_DEPTH],
+  ]
+  for (const [input, expected] of cases) {
+    expect(validateChurnSearch(input).depth, JSON.stringify(input)).toBe(expected)
+  }
+})
+
+test('churn: a directory and an extension list survive their own URL, and an empty one does not', () => {
+  expect(validateChurnSearch(fromUrl('directory=main/src&extensions=.cs,.ts'))).toEqual({
+    days: DEFAULT_CHURN_DAYS,
+    depth: undefined,
+    directory: 'main/src',
+    extensions: '.cs,.ts',
+    repository: undefined,
+  })
+  expect(validateChurnSearch(fromUrl('directory=&extensions='))).toEqual({
+    days: DEFAULT_CHURN_DAYS,
+    depth: undefined,
+    directory: undefined,
+    extensions: undefined,
+    repository: undefined,
+  })
+})
+
+/**
+ * The bug the change-shaped `churnSearch` exists to prevent: every control on the page writes the
+ * whole search, so one that rebuilt it from its own field would silently clear the others. A reader
+ * who filters to `.cs` and then picks a longer window asked for that window OF that filter.
+ */
+test('churn: changing one control keeps every other', () => {
+  const filtered = validateChurnSearch(fromUrl('days=14&directory=main/src&extensions=.cs&depth=2'))
+
+  expect(churnSearch(filtered, { days: 365 })).toEqual({
+    days: 365,
+    depth: 2,
+    directory: 'main/src',
+    extensions: '.cs',
+    repository: undefined,
+  })
+  expect(churnSearch(filtered, { extensions: '' }).extensions).toBe(undefined)
+  expect(churnSearch(filtered, { depth: undefined }).depth).toBe(undefined)
+})
+
+/**
+ * A directory is a qualified path and carries its own repository (ADR-0006), so the two scopes
+ * cannot both be set — one of them would have to lose, and a ranking that kept a repository the
+ * reader never chose is the one that reads as a bug.
+ */
+test('churn: a directory clears the repository, and clearing it leaves neither', () => {
+  const scoped = churnSearch(CHURN_DEFAULTS, { repository: 'main' })
+  expect(scoped.repository).toBe('main')
+
+  const drilled = churnSearch(scoped, { directory: 'main/src/Api' })
+  expect(drilled).toEqual({
+    days: DEFAULT_CHURN_DAYS,
+    depth: undefined,
+    directory: 'main/src/Api',
+    extensions: undefined,
+    repository: undefined,
+  })
+
+  const out = churnSearch(drilled, { directory: '', repository: '' })
+  expect(out.directory).toBe(undefined)
+  expect(out.repository).toBe(undefined)
 })
 
 test('a window is named once, so the select and the heading cannot disagree', () => {

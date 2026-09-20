@@ -362,6 +362,38 @@ public sealed class PathLineageTests(PathLineageFixture fixture) : IClassFixture
             .ToList();
         Assert.Single(dumps);
     }
+
+    /// <summary>
+    ///     An index older than the table this reads. A live index is a file some earlier version of
+    ///     this server wrote, and a restore rebuilds it from the Parquet set it had — so an index
+    ///     predating #148 has no <c>path_lineage</c>, and every path-scoped read used to fail on
+    ///     DuckDB's own catalog error. That reaches a caller as a 500 and as a tool-protocol error,
+    ///     neither of which says the index is out of date.
+    ///     No chain recorded is the same answer as a path nobody renamed, which is the answer this
+    ///     must give: the note is additive and every count beside it is unaffected by its absence.
+    /// </summary>
+    [Fact]
+    public async Task An_index_built_before_the_chain_table_answers_without_the_note_rather_than_failing()
+    {
+        // Its own host, because the index has to lose a table and every other test in this class
+        // reads the shared one. A fixture a test mutates is a fixture whose other tests pass or fail
+        // by the order they happened to run in.
+        using var host = new TestHost(SearchEngine.Substring);
+        await HistoryFixtures.BuildAsync(host, HistoryFixtures.Renames);
+        await host.ExecuteAsync(HistoryFixtures.Renames, "DROP TABLE path_lineage");
+        await using var client = await host.ConnectAsync(HistoryFixtures.Renames);
+
+        // The two reads that take a directory, which is where a stale index was actually met: the
+        // churn ranking the operator page drills with, and the same scope rolled up.
+        string ranked = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 3650, ["directory"] = "one/src/Model" });
+        Assert.DoesNotContain("before", ranked, StringComparison.Ordinal);
+        Assert.Contains("one/src/Model", ranked, StringComparison.Ordinal);
+
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model" });
+        Assert.DoesNotContain("its content was at", log, StringComparison.Ordinal);
+    }
 }
 
 /// <inheritdoc cref="HistoryFixture" />
