@@ -8,13 +8,14 @@ namespace CodeExplorer;
 ///     and whatever drives the cron: a serialised <see cref="TimeSpan" /> is a string, and neither of
 ///     them can compare two of those or add them up.
 ///     <see cref="Step" /> travels with the phase so a reader can group the timeline the way the
-///     progress reports it — several of these belong to step 3 alone (#91).
+///     progress reports it — a step reports several of these where it does several separable things,
+///     as the history step does and as fetching does once a project has more than one repository (#91).
 /// </summary>
 public sealed record PhaseCost(int Step, string Phase, double Seconds);
 
 /// <summary>
 ///     Collects what a refresh spent, phase by phase, out of the reports it already makes.
-///     #91 gave every piece of work inside step 3 its own phase, which lets an operator watching a
+///     #91 gave every piece of work inside the history step its own phase, which lets an operator watching a
 ///     running refresh see what is running. It did not let anyone ask afterwards what a refresh cost:
 ///     the status holds one phase at a time, and a refresh that has finished has moved past all of
 ///     them, so the whole timeline collapses to "Done" the moment the swap returns. Attributing one

@@ -64,10 +64,10 @@ public sealed class IndexBuilder(
         // After the history, because the overview ranks it, and before CompleteAsync for the same
         // reason the history runs before it: an index that went live without an overview is one
         // nothing would ever go back and fill in.
-        // Reported rather than left under the attribution's label (#91): these are still step 3, and
-        // what a refresh spent its wall clock on can only be read back if whatever spent it was named
-        // while it ran.
-        report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+        // Reported rather than left under the attribution's label (#91), and a step of its own rather
+        // than a second phase of the history's: what a refresh spent its wall clock on can only be read
+        // back if whatever spent it was named while it ran, and the counter is read the same way.
+        report(new RefreshProgress(RefreshProgress.OverviewStep, RefreshProgress.TotalStepCount,
             RefreshProgress.OverviewPhase));
         await overview.FillAsync(shadow, singleRepository, cancellationToken);
         await shadow.CompleteAsync(singleRepository, report, cancellationToken);

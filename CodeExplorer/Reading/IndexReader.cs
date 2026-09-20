@@ -138,6 +138,16 @@ public sealed partial class IndexReader : IDisposable
         $"Project '{projectSlug}' has no index to read from right now: it was never built, or a refresh is still building the first one. "
         + $"Ask the operator to refresh it with POST /api/projects/{projectSlug}/refresh, or retry shortly.";
 
+    /// <summary>
+    ///     The explanation for the other way there is nothing to read: the file is there, and an older
+    ///     version of this server wrote it. Told apart from <see cref="NoIndex" /> because "it was never
+    ///     built" would send an agent looking for a project that is in fact indexed, and because the
+    ///     remedy is the same refresh either way only once somebody knows which one it is (#164).
+    /// </summary>
+    public static string OutdatedIndex(string projectSlug) =>
+        $"Project '{projectSlug}' has an index this version of the server cannot read: an older one built it, and only a refresh rewrites it. "
+        + $"Ask the operator to refresh it with POST /api/projects/{projectSlug}/refresh, or retry shortly.";
+
     /// <summary>What the last build read, in build order, which is what a path may name.</summary>
     public async Task<IReadOnlyList<IndexedRepository>> RepositoriesAsync(CancellationToken cancellationToken)
     {
