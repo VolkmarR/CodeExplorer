@@ -11,7 +11,7 @@ namespace CodeExplorer;
 ///     first argument, which made nine <c>Search/</c> files plus <c>Control/</c> and <c>Operator/</c>
 ///     name the attach-and-lease type — and <c>Control/</c> naming it closed a cycle with the
 ///     <c>Index/</c> → <c>Control/</c> arrow ADR-0005 allows. This file is now the only one in
-///     <c>Infrastructure/</c> that names a type from <c>Index/</c>, which is the single arrow ADR-0005
+///     <c>Reading/</c> that names a type from <c>Index/</c>, which is the single arrow ADR-0005
 ///     grants it, and the module boundary test holds it to exactly that.
 /// </summary>
 public sealed class IndexReaders(ProjectIndexes indexes)

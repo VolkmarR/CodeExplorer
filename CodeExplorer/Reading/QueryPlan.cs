@@ -10,7 +10,7 @@ namespace CodeExplorer;
 ///     It explains the statement the reader actually built rather than one retyped beside it: a plan
 ///     read off a hand-copied query is a plan for a different query, which is the way this kind of
 ///     investigation usually goes wrong.
-///     In Infrastructure and not in Search, because every module's reads pass through
+///     In Reading and not in Search, because every module's reads pass through
 ///     <see cref="IndexQuery.ReaderAsync" />, and it was a grep diagnostic only while grep was the
 ///     one query anybody had measured.
 ///     A diagnostic and not a feature. There is no endpoint and no configuration entry, because the

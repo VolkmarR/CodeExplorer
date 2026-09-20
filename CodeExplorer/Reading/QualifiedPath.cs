@@ -12,11 +12,11 @@ public sealed record QualifiedPath(string RepositorySlug, string PathInRepositor
 ///     wrong. A path cannot be read or written without this: <c>src/index.ts</c> is a file in a
 ///     single-repository project and a repository named <c>src</c> in any other, and only the project
 ///     says which (ADR-0006).
-///     It sits at the root rather than in <c>Search/</c>, which is where most of its callers are,
-///     because the other caller is <c>IndexBuilder</c>: the build writes the name and every read parses
-///     it, and one rule written in two folders is a rule that drifts. The module boundary test forbids
-///     <c>Index/</c> reaching into <c>Search/</c> (ADR-0005), so a shared rule they both need belongs
-///     where <c>Project</c> and <c>ReaderColumns</c> already are.
+///     It sits in <c>Reading/</c> rather than in <c>Search/</c>, which is where most of its callers
+///     are, because the other caller is <c>IndexBuilder</c>: the build writes the name and every read
+///     parses it, and one rule written in two folders is a rule that drifts. The module boundary test
+///     forbids <c>Index/</c> reaching into <c>Search/</c> (ADR-0005), and a path is parsed to be read,
+///     so the rule belongs beside <see cref="IndexReader" /> and <see cref="ReaderColumns" />.
 /// </summary>
 public sealed record ProjectPaths(bool SingleRepository, string RepositorySlug)
 {

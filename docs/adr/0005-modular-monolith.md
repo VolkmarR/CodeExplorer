@@ -171,3 +171,73 @@ paragraph are edited together:
 
 The module folders are read off the source tree rather than listed, so a new one arrives with no
 allowed arrows at all and its first reference in either direction has to be argued for here.
+
+## Revisited for #153, on 2026-09-20: reading an index is a module
+
+`Infrastructure/` was defined above as what no concept owns and more than one module is handed. It
+had grown to 4,200 lines, and 2,300 of them were one thing: the index reader, the statements every
+reader shares, the query and plan helpers, the reader columns, the overview document, the history
+window and the path terms. Reading is named nowhere in the Shape list, so it landed in the folder
+that is not named after a concept — and two of those files said as much in their own doc comments,
+justifying where they sat with "the boundary test would fail anywhere else". That is a module with
+no folder, which is the same fault the #35 revisit fixed for the root.
+
+- **`Reading/` is a module.** It holds how an index is read: `IndexReader` with its row records and
+  its tree listing, `IndexReaders` — the one way in — the shared statements, the query and plan
+  helpers, the reader columns, the overview document, the history window, the path terms and the
+  qualified-path rule. It is named after the act and not after a noun in `CONTEXT.md`, because the
+  noun it would be named after is Index, and that name is taken by the module that writes one.
+- **It is not `Index/`.** `Index/` builds: it clones, ingests, attaches, shadows and swaps, and it
+  reaches `Git/` to do it. A reader that lived there would put every MCP tool one arrow away from
+  the builder and the local copy, and `Search/` would then reach `Index/` — the arrow this ADR has
+  refused since the first version of the boundary test, because an answer comes from what the last
+  build read and never from a remote.
+- **It is not `Search/`.** `Control/` and `Operator/` read indexes too — the project page, the
+  overview reply and the browse view all do — and both are forbidden to reach `Search/`, which is
+  where the #146 revisit found `Control/` reaching for a pluraliser. Reading is what three modules
+  are handed; searching is one caller of it.
+- **`Infrastructure/` is the ten files that really are plumbing**: telemetry, the durable store, the
+  key ring, authentication, settings, the project record and its route binding, the outcome type,
+  the tool arguments and the tool reply. The refresh progress record went to `Index/` rather than
+  here: the steps that can count their work are the build's, and `Refresh/` already reaches `Index/`.
+  What is left is host plumbing under any reading of the word, which is the test of the folder the
+  #35 revisit asked for and could not apply while a reader lived in it.
+- **The two arrows out of `Reading/` are argued, not inherited.** `Reading/` → `Index/` is
+  `IndexReaders` naming `ProjectIndexes`, still exactly one file, which is the single arrow this ADR
+  granted `Infrastructure/` at #146 and which moved with the file. `Index/` points back, because a
+  build writes the rows a read parses — the overview document, the imports columns, the qualified
+  path — and two spellings of one column is a disagreement baked into the index rather than a
+  failing read. The pair is a cycle between the folder that writes an index and the folder that
+  reads it, and it is narrower than the one it replaces: `Infrastructure/` had the same pair while
+  also holding authentication and the key ring.
+- **`Infrastructure/` → `Reading/` is one file.** `ToolReply` draws a churn row and an author row
+  for three surfaces at once, so it names the two records `Reading/` declares. The alternative was a
+  third spelling of a ranked row, which is the drift the shared renderer exists to prevent.
+
+Before the move the three files that had outgrown reading were split by concern, as pure moves:
+`IndexReader` into its row records, the scope and locating and advice, and the tree listing;
+`HistoryQueries` into the commit listings, the reads about one file or one commit, the rename
+lineage and the co-change pairing; `ProjectIndexes` into the attach-and-swap machinery and the DDL
+with the schema version it is stamped with. `HistoryTools` and `SearchTools` were split the same way
+for the same reason. No file in `Reading/` or `Search/` is much past 600 lines now.
+
+The arrows this leaves, which supersede the table in the #146 revisit above and are the allow-list
+in `ModuleBoundaryTests` spelled out — anything not on this list fails the build, and an arrow on it
+that nobody draws fails it too, so the list and this paragraph are edited together:
+
+| from              | may reference                                      |
+| ----------------- | -------------------------------------------------- |
+| `Control/`        | `Infrastructure/`, `Reading/`                      |
+| `Git/`            | `Infrastructure/`                                  |
+| `Index/`          | `Git/`, `Infrastructure/`, `Language/`, `Reading/` |
+| `Infrastructure/` | `Control/`, `Reading/`                             |
+| `Language/`       | nothing                                            |
+| `Operator/`       | `Control/`, `Git/`, `Infrastructure/`, `Reading/`  |
+| `Reading/`        | `Index/`, `Infrastructure/`, `Language/`           |
+| `Refresh/`        | `Control/`, `Git/`, `Index/`, `Infrastructure/`    |
+| `Search/`         | `Infrastructure/`, `Language/`, `Reading/`         |
+
+`Infrastructure/` → `Index/` and `Infrastructure/` → `Language/` are gone from it, not because
+anything stopped being true but because both arrows were drawn by files that are now in `Reading/`.
+The test project mirrors the new folder: `CodeExplorer.Tests/Reading/` holds the tests of the tools
+that are nothing but a read — `read_file`, `glob`, `list_tree`, `list_extensions` and `repo_info`.

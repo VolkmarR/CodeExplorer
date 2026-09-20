@@ -25,19 +25,22 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
   file.
 - **Modular monolith (ADR-0005).** Inside the host, one folder per module, named after the concept
   in `CONTEXT.md` it owns: `Control/` (projects, repositories, credentials), `Git/` (local copies),
-  `Index/`, `Search/`, `Refresh/`, `Operator/`, `Language/` (what a file is written in, and
-  everything that follows from it — ADR-0008). Folders follow the module boundary, never the
+  `Index/`, `Reading/` (how an index is read: the reader, the shared statements and the row records
+  every reading module is handed), `Search/`, `Refresh/`, `Operator/`, `Language/` (what a file is
+  written in, and everything that follows from it — ADR-0008). Folders follow the module boundary, never the
   ticket or the endpoint; a refresh touches `Refresh/`, not a folder per endpoint. Everything stays
   in the single `CodeExplorer` namespace, so a folder is navigation and a boundary, not a `using`.
   A module reaches another only through its public types; `Search/` never opens `control.duckdb`.
   What no concept owns and more than one module is handed — telemetry, the durable store, the key
-  ring, authentication, the index reader, the outcome type every index-backed answer returns —
-  lives in `Infrastructure/`, the one folder not named
-  after a concept; only `Program.cs` stays at the root. `ModuleBoundaryTests` turns the arrows into
+  ring, authentication, settings, the project record and its route binding, the outcome type every
+  index-backed answer returns, the tool arguments and the tool reply — lives in `Infrastructure/`,
+  the one folder not named after a concept, and nothing else does: reading an index is a module and
+  has one (ADR-0005, revisited for #153). Only `Program.cs` stays at the root. `ModuleBoundaryTests` turns the arrows into
   a failing build: it sweeps every ordered pair of module folders against an allow-list, so an arrow
   nobody wrote down fails by default and the allow-list and ADR-0005's prose change together. A
   module outside `Index/` and `Refresh/` reaches an index through `IndexReaders` and never names
-  `ProjectIndexes`. The test project mirrors the folders.
+  `ProjectIndexes`. `Reading/` is where `IndexReaders` lives, and it is the only folder outside
+  `Index/` that may name the attach-and-lease type. The test project mirrors the folders.
 - Endpoints are inline lambdas in `Program.cs`, grouped with `MapGroup`. Logic lives in a service;
   a handler that needs more than one statement of its own is a handler doing too much. Once
   `Program.cs` passes about 150 lines, an endpoint group moves to a `static void MapX(this

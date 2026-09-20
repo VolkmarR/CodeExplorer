@@ -62,16 +62,25 @@ public sealed partial class ModuleBoundaryTests
     ///             <c>Infrastructure/</c> with the project record it belongs beside.
     ///         </item>
     ///         <item>
-    ///             <c>Search/</c> answers from an index alone, so it reaches only
+    ///             <c>Search/</c> answers from an index alone, so it reaches only <c>Reading/</c>,
     ///             <c>Infrastructure/</c> and <c>Language/</c>. Not <c>Index/</c> — an index is opened
     ///             through <c>IndexReaders</c> — not <c>Git/</c>, because an answer comes from what the
     ///             last build read and never from a remote, and not <c>Control/</c>, because a search
     ///             opening <c>control.duckdb</c> is what CODING_STANDARDS forbids.
     ///         </item>
     ///         <item>
-    ///             <c>Infrastructure/</c> is what every module is handed, so nothing it holds may reach a
-    ///             caller of it. Its two arrows are the route binding, which reads the control database,
-    ///             and <c>IndexReaders</c>, which opens an index.
+    ///             <c>Reading/</c> is how an index is read (the 2026-09-20 revisit of ADR-0005): the
+    ///             reader, the shared statements and the row records every reading module is handed. Its
+    ///             one arrow into <c>Index/</c> is <c>IndexReaders</c> naming the attach-and-lease type,
+    ///             which is the arrow this ADR used to grant <c>Infrastructure/</c> and which moved here
+    ///             with the file. <c>Index/</c> points back at it, because a build writes the rows this
+    ///             reads and the two must spell them the same way.
+    ///         </item>
+    ///         <item>
+    ///             <c>Infrastructure/</c> is host plumbing, so nothing it holds may reach a caller of it.
+    ///             Its two arrows are the route binding, which reads the control database, and
+    ///             <c>ToolReply</c>, which draws a churn row and an author row for three surfaces at
+    ///             once and so names the two records <c>Reading/</c> declares them as.
     ///         </item>
     ///         <item>
     ///             <c>Language/</c> is the leaf (ADR-0008) and reaches nothing. Being the leaf is what
@@ -83,22 +92,28 @@ public sealed partial class ModuleBoundaryTests
     private static readonly HashSet<string> Allowed =
     [
         "Control -> Infrastructure",
+        "Control -> Reading",
         "Git -> Infrastructure",
         "Index -> Git",
         "Index -> Infrastructure",
         "Index -> Language",
+        "Index -> Reading",
         "Infrastructure -> Control",
-        "Infrastructure -> Index",
-        "Infrastructure -> Language",
+        "Infrastructure -> Reading",
         "Operator -> Control",
         "Operator -> Git",
         "Operator -> Infrastructure",
+        "Operator -> Reading",
+        "Reading -> Index",
+        "Reading -> Infrastructure",
+        "Reading -> Language",
         "Refresh -> Control",
         "Refresh -> Git",
         "Refresh -> Index",
         "Refresh -> Infrastructure",
         "Search -> Infrastructure",
-        "Search -> Language"
+        "Search -> Language",
+        "Search -> Reading"
     ];
 
     public static TheoryData<string, string> ModulePairs
