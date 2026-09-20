@@ -35,7 +35,7 @@ freely within the same major and records anything larger here.
   Parquet to the local disk with `COPY TO`, the app moves it with the Blob SDK under the managed
   identity. Chosen over DuckDB's `azure` extension because write support there is unverified on
   1.5.5 and would be a second runtime extension install.
-- **OpenTelemetry 1.18.0**: `Exporter.OpenTelemetryProtocol`, `Extensions.Hosting`,
+- **OpenTelemetry 1.19.0**: `Exporter.OpenTelemetryProtocol`, `Extensions.Hosting`,
   `Instrumentation.AspNetCore`, `Instrumentation.Http`, `Instrumentation.Runtime`. OTLP as in the
   proof of concept, vendor-neutral; telemetry is off when no endpoint is configured.
 - **No scheduler library.** The app scales to zero, so an in-process timer cannot fire the warm-up
