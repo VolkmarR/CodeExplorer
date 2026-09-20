@@ -79,7 +79,10 @@ _Avoid_: Revision, changeset, changelist
 **History**:
 The commits a project has imported for a repository, which is never guaranteed to be complete: a
 repository may have none at all, and a file's history begins where it was last renamed. An agent
-told nothing is told that, rather than being given an empty answer.
+told nothing is told that, rather than being given an empty answer. History is scoped by the path a
+commit recorded and not by what HEAD holds, so a path a later commit deleted or renamed away is a
+scope with commits and nothing to open — answered, marked the way a churned path that is no longer
+at HEAD is marked, and never refused as a path that was never here.
 _Avoid_: Log, git history, timeline, audit trail
 
 **Author**:

@@ -43,7 +43,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  Lists commits of the project's default branch, newest first. Use it to see what changed recently, and how much of a project is moving, before asking about any one file.
 
                  - `repo` scopes it to one repository, `path` to a folder or a file inside one, `author` to one person, `message` to what a commit says it did; `limit` and `page` walk it. Those are its only arguments, and they combine.
-                 - `path` is a qualified path, exactly as grep, glob and list_tree print one: `main/src/Api` for everything under a folder, or `main/src/Api/Orders.cs` for one file. It is what makes "what has been happening in this folder" one call. Scoping is by the path each commit recorded, so it begins where a file was last renamed.
+                 - `path` is a qualified path, exactly as grep, glob and list_tree print one: `main/src/Api` for everything under a folder, or `main/src/Api/Orders.cs` for one file. It is what makes "what has been happening in this folder" one call. Scoping is by the path each commit recorded, so it begins where a file was last renamed. A path HEAD no longer holds is still scopeable: a file a later commit deleted, or a folder it renamed away, has commits to list and nothing to open, and the answer says so.
                  - `author` matches the email address, not the display name: `grace@example.com` or `grace`, never "Grace Hopper". `authors` lists the addresses.
                  - `message` matches text in the subject line, case-insensitively: a ticket key, a PR number, a release name. A ticket or PR number lives in the commit message and almost never in the code, so look for it here rather than with grep. It searches the subject only, not the body, and it is text and not a pattern — `%` and `_` match themselves.
                  - Nothing else filters — not by one commit and not by date. Any other argument name is named as ignored above the answer.
@@ -67,7 +67,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         [Description("1-based page of results, newest first.")]
         int page = 1,
         [Description(
-            "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. Default: the whole project.")]
+            "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. A path HEAD no longer holds still scopes, because history recorded it. Default: the whole project.")]
         string? path = null,
         CancellationToken cancellationToken = default)
     {
@@ -161,7 +161,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  Lists who has committed, most commits first, with the address each one commits from. Read it before filtering git_log by `author`, which matches that address.
 
                  - `repo` scopes it to one repository and `path` to a folder or a file inside one, which is what makes "who owns this folder" one call rather than a file_history per file; `limit` cuts the list.
-                 - `path` is a qualified path, exactly as grep, glob and list_tree print one: `main/src/Api`, or `main/src/Api/Orders.cs` for one file. Scoping is by the path each commit recorded, so it begins where a file was last renamed — a folder that was moved reads as a quiet one unless you know that.
+                 - `path` is a qualified path, exactly as grep, glob and list_tree print one: `main/src/Api`, or `main/src/Api/Orders.cs` for one file. Scoping is by the path each commit recorded, so it begins where a file was last renamed — a folder that was moved reads as a quiet one unless you know that. A path HEAD no longer holds is still scopeable: a deleted or renamed-away path has authors to list and nothing to open, and the answer says so.
                  - One row is one address: two addresses are two rows, and a respelled name is one row under the newest spelling. Git records the address as the identity.
                  - Counts are commits over the whole imported history, not lines and not a recent window. hot_files is what is moving now; this is who has been here.
                  - It says who touched the code, never who wrote it: a reformat is a commit, so a mass change makes its author look expert in files they only reindented.
@@ -172,7 +172,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         [Description("Authors to return, 1-200. Default 30.")]
         int limit = DefaultAuthors,
         [Description(
-            "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. Default: the whole project.")]
+            "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. A path HEAD no longer holds still scopes, because history recorded it. Default: the whole project.")]
         string? path = null,
         CancellationToken cancellationToken = default)
     {
@@ -726,8 +726,25 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     private static string ByRecordedPath(PathScope? path) =>
         path is null
             ? ""
-            : " The scope is matched by the path each commit recorded, so it begins where a file was "
+            : NotAtHead(path)
+              + " The scope is matched by the path each commit recorded, so it begins where a file was "
               + "last renamed; a directory that was moved records nothing under its new name.";
+
+    /// <summary>
+    ///     The sentence a scope that history records and HEAD no longer holds carries, and the whole
+    ///     reason such a scope is answered rather than refused (#132). It leads the note, before the
+    ///     recorded-path caveat, because it is a fact about this call and the caveat is a fact about
+    ///     every path scope. <c>(no longer at HEAD)</c> is spelled the way <c>hot_files</c> and
+    ///     <c>commit_files</c> spell it: a second wording of one fact is how an agent ends up believing
+    ///     they are two.
+    /// </summary>
+    private static string NotAtHead(PathScope? path) =>
+        path is { AtHead: false } gone
+            // Said about the scope and never about the rows: the same note ends an empty page, and
+            // "these are its commits" under a page past the end would be a sentence about no rows.
+            ? $" Nothing is at '{gone.Spelled}' now (no longer at HEAD) — a later commit deleted it or "
+              + "renamed it away, so there is nothing there to read; this scope is its recorded history."
+            : "";
 
     /// <summary>
     ///     The same caveat under a listing rather than after a sentence — its own paragraph, because a
