@@ -1,6 +1,6 @@
 import { createFileRoute, notFound } from '@tanstack/react-router'
 import { RouteError } from '@/components/RouteError'
-import { validateCommitSearch } from '@/features/history/commitParams'
+import { validateCommitSearch } from '@/lib/urls/commitParams'
 import { CommitPage } from '@/features/history/CommitPage'
 import { commitQuery } from '@/features/history/queries'
 

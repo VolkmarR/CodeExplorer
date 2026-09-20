@@ -1,4 +1,4 @@
-import { asView, type Origin } from '@/components/appNavigation'
+import { asView, type Origin } from '@/lib/urls/views'
 
 /**
  * What the file view needs from the URL: which file, which line to land on, and where the reader

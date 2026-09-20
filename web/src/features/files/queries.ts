@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
-import type { BrowseParameters } from '@/features/files/browseParams'
+import type { BrowseParameters } from '@/lib/urls/browseParams'
 import { api } from '@/lib/api'
 import { projectKey } from '@/lib/queryKeys'
 

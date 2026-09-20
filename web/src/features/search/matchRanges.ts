@@ -1,4 +1,4 @@
-import type { SearchParameters } from '@/features/search/searchParams'
+import type { SearchParameters } from '@/lib/urls/searchParams'
 
 /** A half-open span `[start, end)` of one line's text that the query matched. */
 export interface MatchRange {

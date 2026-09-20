@@ -1,11 +1,9 @@
 import { Activity, BarChart3, Clock, FolderTree, Search, Settings } from 'lucide-react'
-import { churnSearch } from '@/features/churn/churnParams'
-import { treeSearch } from '@/features/files/browseParams'
-import { historySearch } from '@/features/history/historyParams'
-import { searchSearch } from '@/features/search/searchParams'
-
-/** The sidebar's items, in the order it lists them. */
-export type View = 'overview' | 'files' | 'search' | 'history' | 'churn' | 'settings'
+import { treeSearch } from '@/lib/urls/browseParams'
+import { churnSearch } from '@/lib/urls/churnParams'
+import { historySearch } from '@/lib/urls/historyParams'
+import { searchSearch } from '@/lib/urls/searchParams'
+import { asView, type View } from '@/lib/urls/views'
 
 /**
  * Every view of a project: what it is called, what it is drawn as, and where it goes. One table
@@ -14,8 +12,12 @@ export type View = 'overview' | 'files' | 'search' | 'history' | 'churn' | 'sett
  * for the breadcrumb.
  *
  * `link` is spread onto a `Link`, which supplies the `params`; the search for each view comes from
- * that view's own params module, so no default is spelled out here either. The two views that read
- * nothing from the URL beyond the project carry no search at all.
+ * that view's own params module in `lib/urls`, so no default is spelled out here either. The two
+ * views that read nothing from the URL beyond the project carry no search at all.
+ *
+ * The names themselves are `VIEWS` in `lib/urls/views.ts`, because a view's name travels in the URL
+ * and the params modules validate it. `satisfies` below pins every row here to one of those names;
+ * a name added there still needs a row here, since a view with no row is one the frame never draws.
  */
 export const PROJECT_VIEWS = [
   {
@@ -89,26 +91,6 @@ const LINKED_PAGES = [
  * and where the reader came from is a fact about the link they followed. `pageTrail` reads that.
  */
 const VIEW_ALIASES = new Map<string, View>(LINKED_PAGES.map((page) => [page.segment, page.under]))
-
-/**
- * Where a page was reached from, carried in the URL by whatever linked there rather than guessed
- * from the path. A file opened from a commit is the same route as one opened from the tree and the
- * path cannot tell them apart, so the trail above it would otherwise have to lie about one of them.
- *
- * Both fields are optional and absent is the default: a pasted or hand-edited URL still opens, and
- * reads as though it had been reached from the view its route belongs to.
- */
-export interface Origin {
-  /** The view that linked here. */
-  view?: View
-  /** The commit that linked here, when the link came from one. */
-  commit?: string
-}
-
-/** A view's name if that is what this is, and undefined for anything else a URL might carry. */
-export function asView(value: unknown): View | undefined {
-  return PROJECT_VIEWS.some((item) => item.view === value) ? (value as View) : undefined
-}
 
 /**
  * One step of the breadcrumb below the project. A view is named from `VIEW_NAMES` and links to

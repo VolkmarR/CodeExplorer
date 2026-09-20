@@ -166,3 +166,8 @@ Two kinds of failure, two mechanisms. Never mix them.
   instead of throwing, so pattern order is asserted rather than eyeballed.
 - `vp check` and `vp test` are the gate (ADR-0004). Lint rules are configured in `vite.config.ts`;
   a rule switched off carries the decision it conflicts with, never "it was noisy".
+- React Compiler is on, so memoisation is its job: no hand-written `useMemo` or `useCallback`. One
+  kept anyway carries a comment naming the measurement that justified it — the profile that showed
+  the compiler missing it, not an assumption that a render was slow. The exception is a value a
+  lint rule demands be stable, such as a context `value` in `components/ui`, where the rule and not
+  the compiler decides.

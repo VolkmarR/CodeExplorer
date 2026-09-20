@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { RouteError } from '@/components/RouteError'
 import { ChurnPage } from '@/features/churn/ChurnPage'
-import { validateChurnSearch } from '@/features/churn/churnParams'
+import { validateChurnSearch } from '@/lib/urls/churnParams'
 import { churnQuery } from '@/features/churn/queries'
 import { projectQuery } from '@/features/projects/queries'
 

@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
-import type { ChurnParameters } from '@/features/churn/churnParams'
+import type { ChurnParameters } from '@/lib/urls/churnParams'
 import { api } from '@/lib/api'
 import { projectKey } from '@/lib/queryKeys'
 

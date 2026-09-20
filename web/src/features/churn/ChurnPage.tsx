@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { ChurnList } from '@/features/churn/ChurnList'
-import { CHURN_WINDOWS, describeWindow } from '@/features/churn/churnParams'
+import { CHURN_WINDOWS, churnSearch, describeWindow } from '@/lib/urls/churnParams'
 import { churnQuery } from '@/features/churn/queries'
 import { projectQuery } from '@/features/projects/queries'
 import { RepositorySelect } from '@/features/projects/RepositorySelect'
@@ -60,7 +60,7 @@ export function ChurnPage() {
                 onValueChange={(next) =>
                   void navigate({
                     params: { project },
-                    search: { ...search, days: Number(next) },
+                    search: churnSearch(Number(next), search.repository),
                     to: '/projects/$project/churn',
                   })
                 }
@@ -95,10 +95,7 @@ export function ChurnPage() {
                     onChange={(repository) =>
                       void navigate({
                         params: { project },
-                        search: {
-                          ...search,
-                          repository: repository === '' ? undefined : repository,
-                        },
+                        search: churnSearch(search.days, repository),
                         to: '/projects/$project/churn',
                       })
                     }

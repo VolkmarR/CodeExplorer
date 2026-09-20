@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { FileCode } from 'lucide-react'
-import { fileSearch } from '@/features/files/fileParams'
+import { fileSearch } from '@/lib/urls/fileParams'
 import { MatchedLine } from '@/features/search/MatchedLine'
 import { matchRanges } from '@/features/search/matchRanges'
 import { languageFor } from '@/highlight/highlighter'

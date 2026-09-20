@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { dependentsNote, IMPORT_EVIDENCE, importsNote } from '@/features/files/imports'
 import { dependentsQuery, importsQuery } from '@/features/files/queries'
-import { RailEntries, RailPanelAnswer, RailWaiting, tally } from '@/features/files/RailPanel'
+import { RailEntries } from '@/features/files/RailEntries'
+import { RailPanelAnswer } from '@/features/files/RailPanelAnswer'
+import { RailWaiting } from '@/features/files/RailWaiting'
+import { tally } from '@/features/files/tally'
 import { FilePathLink } from '@/components/FilePathLink'
 import { directoryOf, fileName } from '@/lib/format'
 

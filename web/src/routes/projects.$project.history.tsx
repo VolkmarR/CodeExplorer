@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { RouteError } from '@/components/RouteError'
 import { HistoryPage } from '@/features/history/HistoryPage'
-import { validateHistorySearch } from '@/features/history/historyParams'
+import { validateHistorySearch } from '@/lib/urls/historyParams'
 import { commitsQuery } from '@/features/history/queries'
 import { projectQuery } from '@/features/projects/queries'
 

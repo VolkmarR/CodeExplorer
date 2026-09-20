@@ -22,11 +22,13 @@ const OVERRIDDEN: Record<string, 'off'> = {
   'react-doctor/forbid-component-props': 'off',
   // Deep JSX is what JSX looks like; the limit is two levels.
   'react-doctor/jsx-max-depth': 'off',
-  // Inline handlers and object props are exactly what React Compiler memoizes, so these would ask
+  // Inline handlers and the arrays and objects built in a render are exactly what React Compiler
+  // memoizes, so these would ask
   // for the hand-written memoization that enabling the compiler was meant to remove. `render` is
   // also Base UI's composition API — `<Button render={<Link />}>` is how the library says to do it,
   // where Radix took `asChild` and a child element.
   'react-doctor/jsx-no-jsx-as-prop': 'off',
+  'react-doctor/jsx-no-new-array-as-prop': 'off',
   'react-doctor/jsx-no-new-function-as-prop': 'off',
   'react-doctor/jsx-no-new-object-as-prop': 'off',
   // `{...props}` is how every shadcn component forwards to its element.
