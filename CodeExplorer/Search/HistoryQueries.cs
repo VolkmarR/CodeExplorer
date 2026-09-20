@@ -116,7 +116,15 @@ public sealed record PreviousPath(string Spelled, string PathInRepository, int C
 /// <param name="Previous">The chain, newest first, so the immediately previous name leads and the oldest is last.</param>
 /// <param name="Omitted">Further hops the cap kept out, stated the way the churn ranking states what its exclude hid.</param>
 /// <param name="CombinedCommits">Distinct commits recorded across the scope and its whole chain, cap or no cap.</param>
-public sealed record PathLineage(IReadOnlyList<PreviousPath> Previous, int Omitted, int CombinedCommits);
+/// <param name="Chain">
+///     Every earlier path the walk found, repository-relative and <b>untruncated</b> — the same set
+///     <see cref="CombinedCommits" /> was counted over, and not the capped
+///     <paramref name="Previous" /> a reply prints. A reader that paired over the printed list while
+///     quoting a total taken over this one would hand back a ranking and a number that disagree, so
+///     anything computing over the chain uses this (#143).
+/// </param>
+public sealed record PathLineage(IReadOnlyList<PreviousPath> Previous, int Omitted, int CombinedCommits,
+    IReadOnlyList<string> Chain);
 
 /// <summary>
 ///     What an <c>author</c> filter matched, carried beside the page it narrowed so a reply can say
@@ -722,17 +730,24 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                 var window = hasHistory
                     ? await IndexQueries.WindowAsync(index.Connection, request.Days, file.RepositorySlug, token)
                     : null;
+                // Resolved before the pairing rather than after it: the pairing spans the chain now, so
+                // it is an input and no longer only something the reply says (#143).
+                var lineage = await LineageAsync(index, file.RepositorySlug, file.PathInRepository,
+                    await SpellerAsync(index, file.RepositorySlug, token), token);
+                // The untruncated chain, so the ranking covers exactly what the combined total counted.
+                IReadOnlyList<string> anchored = [file.PathInRepository, ..lineage?.Chain ?? []];
                 var coupling = window is null
                     ? new CoChanges(0, 0, [])
-                    : await PairAsync(index, window, file.RepositorySlug, file.PathInRepository, _maxCommitPaths,
+                    : await PairAsync(index, window, file.RepositorySlug, anchored, _maxCommitPaths,
                         Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
                 // One extra read, and only on the branch that cannot answer without it: a window that
                 // reached nothing has to say whether the path has any history at all.
+                // Over the same chain the pairing ran on, not the current path alone: every other number
+                // in this answer is chain-wide now, and a reason-for-nothing quoting the post-rename
+                // slice would explain a chain-wide emptiness with a path-wide count (#143).
                 var recorded = window is not null && coupling.Commits == 0
-                    ? await RecordedPathAsync(index, file.RepositorySlug, file.PathInRepository, token)
+                    ? await RecordedPathAsync(index, file.RepositorySlug, anchored, token)
                     : null;
-                var lineage = await LineageAsync(index, file.RepositorySlug, file.PathInRepository,
-                    await SpellerAsync(index, file.RepositorySlug, token), token);
                 return new CoChangeAnswer(file, hasHistory, window, coupling, _maxCommitPaths, recorded, lineage);
             }, cancellationToken);
         if (outcome is CoChangeAnswer answer) recording.Matched(Engine, answer.Coupling.Files.Count, 0);
@@ -1060,10 +1075,11 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         }
 
         if (found.Count == 0) return null;
-        int combined = await CombinedCommitCountAsync(index, repositorySlug,
-            [pathInRepository, ..found.Select(p => p.PathInRepository)], cancellationToken);
+        var chain = found.Select(p => p.PathInRepository).ToList();
+        int combined = await CombinedCommitCountAsync(index, repositorySlug, [pathInRepository, ..chain],
+            cancellationToken);
         return new PathLineage(found.Take(MaxPreviousPaths).ToList(),
-            Math.Max(0, found.Count - MaxPreviousPaths), combined);
+            Math.Max(0, found.Count - MaxPreviousPaths), combined, chain);
     }
 
     /// <summary>
@@ -1177,15 +1193,31 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
         return (int)((await command.ScalarAsync(cancellationToken) as long?) ?? 0);
     }
 
-    private static async Task<RecordedPath> RecordedPathAsync(IndexReader index, string repositorySlug, string path,
-        CancellationToken cancellationToken)
+    /// <param name="index">The index being read.</param>
+    /// <param name="repositorySlug">The repository the paths belong to.</param>
+    /// <param name="paths">
+    ///     The anchor's path, and every earlier one a rename leads back to. A list and not one path
+    ///     because the pairing this explains the emptiness of spans the same list (#143), and the two
+    ///     have to be counted over the same thing or the explanation contradicts the answer.
+    /// </param>
+    /// <param name="cancellationToken">Threaded to the command.</param>
+    private static async Task<RecordedPath> RecordedPathAsync(IndexReader index, string repositorySlug,
+        IReadOnlyList<string> paths, CancellationToken cancellationToken)
     {
-        using var command = index.Connection.Query("""
-                                                   SELECT count(*) AS commits, max(c.authored_at) AS newest
-                                                   FROM commit_files cf JOIN commits c USING (commit_id)
-                                                   WHERE c.repo_slug = $r AND cf.path = $p
-                                                   """,
-            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path)]);
+        var parameters = new List<DuckDBParameter> { new("r", repositorySlug) };
+        var names = new List<string>(paths.Count);
+        for (int i = 0; i < paths.Count; i++)
+        {
+            parameters.Add(new DuckDBParameter("p" + i.ToString(CultureInfo.InvariantCulture), paths[i]));
+            names.Add("$p" + i.ToString(CultureInfo.InvariantCulture));
+        }
+
+        using var command = index.Connection.Query($"""
+                                                    SELECT count(DISTINCT cf.commit_id) AS commits,
+                                                           max(c.authored_at) AS newest
+                                                    FROM commit_files cf JOIN commits c USING (commit_id)
+                                                    WHERE c.repo_slug = $r AND cf.path IN ({string.Join(", ", names)})
+                                                    """, parameters);
         using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return new RecordedPath(0, null);
         int commits = (int)reader.Int64("commits");
@@ -1457,8 +1489,22 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     Here rather than in <see cref="IndexQueries" />: that class is for the reads a build makes
     ///     too, and no build pairs anything.
     /// </summary>
+    /// <remarks>
+    ///     <paramref name="anchorPaths" /> is the anchor's own path and every earlier one a rename leads
+    ///     back to, so coupling survives a move (#143). It is the one place in this system where a
+    ///     rename is followed rather than signalled: every other path-scoped read counts what its own
+    ///     path recorded (CONTEXT.md, Previous Path), and the exception is here because <c>git_log</c>
+    ///     and <c>file_history</c> can answer for a previous path while nothing can answer its coupling.
+    ///     In the commit that moved the anchor, a counterpart that <b>also moved</b> is dropped and one
+    ///     that was edited is kept. Dropping the whole commit was the first shape and it was too blunt:
+    ///     a commit that renames a file and updates its two callers is three paths, nowhere near the
+    ///     ceiling, and is the strongest coupling evidence the anchor has. What is not evidence is the
+    ///     other half of the same commit — "these moved together" is one commit and not a relationship,
+    ///     which is the paths ceiling's reasoning applied per path instead of per commit. Splitting it
+    ///     this way needs no second threshold, and leaves the commit counted and paired as it is.
+    /// </remarks>
     private static async Task<CoChanges> PairAsync(IndexReader index, HistoryWindow window, string repositorySlug,
-        string pathInRepository, int maxCommitPaths, int limit, CancellationToken cancellationToken)
+        IReadOnlyList<string> anchorPaths, int maxCommitPaths, int limit, CancellationToken cancellationToken)
     {
         // Epoch seconds rather than timestamp parameters, for the reason IndexQueries compares them
         // that way: it keeps the comparison off the session time zone and a DateTimeOffset out of the
@@ -1468,9 +1514,19 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
             new("since", window.Since.ToUnixTimeSeconds()),
             new("until", window.Until.ToUnixTimeSeconds()),
             new("r", repositorySlug),
-            new("p", pathInRepository),
             new("c", maxCommitPaths)
         };
+        // One parameter per path of the chain, which is a handful at most: the walk is capped and a
+        // path is a name, so there is nothing here to build a list literal out of by hand.
+        var names = new List<string>(anchorPaths.Count);
+        for (int i = 0; i < anchorPaths.Count; i++)
+        {
+            string name = "p" + i.ToString(CultureInfo.InvariantCulture);
+            parameters.Add(new DuckDBParameter(name, anchorPaths[i]));
+            names.Add("$" + name);
+        }
+
+        string anchored = string.Join(", ", names);
 
         using var command = index.Connection.Query($"""
                                                     -- The anchor's own commits first, and everything after
@@ -1478,19 +1534,29 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                                     -- what keeps the work proportional to one file's history
                                                     -- instead of to the whole window's.
                                                     WITH anchor AS (
-                                                        SELECT cf.commit_id
+                                                        SELECT cf.commit_id,
+                                                               -- Whether this commit is the one that moved
+                                                               -- the anchor. A rename is one row, carrying
+                                                               -- the new path, so only the commit that did
+                                                               -- the moving matches.
+                                                               bool_or(cf.change_kind = 'renamed') AS moved
                                                         FROM commit_files cf
                                                         JOIN commits c USING (commit_id)
                                                         WHERE c.repo_slug = $r
                                                           AND epoch(c.authored_at) BETWEEN $since AND $until
-                                                          AND cf.path = $p),
+                                                          AND cf.path IN ({anchored})
+                                                        GROUP BY cf.commit_id),
                                                     -- Every path those commits touched. The window and the
                                                     -- repository are not repeated: a commit_id from anchor
                                                     -- already satisfies both. MATERIALIZED because two CTEs
                                                     -- below read this one, and inlined it would be a second
                                                     -- scan of commit_files to produce the same rows.
+                                                    -- `moved` is carried through rather than joined again
+                                                    -- below: anchor groups over commit_files, and reading
+                                                    -- it twice would run that scan twice for one answer.
                                                     touched AS MATERIALIZED (
-                                                        SELECT cf.commit_id, cf.path
+                                                        SELECT cf.commit_id, cf.path, cf.change_kind,
+                                                               anchor.moved
                                                         FROM commit_files cf JOIN anchor USING (commit_id)),
                                                     sized AS (
                                                         SELECT commit_id,
@@ -1505,7 +1571,15 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
                                                     ranked AS (
                                                         SELECT t.path, count(*)::INTEGER AS shared
                                                         FROM touched t JOIN sized s USING (commit_id)
-                                                        WHERE s.paired AND t.path <> $p
+                                                        -- The whole chain and not just the current path:
+                                                        -- an anchor's own earlier name is not a file it
+                                                        -- co-changed with.
+                                                        WHERE s.paired AND t.path NOT IN ({anchored})
+                                                          -- In the commit that moved the anchor, a path
+                                                          -- that moved with it says only "these moved
+                                                          -- together"; one that was edited in the same
+                                                          -- commit is real coupling and stays.
+                                                          AND NOT (t.moved AND t.change_kind = 'renamed')
                                                         GROUP BY t.path
                                                         -- Spelled out rather than ordered by the alias, for
                                                         -- the reason IndexQueries spells its ORDER BY out.
