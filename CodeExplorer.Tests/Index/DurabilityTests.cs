@@ -29,12 +29,13 @@ public sealed class DurabilityTests : IDisposable
         await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
 
         // Spelled out rather than derived from the table list, so adding a table to the index without
-        // adding it to the durable copy fails here instead of on the next scale to zero. The three
-        // history tables are as much of the index as the code ones are (ADR-0007).
+        // adding it to the durable copy fails here instead of on the next scale to zero. The history
+        // tables are as much of the index as the code ones are (ADR-0007), and that includes the
+        // rename chains the build derives from them (#148): a restore does not re-walk.
         Assert.Equal([
                 "attribution.parquet", "commit_files.parquet", "commits.parquet", "files.parquet",
-                "imports.parquet", "index_info.parquet", "lines.parquet", "project_overview.parquet",
-                "repositories.parquet"
+                "imports.parquet", "index_info.parquet", "lines.parquet", "path_lineage.parquet",
+                "project_overview.parquet", "repositories.parquet"
             ],
             Directory.EnumerateFiles(host.DurableIndexDirectory("alpha")).Select(Path.GetFileName).Order());
     }

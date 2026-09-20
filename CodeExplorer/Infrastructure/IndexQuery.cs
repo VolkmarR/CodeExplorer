@@ -85,6 +85,21 @@ internal static class IndexQuery
     }
 
     /// <summary>
+    ///     The same statement from a build, which runs synchronously on a worker thread because the
+    ///     git calls beside it do (<see cref="HistoryBuilder" />). The token is checked before the
+    ///     statement and not threaded into it: DuckDB's synchronous <c>ExecuteNonQuery</c> takes none,
+    ///     so a build is cancellable between statements and not inside one.
+    /// </summary>
+    public static void Execute(this DuckDBConnection connection, string sql,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        cancellationToken.ThrowIfCancellationRequested();
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
     ///     The single number a <c>SELECT count(...)</c> answers with. Read as a <see cref="long" />
     ///     because DuckDB answers a count with one and a caller that wants an <see cref="int" /> knows
     ///     its own bound.

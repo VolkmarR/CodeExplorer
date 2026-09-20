@@ -105,6 +105,9 @@ of the paths the scope has ever recorded came from it: a directory rename moves 
 under it at once, and two files that drifted in over the years do not make somewhere else this
 scope's earlier name. It is transitive, so a path renamed twice has a chain, and capped, so a long
 one says how many earlier names it did not print.
+A chain is a property of the Index and not of a request, so the build walks every one of them and
+writes them down; a read is one query against that table rather than a walk that rediscovers the
+same chain per call.
 Renames are **signalled, never followed** — with one exception, _Co-Change_, which pairs an anchor
 over its earlier paths because nothing else answers coupling for them. A scope's own count stays literal — the History rule
 above holds unchanged — and the note is additive: the earlier path, the commits the whole chain

@@ -32,6 +32,12 @@ class of bug that cannot occur while they are written by the same build.
   rebuild.
 - **`lines.commit_id`**: the attribution materialized per line during the build, so the read path
   never joins — the same reasoning ADR-0003 gives for `files.qualified_path`.
+- **`path_lineage`**: what every path was called before, one row per hop of the chain, derived from
+  `commit_files.old_path` by the same build (#148). It is derived rather than walked, so a refresh
+  recomputes it instead of inheriting it, and it is not among the tables a new shadow carries over.
+  It is still in the durable copy, which is a different mechanism: a restore has no build to
+  recompute it, and an index restored without it would stop saying what a scope was called before —
+  silently, because a missing chain and a path nobody renamed read the same.
 
 Per-line attribution is a column and not a table. Blame is run-structured by construction, so on a
 table already sorted by file it is long runs of one value and DuckDB's RLE leaves almost nothing;
@@ -83,16 +89,15 @@ Attribution answers the ownership question and is honest about the other one; th
   Every project's durable copy is discarded and rebuilt from git, and that rebuild is now a full
   clone of every repository in it. Version 4 followed when attribution moved from blob keying to
   slug-and-path keying; the same rule, a rebuild and no migration, and by then a rebuild was cheap.
-- **Every path-scoped history call now scans `commit_files` once more, and the scans are the price of
-  a signal nobody has to ask for.** Resolving a scope's previous path is a `GROUP BY` over
-  `commit_files` joined to `commits`, and there is no index on `path` — so a project that renamed
-  nothing pays a scan per scoped call to learn that. An opt-in `follow` argument would cost nothing
-  and help only the agent that already suspects a rename, which is not the agent that needs help: the
-  measured failure was an agent given 9 commits for a directory with 1,252 and no reason to look
-  further. The scan is bounded by the same table the churn ranking and the co-change pairing already
-  walk on every call, and it runs only where a path was named — an unscoped log or ranking pays
-  nothing. If it ever stops being affordable, the answer is an index on `commit_files(path)` or a
-  per-repository table of rename prefixes built once by the walk, not an argument.
+- **A path-scoped history call used to scan `commit_files` up to seventeen times, and the build now
+  pays that once instead.** Resolving a scope's previous path is a `GROUP BY` over `commit_files`
+  joined to `commits`, and there is no index on `path`; walked hop by hop, that was two scans per
+  hop and a combined count at the end, per call, for a chain that cannot change between calls. An
+  opt-in `follow` argument would have cost nothing and helped only the agent that already suspects a
+  rename, which is not the agent that needs help: the measured failure was an agent given 9 commits
+  for a directory with 1,252 and no reason to look further. So the answer was the one this entry
+  named rather than the argument — a table of rename chains built once by the walk (`path_lineage`,
+  #148). A scoped call reads one row per hop from it, and a project that renamed nothing reads none.
 - **A change to a history table now costs a full re-walk per project, and that is the price of
   carrying them over.** These three tables are the only ones a refresh inherits rather than rebuilds,
   and they are inherited column for column from whichever copy is at hand — the durable one, or the
@@ -100,6 +105,9 @@ Attribution answers the ownership question and is honest about the other one; th
   did not write it: the insert would be short, and where the shapes happened to line up the carried
   rows would be blind to whatever the new column records, which is a quiet wrong answer rather than a
   failure. Both copies are therefore refused on the same `SchemaVersion` test, and the next refresh
-  walks every commit again. Version 7, which added `commit_files.old_path`, is the first to pay it;
-  the walk it costs is the one ADR-0007 measured at 32 s for a 4,300-commit repository, once per
+  walks every commit again. Version 7, which added `commit_files.old_path`, was the first to pay it,
+  and version 8, which added `path_lineage`, pays it again for a table it does not even carry — the
+  test is on the whole schema, because a version meaning "the history tables in particular" would be
+  a second version number to keep honest. The walk it costs is the one ADR-0007 measured at 32 s for
+  a 4,300-commit repository, once per
   project, and it is user-visible on the first refresh after a deploy.
