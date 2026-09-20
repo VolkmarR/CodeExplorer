@@ -188,5 +188,125 @@ public sealed class ProjectIndexTests : IDisposable
         Assert.Contains("LFS", skipped);
     }
 
+    /// <summary>
+    ///     Every line ending a repository can hold, pinned (#149). Ingest split content a character at
+    ///     a time through a string builder and now slices on the newline, so the three cases the old
+    ///     loop settled by accident are written down: a CRLF ending is dropped, a lone CR is dropped
+    ///     where it stands rather than broken on, and a trailing newline ends the last line instead of
+    ///     starting an empty one.
+    ///     Asserted against the stored lines and not against a helper, because the licence for the
+    ///     rewrite was that a file indexed before and after holds the same rows.
+    /// </summary>
+    [Fact]
+    public async Task Ingest_reads_crlf_lone_cr_and_a_trailing_newline_the_way_it_always_has()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["windows.txt"] = "first\r\nsecond\r\n",
+                // Classic Mac: no LF anywhere, so the whole file is one line with the CRs dropped.
+                ["mac.txt"] = "first\rsecond\rthird",
+                // A CR inside a line, and a last line with no newline after it.
+                ["mixed.txt"] = "a\rb\r\nc",
+                // Nothing but a carriage return: the old loop never started a line for it.
+                ["stray.txt"] = "\r"
+            }
+        });
+
+        Assert.Equal(["first", "second"], await LinesOfAsync(host, "one/windows.txt"));
+        Assert.Equal(["firstsecondthird"], await LinesOfAsync(host, "one/mac.txt"));
+        Assert.Equal(["ab", "c"], await LinesOfAsync(host, "one/mixed.txt"));
+        Assert.Empty(await LinesOfAsync(host, "one/stray.txt"));
+
+        // The line count on the file row is the same count, so the tree and the content agree.
+        var counts = await host.ScalarsAsync("alpha",
+            "SELECT line_count::VARCHAR FROM files ORDER BY qualified_path");
+        Assert.Equal(["1", "2", "0", "2"], counts);
+    }
+
+    /// <summary>
+    ///     Two projects' reads do not queue behind each other (#149). <c>ATTACH</c> belongs to the
+    ///     DuckDB instance, so one semaphore serialises it across every project, and a lease took that
+    ///     semaphore before it had even looked at whether the project was attached — which made every
+    ///     read of every project wait on every other project's.
+    ///     Asserted on the counter rather than on a stopwatch: a timing assertion on a machine running
+    ///     the rest of this suite in parallel proves nothing, and the counter says the exact thing the
+    ///     criterion asks for. Both projects are attached first, because the first attach of each is
+    ///     the one that legitimately takes the gate.
+    /// </summary>
+    [Fact]
+    public async Task Reads_of_an_attached_project_take_no_instance_wide_gate()
+    {
+        // Slugs of this test's own. A metric listener is process-wide and xunit runs classes in
+        // parallel, so a count over every project would be a count of what the rest of the suite was
+        // attaching at the time.
+        using var probe = new TelemetryProbe(GateOne);
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync(GateOne, Repository("class Alpha;\n"));
+        await host.IndexedProjectAsync(GateTwo, Repository("class Beta;\n"));
+        await using var alpha = await host.ConnectAsync(GateOne);
+        await using var beta = await host.ConnectAsync(GateTwo);
+        await TestHost.CallAsync(alpha, "repo_info", []);
+        await TestHost.CallAsync(beta, "repo_info", []);
+
+        // Both projects are attached by now, and getting them there is what the gate is for — so the
+        // count is not expected to be zero here. It is read as the baseline, and it being above zero
+        // is what says the instrument below is one that fires rather than one nobody wired up.
+        int gated = Gated(probe);
+        Assert.True(gated > 0, "the first attach of each project should have taken the gate");
+
+        // Through MCP, which is the layer the criterion names: a tool call is what an agent makes, and
+        // it is the path that takes the lease along with everything else a call carries.
+        await Task.WhenAll(Enumerable.Range(0, 16).Select(i =>
+            Task.Run(() => TestHost.CallAsync(i % 2 == 0 ? alpha : beta, "repo_info", []))));
+
+        Assert.Equal(gated, Gated(probe));
+    }
+
+    private const string GateOne = "gate-one";
+    private const string GateTwo = "gate-two";
+
+    private static int Gated(TelemetryProbe probe) =>
+        probe.Measurements.Count(m => m.Instrument == Telemetry.AttachGate
+                                      && m.Tags.GetValueOrDefault(Telemetry.ProjectTag) is GateOne or GateTwo);
+
+    /// <summary>
+    ///     A lease hands its connection back rather than closing it, so a swap has to empty the pool it
+    ///     went into: the catalog those connections are bound to is detached and the file replaced
+    ///     underneath them (#149). A read after the swap must see the new index, not fail on a stale
+    ///     binding — which is what a pooled connection the swap forgot would give it.
+    /// </summary>
+    [Fact]
+    public async Task A_swap_empties_the_pool_so_the_next_read_sees_the_new_index()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "one",
+            host.CreateGitRepository("one", new Dictionary<string, string> { ["a.cs"] = "class Alpha;\n" }));
+        await host.RefreshAsync("alpha");
+
+        // Several reads first, so the pool holds connections bound to the index about to be replaced.
+        for (int i = 0; i < 6; i++)
+            Assert.Equal(["one/a.cs"], await host.ScalarsAsync("alpha", "SELECT qualified_path FROM files"));
+
+        host.CommitToGitRepository("one", new Dictionary<string, string> { ["b.cs"] = "class Beta;\n" });
+        await host.RefreshAsync("alpha");
+
+        for (int i = 0; i < 6; i++)
+            Assert.Equal(["one/a.cs", "one/b.cs"],
+                await host.ScalarsAsync("alpha", "SELECT qualified_path FROM files ORDER BY qualified_path"));
+    }
+
+    private static Dictionary<string, Dictionary<string, string>> Repository(string content) =>
+        new() { ["one"] = new() { ["a.cs"] = content } };
+
+    private static Task<List<string>> LinesOfAsync(TestHost host, string qualifiedPath) =>
+        host.ScalarsAsync("alpha", $"""
+                                    SELECT l.content FROM lines l JOIN files f USING (file_id)
+                                    WHERE f.qualified_path = '{qualifiedPath}' ORDER BY l.line_number
+                                    """);
+
     private TestHost Start(SearchEngine engine) => _host = new TestHost(engine);
 }
