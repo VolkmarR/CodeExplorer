@@ -579,6 +579,31 @@ public sealed class IndexReader : IDisposable
         return await command.ScalarAsync(cancellationToken) is true;
     }
 
+    /// <summary>
+    ///     Whether any commit recorded a path at or beneath this repository-relative path — the
+    ///     history-aware sibling of <see cref="HoldsPathAsync" />, which asks the current file tree.
+    ///     The two are separate on purpose. A path a later commit deleted or renamed away has commits
+    ///     to read and nothing to open, so the history tools scope to it and the read side
+    ///     (<c>read_file</c>, <c>list_tree</c>, <c>glob</c>) keeps refusing it: widening the one check
+    ///     both use would have <c>read_file</c> offer a file that is not there (#132).
+    ///     Matched on the path a commit recorded, the way every history scope is, and with
+    ///     <c>starts_with</c> rather than GLOB or LIKE for the reason <see cref="HoldsPathAsync" />
+    ///     gives: the path is a name, not a pattern (#122).
+    /// </summary>
+    public async Task<bool> RecordsPathAsync(string repositorySlug, string pathInRepository,
+        CancellationToken cancellationToken)
+    {
+        if (pathInRepository.Length == 0) return true;
+        using var command = Connection.Query("""
+                                             SELECT count(*) > 0
+                                             FROM commit_files cf JOIN commits c USING (commit_id)
+                                             WHERE c.repo_slug = $r
+                                               AND (cf.path = $p OR starts_with(cf.path, $p || '/'))
+                                             """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
+        return await command.ScalarAsync(cancellationToken) is true;
+    }
+
     /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
     private const int MaxSuggestions = 5;
 

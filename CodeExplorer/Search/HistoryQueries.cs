@@ -77,11 +77,16 @@ public sealed record LogRequest(string? Repository, int Limit, int Page, string?
 ///     The scope is matched on the path a commit recorded, so it begins where a file was last renamed
 ///     — the caveat <c>file_history</c> already states, and one every reply here repeats: a
 ///     reorganised directory would otherwise read as a quiet one.
+///     <see cref="AtHead" /> is why this is a record and not a bool: a path history recorded and HEAD
+///     no longer holds is a scope with commits and nothing to open, and a reply that did not say so
+///     would offer an agent a file that is not there (#132). It is the same fact <c>hot_files</c> and
+///     <c>commit_files</c> mark on a ranked row, and it is marked in their words.
 /// </summary>
 /// <param name="Spelled">The qualified path, respelled by the project (ADR-0006).</param>
 /// <param name="RepositorySlug">The repository the path resolved to.</param>
 /// <param name="PathInRepository">The path inside it; empty is the repository's own root.</param>
-public sealed record PathScope(string Spelled, string RepositorySlug, string PathInRepository);
+/// <param name="AtHead">Whether the current file tree still holds anything at or under it.</param>
+public sealed record PathScope(string Spelled, string RepositorySlug, string PathInRepository, bool AtHead = true);
 
 /// <summary>
 ///     What an <c>author</c> filter matched, carried beside the page it narrowed so a reply can say
@@ -736,6 +741,9 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
     ///     reply that shared one sentence for them would have an agent take a typo for a quiet module
     ///     (CODING_STANDARDS, Errors). The slug-prefix diagnosis is the reader's, so a path this
     ///     refuses is refused in the words read_file and list_tree use.
+    ///     "Holds" is asked of the current tree and of the recorded commit paths both, because a path a
+    ///     later commit deleted or renamed away is a scope with history and nothing to open — the third
+    ///     state, which was folded into the refusal until #132 and so read as a misspelling.
     /// </summary>
     private static async Task<(PathScope? Scope, Problem? Unresolved)> ScopeAsync(IndexReader index, string? path,
         CancellationToken cancellationToken)
@@ -757,13 +765,18 @@ public sealed class HistoryQueries(ProjectIndexes indexes, IConfiguration config
             return (null, new Problem(
                 $"repo '{scoped.Slug}' and path '{directory.QualifiedPath}' name different repositories, so nothing can be in both. Drop repo, or pass a path inside '{scoped.Slug}'."));
 
-        if (!await index.HoldsPathAsync(repository.Slug, directory.PathInRepository, cancellationToken))
+        // Three states, not two. A path the tree holds is live; a path the tree does not hold but a
+        // commit recorded is history with nothing left to open, which hot_files already ranks and
+        // which these tools refused as a typo until #132; a path in neither is the refusal below.
+        // Which of the first two matched is carried on the scope, because the answer has to say it.
+        bool atHead = await index.HoldsPathAsync(repository.Slug, directory.PathInRepository, cancellationToken);
+        if (!atHead && !await index.RecordsPathAsync(repository.Slug, directory.PathInRepository, cancellationToken))
             return (null, new Problem(
                 await index.DirectorySlugPrefixAdviceAsync(path, cancellationToken)
                 ?? $"'{directory.QualifiedPath}' names nothing in this index — no file is at that path and none is under it. Use glob or list_tree to locate it.",
                 ProblemKind.Missing));
 
-        return (new PathScope(directory.QualifiedPath, repository.Slug, directory.PathInRepository), null);
+        return (new PathScope(directory.QualifiedPath, repository.Slug, directory.PathInRepository, atHead), null);
     }
 
     /// <summary>

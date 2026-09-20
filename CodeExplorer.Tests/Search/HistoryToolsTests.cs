@@ -1576,6 +1576,145 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
+    ///     hot_files ranks a path a later commit deleted, and git_log and authors used to refuse the same
+    ///     path in the same session — in the words reserved for a path the index never heard of, which
+    ///     tells an agent it made a typo (#132). Three tools, one index, one path: they agree it exists.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_and_authors_scope_to_a_path_that_history_records_and_head_no_longer_holds()
+    {
+        await BuildChurnProjectAsync("deleted", withSecondRepository: false);
+        await using var client = await _host.ConnectAsync("deleted");
+
+        string ranked = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30 });
+        Assert.Contains("one/src/Gone.cs  (no longer at HEAD)", ranked, StringComparison.Ordinal);
+
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Gone.cs" });
+        Assert.DoesNotContain("names nothing in this index", log, StringComparison.Ordinal);
+        Assert.Contains("under 'one/src/Gone.cs'", log, StringComparison.Ordinal);
+        // Its own commits, newest first, and nothing from the file beside it.
+        Assert.True(log.IndexOf("Drop the dead file", StringComparison.Ordinal)
+                    < log.IndexOf("Add the module", StringComparison.Ordinal));
+        Assert.Contains("grace@example.invalid", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("Fix the check", log, StringComparison.Ordinal);
+        Assert.Contains("Nothing is at 'one/src/Gone.cs' now (no longer at HEAD)", log, StringComparison.Ordinal);
+
+        string owners = await TestHost.CallAsync(client, "authors",
+            new Dictionary<string, object?> { ["path"] = "one/src/Gone.cs" });
+        Assert.DoesNotContain("names nothing in this index", owners, StringComparison.Ordinal);
+        Assert.Contains("ada@example.invalid", owners, StringComparison.Ordinal);
+        Assert.Contains("grace@example.invalid", owners, StringComparison.Ordinal);
+        Assert.Contains("Nothing is at 'one/src/Gone.cs' now (no longer at HEAD)", owners, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The other two halves of the same case: a path a rename rather than a deletion took away, and a
+    ///     directory prefix rather than an exact file. A moved folder is the scope an agent asks about
+    ///     most and the one a refusal misleads it about worst — "one/legacy names nothing" reads as a
+    ///     folder that never existed rather than one whose whole history is still here.
+    /// </summary>
+    [Fact]
+    public async Task A_directory_a_rename_emptied_is_scopeable_by_its_recorded_path()
+    {
+        await BuildChurnProjectAsync("moved", withSecondRepository: false);
+        // A rename as git records one, written the way Commit_files_marks_a_path_a_later_commit_renamed_away
+        // writes it: the content at the new path, and then the old path gone.
+        _host.CommitToGitRepositoryAs("moved-one",
+            new Dictionary<string, string> { ["legacy/Mover.cs"] = "m\n" },
+            "Add the legacy helper", "Ada", "ada@example.invalid", 20000);
+        _host.CommitToGitRepositoryAs("moved-one",
+            new Dictionary<string, string> { ["src/Mover.cs"] = "m\n" },
+            "Move the helper", "Grace", "grace@example.invalid", 20001);
+        _host.RemoveInGitRepositoryAs("moved-one", ["legacy/Mover.cs"], "Move the helper, second half", "Grace",
+            "grace@example.invalid", 20002);
+        await _host.RefreshAsync("moved");
+
+        await using var client = await _host.ConnectAsync("moved");
+
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/legacy" });
+        Assert.Contains("under 'one/legacy'", log, StringComparison.Ordinal);
+        Assert.Contains("Add the legacy helper", log, StringComparison.Ordinal);
+        Assert.Contains("Move the helper, second half", log, StringComparison.Ordinal);
+        Assert.Contains("Nothing is at 'one/legacy' now (no longer at HEAD)", log, StringComparison.Ordinal);
+
+        string owners = await TestHost.CallAsync(client, "authors",
+            new Dictionary<string, object?> { ["path"] = "one/legacy" });
+        Assert.Contains("ada@example.invalid", owners, StringComparison.Ordinal);
+        Assert.Contains("grace@example.invalid", owners, StringComparison.Ordinal);
+        Assert.Contains("Nothing is at 'one/legacy' now (no longer at HEAD)", owners, StringComparison.Ordinal);
+
+        // A path a live scope covers says nothing about HEAD, so the note marks the call it is about.
+        string live = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src" });
+        Assert.DoesNotContain("no longer at HEAD", live, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     Four states, four sentences, asserted against each other rather than one at a time: a live
+    ///     scope, a scope history records and HEAD has lost, a live scope nothing was committed under,
+    ///     and a path this index never heard of. Folding any two of them into one sentence is the fault
+    ///     #132 is (CODING_STANDARDS, Errors).
+    /// </summary>
+    [Fact]
+    public async Task The_four_path_scope_answers_are_four_different_sentences()
+    {
+        await BuildChurnProjectAsync("states", withSecondRepository: false);
+        await _host.ExecuteAsync("states", "DELETE FROM commit_files WHERE path LIKE 'docs/%'");
+        await using var client = await _host.ConnectAsync("states");
+
+        async Task<string> AuthorsUnder(string path) => await TestHost.CallAsync(client, "authors",
+            new Dictionary<string, object?> { ["path"] = path });
+
+        string live = await AuthorsUnder("one/src/Hot.cs");
+        string historical = await AuthorsUnder("one/src/Gone.cs");
+        string quiet = await AuthorsUnder("one/docs");
+        string nowhere = await AuthorsUnder("one/nowhere");
+
+        Assert.Contains("under 'one/src/Hot.cs', most commits first", live, StringComparison.Ordinal);
+        Assert.DoesNotContain("no longer at HEAD", live, StringComparison.Ordinal);
+
+        Assert.Contains("under 'one/src/Gone.cs', most commits first", historical, StringComparison.Ordinal);
+        Assert.Contains("no longer at HEAD", historical, StringComparison.Ordinal);
+        Assert.DoesNotContain("No commits are recorded", historical, StringComparison.Ordinal);
+        Assert.DoesNotContain("names nothing in this index", historical, StringComparison.Ordinal);
+
+        Assert.Contains("No commits are recorded under 'one/docs', so no authors are", quiet,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("no longer at HEAD", quiet, StringComparison.Ordinal);
+
+        Assert.Contains("names nothing in this index", nowhere, StringComparison.Ordinal);
+        Assert.Contains("glob or list_tree", nowhere, StringComparison.Ordinal);
+        Assert.DoesNotContain("no longer at HEAD", nowhere, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The widened check is the history tools' alone. A historical path has commits to list and
+    ///     nothing to open, so the read side must go on refusing it — a read_file that offered it would
+    ///     be the same false promise in the opposite direction.
+    /// </summary>
+    [Fact]
+    public async Task The_read_side_still_refuses_a_path_only_history_records()
+    {
+        await BuildChurnProjectAsync("readside", withSecondRepository: false);
+        await using var client = await _host.ConnectAsync("readside");
+
+        string read = await TestHost.CallAsync(client, "read_file",
+            new Dictionary<string, object?> { ["paths"] = Paths("one/src/Gone.cs") });
+        Assert.DoesNotContain("gone\n", read, StringComparison.Ordinal);
+
+        string listed = await TestHost.CallAsync(client, "list_tree",
+            new Dictionary<string, object?> { ["path"] = "one/src" });
+        Assert.DoesNotContain("Gone.cs", listed, StringComparison.Ordinal);
+
+        string globbed = await TestHost.CallAsync(client, "glob",
+            new Dictionary<string, object?> { ["glob"] = "**/Gone.cs" });
+        Assert.DoesNotContain("one/src/Gone.cs", globbed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     `repo` and `path` naming different repositories cannot both hold, and the quiet answer that
     ///     falls out of it — "no commits under 'one/src'" about a busy folder — is exactly the false
     ///     negative #118 exists to stop. It is refused, naming both.
