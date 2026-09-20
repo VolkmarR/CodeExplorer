@@ -1,10 +1,9 @@
-import { useEffect } from 'react'
-import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { RefreshCw } from 'lucide-react'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { PageCard } from '@/components/PageCard'
 import { IndexStatus } from '@/features/projects/IndexStatus'
-import { invalidateProject, projectQuery } from '@/features/projects/queries'
+import { projectQuery } from '@/features/projects/queries'
 import { RefreshProgress } from '@/features/refresh/RefreshProgress'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -32,17 +31,15 @@ export function ProjectCard({
 }) {
   const { data: project } = useSuspenseQuery(projectQuery(slug))
   const { data: status } = useSuspenseQuery(refreshStatusQuery(slug))
-  const queryClient = useQueryClient()
 
   const running = isRefreshRunning(status)
   const refresh = useRefreshProject(slug)
 
-  // The index only changes when a refresh finishes, and the status is the only thing that says so.
-  // Keyed on the state alone: a second refresh passes through Queued and Running on its way back to
-  // Succeeded, so this fires once per refresh rather than on every poll reporting the same one.
-  useEffect(() => {
-    if (status.state === 'Succeeded') void invalidateProject(queryClient, slug)
-  }, [status.state, queryClient, slug])
+  // Nothing here invalidates the project when a refresh finishes, and that is deliberate. This card
+  // watched the status for `Succeeded` and threw the project's cache away whenever it saw it — which
+  // is from the end of one refresh until the start of the next, so every visit to either half of the
+  // project discarded every answer the index had already given. `useRefreshWatcher`, in the sidebar
+  // that is mounted on every view, now does it on the transition instead and does it once.
 
   return (
     <PageCard

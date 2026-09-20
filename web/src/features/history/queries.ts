@@ -5,12 +5,14 @@ import { projectKey } from '@/lib/queryKeys'
 
 /**
  * A page of the change log, keyed under the project so the build that appends commits invalidates it
- * without this feature having to hear about builds.
+ * without this feature having to hear about builds — and fresh until one does, like the commits it
+ * lists: nothing but a build can add to the log.
  */
 export function commitsQuery(project: string, parameters: HistoryParameters) {
   return queryOptions({
     queryFn: () => api.commits(project, parameters.page, parameters.repository),
     queryKey: [...projectKey(project), 'commits', parameters],
+    staleTime: Infinity,
   })
 }
 

@@ -34,9 +34,12 @@ const INTERVALS = {
  * to zero, so there is no connection to hold open and no SignalR or SSE to hold it with. The
  * interval is set only while there is something to watch, so an idle project page makes no requests.
  *
- * `watcher` names who is asking, because the two want different rates and they share a cache entry:
- * whichever is mounted decides, and on the project page — where both are — the faster one wins,
- * which is the one showing the counter.
+ * `watcher` names who is asking, because the two want different rates. They share the cache entry
+ * but not the timer: every observer schedules an interval of its own (`QueryObserver` keeps one
+ * `refetchIntervalId` each), so on the project page — the one view where both are mounted — the two
+ * run side by side and the requests are the sum rather than the faster of them. That is a poll and a
+ * fifth of a poll a second on the one page that is open while a rebuild is watched, which is the
+ * rate the counter needs anyway; nowhere else is more than one watcher mounted.
  */
 export function refreshStatusQuery(slug: string, watcher: keyof typeof INTERVALS = 'page') {
   return queryOptions({
