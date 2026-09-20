@@ -583,9 +583,9 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
                  - The window ends at the newest commit in the index, not at today, and the reply says which dates it covered.
                  - Commits that touched a great many paths at once are left out of the pairing: one reformat or vendor drop pairs every path it touched with every other and would swamp the answer. The reply says when that happened, and where a file has nothing but such commits it says there is no usable co-change history rather than that the file moves alone.
                  - Pairing never crosses a repository, because a commit does not.
-                 - History is matched by path, so it begins where the file was last renamed.
-                 - A path HEAD no longer holds is refused: an anchor a rename severed would report the coupling of a path, read as the coupling of the file that replaced it. git_log and file_history still list its commits.
-                 - An anchor that reached its path by a rename says so, naming the earlier path and the commits the whole chain accounts for. It redirects to git_log and file_history for it, because the earlier path is one this tool refuses.
+                 - IMPORTANT: this is the one read here that FOLLOWS a rename instead of signalling it. An anchor that reached its path by a move is paired over its earlier paths too, so coupling survives the move and the ranking is one ranking. Every other path-scoped tool — git_log, authors, file_history, hot_files — counts only what its own path recorded, and says so; do not carry this tool's behaviour across to them.
+                 - In the commit that moved the anchor, the files that moved WITH it are not counted as coupled — "these moved together" is one commit and not a relationship. Files that commit actually edited are counted, because a rename that updates its callers is the strongest coupling evidence there is.
+                 - A path HEAD no longer holds is refused. The coupling of a file that is gone is a question about a path rather than about a file you can open; git_log and file_history still list its commits.
                  """)]
     public async Task<string> CoChanged(
         [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
@@ -611,7 +611,8 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     ///     path HEAD no longer holds by design (#136), and a previous path is one by definition.
     /// </summary>
     private static string Coupling(CoChangeAnswer answer, string projectSlug) =>
-        WithPreviousPath(CouplingBody(answer, projectSlug), answer.Lineage, RedirectsFromCoChanged);
+        WithPreviousPath(CouplingBody(answer, projectSlug), answer.Lineage,
+            SpansTheChain(answer.Coupling.Files.Count > 0));
 
     private static string CouplingBody(CoChangeAnswer answer, string projectSlug)
     {
@@ -646,7 +647,10 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
             return $"No other file was changed by any of the {coupling.Paired} "
                    + $"{ToolReply.Plural(coupling.Paired, "commit")} that touched {spelled} between "
                    + $"{window.Describe()}. It moves alone in the history that was imported, which is evidence "
-                   + $"and not proof: that history begins where the file was last renamed."
+                   // Not "that history begins where the file was last renamed" any more: this tool's
+                   // pairing follows the chain (#143), so a rename is the one explanation the caller
+                   // can rule out here — and offering it would send them after something already done.
+                   + "and not proof: the window is what bounds it, and only commits recorded there were paired."
                    + (coupling.Excluded == 0 ? "" : " " + ExcludedNote(coupling, answer.MaxCommitPaths));
 
         string files = ToolReply.Plural(coupling.Files.Count, "file");
@@ -709,6 +713,9 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     ///     without saying so is the one that misleads, and the number is also how a caller learns the
     ///     ceiling is wrong for their repository.
     ///     The sentence carries no leading separator, because the two callers want different ones.
+    ///     One reason and one remedy, still. Following renames (#143) drops the paths a move carried
+    ///     rather than the commit that carried them, so a rename never lands in this count — which is
+    ///     what lets the remedy stay attached to the only cause that has one.
     /// </summary>
     private static string ExcludedNote(CoChanges coupling, int maxCommitPaths)
     {
@@ -819,25 +826,47 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     ///     an agent meets one story from both directions.
     /// </summary>
     private static Func<PreviousPath, string> Reads(string tool) =>
-        previous => $"Call {tool} with path=\"{previous.Spelled}\" to read it.";
+        previous => Literal + $"Call {tool} with path=\"{previous.Spelled}\" to read it.";
 
     /// <inheritdoc cref="Reads" />
     private static readonly Func<PreviousPath, string> RanksPrevious =
-        previous => $"Call hot_files with directory=\"{previous.Spelled}\" to rank it.";
+        previous => Literal + $"Call hot_files with directory=\"{previous.Spelled}\" to rank it.";
+
+    /// <summary>
+    ///     What the count above the note means for the four tools that do not follow a rename. It is
+    ///     theirs and not the note's, because <c>co_changed</c> is now the one tool for which it is
+    ///     false (#143).
+    /// </summary>
+    private const string Literal =
+        "the count above is this path's alone, because scoping is by the path each commit recorded "
+        + "and renames are signalled here, not followed. ";
 
     /// <inheritdoc cref="Reads" />
     /// <remarks>
-    ///     It says what this tool is not the read for, and never why. "Which HEAD no longer holds" was
-    ///     the obvious reason and is not checked: a partial rename, or a new file later created at the
-    ///     old path, leaves HEAD holding it — and an agent told a false fact is steered off a call that
-    ///     would have worked. What holds either way is that coupling reported for the earlier path is
-    ///     that path's and not this file's.
+    ///     No longer a redirect (#143). It sent the caller to git_log and file_history while the earlier
+    ///     path was unpairable here; now the pairing spans the chain, so sending anyone elsewhere would
+    ///     be telling them to fetch what they already have. What it says instead is that this answer is
+    ///     wider than every other path-scoped one, because a reader who knows the rule would otherwise
+    ///     read this one as literal too.
+    ///     Two forms, chosen by whether there is a ranking. "The ranking above spans that chain" is
+    ///     false on the thin branches — a window that reached no commit, or a file whose every commit
+    ///     was a mass change — and those replies end by telling the caller to raise <c>days</c> or to
+    ///     read <c>file_history</c>. A note claiming there was nothing more to do would contradict the
+    ///     sentence directly above it.
+    ///     Both forms say "within the window", because the pairing is still bounded by it: a file moved
+    ///     two years ago and asked about over ninety days has a chain that no commit in the window
+    ///     reaches, and a flat claim that the earlier path was paired in would be wrong exactly there.
     /// </remarks>
-    private static readonly Func<PreviousPath, string> RedirectsFromCoChanged =
-        previous =>
-            $"co_changed is not the read for an earlier path — its coupling would be '{previous.Spelled}''s "
-            + $"and not this file's. Call git_log or file_history with path=\"{previous.Spelled}\" to read "
-            + "its history.";
+    private static Func<PreviousPath, string> SpansTheChain(bool ranked) =>
+        previous => ranked
+            ? $"The ranking above spans that chain, within the window it names — commits recorded under "
+              + $"'{previous.Spelled}' are paired into it — so there is no second call to make. co_changed is "
+              + "the one read here that follows a rename rather than signalling it; every other path-scoped "
+              + "answer counts what its own path recorded."
+            : $"The pairing did span that chain, within the window above: commits recorded under "
+              + $"'{previous.Spelled}' were looked at too, so what is missing here is not the rename. "
+              + "co_changed is the one read here that follows a rename rather than signalling it; every "
+              + "other path-scoped answer counts what its own path recorded.";
 
     /// <summary>
     ///     What a scope was called before, said without being asked (#131). A scope whose history was
@@ -851,11 +880,15 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
     ///     what it was.
     /// </summary>
     /// <param name="lineage">The chain the scope's query found, or null where there is none.</param>
-    /// <param name="call">
-    ///     The call to spell out against the previous path, already written — its own tool's for the
-    ///     four that answer for a historical path, and another's for <c>co_changed</c>, which does not.
+    /// <param name="tail">
+    ///     Everything after the combined total: what the count above means, and what to do about it.
+    ///     Both halves belong to the caller and not to this method, because they differ in kind and not
+    ///     only in wording — four tools report a literal count and name the call that reads the rest,
+    ///     while <c>co_changed</c> reports a count already taken across the chain and has nothing to
+    ///     send anyone to. A fixed "the count above is this path's alone" here would have contradicted
+    ///     the sentence the caller appended straight after it (#143).
     /// </param>
-    private static string PreviousPathNote(PathLineage? lineage, Func<PreviousPath, string> call)
+    private static string PreviousPathNote(PathLineage? lineage, Func<PreviousPath, string> tail)
     {
         if (lineage is not { Previous.Count: > 0 } chain) return "";
 
@@ -881,9 +914,7 @@ internal sealed class HistoryTools(IHttpContextAccessor httpContextAccessor, His
         int total = chain.CombinedCommits;
         text.Append(CultureInfo.InvariantCulture,
             $"{total} {ToolReply.Plural(total, "commit")} {ToolReply.Plural(total, "is", "are")} recorded across the whole chain; ");
-        text.Append("the count above is this path's alone, because scoping is by the path each commit "
-                    + "recorded and renames are signalled here, not followed. ");
-        text.Append(call(first));
+        text.Append(tail(first));
         return text.ToString();
     }
 

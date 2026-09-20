@@ -47,9 +47,20 @@ over the chain, not two. Nobody has produced one. The evidence that motivated #1
 way: the failure was *silence*, an agent told 9 commits for a directory with 1,252 and given no
 reason to look further, and silence is what the signal fixed.
 
-Note that this does not cover `co_changed`. Coupling is the one read the previous-path signal can
-name a gap in and point nowhere for, because `git_log` and `file_history` do not answer it — that is
-its own question, tracked separately, and it is not this rejection.
+## The one exception: `co_changed`
+
+This rejection never covered `co_changed`, and #143 has since made it the exception. Its pairing
+**does** follow the anchor's rename chain, so coupling survives a move.
+
+The reason it is carved out rather than an inconsistency: every other path-scoped read has somewhere
+to send a caller for the earlier path — `git_log`, `authors`, `hot_files` and `file_history` all
+answer for one — so the signal can name the gap and point at the fix. Nothing answers coupling. It
+was the single read that could name a gap and point nowhere, which is what made a redirect useless
+there and a merged ranking worth the exception.
+
+The carve-out is stated in `co_changed`'s tool description and in `CONTEXT.md` under **Co-Change**,
+so an agent meets it where it applies rather than inferring it. It does not widen: counts and scopes
+in every other tool stay literal, which is what the rest of this file is about.
 
 ## Prior requests
 

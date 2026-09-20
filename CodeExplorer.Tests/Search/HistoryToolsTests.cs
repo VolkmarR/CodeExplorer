@@ -2014,13 +2014,13 @@ public sealed class HistoryToolsTests : IDisposable
         Assert.Contains("Call file_history with path=\"one/model/Contact.cs\" to read it.", listed,
             StringComparison.Ordinal);
 
-        // co_changed carries the signal and redirects, because it refuses a path HEAD has lost (#136).
+        // co_changed carries the signal and does not redirect: since #143 its pairing spans the chain,
+        // so the ranking above the note already covers the earlier path.
         string coupled = await TestHost.CallAsync(client, "co_changed",
             new Dictionary<string, object?> { ["path"] = "one/src/Model/Contact.cs", ["days"] = 3650 });
         Assert.Contains("its content was at 'one/model/Contact.cs' before", coupled, StringComparison.Ordinal);
-        Assert.Contains("co_changed is not the read for an earlier path", coupled, StringComparison.Ordinal);
-        Assert.Contains("Call git_log or file_history with path=\"one/model/Contact.cs\"", coupled,
-            StringComparison.Ordinal);
+        Assert.Contains("The ranking above spans that chain", coupled, StringComparison.Ordinal);
+        Assert.DoesNotContain("Call git_log or file_history", coupled, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2095,6 +2095,110 @@ public sealed class HistoryToolsTests : IDisposable
         Assert.DoesNotContain("This scope was renamed", log, StringComparison.Ordinal);
         // And in particular not the commit that never touched the model at all.
         Assert.DoesNotContain("Work somewhere else in src", log, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     Coupling survives a move (#143). A file renamed in the cutover is at HEAD, so co_changed
+    ///     answers it rather than refusing — and before this, its pairing saw only the post-rename
+    ///     slice, reported that the file moves alone, and sent the caller to git_log and file_history,
+    ///     neither of which answers coupling. It is the one read whose gap the previous-path signal
+    ///     could name and point nowhere for, so it is the one read that follows a rename.
+    /// </summary>
+    [Fact]
+    public async Task Co_changed_pairs_an_anchor_over_the_paths_it_was_renamed_from()
+    {
+        await BuildRenamedProjectAsync("coupled");
+        await using var client = await _host.ConnectAsync("coupled");
+
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model/Contact.cs", ["days"] = 3650 });
+
+        // The coupling it had before the move, which is all the coupling it has.
+        Assert.Contains("one/src/Api/Handler.cs", reply, StringComparison.Ordinal);
+        Assert.Contains("one/src/Odds/Helper.cs", reply, StringComparison.Ordinal);
+        // A counterpart recorded under its own pre-rename path is named there and marked, because that
+        // is where the commit recorded it and there is nothing at it now.
+        Assert.Contains("one/model/Order.cs  (no longer at HEAD)", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("moves alone", reply, StringComparison.Ordinal);
+
+        // The anchor's own earlier name is not a file it co-changed with. Asserted against the ranking
+        // rows and not the whole reply: the prose legitimately names the earlier path — twice, once to
+        // say what the anchor was called and once to say the ranking spans it — so "absent" is the
+        // wrong claim and "absent from the ranking" is the right one.
+        var ranked = reply.Split('\n').Where(line => line.Contains("shared commit", StringComparison.Ordinal))
+            .ToList();
+        Assert.NotEmpty(ranked);
+        Assert.DoesNotContain(ranked, line => line.Contains("one/model/Contact.cs", StringComparison.Ordinal));
+        // Solo.cs shares only the cutover with the anchor, and moving together is not coupling.
+        Assert.DoesNotContain("Solo.cs", reply, StringComparison.Ordinal);
+        // The cutover is dropped per path and not per commit, so it is still a paired commit and the
+        // ceiling's excluded-commits note — which has one cause and one remedy — does not fire.
+        Assert.DoesNotContain("left out of the pairing", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The pairing spans the whole chain the walk found, not the three hops a reply prints. The two
+    ///     are different lists — the cap is on what is readable, and the combined total beside it is
+    ///     taken over everything — so a ranking drawn from the printed list would contradict the number
+    ///     printed under it. Four renames, a cap of three, and a counterpart that only exists at the
+    ///     fourth hop: it ranks, or the pairing is reading the wrong list.
+    /// </summary>
+    [Fact]
+    public async Task The_pairing_spans_the_whole_chain_and_not_the_hops_a_reply_prints()
+    {
+        string source = _host.CreateEmptyGitRepository("deep-one");
+        _host.CommitToGitRepositoryAs("deep-one",
+            new Dictionary<string, string> { ["a/Thing.cs"] = "thing\n", ["a/Friend.cs"] = "friend\n" },
+            "Import the thing and its friend", "Ada", "ada@example.invalid", 40000);
+        foreach ((string from, string to, int minute) in new[]
+                 {
+                     ("a/Thing.cs", "b/Thing.cs", 40001), ("b/Thing.cs", "c/Thing.cs", 40002),
+                     ("c/Thing.cs", "d/Thing.cs", 40003), ("d/Thing.cs", "e/Thing.cs", 40004)
+                 })
+            _host.MoveInGitRepositoryAs("deep-one", new Dictionary<string, string> { [from] = to },
+                $"Move the thing to {to}", "Grace", "grace@example.invalid", minute);
+
+        await _host.CreateProjectAsync("deep");
+        await _host.AddRepositoryAsync("deep", "one", source);
+        await _host.RefreshAsync("deep");
+        await using var client = await _host.ConnectAsync("deep");
+
+        string reply = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/e/Thing.cs", ["days"] = 3650 });
+
+        // The cap bites: three hops printed, the fourth counted and said.
+        Assert.Contains("1 further earlier path not shown", reply, StringComparison.Ordinal);
+        // And the counterpart that only ever shared a commit at the fourth hop is ranked anyway.
+        Assert.Contains("one/a/Friend.cs", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The exception is `co_changed`'s alone. An agent that met a followed rename there and carried
+    ///     the assumption to its neighbours would read every other count as wider than it is, so the
+    ///     tools have to keep disagreeing on purpose — and say so.
+    /// </summary>
+    [Fact]
+    public async Task Only_co_changed_follows_a_rename_and_its_description_says_so()
+    {
+        await BuildRenamedProjectAsync("carveout");
+        await using var client = await _host.ConnectAsync("carveout");
+
+        var listed = (await client.ListToolsAsync(cancellationToken: Ct))
+            .ToDictionary(tool => tool.Name, tool => tool.Description ?? "", StringComparer.Ordinal);
+        Assert.Contains("the one read here that FOLLOWS a rename", listed["co_changed"], StringComparison.Ordinal);
+        foreach (string tool in new[] { "git_log", "authors", "file_history", "hot_files" })
+        {
+            // Each neighbour still states the recorded-path rule in its own words, and none of them
+            // claims to follow a rename.
+            Assert.Contains("begins where", listed[tool], StringComparison.Ordinal);
+            Assert.DoesNotContain("FOLLOWS a rename", listed[tool], StringComparison.Ordinal);
+        }
+
+        // The neighbours still count what their own path recorded: git_log scoped to the new path sees
+        // the cutover alone, whatever co_changed does.
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model", ["limit"] = 100 });
+        Assert.DoesNotContain("Add the contact feature", log, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2203,12 +2307,19 @@ public sealed class HistoryToolsTests : IDisposable
         _host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string> { ["src/Api/Handler.cs"] = "handler\nmore\n" },
             "Tighten the handler", "Grace", "grace@example.invalid", 30003);
+        // Alone in its own commit, so the only commit it ever shares with Contact.cs is the cutover.
+        // It is what says the rename is excluded from the pairing rather than merely diluted: a file
+        // that moved beside the anchor and nothing more must not rank as coupled to it.
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string> { ["model/Solo.cs"] = "solo\n" },
+            "Add the solo model", "Ada", "ada@example.invalid", 30004);
         // The cutover, as the real one arrived: one commit, every path renamed, no content changed.
         _host.MoveInGitRepositoryAs(project + "-one",
             new Dictionary<string, string>
             {
                 ["model/Contact.cs"] = "src/Model/Contact.cs",
-                ["model/Order.cs"] = "src/Model/Order.cs"
+                ["model/Order.cs"] = "src/Model/Order.cs",
+                ["model/Solo.cs"] = "src/Model/Solo.cs"
             },
             "Merged PR 39331: Moved Model to src\\Model", "Grace", "grace@example.invalid", 31000);
 
