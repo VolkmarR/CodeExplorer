@@ -45,14 +45,18 @@ export const xsharp = defineLanguage({
         regex: /\/\/[^\n]*|\/\*[\s\S]*?\*\/|&&[^\n]*|^[ \t]*\*[^\n]*/gm,
       },
       { className: 'string', regex: /e?"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/g },
-      // Preprocessor directives, which in X# also include `#command` and `#translate`.
+      // Preprocessor directives, which in X# also include `#command` and `#translate`. Both these
+      // rules fill rather than claim the whole span, for the reason the C# definition gives: the
+      // strings and comments inside them are already claimed, and all-or-nothing would hand back
+      // the entire directive over them. `#include "foo.ch"` is the common case here.
       {
         className: 'meta',
+        fill: true,
         regex:
           /^[ \t]*#(?:command|define|else|endif|endregion|ifn?def|include|region|translate|using|xcommand|xtranslate)\b[^\n]*/gim,
       },
       // `[Foo]` at the start of a line is an attribute; anywhere else it is an array index.
-      { className: 'meta', regex: /^[ \t]*\[[A-Za-z_][\w.]*[^\n]*\]/gm },
+      { className: 'meta', fill: true, regex: /^[ \t]*\[[A-Za-z_][\w.]*[^\n]*\]/gm },
       // `#SYMBOL` is a literal of its own in X#, not a preprocessor directive — those are anchored to
       // the start of a line above. It has to be claimed before the keyword and type patterns, or
       // `#Symbol` loses its name half to the `SYMBOL` type and the `#` is left stranded.

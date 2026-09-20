@@ -9,6 +9,15 @@ export type Pattern = {
   className: HighlightTokenClass | ((match: RegExpExecArray) => HighlightTokenClass)
   group?: number
   regex: RegExp
+  /**
+   * Colour whatever of the match is still free, instead of giving the whole match up when any of it
+   * is taken. For a rule that claims a span containing other code — an attribute or a preprocessor
+   * directive, which run after the strings and comments inside them have been claimed — all or
+   * nothing means nothing: `[Obsolete("gone")]` lost its whole span to the four characters of
+   * `"gone"` and its name then read as a call. Filling colours the brackets and leaves the string a
+   * string, which is what the span means and what an editor shows.
+   */
+  fill?: boolean
 }
 
 /**
@@ -33,17 +42,38 @@ export function collect(code: string, patterns: readonly Pattern[]): TokenRange[
       }
       const start = match.index + match[0].length - value.length
       const end = start + value.length
-      if (claim(claimed, start, end)) {
-        ranges.push({
-          className:
-            typeof pattern.className === 'function' ? pattern.className(match) : pattern.className,
-          end,
-          start,
-        })
+      const className =
+        typeof pattern.className === 'function' ? pattern.className(match) : pattern.className
+      if (pattern.fill) {
+        for (const [from, to] of freeRuns(claimed, start, end)) {
+          claimed.fill(1, from, to)
+          ranges.push({ className, end: to, start: from })
+        }
+      } else if (claim(claimed, start, end)) {
+        ranges.push({ className, end, start })
       }
     }
   }
   return ranges
+}
+
+/**
+ * The maximal unclaimed stretches of `[start, end)`, in order. Empty when the span is fully taken,
+ * which is how a rule that fills stays out of the way of one that already ran.
+ */
+function freeRuns(claimed: Uint8Array, start: number, end: number): [number, number][] {
+  const runs: [number, number][] = []
+  let from = -1
+  for (let index = start; index < end; index++) {
+    if (claimed[index]) {
+      if (from !== -1) runs.push([from, index])
+      from = -1
+    } else if (from === -1) {
+      from = index
+    }
+  }
+  if (from !== -1) runs.push([from, end])
+  return runs
 }
 
 function claim(claimed: Uint8Array, start: number, end: number): boolean {

@@ -32,8 +32,13 @@ export const csharp = defineLanguage({
       // Preprocessor directives and attributes: both start a line and both describe the code rather
       // than being it. An attribute is required to start with an upper-case name, which keeps the
       // pattern off array indexers and collection expressions.
-      { className: 'meta', regex: /^[ \t]*#[^\n]*/gm },
-      { className: 'meta', regex: /^[ \t]*\[[A-Z][\w.]*[^\n]*\]/gm },
+      //
+      // Both fill rather than claim the whole span, because the rule above has already taken any
+      // string or comment inside them: `[Obsolete("gone")]` and `#pragma warning disable // why`
+      // would otherwise be given up entirely over the few characters already coloured, and their
+      // names would be left to read as calls.
+      { className: 'meta', fill: true, regex: /^[ \t]*#[^\n]*/gm },
+      { className: 'meta', fill: true, regex: /^[ \t]*\[[A-Z][\w.]*[^\n]*\]/gm },
       { className: 'literal', regex: /\b(?:true|false|null)\b/g },
       { className: 'keyword', regex: new RegExp(String.raw`\b(?:${KEYWORDS})\b`, 'g') },
       { className: 'type', regex: new RegExp(String.raw`\b(?:${BUILT_IN_TYPES})\b`, 'g') },
