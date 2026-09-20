@@ -64,7 +64,12 @@ builder.Services.AddMcpServer().WithHttpTransport()
     // An argument the SDK cannot bind is answered by the tool's own schema rather than by the
     // transport's one sentence (#85, ToolArguments). Registered once for every tool, present and
     // future.
-    .WithRequestFilters(filters => filters.AddCallToolFilter(ToolArguments.Filter))
+    // Outermost first: the tool span has to cover everything an agent waits for, including the
+    // argument filter below it, because what #90 is looking for is the time that is NOT in the query
+    // span further in. Registered once for every tool, present and future (#90).
+    .WithRequestFilters(filters => filters
+        .AddCallToolFilter(Telemetry.ToolFilter)
+        .AddCallToolFilter(ToolArguments.Filter))
     .WithTools<ProjectTools>()
     .WithTools<SearchTools>()
     .WithTools<FileTools>()

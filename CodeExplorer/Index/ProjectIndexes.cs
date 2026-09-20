@@ -381,13 +381,22 @@ public sealed class ProjectIndexes : IDisposable
     /// </summary>
     public async Task<IndexLease?> OpenAsync(string slug, CancellationToken cancellationToken)
     {
+        // Timed here and not at the twenty-odd callers, so that every way of asking for a lease is
+        // measured and a new one cannot forget to be. It is the first candidate #90 names for the ~1.2 s
+        // every call costs regardless of the work it does: a connection is opened per lease and the
+        // ATTACH and USE run each time, and none of that was under any instrument.
+        using var recording = Telemetry.Lease(slug);
+
         // Lazily, and here rather than at startup: a replica that scaled to zero has an empty disk, and
         // an off-hours wake should cost the restore of the one project being connected to rather than
         // everyone's (#9). Projects attach on first connection for the same reason, which is what the
         // rest of this method has always done.
         if (!HasIndex(slug)) await RestoreAsync(slug, cancellationToken);
 
-        return await AttachAndLeaseAsync(slug, cancellationToken);
+        var lease = await AttachAndLeaseAsync(slug, cancellationToken);
+        if (lease is null) recording.Absent();
+        else recording.Opened();
+        return lease;
     }
 
     /// <summary>
