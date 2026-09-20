@@ -25,7 +25,7 @@ export interface RefreshProgress {
   total: number | null
 }
 
-/** What one phase of a refresh cost. `step` is the step it ran at — several phases share step 3. */
+/** What one phase of a refresh cost. `step` is the step it ran at; a step can report several. */
 export interface PhaseCost {
   step: number
   phase: string

@@ -1,7 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Plus, Settings } from 'lucide-react'
-import { treeSearch } from '@/lib/urls/browseParams'
 import { IndexStatus } from '@/features/projects/IndexStatus'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,8 +13,8 @@ const CARD_LINK = 'after:absolute after:inset-0 hover:underline'
  * Every project, with what its index holds. MCP has no discovery — an agent connects to a URL it was
  * given — so this list is the only place a project becomes visible at all.
  *
- * A project card leads to its files rather than to its settings: browsing code is the daily use and
- * editing a project is rare, so creation hides behind a button and editing behind a per-card one.
+ * A project card leads to its overview rather than to its settings: opening a project is the daily
+ * use and editing one is rare, so creation hides behind a button and editing behind a per-card one.
  */
 export function ProjectList() {
   const { data: projects } = useSuspenseQuery(projectsQuery())
@@ -45,19 +44,20 @@ export function ProjectList() {
         <ul className="space-y-3">
           {projects.map((project) => (
             <li key={project.slug}>
-              {/* The whole card is the browse target, so the title link is stretched over it with a
+              {/* The whole card is the target, so the title link is stretched over it with a
                   pseudo-element. The settings button needs its own stacking context to stay
                   clickable; nesting it inside the link would be invalid instead. */}
               <Card size="sm" className="relative transition-colors hover:bg-muted/40">
                 <CardHeader className="flex flex-row items-baseline justify-between gap-4">
                   <CardTitle>
-                    {/* Nothing to browse before the first build, so an unbuilt project leads to its
-                        settings — where the repositories and the build button are — instead. */}
+                    {/* Overview and not Files: it is what the project is, and every other view is a
+                        click away in the sidebar once you are inside it. Nothing to show there
+                        before the first build, so an unbuilt project leads to its settings — where
+                        the repositories and the build button are — instead. */}
                     {project.index.builtAt ? (
                       <Link
-                        to="/projects/$project/files"
+                        to="/projects/$project"
                         params={{ project: project.slug }}
-                        search={treeSearch()}
                         className={CARD_LINK}
                       >
                         {project.name}

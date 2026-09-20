@@ -1,22 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Boxes, MoreHorizontal, Plus, RefreshCw, Settings, SquareCode } from 'lucide-react'
+import { Boxes, Plus, SquareCode } from 'lucide-react'
 import { PROJECT_VIEWS } from '@/app/navigation'
 import type { View } from '@/lib/urls/views'
 import { indexState, type IndexState } from '@/features/projects/indexState'
 import { StateDot } from '@/features/projects/StateDot'
 import { projectQuery } from '@/features/projects/queries'
 import { isRefreshRunning, refreshStatusQuery } from '@/features/refresh/queries'
-import { useRefreshProject } from '@/features/refresh/useRefreshProject'
 import { useRefreshWatcher } from '@/features/refresh/useRefreshWatcher'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
-import { toast } from '@/components/ui/toast'
 import {
   Sidebar,
   SidebarContent,
@@ -156,54 +148,16 @@ function ProjectBlock({
   view: View | null
   index: ProjectIndex
 }) {
-  const refresh = useRefreshProject(project)
   const { running, state } = index
 
   return (
     <SidebarGroup>
+      {/* No actions menu beside the name: both of its items were a second way to somewhere the
+          sidebar already goes — Settings is a view below, and refreshing is a button on Overview,
+          which is also where a refusal has a panel to be read in rather than a toast. */}
       <SidebarGroupLabel className="gap-2" title={`Index ${state}`}>
         <StateDot state={running ? 'refreshing' : state} />
         <span className="flex-1 truncate font-mono text-foreground">{project}</span>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-            aria-label={`Actions for the ${project} project`}
-          >
-            <MoreHorizontal className="size-4" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            {/* The one thing worth doing to a project from wherever you happen to be: every view
-                under this menu answers from the index, and this is what makes the index current.
-                A refusal — another refresh running, too little disk — is the server's own prose,
-                and a menu has no panel to put it in, so it goes to a toast. */}
-            <DropdownMenuItem
-              disabled={running || refresh.isPending}
-              onClick={() =>
-                refresh.mutate(undefined, {
-                  onError: (error) =>
-                    toast.add({
-                      description: error.message,
-                      title: 'Not refreshing',
-                      type: 'error',
-                    }),
-                })
-              }
-            >
-              <RefreshCw />
-              {running ? 'Refreshing…' : 'Refresh now'}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              render={
-                <Link to="/projects/$project/settings" params={{ project }}>
-                  <Settings />
-                  Settings and repositories
-                </Link>
-              }
-            />
-            {/* Deleting the project stays on the settings page, where it asks first: a menu item
-                that removes an index a slip of the hand away is not a menu item. */}
-          </DropdownMenuContent>
-        </DropdownMenu>
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
