@@ -82,3 +82,44 @@ test('a pattern is run from the start of every file, not from where the last one
   expect(collect('class', [pattern])).toEqual([{ className: 'keyword', end: 5, start: 0 }])
   expect(collect('class', [pattern])).toEqual([{ className: 'keyword', end: 5, start: 0 }])
 })
+
+test('a filling pattern colours what is free and leaves what is claimed', () => {
+  // The attribute case, reduced: the string runs first and keeps its span, and the rule around it
+  // would lose everything to those few characters if it claimed all or nothing.
+  const patterns: Pattern[] = [
+    { className: 'string', regex: /"[^"]*"/g },
+    { className: 'meta', fill: true, regex: /^\[[^\n]*\]/gm },
+  ]
+  expect(collect('[A("b")]', patterns)).toEqual([
+    { className: 'string', end: 6, start: 3 },
+    { className: 'meta', end: 3, start: 0 },
+    { className: 'meta', end: 8, start: 6 },
+  ])
+})
+
+test('a filling pattern with nothing in its way emits one range, as claiming would', () => {
+  const patterns: Pattern[] = [{ className: 'meta', fill: true, regex: /^\[[^\n]*\]/gm }]
+  expect(collect('[Fact]', patterns)).toEqual([{ className: 'meta', end: 6, start: 0 }])
+})
+
+test('a filling pattern emits nothing when its span is entirely claimed', () => {
+  const patterns: Pattern[] = [
+    { className: 'comment', regex: /^\[[^\n]*\]/gm },
+    { className: 'meta', fill: true, regex: /^\[[^\n]*\]/gm },
+  ]
+  expect(collect('[Fact]', patterns)).toEqual([{ className: 'comment', end: 6, start: 0 }])
+})
+
+test('a filling pattern does not bridge two claimed spans', () => {
+  // Two strings in one attribute leave three free stretches, not one range spanning the lot.
+  const patterns: Pattern[] = [
+    { className: 'string', regex: /"[^"]*"/g },
+    { className: 'meta', fill: true, regex: /^\[[^\n]*\]/gm },
+  ]
+  const meta = collect('[A("b","c")]', patterns).filter((range) => range.className === 'meta')
+  expect(meta).toEqual([
+    { className: 'meta', end: 3, start: 0 },
+    { className: 'meta', end: 7, start: 6 },
+    { className: 'meta', end: 12, start: 10 },
+  ])
+})
