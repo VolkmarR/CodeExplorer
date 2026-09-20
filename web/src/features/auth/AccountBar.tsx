@@ -4,6 +4,7 @@ import { LogIn, LogOut } from 'lucide-react'
 import { signInHref, signOutAction } from '@/lib/api'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { authQuery } from './queries'
+import { initials } from './initials'
 
 const ACTION =
   'flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-foreground'
@@ -54,18 +55,4 @@ export function AccountBar() {
       </form>
     </div>
   )
-}
-
-/**
- * At most two letters from the name the tenant gave. It is a display name and not a structured
- * one — "Volkmar Rigo", "rigo.volkmar", a UPN — so this takes the first letter of the first two
- * words and gives up gracefully rather than pretending to parse a person.
- */
-function initials(name: string | null): string {
-  if (!name) return '?'
-  const words = name.split(/[\s.@_-]+/).filter(Boolean)
-  return words
-    .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase() ?? '')
-    .join('')
 }
