@@ -99,7 +99,7 @@ public sealed class ShadowIndex(DuckDBConnection connection, string catalog, str
     {
         if (fullTextLoaded)
         {
-            report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+            report(new RefreshProgress(RefreshProgress.FullTextStep, RefreshProgress.TotalStepCount,
                 RefreshProgress.FullTextPhase));
             await FtsExtension.CreateIndexAsync(Connection, cancellationToken);
         }
@@ -156,6 +156,12 @@ public sealed partial class ProjectIndexes : IDisposable
     // only written under the gate, so the ordering rule the gate exists for is unchanged.
     private readonly SemaphoreSlim _attachGate = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> _attached = new(StringComparer.Ordinal);
+
+    // Whether the file each project's catalog is attached to was written by this build's schema,
+    // remembered so that the question costs one query per attach rather than one per lease. It is
+    // forgotten wherever the live file is replaced — every such place detaches the catalog and
+    // removes it from the set above, and the two are removed together for the same reason.
+    private readonly ConcurrentDictionary<string, bool> _readable = new(StringComparer.Ordinal);
 
     // One pool per project, because a pooled connection is handed back still bound to that project and
     // USE is what rebinds it on the way out. Kept for the life of the process like the gates beside it.
@@ -303,6 +309,18 @@ public sealed partial class ProjectIndexes : IDisposable
             try
             {
                 await BindAsync(connection, slug, cancellationToken);
+
+                // A file an older schema wrote is not readable by this build, and every read of it
+                // would fail on whatever column the bump added — a Binder Error out of the middle of
+                // a query, which is an exception where CODING_STANDARDS asks for an answer (#164).
+                // Refused here rather than at each reader, for the reason the lease is taken here.
+                if (!await ReadableAsync(connection, slug, cancellationToken))
+                {
+                    pool.Return(connection, generation);
+                    gate.Leave();
+                    return null;
+                }
+
                 return new IndexLease(connection, FtsAvailable, reusable =>
                 {
                     if (reusable) pool.Return(connection, generation);
@@ -382,6 +400,7 @@ public sealed partial class ProjectIndexes : IDisposable
                 _attached.TryRemove(catalog, out _);
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
                 _attached.TryRemove(slug, out _);
+                _readable.TryRemove(slug, out _);
                 File.Move(path, FilePath(slug), true);
                 File.Delete(FilePath(slug) + ".wal");
                 File.Delete(path + ".wal");
@@ -480,6 +499,34 @@ public sealed partial class ProjectIndexes : IDisposable
         return await version.ExecuteScalarAsync(cancellationToken) is int found && found == SchemaVersion;
     }
 
+    /// <summary>
+    ///     Whether the project's attached file can be read by this build, remembered per attach. The
+    ///     same test the carry-over makes, asked on the way in rather than on the way out: a version
+    ///     bump adds a column, and a reader handed the older file fails on the first query naming it.
+    ///     Answered once per attach because a lease is the hot path (#149) and the file cannot change
+    ///     underneath an attach — everything that replaces it detaches the catalog first.
+    /// </summary>
+    private async Task<bool> ReadableAsync(DuckDBConnection connection, string slug,
+        CancellationToken cancellationToken)
+    {
+        if (_readable.TryGetValue(slug, out bool known)) return known;
+
+        bool current = await LiveSchemaMatchesAsync(connection, slug, cancellationToken);
+        _readable[slug] = current;
+        if (!current)
+            _logger.LogWarning(
+                "Project {Project} has an index this build cannot read: it was written for a schema "
+                + "other than version {Version}, and only a refresh rewrites it", slug, SchemaVersion);
+        return current;
+    }
+
+    /// <summary>
+    ///     Whether the project's index is on disk but written for another schema version, which is the
+    ///     one reason <see cref="OpenAsync" /> refuses a project that does have a file. It is what lets
+    ///     a reader say which of the two refusals it is looking at without asking the file again.
+    /// </summary>
+    public bool SchemaOutdated(string slug) => _readable.TryGetValue(slug, out bool current) && !current;
+
     /// <summary>Whether the attached catalog holds this table, which an interrupted build may not have written.</summary>
     private static async Task<bool> HasTableAsync(DuckDBConnection connection, string slug, string table,
         CancellationToken cancellationToken)
@@ -510,6 +557,7 @@ public sealed partial class ProjectIndexes : IDisposable
                 _attached.TryRemove(catalog, out _);
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
                 _attached.TryRemove(slug, out _);
+                _readable.TryRemove(slug, out _);
                 // One overwriting move, never delete-then-move: a move that fails after the old file was
                 // deleted would leave the project with no index at all, and the caller's cleanup would
                 // then take the shadow too. Overwrite replaces the file or leaves it exactly as it was.
@@ -552,6 +600,7 @@ public sealed partial class ProjectIndexes : IDisposable
             {
                 await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
                 _attached.TryRemove(slug, out _);
+                _readable.TryRemove(slug, out _);
                 DeleteIndexFile(FilePath(slug));
             }, cancellationToken);
 

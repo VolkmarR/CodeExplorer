@@ -348,10 +348,16 @@ public sealed class RefreshTests : IDisposable
         // and this is about which pieces of work are named and in what order, not how often they report.
         Assert.Equal(expected, reported.Select(progress => progress.Phase).Where(Fixed).ToList());
 
-        // The step count and the step numbers are untouched: the new phases are additional reports at
-        // step 3, which is what keeps "step 3 of 5" a fact rather than a renumbering (#91).
+        // Every report counts against the same total, and each fixed phase runs at the step that owns
+        // it: the overview and the full-text index reported as step 3 alongside the history until they
+        // were split out of it, which is what had the counter sit on 3 for most of a large refresh.
         Assert.All(reported, progress => Assert.Equal(RefreshProgress.TotalStepCount, progress.TotalSteps));
-        Assert.All(InsideStepThree(reported), progress => Assert.Equal(RefreshProgress.HistoryStep, progress.Step));
+        Assert.All(reported.Where(progress => StepOf(progress.Phase) is not null),
+            progress => Assert.Equal(StepOf(progress.Phase), progress.Step));
+
+        // And they are reported in step order, never a step the refresh has already left.
+        var steps = reported.Select(progress => progress.Step).ToList();
+        Assert.Equal(steps.Order(), steps);
     }
 
     /// <summary>
@@ -386,10 +392,10 @@ public sealed class RefreshTests : IDisposable
         // phases name the repository they are working on.
         Assert.Equal(expected, status.Phases.Select(cost => cost.Phase).Where(Fixed).ToList());
 
-        // Each phase carries the step it ran at, so a reader can see that several of these are step 3
-        // rather than having to know which ones are (#91).
-        Assert.All(status.Phases.Where(cost => InsideStepThree(cost.Phase)),
-            cost => Assert.Equal(RefreshProgress.HistoryStep, cost.Step));
+        // Each phase carries the step it ran at, so a reader can group the timeline the way the
+        // counter counted rather than having to know which phase belongs to which step (#91).
+        Assert.All(status.Phases.Where(cost => StepOf(cost.Phase) is not null),
+            cost => Assert.Equal(StepOf(cost.Phase), cost.Step));
 
         // The timeline accounts for the refresh rather than merely listing it: every phase costs
         // something a clock could measure, and together they fit inside the wall clock the status
@@ -429,17 +435,27 @@ public sealed class RefreshTests : IDisposable
 
     /// <summary>The phases with a wording of their own, as opposed to the counting ones naming a repository.</summary>
     private static bool Fixed(string phase) =>
-        phase is RefreshProgress.IngestPhase or RefreshProgress.HistoryPhase or RefreshProgress.AttributionPhase
+        phase is RefreshProgress.IngestPhase or RefreshProgress.AttributionPhase
             or RefreshProgress.OverviewPhase or RefreshProgress.FullTextPhase or RefreshProgress.StorePhase
             or RefreshProgress.SwapPhase;
 
-    private static IEnumerable<RefreshProgress> InsideStepThree(IEnumerable<RefreshProgress> reported) =>
-        reported.Where(progress => InsideStepThree(progress.Phase));
-
-    /// <summary>The pieces #91 separated out of step 3, which all still report as step 3.</summary>
-    private static bool InsideStepThree(string phase) =>
-        phase is RefreshProgress.AttributionPhase or RefreshProgress.OverviewPhase
-            or RefreshProgress.FullTextPhase;
+    /// <summary>
+    ///     Which step owns a phase with a wording of its own, and null for the counting phases that name
+    ///     a repository — those belong to a step too, but only their fixed siblings pin the numbering.
+    ///     Spelled out here rather than derived from the constants, so that a renumbering has to be
+    ///     written down twice and cannot pass by agreeing with itself.
+    /// </summary>
+    private static int? StepOf(string phase) => phase switch
+    {
+        RefreshProgress.StartPhase => 1,
+        RefreshProgress.IngestPhase => 2,
+        RefreshProgress.AttributionPhase => 3,
+        RefreshProgress.OverviewPhase => 4,
+        RefreshProgress.FullTextPhase => 5,
+        RefreshProgress.StorePhase => 6,
+        RefreshProgress.SwapPhase => 7,
+        _ => null
+    };
 
     private static Dictionary<string, Dictionary<string, string>> Fixture(string repository = "one") =>
         new() { [repository] = new Dictionary<string, string> { [OldFile] = "class A;\n" } };

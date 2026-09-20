@@ -207,10 +207,11 @@ refresh.
 _Avoid_: Sync, reindex, update, pull
 
 **Step**:
-One of the five fixed stages a refresh passes through — fetching, reading, history, storing,
-swapping. There are always five and they are always in that order, which is what makes "step 3 of 5"
-a fact rather than an estimate. A step is not a unit of time: they are wildly unequal, and a first
-history import dwarfs the rest.
+One of the seven fixed stages a refresh passes through — fetching, reading, history, the overview,
+the full-text index, storing, swapping. They are always in that order, which is what makes "step 3
+of 7" a fact rather than an estimate; a server with no `fts` extension has nothing to build at the
+full-text step and passes straight from the overview to the store. A step is not a unit of time:
+they are wildly unequal, and a first history import dwarfs the rest.
 _Avoid_: Stage, part
 
 **Phase**:

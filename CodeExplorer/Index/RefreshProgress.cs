@@ -21,10 +21,21 @@ namespace CodeExplorer;
 public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, long? Done = null, long? Total = null)
 {
     /// <summary>
-    ///     How many steps a refresh has: fetching, reading, history, storing, swapping. Fixed and known
-    ///     before it starts, which is what makes "step 3 of 5" a fact rather than an estimate.
+    ///     How many steps a refresh has: fetching, reading, history, the overview, the full-text index,
+    ///     storing, swapping. Fixed and known before it starts, which is what makes "step 3 of 7" a fact
+    ///     rather than an estimate.
+    ///     It was 5 until the overview and the full-text build were split out of the history step. #91
+    ///     had already given them phases of their own and deliberately left them reporting as step 3, so
+    ///     that the numbering stayed still while the labels got finer; the counter then sat on 3 for most
+    ///     of a large refresh, because the two longest pieces of work on a real project are the two that
+    ///     the third step did not name. A step is what the counter is read for, so they are steps now.
+    ///     A server with no <c>fts</c> extension never reports <see cref="FullTextStep" />: there is no
+    ///     BM25 index to build, and the counter goes from the overview to the store. The step space is
+    ///     still the same seven — whether this process has the extension is known at startup, so the
+    ///     step being empty is as fixed as the rest — and a phase that flashed past instantly would read
+    ///     as a full-text index that was somehow free.
     /// </summary>
-    public const int TotalStepCount = 5;
+    public const int TotalStepCount = 7;
 
     public const int FetchStep = 1;
 
@@ -32,9 +43,13 @@ public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, lon
 
     public const int HistoryStep = 3;
 
-    public const int StoreStep = 4;
+    public const int OverviewStep = 4;
 
-    public const int SwapStep = 5;
+    public const int FullTextStep = 5;
+
+    public const int StoreStep = 6;
+
+    public const int SwapStep = 7;
 
     /// <summary>
     ///     The phases, as the status endpoint hands them to an operator: what is happening, in an
@@ -42,9 +57,10 @@ public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, lon
     ///     phase is not waiting on a wording that a rewrite of the sentence quietly breaks. They live
     ///     here rather than in <c>Refresh/</c> for the reason this whole type does — half of them are
     ///     reported from inside the build, which cannot depend on the refresh that orchestrates it.
-    ///     A step reports several of them where it does several separable things (#91): step 3 alone
-    ///     attributes, builds the overview and builds the full-text index, and a reader who cannot tell
-    ///     them apart cannot say what a refresh spent its time on.
+    ///     A step reports several of them where it does several separable things (#91): step 3 walks the
+    ///     history, attributes the lines and writes that attribution onto them, and a reader who cannot
+    ///     tell them apart cannot say what a refresh spent its time on. The overview and the full-text
+    ///     index were the other two pieces of that step, and are steps of their own now.
     /// </summary>
     public const string IngestPhase = "Reading the repositories into the shadow index";
 
@@ -55,8 +71,6 @@ public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, lon
     ///     (#92) and a reader finds it on every finished refresh.
     /// </summary>
     public const string StartPhase = "Starting";
-
-    public const string HistoryPhase = "Importing history and attributing lines";
 
     public const string AttributionPhase = "Writing attribution onto the lines";
 

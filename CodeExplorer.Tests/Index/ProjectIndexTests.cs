@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -136,6 +137,41 @@ public sealed class ProjectIndexTests : IDisposable
 
         Assert.Null(await host.Indexes.OpenAsync("alpha", Ct));
         Assert.False(host.Indexes.HasIndex("alpha"));
+    }
+
+    /// <summary>
+    ///     What a deployment leaves behind whenever <c>SchemaVersion</c> is bumped: the file of the
+    ///     build before it, which the new build's statements name columns the old one never wrote.
+    ///     Read anyway, that is a <c>Binder Error</c> out of the middle of a query — an exception where
+    ///     CODING_STANDARDS asks for an answer, and a 500 on every page of a project that is in fact
+    ///     indexed (#164). The file is refused on the way in instead, and the refusal says which of the
+    ///     two reasons there is nothing to read.
+    /// </summary>
+    [Fact]
+    public async Task An_index_an_older_schema_wrote_is_refused_rather_than_read()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new() { ["src/index.ts"] = "export const one = 1;" }
+        });
+
+        await host.ExecuteAsync("alpha",
+            $"UPDATE index_info SET schema_version = {ProjectIndexes.SchemaVersion - 1}");
+        // The verdict is remembered per attach, and this instance attached the file while it was still
+        // current. A restart is what a deployment of the newer build looks like from here anyway.
+        host.Restart();
+
+        Assert.True(host.Indexes.HasIndex("alpha"));
+        Assert.Null(await host.Indexes.OpenAsync("alpha", Ct));
+        Assert.True(host.Indexes.SchemaOutdated("alpha"));
+
+        // And what a reader is handed: the sentence naming the index that is there, not the one for a
+        // project nobody has built.
+        var readers = host.Services.GetRequiredService<IndexReaders>();
+        var answer = await readers.OverIndexAsync("alpha", null,
+            (_, _) => Task.FromResult<Outcome>(new Problem("the index was read")), Ct);
+        Assert.Equal(new Problem(IndexReader.OutdatedIndex("alpha"), ProblemKind.NoIndex), answer);
     }
 
     [Fact]
