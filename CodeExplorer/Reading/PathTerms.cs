@@ -7,9 +7,9 @@ namespace CodeExplorer;
 ///     <c>"*.g.cs,/tests/"</c>. A term holding <c>*</c> or <c>?</c> is a SQL <c>GLOB</c> over the whole
 ///     path, where <c>*</c> crosses <c>/</c> (ADR-0004); anything else is a plain substring. Matching
 ///     is case-insensitive, which is why every path expression handed in is already lower-cased.
-///     It sits in <c>Infrastructure/</c> rather than beside <see cref="FileFilter" />, which is its
+///     It sits in <c>Reading/</c> rather than beside <see cref="FileFilter" />, which is its
 ///     first caller, because its second is the churn ranking in <see cref="IndexQueries" /> — and
-///     <c>Infrastructure/</c> may not reach into <c>Search/</c> (ADR-0005). Two spellings of one filter
+///     <c>Reading/</c> may not reach into <c>Search/</c> (ADR-0005). Two spellings of one filter
 ///     syntax is the drift an agent cannot see: <c>exclude="*.g.cs"</c> answered one way by grep and
 ///     another by hot_files is worse than hot_files not taking the argument at all.
 /// </summary>

@@ -231,9 +231,9 @@ public sealed class TelemetryTests
     ///     point that measured a search without being one.
     /// </summary>
     [Theory]
-    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "DefinitionSearch.cs",
-        "FileDeclarations.cs", "FileQueries.cs", "GrepSearch.cs", "HistoryQueries.cs", "ImportGraph.cs",
-        "MatchList.cs", "ReferenceSearch.cs")]
+    [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.Search)}(", "CoChangeQueries.cs",
+        "CommitLogQueries.cs", "DefinitionSearch.cs", "FileDeclarations.cs", "FileHistoryQueries.cs",
+        "FileQueries.cs", "GrepSearch.cs", "ImportGraph.cs", "MatchList.cs", "ReferenceSearch.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.IndexBuild)}(", "IndexBuilder.cs")]
     [InlineData($"{nameof(Telemetry)}.{nameof(Telemetry.DurableCopy)}(", "DurableIndex.cs")]
     public void Only_the_recording_services_start_a_recording(string call, params string[] files) =>

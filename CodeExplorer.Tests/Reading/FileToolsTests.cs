@@ -726,7 +726,7 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
 
         Assert.Contains("one/", reply, StringComparison.Ordinal);
 
-        string statement = Directory.EnumerateFiles(plans, "*IndexReader-RepositoryLevelAsync.sql.txt")
+        string statement = Directory.EnumerateFiles(plans, "*IndexReaderTree-RepositoryLevelAsync.sql.txt")
             .Select(File.ReadAllText).First();
         Assert.DoesNotContain("JOIN", statement, StringComparison.Ordinal);
 
