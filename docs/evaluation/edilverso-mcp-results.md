@@ -402,3 +402,204 @@ hard enough to beat a plain grep-count loop this run. `who_imports`/`co_changed`
    (e.g. via the actual type names it declares) or explicitly say "ambiguous, showing
    namespace-level importers" instead of returning a result an agent has to independently
    recognize as unreliable.
+
+---
+
+## Update: rerun after MCP server changes (2026-09-19, same day)
+
+The user updated the MCP server and asked to rerun all 10 questions (MCP-only arm) with the same
+questions/anchors, to check whether the changes moved the needle on timing, tool-call count, and
+answer quality. Same 10 subagents, same prompts, same Q5 string / Q7 PR anchor, run fresh (no
+memory of the first pass).
+
+### Aggregate: before vs. after
+
+| Metric | Before (baseline) | After (rerun) | Change |
+|---|---|---|---|
+| Total wall-clock | 1,197,189 ms (~20.0 min) | 1,062,999 ms (~17.7 min) | **-11%** |
+| Total tool calls | 254 | 237 | **-7%** |
+| Total tokens | 822,656 | 720,893 | **-12%** |
+
+Consistent, moderate improvement across the board — not dramatic, but a real reduction in cost on
+every axis, plus (see below) one concrete correctness/usability fix and no regressions in what a
+question could answer.
+
+### Per-question: before vs. after
+
+| Q | Time (before → after) | Calls (before → after) | Tokens (before → after) | Verdict |
+|---|---|---|---|---|
+| 1 | 95.9s → 125.4s | 17 → 43 | 75.3k → 65.5k | **Worse** (time/calls) — agent did extra per-folder `glob(limit=1)` probing this run, a strategy choice, not a tool regression |
+| 2 | 44.7s → 37.3s | 7 → 5 | 59.6k → 58.4k | Better across the board |
+| 3 | 57.6s → 53.6s | 13 → 12 | 56.9k → 56.4k | Slightly better; also used `hot_files(directory=...)` to shortlist candidates instead of guessing files to check |
+| 4 | 142.8s → 118.5s | 41 → 32 | 100.5k → 67.1k | Better across the board |
+| 5 | 50.4s → 47.4s | 9 → 9 | 55.0k → 54.7k | Flat |
+| 6 | 130.3s → 185.2s | 31 → 38 | 98.0k → 99.7k | **Worse** — more thorough exploration this run, same quality answer |
+| 7 | 141.1s → 120.5s | 27 → 25 | 82.0k → 77.9k | Better, but the underlying gap (no diff/files-in-commit primitive) is **still there** |
+| 8 | 254.3s → 141.9s | 54 → 29 | 100.7k → 80.7k | **Much better** (44% faster, 46% fewer calls) |
+| 9 | 76.0s → 47.7s | 12 → 9 | 75.2k → 55.4k | **Much better**, and now correctly covers both TS and C# (the baseline left the C# side broken due to an agent-side regex bug, not a tool bug) |
+| 10 | 204.2s → 185.6s | 43 → 35 | 119.5k → 105.1k | Better, and see the confirmed fix below |
+
+### What actually changed on the server side
+
+- **Fixed: `authors`/`git_log` now honor a `path`/`directory` scope.** This was the single most
+  concrete gap flagged in the baseline (Q10): previously, passing a `path` to `authors` or
+  `git_log` was silently ignored and returned whole-repo results, forcing an agent to reconstruct
+  "who owns this feature" from many individual `file_history` calls. In the rerun, the same Q10
+  agent explicitly tested this and confirmed scoped calls (e.g. `authors(path="src/Frontend/.../opportunities")`)
+  now return narrower, correctly-filtered results. This directly makes Q10-style "who owns this
+  feature area" briefings both cheaper and more precise going forward.
+- **Not fixed: no "files touched by commit X" / diff primitive** (Q7, retested). The rerun agent
+  hit the exact same limitation and had to fall back to the same grep-then-`file_history`
+  triangulation as the baseline, explicitly re-confirming "there is no commit-scoped file-list or
+  diff tool." Worth prioritizing given it recurred identically on a fresh run.
+- **Not fixed: `who_imports` namespace-collision ambiguity** (Q8, retested with a different picked
+  routine). The rerun agent independently hit the same wall — `who_imports` on a file inside a
+  shared C# namespace returned no resolvable edge — and used the same `.csproj` `ProjectReference`
+  grep fallback as the baseline. Confirmed still open.
+- **New finding, not previously tested: `hot_files` is not rename-aware** (Q4 rerun). The
+  `src/Model` directory was renamed from a root-level `model/` folder mid-history; `hot_files`
+  matches by literal path, so the same logical files' history is split across two separate
+  listings (`model/...`, mostly high commit counts but "no longer at HEAD", vs. `src/Model/...`,
+  low counts as the current path). This wasn't a regression from the update — it's a pre-existing
+  gap the rerun happened to surface by choosing a slightly different directory scope than the
+  baseline run did.
+- **Minor, unconfirmed as new**: the rerun's `repo_info` response included an explicit caveat that
+  the imported commit history "may begin later than the repository itself does" — this framing
+  wasn't quoted in the baseline Q1 report. It may be a genuine addition to the tool's output, or
+  simply something the baseline agent didn't think to quote; not confident enough to log as a
+  confirmed fix, but worth noting as a possible improvement to repo-age framing.
+- **Still present, unrelated to the update**: the path-prefix confusion (agents guessing a leading
+  `<project-slug>/` segment before discovering plain `src/...` is correct) recurred in the Q1
+  rerun. Not fixed, and low-cost to fix per the original recommendation.
+
+### Overall verdict
+
+The update is a net positive: real, measurable reductions in time/calls/tokens on 7 of 10
+questions, no regressions in answer completeness or correctness on any question, and one
+confirmed fix to a real gap (`authors`/`git_log` path scoping) that was called out by name in the
+baseline report. The two "worse" questions (Q1, Q6) are explained by the rerun agent choosing a
+more exploratory strategy, not by anything slower in the tools themselves. The two gaps flagged
+most concretely in the baseline as fixable — no diff/files-in-commit primitive, and
+`who_imports` namespace-collision handling — are both still open and reproduced identically on
+this run; those remain the highest-value next fixes.
+
+---
+
+## Update 2: rerun after a second MCP change (2026-09-20) — `commit`/`commit_files` added
+
+The user added two new tools, `mcp__edilverso__commit` and `mcp__edilverso__commit_files`, and
+asked for another full rerun to check whether they closed the "no diff/files-in-commit primitive"
+gap flagged twice already (baseline Q7, update-1 Q7). Same 10 questions, same anchors, fresh
+subagents with the new tools listed. This run hit the account's weekly rate limit partway through
+— **Q4, Q8, and Q10 failed mid-run and were retried once (all three retries succeeded)**; **Q6, Q7,
+and Q9 delivered complete, full-quality final reports but were cut off before reporting their own
+timing/token usage**, so those three have no metrics this round (content is complete and used
+below; cost comparison for them is marked N/A).
+
+### Per-question metrics (available data only)
+
+| Q | Time (upd.1 → upd.2) | Calls (upd.1 → upd.2) | Tokens (upd.1 → upd.2) | Note |
+|---|---|---|---|---|
+| 1 | 125.4s → 78.7s | 43 → 13 | 65.5k → 60.6k | Big improvement — clean run, no path-prefix confusion, no per-folder probing this time |
+| 2 | 37.3s → 43.9s | 5 → 6 | 58.4k → 60.7k | Flat |
+| 3 | 53.6s → 23.8s | 12 → 5 | 56.4k → 53.9k | **Big improvement** — `git_log(path=...)` now scopes directly to a directory, replacing multi-file `file_history` guesswork |
+| 4 | 118.5s → 163.9s (retry) | 32 → 28 | 67.1k → 65.5k | Similar cost, but went noticeably deeper (see finding below) |
+| 5 | 47.4s → 63.3s | 9 → 13 | 54.7k → 56.8k | Slightly more expensive — used the new `commit`/`commit_files` tools for extra verification, a worthwhile trade |
+| 6 | 185.2s → N/A (rate-limited before usage report) | 38 → 9 | 99.7k → N/A | Tool-call count dropped sharply (38→9) on a comparably complete answer — likely a real efficiency gain, but not verifiable on cost this round |
+| 7 | 120.5s → N/A (rate-limited) | 25 → ~27 (incl. failed path probes) | 77.9k → N/A | See dedicated section below — the core gap is fixed |
+| 8 | 141.9s → 187.3s (retry) | 29 → 38 | 80.7k → 95.8k | Somewhat more expensive (compared two candidate routines this time before picking one); `who_imports` gap reconfirmed a third time |
+| 9 | 47.7s → N/A (rate-limited) | 9 → 7 | 55.4k → N/A | Answer quality equal/slightly cleaner, fewer calls |
+| 10 | 185.6s → 138.3s (retry) | 35 → 29 | 105.1k → 117.8k | Faster despite being a retry; heavy, effective use of path-scoped `authors`/`git_log` and the new `commit` tool |
+
+### The headline result: Q7's gap is fixed
+
+The rerun explicitly tested `commit`/`commit_files` against PR 39371 (same commit `e1e3ef1c` used
+in every prior run of this question) and got a categorically better answer:
+
+- **`commit(sha)`** returns commit metadata directly: author, date, subject, and total file/line
+  change counts — no need to page `git_log` looking for a message match once the hash is known.
+- **`commit_files(sha)`** returns the **complete, exact list of files a commit touched**, with
+  change type (added/modified/deleted) and per-file +/- line counts, in one call — with built-in
+  pagination for commits touching more than ~300 files. This is exactly the missing primitive
+  called out in both the baseline and update-1 reports.
+- Compared directly against the old triangulation approach (grep for distinctive new text, then
+  `file_history` on every guessed candidate file): the new approach is strictly better because it
+  doesn't depend on the commit's content being textually distinctive, doesn't require guessing
+  candidate files, and can't silently miss a touched file that lacks distinctive text (e.g. a
+  `.resx` or `.po` file with only generic additions — exactly the kind of file the old grep-based
+  approach was most likely to under-count). The rerun agent found **20 files** for PR 39371 this
+  way, versus 5–8 files found by two independent triangulation attempts in earlier runs — strong
+  evidence the old method really was undercounting, not just differently scoped.
+
+**One real gap remains, stated by the tool itself**: `commit`/`commit_files` give file-level
+metadata (which files, what kind of change, how many lines), but **the actual diff content is not
+indexed** — there is still no way to see the literal before/after text of a change. An agent can
+now say "these 20 files changed, roughly this many lines" with certainty, and can infer *what*
+changed in plain language from file names/paths/comments, but cannot quote an actual line-level
+diff, and "has this changed since" is answered at file granularity (any later touch to the path)
+rather than line granularity (whether the specific lines survived a later edit to the same file).
+This was independently reconfirmed on both the Q5 and Q7 reruns.
+
+### Other confirmed fixes and reconfirmed gaps this round
+
+- **Fixed, and broader than first thought: `git_log` (not just `authors`) now honors a `path`
+  filter.** Update 1 confirmed the fix for `authors`; this round's Q3 rerun showed `git_log(path="src/ManagementSite")`
+  also scopes correctly, collapsing what used to take 12–13 calls (glob the app, then
+  `file_history` on 4–5 individual files to triangulate "most recent") into 5 calls total. This is
+  a bigger win than update 1's report suggested.
+- **Reconfirmed, still open: `who_imports` fails on shared C# namespaces.** The Q8 rerun
+  independently hit the exact same wall a third time (this time on `AbstractRepository.cs`,
+  `Result.cs`, and `GenericResult.cs` — three different files, three different shared namespaces)
+  and had to fall back to grepping `.csproj` `ProjectReference` lines each time. Three-for-three
+  reproduction across three separate runs and three separate target files makes this the
+  single most consistently-reproduced gap across the whole evaluation.
+- **New, more serious framing of the rename-tracking gap** (first surfaced in update 1's Q4): the
+  Q4 retry this round discovered the `model/` → `src/Model/` split is **not a clean historical
+  cutover** — the old `model/` path is still receiving live commits (18 in the last 30 days) in
+  parallel with the new `src/Model/` path, which itself has only 9 commits total. Naively trusting
+  `hot_files`/`git_log` on the current path alone would make Model look like the *least* active
+  app in the repo (9 commits) when combined evidence puts it 3rd-busiest (~562 commits in six
+  months). This is worse than a cosmetic rename-tracking gap — it's a case where the tool's
+  literal-path matching produces an actively misleading answer to exactly the question ("where is
+  effort really going") this tool is supposed to help answer, unless the agent thinks to check
+  both paths. Worth prioritizing over the other three gaps precisely because it fails silently
+  (wrong number, not an error) rather than loudly.
+
+  > **Correction, added during triage of #131.** The "not a clean historical cutover" reading above
+  > is wrong, and the index says so: `model/` has 1,243 commits spanning 2024-06-28 to 2026-09-15
+  > and stops there, `src/Model/` has 9 commits all within 2026-09, HEAD holds no file under
+  > `model/` at all, and the same basenames appear under both roots. It is a clean cutover that
+  > happened around 2026-09-15/16, days before this run. The agent's 30-day window straddled the
+  > rename, so pre-cutover commits read to it as parallel live activity.
+  >
+  > The finding is kept as written because what it records is real: an agent with these tools, asked
+  > where effort is going, concluded that two paths were simultaneously active when one had been
+  > dead for a day. That misreading is a better argument for rename-awareness than the false claim
+  > was — the gap is a rename split, and the reply gives an agent nothing to catch it with.
+- **`git_log` cannot scope to a path that doesn't exist at HEAD** (new finding, Q4 retry): scoping
+  `git_log` to the old `model/` path or to any file under it errors out (something like "names
+  nothing in this index"), even though `hot_files` happily ranks commits against that same
+  now-deleted path. An agent investigating the rename-split issue above has no way to pull actual
+  commit-by-commit detail (messages, authors, dates) for the pre-rename path — only the aggregate
+  counts `hot_files` provides. Fixing this would make the rename-split issue fully diagnosable
+  instead of just detectable.
+
+### Updated overall verdict
+
+Both rounds of changes are net improvements, and the second round fixed exactly the gap it set out
+to fix. Confirmed fixes across both updates: `authors`+`git_log` path scoping (a genuine, broad
+efficiency win reproduced on Q3/Q10), and the `commit`/`commit_files` files-in-commit primitive (a
+genuine correctness win on Q7, likely also improving Q5's confidence). One gap has now been
+reproduced identically three times (`who_imports` on shared namespaces) and should be the next
+priority. One gap changed from "cosmetic" to "actively misleading" on closer inspection (the
+rename-tracking split) and deserves attention ahead of its apparent severity in the first report.
+
+Filed as tracker issues: [#131](https://github.com/VolkmarR/CodeExplorer/issues/131) (rename
+split leaves the old path live), [#132](https://github.com/VolkmarR/CodeExplorer/issues/132)
+(`git_log` can't scope to a path gone from HEAD), [#133](https://github.com/VolkmarR/CodeExplorer/issues/133)
+(`who_imports` shared-namespace fallback still routes to `.csproj` grep instead of
+`find_references`, checked against #114's acceptance criteria). Everything else this evaluation
+surfaced was already tracked and closed before this run: #118 (`authors`/`git_log` path scope),
+#107 (`commit`/`commit_files`), #117 (`hot_files` exclude filter), #109 (`hot_files` directory
+ranking), #114 (`who_imports`/`imports` unresolved messaging), #115/#127 (`co_changed`
+rename-severed history).

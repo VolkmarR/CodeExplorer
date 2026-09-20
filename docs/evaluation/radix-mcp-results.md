@@ -1,5 +1,25 @@
 # Radix MCP arm — results
 
+**Update 2026-09-19 (same day): reran all 10 questions after an MCP server update.** See
+[Rerun after MCP update](#rerun-after-mcp-update) at the end of this document for the full
+before/after comparison. Short version: the update shipped `commit`/`commit_files` (per
+[issue #107](https://github.com/VolkmarR/CodeExplorer/issues/107)) plus two more improvements not
+covered by that spec — `repo_info` now reports each repository's exact commit count and history
+date range, and `hot_files` gained a `depth` parameter for a per-subdirectory ranking in one call.
+Q7 (the question that motivated #107) dropped from 60 tool calls / 310s to 10 calls / 50s. Several
+other questions cost slightly *more* on rerun — not a regression, but subagents using their freed-up
+budget for deeper verification rather than fewer calls.
+
+**Update 2026-09-20: opened four more issues from that rerun's findings, then reran again after a
+second MCP update.** See [Rerun after MCP update #2](#rerun-after-mcp-update-2) at the end of this
+document. Issues [#125](https://github.com/VolkmarR/CodeExplorer/issues/125),
+[#126](https://github.com/VolkmarR/CodeExplorer/issues/126),
+[#127](https://github.com/VolkmarR/CodeExplorer/issues/127) and
+[#128](https://github.com/VolkmarR/CodeExplorer/issues/128) were filed; #125 (`commit_files`
+pagination) and #128 (`list_declarations` pagination) were both confirmed fixed and working exactly
+as designed in this second rerun.
+
+
 Run date: 2026-09-19. MCP arm only, per `mcp-vs-direct-access.md` — no direct-access (filesystem)
 arm was run in this session. Each question was answered by a fresh general-purpose subagent given
 only the `mcp__radix__*` tools and the exact question text from the source doc (with a concrete
@@ -446,3 +466,127 @@ one recurring soft failure mode across this run wasn't wrong answers, it was **e
 of the same workarounds** (the X# imports gap, three times; the commit→files gap, once but very
 expensively) — the kind of cost that a small number of targeted tool improvements above would remove
 for every future run, MCP or otherwise.
+
+---
+
+## Rerun after MCP update
+
+All 10 questions were rerun the same day, same prompts, same test data (ticket #30269, string
+"Suchen des Datensatzes nicht möglich"), after the operator shipped an MCP update. Confirmed
+changes in the tool surface between the two runs:
+
+1. **`commit` and `commit_files` tools added** — exactly [issue #107](https://github.com/VolkmarR/CodeExplorer/issues/107),
+   which this evaluation's Q7 finding motivated. Given a SHA, `commit` returns the full record
+   (author, date, subject, **message body**, files-changed/added/deleted sums) and `commit_files`
+   returns every path it touched with change kind and line sums.
+2. **`repo_info` now reports each repository's exact commit count and history date range**
+   (e.g. "radix: 10,388 commits, 2021-06-24→2026-09-18") — not part of #107's scope, but closes
+   the exact gap flagged as missing-functionality item #2 in this document (no oldest-commit/
+   total-count field, which cost Q1's original run a 15-call binary search).
+3. **`hot_files` gained a `depth` parameter**, returning a per-subdirectory ranking in one call
+   (e.g. `hot_files(directory="radix/src", depth=1, ...)` ranks all 77 module folders at once) —
+   closes missing-functionality item #3 (no per-directory aggregate, which forced Q3/Q4's original
+   runs to fan out 5-10 separate directory-scoped calls).
+
+Unaddressed, as expected (out of scope or not part of this update): `imports`/`who_imports` still
+return nothing for X#/VO's global-visibility dialect (confirmed again in Q6, Q8, Q10 reruns); no
+diff content (by design, ADR-0007); `co_changed` still goes silent once a file's history is severed
+— and a September 2026 mass project-rename commit (PR 38801) means this now affects a *large*
+fraction of acslib files project-wide, not just the one file Q8's original run happened to hit.
+
+### Per-question comparison
+
+| Q | Original (time / calls / tokens) | Rerun (time / calls / tokens) | What changed |
+|---|---|---|---|
+| 1 | 150.9s / 28 / 66.2K | 87.1s / 11 / 63.0K | `repo_info`'s new date-range field eliminated the 15-call binary search for "how far back does history go" |
+| 2 | 53.2s / 7 / 56.5K | 64.5s / 8 / 64.3K | Unaffected question; within normal run-to-run variance |
+| 3 | 80.5s / 15 / 94.4K | 88.7s / 10 / 91.6K | Used `commit`/`commit_files` to inspect the module's newest commit directly; hit a new 40KB-truncation limit on a 651-file commit (see below) |
+| 4 | 123.7s / 18 / 69.6K | 128.3s / 18 / 75.6K | Used `hot_files`' new `depth` param for one-call per-module rankings, then spent the same call budget on deeper verification (confirmed the mass-rename confound via `git_log` instead of inferring it) |
+| 5 | 90.4s / 14 / 63.1K | 82.6s / 13 / 63.7K | `commit` gave the full message body for extra context on the ambiguous "was this reworded" question; the underlying no-diff limit (correctly) still stands |
+| 6 | 142.3s / 28 / 97.1K | 151.9s / 31 / 111.6K | Same `imports`/`who_imports` gap confirmed again; rerun found more (a disabled supplier-billing UI stub, the exact legacy/new-engine feature flag) with a slightly larger budget |
+| 7 | 309.7s / 60 / 152.7K | **50.0s / 10 / 59.7K** | The targeted fix: `commit`+`commit_files` replaced a ~30-file brute-force `file_history` sweep entirely — **84% less time, 83% fewer calls, 61% fewer tokens** |
+| 8 | 149.4s / 21 / 98.1K | 170.7s / 29 / 97.0K | Picked a different routine (`DBValues`); `co_changed` came back empty for all 3 files it checked, all severed by the same September mass-rename commit — a residual gap, discussed above |
+| 9 | 63.5s / 5 / 54.0K | 99.5s / 10 / 66.2K | Unaffected question; rerun added `find_definition` verification passes not present in the original (agent variance, not an MCP change) |
+| 10 | 147.9s / 23 / 106.1K | 150.3s / 25 / 117.6K | Unaffected by the new tools this run; confirmed the `who_imports` gap and the thin-`co_changed`-window issue again |
+| **Total** | **1,311.5s / 219 / 857.8K** | **1,073.6s / 165 / 810.3K** | **−18% time, −25% tool calls, −6% tokens overall** |
+
+### Verdict
+
+The update did exactly what it targeted: **Q7 went from the single most expensive question in the
+whole evaluation to one of the cheapest**, with a stronger, more certain answer (no more "can't rule
+out a missed file"). Two changes outside the original spec's scope — `repo_info`'s date range and
+`hot_files`' `depth` — independently fixed two more of the seven missing-functionality items flagged
+in the original run (items #1 and #3), visible in Q1's and Q4's reruns.
+
+The overall numbers understate the improvement for the fixed gaps and slightly overstate it for the
+rest: five of the nine unaffected/partially-affected questions (Q2, Q6, Q8, Q9, Q10) cost the same or
+a little more on rerun, in every case because the subagent used its budget for extra verification
+depth rather than because anything got harder — none of them reported a new failure, a wrong answer,
+or a tool regression. The one genuinely new limitation surfaced is `commit_files`' apparent output
+cap (~40KB) on very large commits (Q3 hit this on a 651-file commit and could only see the first
+~400 paths) — the same class of gap `find_references`' 60-file cap already has, and worth a look if
+large mass-commits (like the September rename) are common in this codebase.
+
+---
+
+## Rerun after MCP update #2
+
+The 40KB-truncation finding above, plus three more gaps identified in a follow-up review, were filed
+as issues [#125](https://github.com/VolkmarR/CodeExplorer/issues/125) (`commit_files` pagination),
+[#126](https://github.com/VolkmarR/CodeExplorer/issues/126) (`find_definition`/`find_references`
+unprofiled-extension reporting), [#127](https://github.com/VolkmarR/CodeExplorer/issues/127)
+(`co_changed` naming a mass-rename-severed history explicitly) and
+[#128](https://github.com/VolkmarR/CodeExplorer/issues/128) (`list_declarations` pagination). After
+a second MCP update, 9 of the 10 questions were rerun the next day (2026-09-20; Q7 was left as-is,
+since it was already directly verified against #107 and none of the four new issues touch it).
+
+**Confirmed fixed, both by inspecting the tool schemas and by observing it happen in practice:**
+
+- **#125 — `commit_files` now takes an `offset` argument** and its description states the exact
+  mechanism: "a page holds at most 300 paths... the reply says how many it listed and the `offset`
+  that asks for the rest." Q3's rerun hit the *same* 651-file commit as before and this time got an
+  explicit "first 300 of 651" instead of a silent cutoff — the agent made an *informed* choice not to
+  page further (correctly judging the rest was mechanical noise) rather than being blindsided.
+- **#128 — `list_declarations` now takes an `offset` argument**, with the same "page holds at most
+  500... reply says how many it listed" pattern. Q6's rerun explicitly noted the new parameter exists
+  and works, and made a deliberate, disclosed choice not to page past the first 500 declarations of a
+  10,900-line class because the customer-facing question didn't need the rest.
+
+**Not directly exercised this run:**
+
+- **#126** (`find_definition`/`find_references` unprofiled-extension reporting) — the code change was
+  visible in `DefinitionResult`'s new `Unprofiled` field (confirmed by inspecting the diff before this
+  rerun), but none of the 9 rerun questions happened to search a scope containing unprofiled
+  extensions, so it wasn't observed firing in an agent's actual reply this round.
+- **#127** (`co_changed` naming a mass-rename-severed history) — Q8's rerun picked a different routine
+  (`GetRXShell`) than the mass-rename-affected files from the prior run, and its `co_changed` calls
+  had enough real commits left after exclusion to produce a genuine ranking (the exclusion note fired
+  correctly, but on files that weren't fully severed) — so this run didn't reproduce the exact
+  "entire history is one excluded commit" scenario #127 targets. Still open pending a direct test.
+
+### Per-question comparison (original → after #107 → after #125–128)
+
+| Q | Original | After #107 | After #125–128 | Net change |
+|---|---|---|---|---|
+| 1 | 150.9s / 28 / 66.2K | 87.1s / 11 / 63.0K | 110.7s / 11 / 64.5K | Stable at the #107-driven improvement; one wasted `git_log` call (old habit, self-disclosed) |
+| 2 | 53.2s / 7 / 56.5K | 64.5s / 8 / 64.3K | 49.3s / 7 / 58.0K | Unaffected question; cheapest run yet |
+| 3 | 80.5s / 15 / 94.4K | 88.7s / 10 / 91.6K | 72.1s / 12 / 80.5K | **#125 fix observed directly** — informed paging decision instead of silent truncation |
+| 4 | 123.7s / 18 / 69.6K | 128.3s / 18 / 75.6K | 112.6s / 13 / 66.8K | Best of the three runs on every metric |
+| 5 | 90.4s / 14 / 63.1K | 82.6s / 13 / 63.7K | 110.0s / 18 / 66.0K | Slightly more calls (extra CLAUDE.md digging), unrelated to this update |
+| 6 | 142.3s / 28 / 97.1K | 151.9s / 31 / 111.6K | 123.5s / 26 / 96.4K | **#128 fix observed directly** — agent confirmed offset paging works, chose not to need it |
+| 8 | 149.4s / 21 / 98.1K | 170.7s / 29 / 97.0K | 144.4s / 27 / 94.8K | Picked a different routine; didn't hit #127's exact scenario this time |
+| 9 | 63.5s / 5 / 54.0K | 99.5s / 10 / 66.2K | 112.2s / 11 / 65.7K | Unaffected question; consistent, well-verified answer across all three runs |
+| 10 | 147.9s / 23 / 106.1K | 150.3s / 25 / 117.6K | 145.6s / 20 / 127.6K | Fewest tool calls of the three runs; richest briefing |
+| **Total (9 Qs, excl. Q7)** | **1,001.8s / 159 / 705.1K** | **1,023.6s / 155 / 750.6K** | **980.4s / 145 / 720.3K** | **vs. after-#107: −4% time, −6% calls, −4% tokens** |
+
+### Verdict
+
+Both issues that got a chance to fire did exactly what they were meant to: **#125 and #128 turned two
+silent-truncation failure modes into informed, disclosed decisions.** Neither produces a dramatic
+call-count drop the way #107 did for Q7, because pagination only pays off when an agent actually
+*needs* the next page — most of the time, the first page is enough and the fix's value is entirely in
+removing the risk of an unnoticed gap, not in cutting calls. #126 and #127 remain unverified in
+practice (their code paths exist but weren't exercised this round) and are worth a targeted retest
+rather than a full 10-question rerun next time — a question deliberately built around an unprofiled
+extension (for #126) or a file whose *only* commit is a mass rename (for #127) would confirm them
+directly.
