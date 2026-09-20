@@ -10,6 +10,7 @@
     "@tanstack/highlight": "^0.1.0",
     "@tanstack/react-query": "^5.102.8",
     "@tanstack/react-router": "^1.170.36",
+    "@tanstack/react-virtual": "^3.14.13",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "ky": "^2.1.0",

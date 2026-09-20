@@ -18,7 +18,9 @@ export interface TimedSearch {
 
 /**
  * Keyed under the project, so the build that replaces the index invalidates every search over it
- * without this feature having to hear about builds.
+ * without this feature having to hear about builds — which is also why it never goes stale on its
+ * own: the same query over the same index has the same answer, and the pager walking back to a page
+ * already seen should cost nothing.
  */
 export function searchQuery(project: string, query: SearchParameters) {
   return queryOptions({
@@ -28,5 +30,6 @@ export function searchQuery(project: string, query: SearchParameters) {
       return { elapsedMs: Math.round(performance.now() - started), result }
     },
     queryKey: [...projectKey(project), 'search', query],
+    staleTime: Infinity,
   })
 }

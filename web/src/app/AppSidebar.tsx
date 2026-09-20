@@ -8,6 +8,7 @@ import { StateDot } from '@/features/projects/StateDot'
 import { projectQuery } from '@/features/projects/queries'
 import { isRefreshRunning, refreshStatusQuery } from '@/features/refresh/queries'
 import { useRefreshProject } from '@/features/refresh/useRefreshProject'
+import { useRefreshWatcher } from '@/features/refresh/useRefreshWatcher'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -126,6 +127,12 @@ function useProjectIndex(project: string | undefined): ProjectIndex {
   const { data: detail } = useQuery({ ...projectQuery(project ?? ''), enabled })
   const { data: status } = useQuery({ ...refreshStatusQuery(project ?? '', 'frame'), enabled })
   const builtAt = detail?.index.builtAt ?? null
+
+  // The poll above is the only one mounted on every view of a project, so it is also the one thing
+  // that can notice a refresh finishing whatever page is open — and a finished refresh is what makes
+  // every answer under the project stale. The frame watches; the invalidation itself is the refresh
+  // feature's (`useRefreshWatcher`).
+  useRefreshWatcher(project, status?.state)
 
   return {
     builtAt,
