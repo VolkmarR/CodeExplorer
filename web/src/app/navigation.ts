@@ -1,6 +1,6 @@
 import { Activity, BarChart3, Clock, FolderTree, Search, Settings } from 'lucide-react'
 import { treeSearch } from '@/lib/urls/browseParams'
-import { churnSearch } from '@/lib/urls/churnParams'
+import { CHURN_DEFAULTS, churnSearch } from '@/lib/urls/churnParams'
 import { historySearch } from '@/lib/urls/historyParams'
 import { searchSearch } from '@/lib/urls/searchParams'
 import { asView, type View } from '@/lib/urls/views'
@@ -47,7 +47,7 @@ export const PROJECT_VIEWS = [
   {
     Icon: BarChart3,
     label: 'Churn',
-    link: { search: churnSearch(), to: '/projects/$project/churn' },
+    link: { search: churnSearch(CHURN_DEFAULTS), to: '/projects/$project/churn' },
     view: 'churn',
   },
   {

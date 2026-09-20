@@ -11,7 +11,7 @@ import { projectKey } from '@/lib/queryKeys'
  */
 export function churnQuery(project: string, parameters: ChurnParameters) {
   return queryOptions({
-    queryFn: () => fetchChurn(project, parameters.days, parameters.repository),
+    queryFn: () => fetchChurn(project, parameters),
     queryKey: [...projectKey(project), 'churn', parameters],
     staleTime: Infinity,
   })

@@ -422,6 +422,50 @@ public sealed class SearchEndpointTests
     }
 
     /// <summary>
+    ///     What the page narrows a ranking with (#161). An unfiltered ranking of a real project is
+    ///     mostly project files and translations, so every one of these is a search param — the
+    ///     ranking worth sending a colleague is the narrowed one, and a filter the URL did not carry
+    ///     would be the part of it a link could not reproduce.
+    /// </summary>
+    [Fact]
+    public async Task The_churn_page_narrows_by_extension_and_by_directory_and_says_what_it_hid()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        // The menu the page draws its filter from: what this window is written in, ranked like the
+        // files are, and carried before anything is filtered so a first visit can offer the choice.
+        var all = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn");
+        Assert.Null(all.Depth);
+        Assert.Equal(0, all.Hidden);
+        Assert.Equal([".cs", ".md"], all.Extensions.Select(e => e.Extension).Order());
+
+        var sharp = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?extensions=.cs");
+        Assert.Equal(["one/src/Widget.cs", "two/src/Widget.cs"],
+            sharp.Files.Select(f => f.QualifiedPath).Order());
+        // The Markdown file is off screen and the answer says so, rather than letting two rows read
+        // as the whole window.
+        Assert.Equal(1, sharp.Hidden);
+        // The menu is unchanged by the selection: it is also the way back out of it.
+        Assert.Equal([".cs", ".md"], sharp.Extensions.Select(e => e.Extension).Order());
+
+        // Written without the dot, the way a person types it.
+        var bare = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?extensions=cs");
+        Assert.Equal(sharp.Files.Count, bare.Files.Count);
+
+        // A directory scope is a qualified path and carries its own repository, which is why the page
+        // sends one parameter and not two.
+        var scoped = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?directory=one/src");
+        Assert.Equal("one/src/Widget.cs", Assert.Single(scoped.Files).QualifiedPath);
+
+        // Rolled up, the rows are directories and the answer says at what depth — the page draws a
+        // directory row and a file row differently and cannot tell them apart from the path.
+        var rolled = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?depth=2");
+        Assert.Equal(2, rolled.Depth);
+        Assert.Equal(["one/docs", "one/src", "two/src"],
+            rolled.Files.Select(f => f.QualifiedPath).Order());
+    }
+
+    /// <summary>
     ///     A project whose history was never imported answers with no dates and no ranking, rather
     ///     than a failure: the page draws that as its own starting state.
     /// </summary>

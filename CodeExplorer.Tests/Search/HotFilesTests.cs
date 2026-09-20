@@ -347,7 +347,7 @@ public sealed class HotFilesTests(HotFilesFixture fixture) : IClassFixture<HotFi
         // The distortion, before anything is done about it: the generated file wins.
         Assert.True(unfiltered.IndexOf("one/src/Model.g.cs", StringComparison.Ordinal)
                     < unfiltered.IndexOf("one/src/Service.cs", StringComparison.Ordinal));
-        Assert.DoesNotContain("exclude hid", unfiltered, StringComparison.Ordinal);
+        Assert.DoesNotContain("The filter hid", unfiltered, StringComparison.Ordinal);
 
         string filtered = await TestHost.CallAsync(client, "hot_files",
             new Dictionary<string, object?> { ["days"] = 30, ["exclude"] = "*.g.cs,/migrations/" });
@@ -355,14 +355,87 @@ public sealed class HotFilesTests(HotFilesFixture fixture) : IClassFixture<HotFi
         Assert.DoesNotContain("migrations", filtered, StringComparison.Ordinal);
         Assert.Contains("one/src/Service.cs", filtered, StringComparison.Ordinal);
         // An excluded ranking must never read as an unfiltered one.
-        Assert.Contains("exclude hid 2 paths, so this is a filtered ranking", filtered,
+        Assert.Contains("The filter hid 2 paths, so this is a filtered ranking", filtered,
             StringComparison.Ordinal);
 
         // The rollup reads the same scope, so it hides the same files rather than answering differently.
         string rolled = await TestHost.CallAsync(client, "hot_files",
             new Dictionary<string, object?> { ["days"] = 30, ["depth"] = 2, ["exclude"] = "/migrations/" });
         Assert.DoesNotContain("one/migrations", rolled, StringComparison.Ordinal);
-        Assert.Contains("exclude hid 1 path", rolled, StringComparison.Ordinal);
+        Assert.Contains("The filter hid 1 path", rolled, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The other polarity of the same filter (#161): naming the extensions that are the code,
+    ///     which on a real project is shorter than listing everything that is not. Asked of both
+    ///     grains, because the rollup ranks the files it kept and a rollup filtered differently from
+    ///     the files under it is a directory whose churn nothing on screen adds up to.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_ranks_only_the_extensions_it_is_given()
+    {
+        await HistoryFixtures.BuildGeneratedProjectAsync(_host, "byext");
+        await using var client = await _host.ConnectAsync("byext");
+
+        string sharp = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["extensions"] = ".cs" });
+        Assert.Contains("one/src/Service.cs", sharp, StringComparison.Ordinal);
+        Assert.Contains("one/src/Model.g.cs", sharp, StringComparison.Ordinal);
+        Assert.DoesNotContain("0001.sql", sharp, StringComparison.Ordinal);
+        Assert.Contains("The filter hid 1 path", sharp, StringComparison.Ordinal);
+
+        // Written without the dot, which is how a person types it, and with it, which is how the
+        // reply spells it. One term, two spellings, one ranking.
+        string bare = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["extensions"] = "cs" });
+        Assert.DoesNotContain("0001.sql", bare, StringComparison.Ordinal);
+
+        // Anchored at the end of the path, which is what keeps an extension from behaving like the
+        // substring it looks like: `.sql` selects the migration and nothing that merely contains it.
+        string sql = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["extensions"] = ".sql" });
+        Assert.Contains("one/migrations/0001.sql", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("Service.cs", sql, StringComparison.Ordinal);
+        Assert.Contains("The filter hid 2 paths", sql, StringComparison.Ordinal);
+
+        // Both filters at once, and the count is paths hidden by EITHER rather than the sum: the
+        // generated file is dropped twice over and must still be one path.
+        string both = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?>
+            {
+                ["days"] = 30, ["extensions"] = ".cs", ["exclude"] = "*.g.cs"
+            });
+        Assert.Contains("one/src/Service.cs", both, StringComparison.Ordinal);
+        Assert.DoesNotContain("Model.g.cs", both, StringComparison.Ordinal);
+        Assert.Contains("The filter hid 2 paths", both, StringComparison.Ordinal);
+
+        // The rollup reads the same filters, so it rolls up the files the caller can still see.
+        string rolled = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30, ["depth"] = 2, ["extensions"] = ".sql" });
+        Assert.Contains("one/migrations", rolled, StringComparison.Ordinal);
+        Assert.DoesNotContain("one/src", rolled, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The menu the filter is chosen from (#161). An agent that has just read a ranking of
+    ///     project files needs the spellings this scope actually holds, not the ones it would guess —
+    ///     a project written in `.prg` is exactly where guessing `.cs` answers with an empty ranking
+    ///     that reads as a quiet repository.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_names_the_extensions_the_window_holds()
+    {
+        await HistoryFixtures.BuildGeneratedProjectAsync(_host, "menu");
+        await using var client = await _host.ConnectAsync("menu");
+
+        string reply = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 30 });
+
+        Assert.Contains("Extensions changed in this window", reply, StringComparison.Ordinal);
+        // Commits then paths: two generated files accounting for more commits than the code is the
+        // shape the line exists to make visible.
+        Assert.Contains(".cs 5c/2f", reply, StringComparison.Ordinal);
+        Assert.Contains(".sql 4c/1f", reply, StringComparison.Ordinal);
     }
 
     /// <summary>

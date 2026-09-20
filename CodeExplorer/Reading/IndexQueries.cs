@@ -88,17 +88,17 @@ internal static class IndexQueries
     ///     without <paramref name="repositorySlug" />, because a directory of one repository is not a
     ///     directory of another; callers resolve both from the one qualified path they were given.
     /// </param>
-    /// <param name="exclude">
-    ///     Comma-separated path terms whose files are dropped from the ranking, in
-    ///     <see cref="PathTerms" />' syntax, or null to rank everything the scope holds.
+    /// <param name="filters">
+    ///     Which extensions to rank and which paths to drop, in <see cref="PathTerms" />' syntax, or
+    ///     <see cref="ChurnFilters.None" /> to rank everything the scope holds.
     /// </param>
     /// <param name="limit">How many files to return.</param>
     /// <param name="cancellationToken">Threaded through to the command.</param>
     public static async Task<IReadOnlyList<ChurnedFile>> RankAsync(DuckDBConnection connection, ProjectPaths paths,
-        HistoryWindow window, string? repositorySlug, string? directoryInRepository, string? exclude, int limit,
+        HistoryWindow window, string? repositorySlug, string? directoryInRepository, ChurnFilters filters, int limit,
         CancellationToken cancellationToken)
     {
-        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository, exclude);
+        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository, filters);
 
         // Ranked first, and only then asked which of the survivors still exist. Resolving `at_head`
         // inside the aggregate would join `files` — the largest table here after `lines` — against
@@ -162,17 +162,17 @@ internal static class IndexQueries
     ///     to nothing, the first segment of a qualified path is the repository, so one level of the
     ///     depth is spent there and a depth of one ranks repositories.
     /// </param>
-    /// <param name="exclude">
-    ///     The same terms the file ranking takes, applied to the files before they are rolled up — so a
-    ///     directory's churn is the churn of the files the caller can still see.
+    /// <param name="filters">
+    ///     The same filters the file ranking takes, applied to the files before they are rolled up — so
+    ///     a directory's churn is the churn of the files the caller can still see.
     /// </param>
     /// <param name="limit">How many directories to return.</param>
     /// <param name="cancellationToken">Threaded through to the command.</param>
     public static async Task<IReadOnlyList<ChurnedFile>> RankDirectoriesAsync(DuckDBConnection connection,
         ProjectPaths paths, HistoryWindow window, string? repositorySlug, string? directoryInRepository, int depth,
-        string? exclude, int limit, CancellationToken cancellationToken)
+        ChurnFilters filters, int limit, CancellationToken cancellationToken)
     {
-        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository, exclude);
+        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository, filters);
         string prefix = directoryInRepository?.TrimEnd('/') ?? "";
         parameters.Add(new DuckDBParameter("p", prefix));
         // The repository slug leads a qualified path only where the project puts it there (ADR-0006),
@@ -245,22 +245,33 @@ internal static class IndexQueries
     }
 
     /// <summary>
-    ///     How many distinct paths of the scope the <c>exclude</c> terms kept out of a ranking. Counted
-    ///     rather than implied: a filtered ranking reads exactly like an unfiltered one, and "the top
-    ///     file here is X" is a sentence an agent repeats. Asked only where there are terms, so an
+    ///     How many distinct paths of the scope the filters kept out of a ranking. Counted rather than
+    ///     implied: a filtered ranking reads exactly like an unfiltered one, and "the top file here is
+    ///     X" is a sentence an agent repeats. Asked only where something was filtered, so an
     ///     unfiltered call pays for nothing.
+    ///     One number for both filters and not one each (#161). A reader wants to know how much of the
+    ///     window is off screen, and splitting that into "excluded" and "the wrong extension" invites
+    ///     adding the two — which double-counts every path both filters would have dropped.
     /// </summary>
-    public static async Task<int> HiddenByExcludeAsync(DuckDBConnection connection, ProjectPaths paths,
-        HistoryWindow window, string? repositorySlug, string? directoryInRepository, string? exclude,
+    public static async Task<int> HiddenAsync(DuckDBConnection connection, ProjectPaths paths,
+        HistoryWindow window, string? repositorySlug, string? directoryInRepository, ChurnFilters filters,
         CancellationToken cancellationToken)
     {
-        if (PathTerms.Split(exclude).Count == 0) return 0;
+        if (!filters.Any) return 0;
 
-        // The scope without the exclude, and then only the paths the exclude would drop: the same
-        // window and the same directory, so the number is about this ranking and not about the project.
-        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository, null);
-        string? excluding = PathTerms.Excluding(exclude, ChurnedPath(paths), "cx", parameters);
-        conditions.Add($"NOT ({excluding})");
+        // The scope without the filters, and then only the paths they drop: the same window and the
+        // same directory, so the number is about this ranking and not about the project.
+        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository,
+            ChurnFilters.None);
+        string path = ChurnedPath(paths);
+        var dropped = new List<string>(2);
+        if (PathTerms.Excluding(filters.Exclude, path, "cx", parameters) is { } excluding)
+            dropped.Add($"NOT ({excluding})");
+        if (PathTerms.Including(filters.Extensions, path, "ce", parameters) is { } including)
+            dropped.Add($"NOT ({including})");
+        // OR and not AND: a path is off screen if EITHER filter drops it, and the DISTINCT below is
+        // what keeps one dropped by both from being counted twice.
+        conditions.Add($"({string.Join(" OR ", dropped)})");
 
         using var command = connection.Query($"""
                                               SELECT count(*) AS hidden FROM (
@@ -273,13 +284,61 @@ internal static class IndexQueries
     }
 
     /// <summary>
+    ///     Which extensions the window's scope actually holds, most-changed first, so a caller can be
+    ///     offered the filter rather than made to guess at it (#161). Counted over the same window and
+    ///     scope as the ranking and BEFORE the extension filter, because a list that narrowed with the
+    ///     selection would delete the option a reader needs to get back out of it — but after
+    ///     <c>exclude</c>, which says what is not code here at all.
+    ///     The extension is read off the last segment's last dot, so a dotfile with no extension and a
+    ///     path with a dot in a directory name both fall to the empty string, which is what a file with
+    ///     no extension is. It is ranked by commits like the files are, which is what puts <c>.cs</c>
+    ///     above <c>.xlf</c> in the list a reader opens even when the translations outnumber it.
+    /// </summary>
+    public static async Task<IReadOnlyList<ChurnedExtension>> ChurnedExtensionsAsync(DuckDBConnection connection,
+        ProjectPaths paths, HistoryWindow window, string? repositorySlug, string? directoryInRepository,
+        string? exclude, int limit, CancellationToken cancellationToken)
+    {
+        var (conditions, parameters) = ChurnScope(paths, window, repositorySlug, directoryInRepository,
+            new ChurnFilters(null, exclude));
+        parameters.Add(new DuckDBParameter("xl", limit));
+
+        using var command = connection.Query($"""
+                                              WITH named AS (
+                                                  SELECT c.repo_slug, cf.path, cf.commit_id,
+                                                         -- The last segment, so a dot in a directory
+                                                         -- name is not read as an extension.
+                                                         split_part(cf.path, '/', -1) AS leaf
+                                                  FROM commit_files cf
+                                                  JOIN commits c USING (commit_id)
+                                                  WHERE {string.Join(" AND ", conditions)}
+                                              )
+                                              SELECT CASE WHEN contains(leaf, '.')
+                                                          THEN lower('.' || split_part(leaf, '.', -1))
+                                                          ELSE '' END AS extension,
+                                                     count(DISTINCT commit_id)::INTEGER AS commits,
+                                                     count(DISTINCT (repo_slug, path))::INTEGER AS files
+                                              FROM named
+                                              GROUP BY extension
+                                              ORDER BY commits DESC, files DESC, extension
+                                              LIMIT $xl
+                                              """, parameters);
+        using var reader = await command.ReaderAsync(cancellationToken);
+        var extensions = new List<ChurnedExtension>();
+        while (await reader.ReadAsync(cancellationToken))
+            extensions.Add(new ChurnedExtension(reader.Text("extension"), reader.Int32("commits"),
+                reader.Int32("files")));
+
+        return extensions;
+    }
+
+    /// <summary>
     ///     The window and the scope both rankings of churn count over, as conditions over
     ///     <c>commit_files cf</c> joined to <c>commits c</c>. Written once because the file ranking and
     ///     the directory rollup answer the same question at two grains, and a scope that meant
     ///     something different in one of them would have the rollup disagree with the files under it.
     /// </summary>
     private static (List<string> Conditions, List<DuckDBParameter> Parameters) ChurnScope(ProjectPaths paths,
-        HistoryWindow window, string? repositorySlug, string? directoryInRepository, string? exclude)
+        HistoryWindow window, string? repositorySlug, string? directoryInRepository, ChurnFilters filters)
     {
         // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
         // WindowAsync reads it that way: it keeps the comparison off the session time zone, and it
@@ -314,8 +373,13 @@ internal static class IndexQueries
         // The terms every other filtered search takes, parsed by the same code rather than spelled a
         // second time (#117). Matched against the qualified path, because that is the path the caller
         // was shown and the one an exclude term is written against.
-        if (PathTerms.Excluding(exclude, ChurnedPath(paths), "cx", parameters) is { } excluding)
+        if (PathTerms.Excluding(filters.Exclude, ChurnedPath(paths), "cx", parameters) is { } excluding)
             conditions.Add(excluding);
+
+        // Bracketed, because it is a disjunction joining a list of conditions that are ANDed (#161):
+        // without the parentheses the last extension would own the whole window and the scope.
+        if (PathTerms.Including(filters.Extensions, ChurnedPath(paths), "ce", parameters) is { } including)
+            conditions.Add($"({including})");
 
         return (conditions, parameters);
     }
@@ -335,7 +399,7 @@ internal static class IndexQueries
     ///     system ranks paths a later commit deleted or renamed away, and a change to how "still there"
     ///     is recognised has to reach all of them or two answer differently about one path.
     ///     Always applied to what survived a LIMIT, never inside the aggregate that produced it, for
-    ///     the reason <see cref="RankAsync" /> gives where it uses this.
+    ///     the reason <c>RankAsync</c> gives where it uses this.
     /// </summary>
     /// <param name="repositorySlug">
     ///     The SQL naming the repository to look in: a column of <c>ranked</c> where the ranking spans

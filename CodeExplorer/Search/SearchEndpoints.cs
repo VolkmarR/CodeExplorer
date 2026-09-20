@@ -107,7 +107,15 @@ internal sealed record ChurnResponse(
     DateTimeOffset? Since,
     DateTimeOffset? Until,
     IReadOnlyList<ChurnedFile> Files,
-    IReadOnlyList<string> WithoutHistory);
+    IReadOnlyList<string> WithoutHistory,
+    // What the rows are (#161): the depth they were rolled up to, or null where each row is a file.
+    // The page draws a directory row and a file row differently — one drills in, the other opens —
+    // so it must be told which it has rather than guess from the path.
+    int? Depth,
+    // The extensions the scope holds, so the page can offer the filter, and how many paths the
+    // filters kept off screen, so a narrowed ranking does not read as the whole window.
+    IReadOnlyList<ChurnedExtension> Extensions,
+    int Hidden);
 
 /// <summary>One file in a listing. The index's internal file id is deliberately not in it.</summary>
 internal sealed record FileListEntry(
@@ -238,11 +246,20 @@ internal static class SearchEndpoints
         // The route is named for the concept and the MCP tool is named `hot_files`, which is not an
         // oversight: a tool name is agent-facing and trades on the shell verbs a model already knows
         // (CODING_STANDARDS, Comments), where a URL the UI holds follows the vocabulary.
+        //
+        // `directory` and `repository` are one scope on the service and two parameters here, because
+        // the page holds them as two things: a repository is chosen from a list and a directory is
+        // walked into. The directory wins where both arrive, and it already carries the repository —
+        // it is a qualified path, which is how a project spells one (ADR-0006).
         project.MapGet("/churn",
             async (Project project, HistoryQueries history, CancellationToken ct, string? repository = null,
-                    int days = HistoryWindow.DefaultDays, int limit = ChurnFilesShown) =>
+                    string? directory = null, int? depth = null, string? extensions = null,
+                    string? exclude = null, int days = HistoryWindow.DefaultDays,
+                    int limit = ChurnFilesShown) =>
                 Answer<ChurnAnswer>(
-                    await history.ChurnAsync(project.Slug, new ChurnRequest(repository, days, limit), ct), Churn));
+                    await history.ChurnAsync(project.Slug,
+                        new ChurnRequest(string.IsNullOrEmpty(directory) ? repository : directory, days, limit,
+                            depth, exclude, extensions), ct), Churn));
 
         // One commit, for the page a link to a SHA opens. Its own route rather than a filter on the
         // change log: the page arrives knowing only the SHA, and finding it in the log would mean
@@ -283,7 +300,7 @@ internal static class SearchEndpoints
     /// </summary>
     private static IResult Churn(ChurnAnswer answer) =>
         Results.Ok(new ChurnResponse(answer.Window?.Since, answer.Window?.Until, answer.Files,
-            answer.Coverage.Without));
+            answer.Coverage.Without, answer.Depth, answer.Extensions, answer.Hidden));
 
     /// <summary>
     ///     One commit, in the same shape the change log lists it in, so the page a link opens and the row
