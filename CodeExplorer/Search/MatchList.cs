@@ -46,7 +46,7 @@ public sealed record MatchListResult(
 ///     deduplication is a <c>GROUP BY</c>, so the whole answer is computed in DuckDB (ADR-0004) and
 ///     only the distinct values cross the wire. Nothing here opens <c>control.duckdb</c> (ADR-0005).
 /// </summary>
-public sealed class MatchList(ProjectIndexes indexes)
+public sealed class MatchList(IndexReaders readers)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell this apart from a grep.</summary>
     public const string Engine = "match list";
@@ -110,7 +110,7 @@ public sealed class MatchList(ProjectIndexes indexes)
         // Non-capturing, so the group numbers the caller passed still mean what they meant.
         if (request.WholeWord) query = $@"\b(?:{query})\b";
 
-        return await IndexReader.OverIndexAsync(indexes, slug, request.Filter.Repository,
+        return await readers.OverIndexAsync(slug, request.Filter.Repository,
             (index, token) => QueryAsync(index, request, query, token), cancellationToken);
     }
 

@@ -83,7 +83,7 @@ public sealed record ExtensionListing(IndexedRepository? Repository, IReadOnlyLi
 ///     answer the same way; only the rendering differs. Every answer is an <see cref="Outcome" />:
 ///     a semantic failure is an answer, never an exception (CODING_STANDARDS).
 /// </summary>
-public sealed class FileQueries(ProjectIndexes indexes)
+public sealed class FileQueries(IndexReaders readers)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell a listing apart from a scan.</summary>
     private const string Engine = "index listing";
@@ -117,7 +117,7 @@ public sealed class FileQueries(ProjectIndexes indexes)
             return Task.FromResult<Outcome>(
                 new Problem("No paths given. Pass at least one qualified path such as `repo/src/File.cs`."));
 
-        return IndexReader.OverIndexAsync(indexes, slug, null, async (index, token) =>
+        return readers.OverIndexAsync(slug, null, async (index, token) =>
         {
             var reads = new List<FileRead>(request.Windows.Count);
             foreach (var window in request.Windows)
@@ -161,7 +161,7 @@ public sealed class FileQueries(ProjectIndexes indexes)
         string pattern = request.Glob.Trim().Replace('\\', '/');
         if (MalformedGlob(pattern) is { } malformed) return Task.FromResult<Outcome>(new Problem(malformed));
 
-        return IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
+        return readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             int page = Math.Max(1, request.Page);
             var result = await index.GlobAsync(pattern, request.Limit, (page - 1) * request.Limit, token);
@@ -186,7 +186,7 @@ public sealed class FileQueries(ProjectIndexes indexes)
             return Task.FromResult<Outcome>(new Problem(
                 "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on."));
 
-        return IndexReader.OverDirectoryAsync(indexes, slug, request.Path, async (index, directory, token) =>
+        return readers.OverDirectoryAsync(slug, request.Path, async (index, directory, token) =>
         {
             // Null is the repository level, which a single-repository project does not have: there the
             // project level is that repository's own top level (ADR-0006).
@@ -225,7 +225,7 @@ public sealed class FileQueries(ProjectIndexes indexes)
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.Search(slug);
-        var outcome = await IndexReader.OverIndexAsync(indexes, slug, request.Repository, async (index, token) =>
+        var outcome = await readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
             new ExtensionListing(index.Repository,
                 (await IndexQueries.ExtensionCountsAsync(index.Connection, index.Repository?.Slug, token))
                 .OrderByDescending(e => e.Files)

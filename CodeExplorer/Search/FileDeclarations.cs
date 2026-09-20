@@ -76,7 +76,7 @@ public sealed record DeclarationsResult(
 ///     Textual throughout, and therefore evidence rather than proof: a declaration form no profile
 ///     knows is one this does not find rather than one that is not there, and the reply says as much.
 /// </summary>
-public sealed class FileDeclarations(ProjectIndexes indexes)
+public sealed class FileDeclarations(IndexReaders readers)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell this apart from a symbol search.</summary>
     public const string Engine = "file declarations";
@@ -107,7 +107,7 @@ public sealed class FileDeclarations(ProjectIndexes indexes)
     }
 
     private Task<Outcome> ReadAsync(string slug, string path, int offset, CancellationToken cancellationToken) =>
-        IndexReader.OverFileAsync(indexes, slug, path, true, async (index, file, token) =>
+        readers.OverFileAsync(slug, path, true, async (index, file, token) =>
         {
             string extension = Languages.ExtensionOf(file.QualifiedPath);
             var analyzer = Languages.Default.For(extension);

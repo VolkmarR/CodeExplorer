@@ -17,7 +17,7 @@ namespace CodeExplorer;
 internal sealed class ProjectTools(
     IHttpContextAccessor httpContextAccessor,
     ControlDatabase control,
-    ProjectIndexes indexes)
+    IndexReaders readers)
 {
     [McpServerTool(Name = "which_project")]
     [Description(
@@ -43,7 +43,7 @@ internal sealed class ProjectTools(
         // Null covers a build that was interrupted while filling the file as well as a project never
         // built: the reader will not report half-built tables as the project, and either way the
         // agent's next move is the same.
-        var status = await IndexReader.StatusAsync(indexes, project.Slug, true, cancellationToken);
+        var status = await readers.StatusAsync(project.Slug, true, cancellationToken);
         if (status is null)
             return IndexReader.NoIndex(project.Slug) + (configured.Count == 0
                 ? $" The project has no repositories yet either; add one with POST /api/projects/{project.Slug}/repositories."
@@ -117,7 +117,7 @@ internal sealed class ProjectTools(
         // The repositories come from the index's own table rather than from the stored row: they are
         // already one join-free read, and a second copy inside the overview would be a second
         // definition of what this project holds (IndexOverview says the same).
-        return await IndexReader.OverIndexAsync(indexes, project.Slug, null,
+        return await readers.OverIndexAsync(project.Slug, null,
             async (index, token) => OverviewReply.Render(project, await index.RepositoriesAsync(token),
                 await index.OverviewAsync(token)),
             problem => problem.Explanation, cancellationToken);

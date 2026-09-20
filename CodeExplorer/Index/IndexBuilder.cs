@@ -142,12 +142,12 @@ public sealed class IndexBuilder(
                 foreach (var edge in found.Edges)
                     imported.CreateRow().AppendValue(++importId).AppendValue(fileId)
                         .AppendValue(edge.LineNumber).AppendValue(edge.Name)
-                        .AppendValue(ImportBuilder.Column(edge.Shape))
+                        .AppendValue(ImportColumns.Column(edge.Shape))
                         // target_file and unresolved are the resolution pass's, which runs once the
                         // whole project is in the shadow; a row that still holds two nulls is one it
                         // never reached.
                         .AppendNullValue().AppendNullValue()
-                        .AppendValue(ImportBuilder.Column(edge.Evidence)).EndRow();
+                        .AppendValue(ImportColumns.Column(edge.Evidence)).EndRow();
 
                 var row = files.CreateRow()
                     .AppendValue(fileId).AppendValue(repoId)

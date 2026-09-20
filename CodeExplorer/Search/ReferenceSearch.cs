@@ -95,7 +95,7 @@ public sealed record ReferenceResult(
 ///     It is textual throughout and therefore evidence rather than proof, which every reply says in
 ///     so many words. Nothing here opens <c>control.duckdb</c> (ADR-0005).
 /// </summary>
-public sealed class ReferenceSearch(ProjectIndexes indexes)
+public sealed class ReferenceSearch(IndexReaders readers)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell this apart from a grep.</summary>
     public const string Engine = "reference scan";
@@ -141,7 +141,7 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         string symbol = request.Symbol.Trim();
         if (SearchQuery.Unusable(symbol, "find_references") is { } unusable) return new Problem(unusable);
 
-        return await IndexReader.OverIndexAsync(indexes, slug, request.Filter.Repository,
+        return await readers.OverIndexAsync(slug, request.Filter.Repository,
             (index, token) => QueryAsync(index, request, symbol, token), cancellationToken);
     }
 
