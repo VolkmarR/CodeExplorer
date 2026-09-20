@@ -17,6 +17,8 @@ public sealed class HistoryToolsTests : IDisposable
 {
     private readonly TestHost _host = new(SearchEngine.Substring);
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     /// <summary>
     ///     What a call carrying one name git_log does not have is read with, whatever the answer under
     ///     it turns out to be. Written once because the point of the assertions below is that the four
@@ -1610,6 +1612,138 @@ public sealed class HistoryToolsTests : IDisposable
     }
 
     /// <summary>
+    ///     The log-shaped read of one path answers for a path HEAD no longer holds, the same way the log
+    ///     itself does (#136). git_log's own description routes an agent here for "the same read for one
+    ///     exact path", so refusing the very path git_log had just answered for reported a typo the
+    ///     caller had not made. The not-at-HEAD sentence is asserted against git_log's, word for word:
+    ///     one fact, one wording, or an agent learns there are two.
+    /// </summary>
+    [Fact]
+    public async Task File_history_lists_a_path_history_records_and_head_no_longer_holds()
+    {
+        await BuildChurnProjectAsync("gonefile", withSecondRepository: false);
+        await using var client = await _host.ConnectAsync("gonefile");
+
+        string listed = await TestHost.CallAsync(client, "file_history",
+            new Dictionary<string, object?> { ["path"] = "one/src/Gone.cs" });
+
+        Assert.DoesNotContain("No indexed file", listed, StringComparison.Ordinal);
+        Assert.DoesNotContain("glob or list_tree", listed, StringComparison.Ordinal);
+        Assert.Contains("changed one/src/Gone.cs, newest first", listed, StringComparison.Ordinal);
+        // Its own commits, newest first, and nothing from the file beside it.
+        Assert.True(listed.IndexOf("Drop the dead file", StringComparison.Ordinal)
+                    < listed.IndexOf("Add the module", StringComparison.Ordinal));
+        Assert.DoesNotContain("Fix the check", listed, StringComparison.Ordinal);
+
+        const string note = "Nothing is at 'one/src/Gone.cs' now (no longer at HEAD)";
+        Assert.Contains(note, listed, StringComparison.Ordinal);
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Gone.cs" });
+        Assert.Contains(note, log, StringComparison.Ordinal);
+
+        // A live path answers exactly as it did, with nothing said about HEAD.
+        string live = await TestHost.CallAsync(client, "file_history",
+            new Dictionary<string, object?> { ["path"] = "one/src/Hot.cs" });
+        Assert.Contains("changed one/src/Hot.cs, newest first", live, StringComparison.Ordinal);
+        Assert.DoesNotContain("no longer at HEAD", live, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The two tools whose answer is about the file that is there keep refusing, which is correct —
+    ///     blame attributes the lines of the newest recorded commit (ADR-0007) and there are none, and
+    ///     co_changed's historical anchor is a decision deferred to #115/#127. What changes is the
+    ///     refusal: it names the reason and the reads that do answer, instead of advising on a spelling
+    ///     that was right (#136).
+    /// </summary>
+    [Theory]
+    [InlineData("blame")]
+    [InlineData("co_changed")]
+    public async Task Blame_and_co_changed_refuse_a_historical_path_by_naming_the_reason_and_the_reads_that_answer(
+        string tool)
+    {
+        // A project slug takes no underscore, and `co_changed` has one.
+        string slug = "goneread" + tool.Replace("_", "", StringComparison.Ordinal);
+        await BuildChurnProjectAsync(slug, withSecondRepository: false);
+        await using var client = await _host.ConnectAsync(slug);
+
+        string refused = await TestHost.CallAsync(client, tool,
+            new Dictionary<string, object?> { ["path"] = "one/src/Gone.cs" });
+
+        Assert.Contains("'one/src/Gone.cs' is recorded in this project's history and HEAD no longer holds it",
+            refused, StringComparison.Ordinal);
+        Assert.Contains($"{tool} cannot answer for it", refused, StringComparison.Ordinal);
+        Assert.Contains("git_log and file_history read the recorded history and still answer for this path",
+            refused, StringComparison.Ordinal);
+        // The fault this replaces: a refusal shaped like a typo report, for a path spelled correctly.
+        Assert.DoesNotContain("No indexed file", refused, StringComparison.Ordinal);
+        Assert.DoesNotContain("glob or list_tree", refused, StringComparison.Ordinal);
+        Assert.DoesNotContain("Did you mean", refused, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The real typo case, which must stay distinguishable from the one above in all three tools: a
+    ///     path neither HEAD nor any recorded commit holds keeps the locator's refusal, spelling advice
+    ///     and all. Folding the two into one sentence is the fault, pointed the other way.
+    /// </summary>
+    [Theory]
+    [InlineData("file_history")]
+    [InlineData("blame")]
+    [InlineData("co_changed")]
+    public async Task A_path_neither_head_nor_history_holds_keeps_the_not_here_refusal(string tool)
+    {
+        string slug = "nowhere" + tool.Replace("_", "", StringComparison.Ordinal);
+        await BuildChurnProjectAsync(slug, withSecondRepository: false);
+        await using var client = await _host.ConnectAsync(slug);
+
+        string refused = await TestHost.CallAsync(client, tool,
+            new Dictionary<string, object?> { ["path"] = "one/src/Nowhere.cs" });
+
+        Assert.Contains("No indexed file 'one/src/Nowhere.cs'", refused, StringComparison.Ordinal);
+        Assert.Contains("glob or list_tree", refused, StringComparison.Ordinal);
+        Assert.DoesNotContain("no longer holds it", refused, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A directory a rename emptied is a scope git_log answers for and not a file these three can:
+    ///     `one/legacy` records commits beneath it and none of its own. The single-file tools ask about
+    ///     the exact path, so it stays the not-here refusal rather than becoming a historical file with
+    ///     no commits to list — a quiet wrong answer where a refusal is the right one.
+    /// </summary>
+    [Fact]
+    public async Task A_renamed_away_directory_is_not_a_historical_file()
+    {
+        await BuildChurnProjectAsync("emptied", withSecondRepository: false);
+        _host.CommitToGitRepositoryAs("emptied-one",
+            new Dictionary<string, string> { ["legacy/Mover.cs"] = "m\n" },
+            "Add the legacy helper", "Ada", "ada@example.invalid", 20000);
+        _host.CommitToGitRepositoryAs("emptied-one",
+            new Dictionary<string, string> { ["src/Mover.cs"] = "m\n" },
+            "Move the helper", "Grace", "grace@example.invalid", 20001);
+        _host.RemoveInGitRepositoryAs("emptied-one", ["legacy/Mover.cs"], "Move the helper, second half", "Grace",
+            "grace@example.invalid", 20002);
+        await _host.RefreshAsync("emptied");
+
+        await using var client = await _host.ConnectAsync("emptied");
+
+        // The scope-shaped read answers for it, as #132 made it.
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/legacy" });
+        Assert.Contains("Add the legacy helper", log, StringComparison.Ordinal);
+
+        string listed = await TestHost.CallAsync(client, "file_history",
+            new Dictionary<string, object?> { ["path"] = "one/legacy" });
+        Assert.Contains("No indexed file 'one/legacy'", listed, StringComparison.Ordinal);
+        Assert.DoesNotContain("no longer holds it", listed, StringComparison.Ordinal);
+
+        // The file under it, which a commit did record, is the historical case and is listed.
+        string mover = await TestHost.CallAsync(client, "file_history",
+            new Dictionary<string, object?> { ["path"] = "one/legacy/Mover.cs" });
+        Assert.Contains("changed one/legacy/Mover.cs, newest first", mover, StringComparison.Ordinal);
+        Assert.Contains("Nothing is at 'one/legacy/Mover.cs' now (no longer at HEAD)", mover,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     An address that matches nobody is answered before the scope is described, and the count it
     ///     offers was taken under that scope. Naming only the repository would hand an agent the
     ///     addresses of a path as the project's — and under a path HEAD no longer holds, a miss that
@@ -1814,6 +1948,273 @@ public sealed class HistoryToolsTests : IDisposable
             new Dictionary<string, object?>
                 { ["days"] = 30, ["directory"] = "one/app/[slug]", ["depth"] = 1 });
         Assert.DoesNotContain("one/app/s", rolled, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     hot_files returns a number, and a wrong number is indistinguishable from a right one: a
+    ///     directory that was renamed mid-history ranks its post-rename slice alone. git_log, authors
+    ///     and file_history all warn about that in their own descriptions; this is the tool where it
+    ///     matters most, and it did not (#135). Asserted against the sibling wording rather than for a
+    ///     sentence of its own, because a fourth phrasing of one fact is how an agent ends up believing
+    ///     the tools differ.
+    /// </summary>
+    [Fact]
+    public async Task Hot_files_says_its_directory_scope_is_matched_by_the_recorded_path()
+    {
+        await using var client = await ChurnAsync();
+        var listed = (await client.ListToolsAsync(cancellationToken: Ct))
+            .ToDictionary(tool => tool.Name, tool => tool.Description ?? "", StringComparer.Ordinal);
+
+        string churn = listed["hot_files"];
+        Assert.Contains("begins where a directory was last renamed or moved", churn, StringComparison.Ordinal);
+        Assert.Contains("reads as a quiet one unless you know that", churn, StringComparison.Ordinal);
+        // The siblings' clause, word for word, so the four descriptions cannot drift into four facts.
+        Assert.Contains("Scoping is by the path each commit recorded", churn, StringComparison.Ordinal);
+        Assert.Contains("Scoping is by the path each commit recorded", listed["authors"], StringComparison.Ordinal);
+        // The row-level note is about what the ranking returns, not about the scope it was given, and
+        // stays its own bullet.
+        Assert.Contains("Files a later commit deleted or renamed away are ranked too and marked", churn,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The cutover as a real one arrives: one commit of many `renamed` rows, content unchanged
+    ///     (#131). Every path-scoped tool scoped to the new name must say what the old name was, how
+    ///     many commits the whole chain accounts for, and how to read the old name — and must go on
+    ///     counting only what its own path recorded, because renames are signalled and not followed.
+    /// </summary>
+    [Fact]
+    public async Task A_directory_renamed_in_one_commit_is_signalled_by_every_path_scoped_tool()
+    {
+        await BuildRenamedProjectAsync("cutover");
+        await using var client = await _host.ConnectAsync("cutover");
+
+        string ranked = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 3650, ["directory"] = "one/src/Model" });
+        Assert.Contains("its content was at 'one/model' before", ranked, StringComparison.Ordinal);
+        Assert.Contains("recorded across the whole chain", ranked, StringComparison.Ordinal);
+        Assert.Contains("Call hot_files with directory=\"one/model\" to rank it.", ranked, StringComparison.Ordinal);
+        // Signalled, not followed: the ranking itself is still the post-rename slice.
+        Assert.Contains("renames are signalled here, not followed", ranked, StringComparison.Ordinal);
+
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model" });
+        Assert.Contains("its content was at 'one/model' before", log, StringComparison.Ordinal);
+        Assert.Contains("Call git_log with path=\"one/model\" to read it.", log, StringComparison.Ordinal);
+        // The scope's own count is literal: only the cutover commit touched src/Model.
+        Assert.DoesNotContain("Add the contact feature", log, StringComparison.Ordinal);
+
+        string owners = await TestHost.CallAsync(client, "authors",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model" });
+        Assert.Contains("Call authors with path=\"one/model\" to read it.", owners, StringComparison.Ordinal);
+
+        string listed = await TestHost.CallAsync(client, "file_history",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model/Contact.cs" });
+        Assert.Contains("its content was at 'one/model/Contact.cs' before", listed, StringComparison.Ordinal);
+        Assert.Contains("Call file_history with path=\"one/model/Contact.cs\" to read it.", listed,
+            StringComparison.Ordinal);
+
+        // co_changed carries the signal and redirects, because it refuses a path HEAD has lost (#136).
+        string coupled = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model/Contact.cs", ["days"] = 3650 });
+        Assert.Contains("its content was at 'one/model/Contact.cs' before", coupled, StringComparison.Ordinal);
+        Assert.Contains("co_changed is not the read for an earlier path", coupled, StringComparison.Ordinal);
+        Assert.Contains("Call git_log or file_history with path=\"one/model/Contact.cs\"", coupled,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The empty answers are the ones the signal exists for. A directory renamed longer ago than the
+    ///     window ranks nothing and says "raise days"; a file whose commits all predate the window lists
+    ///     none and says its history may have "reached this path by a rename" — and both used to drop
+    ///     the rename they were describing, along with the count and the call.
+    /// </summary>
+    [Fact]
+    public async Task An_empty_answer_still_says_what_the_scope_was_called_before()
+    {
+        await BuildRenamedProjectAsync("quietened");
+        // Work elsewhere, long after the cutover: the window ends at the repository's newest commit, so
+        // this is what puts the rename out of reach of a short one — which is the situation an agent
+        // asking "what is busy here" with the default window actually meets.
+        _host.CommitToGitRepositoryAs("quietened-one",
+            new Dictionary<string, string> { ["src/Api/Handler.cs"] = "handler\nmore\nstill more\n" },
+            "Work on the api a year later", "Grace", "grace@example.invalid", 31000 + 400 * 24 * 60);
+        await _host.RefreshAsync("quietened");
+        await using var client = await _host.ConnectAsync("quietened");
+
+        // A window that reaches neither the cutover nor anything under the new path.
+        string ranked = await TestHost.CallAsync(client, "hot_files",
+            new Dictionary<string, object?> { ["days"] = 1, ["directory"] = "one/src/Model" });
+        Assert.DoesNotContain("most-changed", ranked, StringComparison.Ordinal);
+        Assert.Contains("its content was at 'one/model' before", ranked, StringComparison.Ordinal);
+        Assert.Contains("Call hot_files with directory=\"one/model\" to rank it.", ranked, StringComparison.Ordinal);
+
+        // co_changed's thin answer, which says the file may move alone, carries it too.
+        string coupled = await TestHost.CallAsync(client, "co_changed",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model/Contact.cs", ["days"] = 1 });
+        Assert.Contains("its content was at 'one/model/Contact.cs' before", coupled, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A candidate on the scope's own branch is not a previous path. Most of `src` moving down into
+    ///     `src/Model` makes `src` the dominant earlier prefix, and reporting it would give a combined
+    ///     total covering all of `src` — the inflated number this feature exists to correct, pointing
+    ///     backwards.
+    /// </summary>
+    [Fact]
+    public async Task An_ancestor_of_the_scope_is_not_its_previous_path()
+    {
+        string source = _host.CreateEmptyGitRepository("nested-one");
+        _host.CommitToGitRepositoryAs("nested-one",
+            new Dictionary<string, string>
+            {
+                ["src/Contact.cs"] = "contact\n",
+                ["src/Order.cs"] = "order\n",
+                ["src/Unrelated.cs"] = "unrelated\n"
+            },
+            "Import the model", "Ada", "ada@example.invalid", 30000);
+        _host.CommitToGitRepositoryAs("nested-one",
+            new Dictionary<string, string> { ["src/Unrelated.cs"] = "unrelated\nmore\n" },
+            "Work somewhere else in src", "Ada", "ada@example.invalid", 30001);
+        _host.MoveInGitRepositoryAs("nested-one",
+            new Dictionary<string, string>
+            {
+                ["src/Contact.cs"] = "src/Model/Contact.cs",
+                ["src/Order.cs"] = "src/Model/Order.cs"
+            },
+            "Group the model together", "Grace", "grace@example.invalid", 31000);
+
+        await _host.CreateProjectAsync("nested");
+        await _host.AddRepositoryAsync("nested", "one", source);
+        await _host.RefreshAsync("nested");
+
+        await using var client = await _host.ConnectAsync("nested");
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Model", ["limit"] = 100 });
+
+        Assert.DoesNotContain("This scope was renamed", log, StringComparison.Ordinal);
+        // And in particular not the commit that never touched the model at all.
+        Assert.DoesNotContain("Work somewhere else in src", log, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A path renamed twice reports its chain, oldest last. One hop is the common case and the one
+    ///     a walk that stopped at the first edge would get right; two is what says the walk is
+    ///     transitive.
+    /// </summary>
+    [Fact]
+    public async Task A_path_renamed_twice_reports_its_chain_oldest_last()
+    {
+        await BuildRenamedProjectAsync("twice");
+        _host.MoveInGitRepositoryAs("twice-one",
+            new Dictionary<string, string>
+            {
+                ["src/Model/Contact.cs"] = "src/Domain/Contact.cs",
+                ["src/Model/Order.cs"] = "src/Domain/Order.cs"
+            },
+            "Merged PR 40001: Moved Model to src\\Domain", "Grace", "grace@example.invalid", 32000);
+        await _host.RefreshAsync("twice");
+
+        await using var client = await _host.ConnectAsync("twice");
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Domain" });
+
+        Assert.Contains("its content was at 'one/src/Model' before", log, StringComparison.Ordinal);
+        Assert.Contains("Before that, 'one/model'", log, StringComparison.Ordinal);
+        Assert.True(log.IndexOf("one/src/Model", StringComparison.Ordinal)
+                    < log.IndexOf("Before that, 'one/model'", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    ///     The other half, and the one that keeps the change additive: a scope nothing was renamed from
+    ///     answers exactly as it did. A note that fired on an ordinary directory would be read past
+    ///     within a session, and then read past on the directory that needed it.
+    /// </summary>
+    [Fact]
+    public async Task A_scope_with_no_previous_path_says_nothing_about_one()
+    {
+        await BuildRenamedProjectAsync("stayed");
+        await using var client = await _host.ConnectAsync("stayed");
+
+        foreach (string reply in new[]
+                 {
+                     await TestHost.CallAsync(client, "hot_files",
+                         new Dictionary<string, object?> { ["days"] = 3650, ["directory"] = "one/src/Api" }),
+                     await TestHost.CallAsync(client, "git_log",
+                         new Dictionary<string, object?> { ["path"] = "one/src/Api" }),
+                     await TestHost.CallAsync(client, "authors",
+                         new Dictionary<string, object?> { ["path"] = "one/src/Api" }),
+                     await TestHost.CallAsync(client, "file_history",
+                         new Dictionary<string, object?> { ["path"] = "one/src/Api/Handler.cs" }),
+                     await TestHost.CallAsync(client, "co_changed",
+                         new Dictionary<string, object?> { ["path"] = "one/src/Api/Handler.cs", ["days"] = 3650 })
+                 })
+        {
+            Assert.DoesNotContain("This scope was renamed", reply, StringComparison.Ordinal);
+            Assert.DoesNotContain("across the whole chain", reply, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    ///     A stray file that moved in is not a previous path. `src/Api` took one file from `src/Odds`
+    ///     and holds several of its own, so `src/Odds` is below the share a previous path has to clear —
+    ///     and a rule counting renamed rows alone rather than the scope's recorded paths would call it
+    ///     one, because it is the only rename edge the scope has.
+    /// </summary>
+    [Fact]
+    public async Task A_single_file_moved_in_is_not_a_previous_path()
+    {
+        await BuildRenamedProjectAsync("stray");
+        _host.MoveInGitRepositoryAs("stray-one",
+            new Dictionary<string, string> { ["src/Odds/Helper.cs"] = "src/Api/Helper.cs" },
+            "Move the helper where it is used", "Grace", "grace@example.invalid", 32000);
+        await _host.RefreshAsync("stray");
+
+        await using var client = await _host.ConnectAsync("stray");
+        string log = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["path"] = "one/src/Api" });
+
+        Assert.DoesNotContain("This scope was renamed", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("one/src/Odds", log, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A cutover: `model/` built up over several commits, then moved to `src/Model` wholesale in one,
+    ///     beside an `src/Api` that never moved and an `src/Odds` that one file later leaves.
+    /// </summary>
+    private async Task BuildRenamedProjectAsync(string project)
+    {
+        string source = _host.CreateEmptyGitRepository(project + "-one");
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string>
+            {
+                ["model/Contact.cs"] = "contact\n",
+                ["model/Order.cs"] = "order\n",
+                ["src/Api/Handler.cs"] = "handler\n",
+                ["src/Odds/Helper.cs"] = "helper\n"
+            },
+            "Import the model", "Ada", "ada@example.invalid", 30000);
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string> { ["model/Contact.cs"] = "contact\nmore\n" },
+            "Add the contact feature", "Ada", "ada@example.invalid", 30001);
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string> { ["model/Order.cs"] = "order\nmore\n" },
+            "Extend the order", "Grace", "grace@example.invalid", 30002);
+        _host.CommitToGitRepositoryAs(project + "-one",
+            new Dictionary<string, string> { ["src/Api/Handler.cs"] = "handler\nmore\n" },
+            "Tighten the handler", "Grace", "grace@example.invalid", 30003);
+        // The cutover, as the real one arrived: one commit, every path renamed, no content changed.
+        _host.MoveInGitRepositoryAs(project + "-one",
+            new Dictionary<string, string>
+            {
+                ["model/Contact.cs"] = "src/Model/Contact.cs",
+                ["model/Order.cs"] = "src/Model/Order.cs"
+            },
+            "Merged PR 39331: Moved Model to src\\Model", "Grace", "grace@example.invalid", 31000);
+
+        await _host.CreateProjectAsync(project);
+        await _host.AddRepositoryAsync(project, "one", source);
+        await _host.RefreshAsync(project);
     }
 
     /// <summary>A repository whose regenerated output and migrations outrank its hand-written code.</summary>
