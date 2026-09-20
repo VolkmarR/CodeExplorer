@@ -293,7 +293,7 @@ public sealed class DefinitionTests : IDisposable
     }
 
     /// <summary>
-    ///     An extension no profile covers is named outright (#126), the way imports, who_imports and
+    ///     An extension no profile covers is named outright (#126), the way imports and
     ///     list_declarations already name one. Those files are searched with the conservative default
     ///     shapes, so a declaration written the way that language writes one is missing from the answer
     ///     — and a reply that said nothing about it would read the same as one that searched them.

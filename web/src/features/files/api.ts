@@ -106,27 +106,6 @@ export interface FileImports {
   imports: ImportEdge[]
 }
 
-/** One file that imports the file being looked at, and the line that does it. */
-export interface Dependent {
-  qualifiedPath: string
-  name: string
-  lineNumber: number
-}
-
-/**
- * What imports a file. `shareTheModule` and `unplaced` are why an empty list is not "nothing depends
- * on this": a module several files declare resolves to none of them, and an unresolved edge spelling
- * this file's name may be a dependency the index could not place.
- */
-export interface FileDependents {
-  qualifiedPath: string
-  module: string | null
-  shareTheModule: number
-  unplaced: number
-  capped: boolean
-  dependents: Dependent[]
-}
-
 /**
  * One name a file introduces. `type` and `member` are what the line declares — either may be null,
  * and a line that reads as both fills both — and `text` is the line itself, which is what the panel
@@ -191,16 +170,6 @@ export function fetchImports(project: string, path: string) {
   return http
     .get(`projects/${project}/file/imports`, { searchParams: { path } })
     .json<FileImports>()
-}
-
-/**
- * The direction a codebase cannot be read for: every import line in the project, resolved at index
- * time and looked up backwards.
- */
-export function fetchDependents(project: string, path: string) {
-  return http
-    .get(`projects/${project}/file/dependents`, { searchParams: { path } })
-    .json<FileDependents>()
 }
 
 export function fetchDeclarations(project: string, path: string) {

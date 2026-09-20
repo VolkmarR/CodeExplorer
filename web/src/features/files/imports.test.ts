@@ -1,6 +1,6 @@
 import { expect, test } from 'vite-plus/test'
-import { dependentsNote, importsNote } from '@/features/files/imports'
-import type { FileDependents, FileImports, ImportEdge } from '@/features/files/api'
+import { importsNote } from '@/features/files/imports'
+import type { FileImports, ImportEdge } from '@/features/files/api'
 
 const edge = (name: string, targetPath: string | null): ImportEdge => ({
   lineNumber: 1,
@@ -17,16 +17,6 @@ const imports = (fields: Partial<FileImports>): FileImports => ({
   module: null,
   profiled: true,
   qualifiedPath: 'one/src/Orders.cs',
-  ...fields,
-})
-
-const dependents = (fields: Partial<FileDependents>): FileDependents => ({
-  capped: false,
-  dependents: [],
-  module: null,
-  qualifiedPath: 'one/src/Orders.cs',
-  shareTheModule: 0,
-  unplaced: 0,
   ...fields,
 })
 
@@ -52,44 +42,9 @@ test('a file with imports has nothing to explain, and one cut off at the ceiling
 })
 
 /**
- * The reverse lookup's two ways of being thinner than the project is. Both are about resolution and
- * neither is about the code, so an empty list that does not say so reads as "nothing depends on
- * this" — the one claim a dependency panel must never make by accident.
+ * An unresolved name is still a dependency, so it is listed as written with the reason beside it —
+ * and the panel has nothing to add, because the row already says what happened to it.
  */
-test('a thin dependents list says why it is thin', () => {
-  const shared = dependentsNote(dependents({ module: 'Orders.Storage', shareTheModule: 2 }))
-  expect(shared).toContain('Orders.Storage')
-  // The empty list is a sentence of its own, and it is about what was found rather than about the
-  // code: "nothing depends on this" is the one claim this panel must never make by accident.
-  expect(shared).toContain('No import line')
-
-  expect(dependentsNote(dependents({ unplaced: 3 }))).toContain('3')
-})
-
-/**
- * A list at the ceiling on a file whose module is shared is thin for both reasons at once, and the
- * busiest file is where only being told half of it costs the reader most.
- */
-test('a dependents list cut off at the ceiling says so as well as why it is thin', () => {
-  const many = dependentsNote(
-    dependents({
-      capped: true,
-      dependents: [{ lineNumber: 1, name: 'Orders.Domain', qualifiedPath: 'one/src/Report.cs' }],
-      module: 'Orders.Storage',
-      shareTheModule: 2,
-    }),
-  )
-
-  expect(many).toContain('first')
-  expect(many).toContain('Orders.Storage')
-})
-
-test('a list that is neither empty nor cut off has nothing to explain', () => {
-  expect(
-    dependentsNote(
-      dependents({
-        dependents: [{ lineNumber: 1, name: 'Orders.Domain', qualifiedPath: 'one/src/Report.cs' }],
-      }),
-    ),
-  ).toBe(null)
+test('a name that did not resolve leaves the note empty, since the row itself says why', () => {
+  expect(importsNote(imports({ imports: [edge('System.Text', null)] }))).toBe(null)
 })

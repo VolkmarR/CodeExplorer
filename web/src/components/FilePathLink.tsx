@@ -15,6 +15,7 @@ export function FilePathLink({
   label,
   line,
   origin,
+  wrap = false,
 }: {
   project: string
   qualifiedPath: string
@@ -25,10 +26,23 @@ export function FilePathLink({
   line?: number
   /** Where this link is, so the file's trail says how the reader got there. Absent reads as Files. */
   origin?: Origin
+  /**
+   * Whether to wrap the label onto a second line rather than cut it off at the width available.
+   * Off by default, because a list of paths that each wrap is a list whose rows no longer line up —
+   * and a path truncated from the left still shows the directory the reader is scanning for.
+   * On where the label is a name whose END is what distinguishes it, which is every dotted
+   * namespace: `…MasterData.Infrastructure.McSerializer` and `…MasterData.Infrastructure.McReader`
+   * truncate to the same string, so two different imports draw as one row twice (#160).
+   */
+  wrap?: boolean
 }) {
+  // One word either way, so the two states cannot drift apart: the deleted-file span below and the
+  // link are the same label under the same rule.
+  const fit = wrap ? 'wrap-anywhere' : 'truncate'
+
   if (!atHead) {
     return (
-      <span className="truncate text-muted-foreground line-through decoration-muted-foreground/50">
+      <span className={`${fit} text-muted-foreground line-through decoration-muted-foreground/50`}>
         {label ?? qualifiedPath}
       </span>
     )
@@ -39,7 +53,7 @@ export function FilePathLink({
       to="/projects/$project/file"
       params={{ project }}
       search={fileSearch(qualifiedPath, line, origin)}
-      className="truncate hover:text-primary hover:underline"
+      className={`${fit} hover:text-primary hover:underline`}
     >
       {label ?? qualifiedPath}
     </Link>

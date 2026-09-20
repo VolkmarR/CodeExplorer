@@ -4,10 +4,10 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     The <c>imports</c> and <c>who_imports</c> tools over a project index (#55). The engine is
-///     pinned as it is for the other tools; neither of these takes a text-search path at all — they
-///     read a table the build filled — so one engine proves both, and the shared fixture runs under
-///     both to say so rather than assume it.
+///     The <c>imports</c> tool over a project index (#55). The engine is pinned as it is for the
+///     other tools; this one takes no text-search path at all — it reads a table the build filled —
+///     so one engine proves it, and the shared fixture runs under both to say so rather than assume
+///     it. The <c>who_imports</c> tool it was written beside is gone (#160).
 /// </summary>
 public sealed class ImportTests : IDisposable
 {
@@ -74,36 +74,6 @@ public sealed class ImportTests : IDisposable
         Assert.Contains("Orders.Domain  ->  one/src/Orders.cs", text);
     }
 
-    [Fact]
-    public async Task The_reverse_direction_names_the_files_that_import_one()
-    {
-        await using var client = await StartAsync(SearchEngine.Substring);
-
-        string text = await WhoImportsAsync(client, "one/src/Orders.cs");
-
-        Assert.Contains("1 file imports one/src/Orders.cs", text);
-        Assert.Contains("one/src/Report.cs:3  -  Orders.Domain", text);
-    }
-
-    /// <summary>
-    ///     The case an empty list would read wrongly: two files declare the namespace, so an import of
-    ///     it resolved to neither, and "nothing depends on this" would be a fact invented out of a
-    ///     resolution this could not make.
-    /// </summary>
-    [Fact]
-    public async Task A_file_sharing_its_namespace_is_told_why_the_reverse_lookup_is_thin()
-    {
-        await using var client = await StartAsync(SearchEngine.Substring);
-
-        string text = await WhoImportsAsync(client, "one/src/Storage.cs");
-
-        Assert.Contains("No import edge in this project resolved to one/src/Storage.cs", text);
-        Assert.Contains("this file declares `Orders.Storage`, and 1 other file declares it too", text);
-        // The pivot that answers the question, not a grep the caller has to turn into one (#114).
-        Assert.Contains("Run list_declarations on it, then find_references on one of the names it declares", text);
-        Assert.DoesNotContain("grep for `Orders.Storage`", text);
-    }
-
     /// <summary>
     ///     An all-unresolved answer reads as "this file depends on nothing here" (#114). It is not: a
     ///     project-local dependency a language expresses without an import line leaves nothing to
@@ -123,22 +93,6 @@ public sealed class ImportTests : IDisposable
         // A file whose imports do resolve is unaffected: no note, no hedging.
         string resolving = await ImportsAsync(client, "one/src/Report.cs");
         Assert.DoesNotContain("no project-local dependencies", resolving);
-    }
-
-    /// <summary>
-    ///     The empty reverse lookup, where no shared namespace explains it (#114). "Nothing imports
-    ///     this" is this tool's claim; "nothing depends on this" is the one an agent reads and acts on.
-    /// </summary>
-    [Fact]
-    public async Task No_importers_says_no_edge_resolved_rather_than_nothing_depends_on_it()
-    {
-        await using var client = await StartAsync(SearchEngine.Substring);
-
-        string text = await WhoImportsAsync(client, "one/src/Report.cs");
-
-        Assert.Contains("No import edge in this project resolved to one/src/Report.cs", text);
-        Assert.Contains("not the same as nothing depending on it", text);
-        Assert.Contains("Run list_declarations on it, then find_references on one of the names it declares", text);
     }
 
     [Fact]
@@ -207,9 +161,9 @@ public sealed class ImportTests : IDisposable
         Assert.Contains("react  -  names a package, not a file in this project", main);
 
         // A dynamic import is the same edge, so the file is imported twice and both lines are named.
-        string render = await WhoImportsAsync(client, "one/src/app/render.ts");
-        Assert.Contains("one/src/app/main.ts:1", render);
-        Assert.Contains("one/src/app/main.ts:4", render);
+        Assert.Contains("imports 4 names, 3 of them resolved", main);
+        Assert.Contains("     1: ./render  ->  one/src/app/render.ts", main);
+        Assert.Contains("     4: ./render  ->  one/src/app/render.ts", main);
 
         string markup = await ImportsAsync(client, "one/src/index.html");
         Assert.Contains("site.css  ->  one/src/site.css", markup);
@@ -262,39 +216,9 @@ public sealed class ImportTests : IDisposable
         Assert.Contains("Orders  ->  one/src/Orders.pas", text);
         Assert.Contains("Invoices  ->  one/src/Invoices.pas", text);
         Assert.Contains("Logging  ->  one/src/Logging.pas", text);
-
-        string invoices = await WhoImportsAsync(client, "one/src/Invoices.pas");
-        Assert.Contains("1 file imports one/src/Invoices.pas", invoices);
-        Assert.Contains("one/src/Main.pas:7", invoices);
-    }
-
-    /// <summary>
-    ///     The pivot has to be readable before the call, not only in the reply (#133). who_imports named
-    ///     it in the bullet about an EMPTY answer alone, and a shared namespace can be reported
-    ///     alongside resolved importers — so the bullet that covers this branch named no next step, and
-    ///     an agent that read the description and got a non-empty answer never met one.
-    ///     Asserted against the reply in the same test: the description and the note are one story, and
-    ///     a change to either that left the other behind is what this pins.
-    /// </summary>
-    [Fact]
-    public async Task The_shared_namespace_branch_names_the_pivot_in_the_description_as_well_as_the_reply()
-    {
-        await using var client = await StartAsync(SearchEngine.Substring);
-
-        string described = (await client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken))
-            .Single(tool => tool.Name == "who_imports").Description ?? "";
-        Assert.Contains("A file whose declared namespace or unit is shared with other files", described);
-        Assert.Contains("run list_declarations on the file and find_references on a name it declares", described);
-
-        string text = await WhoImportsAsync(client, "one/src/Storage.cs");
-        Assert.Contains("this file declares `Orders.Storage`, and 1 other file declares it too", text);
-        // An instruction, not a description of two tools that happen to exist.
-        Assert.Contains("Run list_declarations on it, then find_references on one of the names it declares", text);
-
-        // A file whose namespace is its own gains no note and no pivot.
-        string unique = await WhoImportsAsync(client, "one/src/Orders.cs");
-        Assert.DoesNotContain("other file declares it too", unique);
-        Assert.DoesNotContain("Run list_declarations", unique);
+        // The second clause, on its own line: a unit named there is an edge like any other, and the
+        // line it is reported on is the line it was written on.
+        Assert.Contains("     7: Invoices  ->  one/src/Invoices.pas", text);
     }
 
     [Fact]
@@ -306,9 +230,10 @@ public sealed class ImportTests : IDisposable
         _host.DeleteIndexFile("alpha");
         await using var client = await _host.ConnectAsync("alpha");
 
-        // A restored index that had lost the table would answer this with "no file imports it",
-        // which reads as a fact about the code rather than about the restore.
-        Assert.Contains("1 file imports one/src/Orders.cs", await WhoImportsAsync(client, "one/src/Orders.cs"));
+        // A restored index that had lost the table would answer this with "this file imports
+        // nothing", which reads as a fact about the code rather than about the restore.
+        Assert.Contains("Orders.Domain  ->  one/src/Orders.cs",
+            await ImportsAsync(client, "one/src/Report.cs"));
     }
 
     [Fact]
@@ -320,7 +245,7 @@ public sealed class ImportTests : IDisposable
         // The leaf name exists elsewhere, so the miss is a path that is wrong rather than a name
         // that is: an agent told only "no such file" would go looking for the file instead.
         Assert.Contains("Did you mean one/src/Orders.cs",
-            await WhoImportsAsync(client, "one/elsewhere/Orders.cs"));
+            await ImportsAsync(client, "one/elsewhere/Orders.cs"));
     }
 
     [Fact]
@@ -346,7 +271,4 @@ public sealed class ImportTests : IDisposable
 
     private static Task<string> ImportsAsync(McpClient client, string path) =>
         TestHost.CallAsync(client, "imports", new Dictionary<string, object?> { ["path"] = path });
-
-    private static Task<string> WhoImportsAsync(McpClient client, string path) =>
-        TestHost.CallAsync(client, "who_imports", new Dictionary<string, object?> { ["path"] = path });
 }

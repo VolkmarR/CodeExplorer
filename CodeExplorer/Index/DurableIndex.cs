@@ -47,7 +47,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         "path_lineage",
         // The import edges the build read and resolved (#55). They travel with the tables, like the
         // overview and for the same reason: a restored index that had lost them would answer
-        // `who_imports` with nothing, which reads as "nothing depends on this file".
+        // `imports` with nothing, which reads as "this file imports nothing".
         "imports",
         // The overview the build computed (#51). It travels with the tables it was derived from, so a
         // restored index answers project_overview without a rebuild — which is the whole point of
