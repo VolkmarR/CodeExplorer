@@ -261,24 +261,64 @@ internal sealed class SearchTools(
     ///     one fact and not two shapes of it. What follows from it differs and is the caller's clause.
     ///     Empty where every matching file's extension is profiled, which is the common case: a note
     ///     on every reply is one an agent stops reading.
+    ///     A clause per reason and one consequence for the note (#129): "read with shapes that may not
+    ///     fit" and "not read at all" are different claims and each says its own, but what an agent
+    ///     does about either is the same thing, and saying it twice in two consecutive notes is how a
+    ///     caveat becomes something to skim. The unreadable clause is only ever reached by
+    ///     `find_definition`; `find_references` classifies an occurrence with the analyser whatever
+    ///     its language, so a shapeless profile costs it nothing and it reports none.
     /// </summary>
-    /// <param name="unprofiled">The extensions, most files first, as the search counted them.</param>
-    /// <param name="consequence">What the gap costs this tool's answer, in the tool's own words.</param>
-    private static string UnprofiledNote(IReadOnlyList<UnprofiledFiles> unprofiled, string consequence)
+    /// <param name="uncovered">Every gap the search counted, as the search ordered them.</param>
+    /// <param name="consequence">What the gaps cost this tool's answer, in the tool's own words.</param>
+    private static string CoverageNote(IReadOnlyList<UncoveredFiles> uncovered, string consequence)
     {
-        if (unprofiled.Count == 0) return "";
+        var unprofiled = WithGap(uncovered, CoverageGap.Unprofiled);
+        var unreadable = WithGap(uncovered, CoverageGap.Unreadable);
+        if (unprofiled.Count == 0 && unreadable.Count == 0) return "";
 
-        int files = unprofiled.Sum(u => u.Files);
-        var named = unprofiled.Take(ScopeCoverage.MaxExtensionsNamed).ToList();
-        string extensions = string.Join(", ", named.Select(u => u.Extension));
-        // The remainder is counted rather than listed: how many kinds of file this covers is the part
-        // that still says something once the list would be the project's file types.
-        if (unprofiled.Count > named.Count)
-            extensions += string.Create(CultureInfo.InvariantCulture,
-                $" and {unprofiled.Count - named.Count} further {ToolReply.Plural(unprofiled.Count - named.Count, "extension")}");
+        var text = new StringBuilder("NOTE: ");
+        if (unprofiled.Count > 0)
+        {
+            int files = unprofiled.Sum(file => file.Files);
+            text.Append(CultureInfo.InvariantCulture,
+                $"{files} {ToolReply.Plural(files, "file")} spelling the name {ToolReply.Plural(files, "is", "are")} {Named(unprofiled, "extension")}, which no language profile covers, so {ToolReply.Plural(files, "it was", "they were")} read with the conservative default shapes rather than the forms that language writes. ");
+        }
 
-        return string.Create(CultureInfo.InvariantCulture,
-            $"NOTE: {files} {ToolReply.Plural(files, "file")} spelling the name {ToolReply.Plural(files, "is", "are")} {extensions}, which no language profile covers, so {ToolReply.Plural(files, "it was", "they were")} read with the conservative default shapes rather than the forms that language writes. {consequence}\n");
+        if (unreadable.Count > 0)
+        {
+            int files = unreadable.Sum(file => file.Files);
+            // "further" only where the clause above already counted some. The two reasons are counted
+            // apart — the same file cannot be both — and a note that opens with this one has nothing
+            // to be further than.
+            string counted = unprofiled.Count > 0
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"{files} further {ToolReply.Plural(files, "file")} spelling the name")
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"{files} {ToolReply.Plural(files, "file")} spelling the name");
+            text.Append(CultureInfo.InvariantCulture,
+                $"{counted} {ToolReply.Plural(files, "is", "are")} {Named(unreadable, "language")}, whose declarations are not something that can be read from a line, so nothing in {ToolReply.Plural(files, "it", "them")} was scanned. ");
+        }
+
+        return text.Append(consequence).Append('\n').ToString();
+    }
+
+    /// <summary>The gaps of one reason, most files first, as the search already ordered them.</summary>
+    private static List<UncoveredFiles> WithGap(IReadOnlyList<UncoveredFiles> uncovered, CoverageGap gap) =>
+        [.. uncovered.Where(file => file.Gap == gap)];
+
+    /// <summary>
+    ///     The languages a note names, and a count of the rest. The remainder is counted rather than
+    ///     listed: how many kinds of file this covers is the part that still says something once the
+    ///     list would be the project's file types.
+    /// </summary>
+    private static string Named(List<UncoveredFiles> uncovered, string kind)
+    {
+        var named = uncovered.Take(ScopeCoverage.MaxExtensionsNamed).ToList();
+        string languages = string.Join(", ", named.Select(file => file.Language));
+        return uncovered.Count > named.Count
+            ? languages + string.Create(CultureInfo.InvariantCulture,
+                $" and {uncovered.Count - named.Count} further {ToolReply.Plural(uncovered.Count - named.Count, kind)}")
+            : languages;
     }
 
     private static string NoReferences(string symbol, ReferenceResult result)
@@ -358,7 +398,7 @@ internal sealed class SearchTools(
 
         // Beside the other notes about what this answer does not cover, and above the listing for the
         // reason they are: a caveat under a long list is one the reply cap can cut (#126).
-        if (UnprofiledNote(result.Unprofiled, ReferenceCost) is { Length: > 0 } unprofiled)
+        if (CoverageNote(result.Uncovered, ReferenceCost) is { Length: > 0 } unprofiled)
             text.Append("  ").Append(unprofiled);
 
         Section("DECLARATIONS", ReferenceKind.Definition);
@@ -481,21 +521,24 @@ internal sealed class SearchTools(
             $"This reads the declaration forms it knows, so a form it does not know is a miss and not proof there is none — the symbol may also be declared in a language this indexes without profiling, or generated rather than written. Run find_references(symbol=\"{symbol}\") and read its DECLARATIONS section, or grep for it.");
         // Which of those two a miss actually is, where the index can say: "a language this indexes
         // without profiling" is a possibility in the sentence above and a fact here, named with the
-        // files it applies to (#126).
-        if (UnprofiledNote(result.Unprofiled, DefinitionCost) is { Length: > 0 } unprofiled)
-            text.Append('\n').Append(unprofiled);
+        // files it applies to (#126) — and beside it the files nothing was read from at all (#129).
+        if (CoverageNote(result.Uncovered, DefinitionCost) is { Length: > 0 } uncovered)
+            text.Append('\n').Append(uncovered);
         return text.ToString();
     }
 
     /// <summary>
-    ///     What an unprofiled extension costs a declaration answer. Stronger than the reference tool's
+    ///     What a gap in coverage costs a declaration answer. Stronger than the reference tool's
     ///     clause and deliberately so: a declaration is found by matching the shape of the line, so a
     ///     language whose shapes were never registered can hide one completely, where a reference in
     ///     the same file is still found and only its label is a guess.
+    ///     One clause for both reasons, in words that fit a file read with the wrong shapes and a file
+    ///     read with none: which of the two it was is the note's own sentence, and what to do about it
+    ///     is the same either way.
     /// </summary>
     private const string DefinitionCost =
-        "A declaration written the way that language writes one is not found by those shapes at all, "
-        + "so this answer is silent about those files rather than negative about them: grep the name "
+        "A declaration written the way those languages write one is not in this answer at all, "
+        + "so it is silent about those files rather than negative about them: grep the name "
         + "there, or read one of them to see how the language declares things.";
 
     private static string FormatDefinitions(string symbol, DefinitionResult result)
@@ -510,8 +553,8 @@ internal sealed class SearchTools(
 
         // Above the sites, where a reply that found something is most likely to be read as the whole
         // of what there is: an answer of three declarations can still be missing the one written in a
-        // language no profile covers (#126).
-        text.Append(UnprofiledNote(result.Unprofiled, DefinitionCost));
+        // language no profile covers (#126) or in one nothing was scanned from (#129).
+        text.Append(CoverageNote(result.Uncovered, DefinitionCost));
 
         // Headings where the language draws the distinction they name, and none where it does not.
         // Whether this ANSWER holds both kinds decides nothing: a Delphi routine found only in its

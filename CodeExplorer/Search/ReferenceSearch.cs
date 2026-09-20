@@ -48,7 +48,7 @@ public sealed record Reference(
 ///     occurrence here may turn out to be a call, a comment or an unrelated symbol of the same name.
 /// </summary>
 /// <remarks>
-///     <see cref="Unprofiled" /> is the extensions among the files holding the name that no language
+///     <see cref="Uncovered" /> is the extensions among the files holding the name that no language
 ///     profile covers (#126). Their lines are matched like any other — the pattern is the same in
 ///     every language — but what each appearance looks like was decided by the conservative default
 ///     shapes, so a clean set of counts over them is a weaker claim than the same counts over a
@@ -61,7 +61,7 @@ public sealed record ReferenceResult(
     long TotalOccurrences,
     IReadOnlyList<Reference> References,
     int? FilesMatchingWithoutFilters,
-    IReadOnlyList<UnprofiledFiles> Unprofiled) : Outcome
+    IReadOnlyList<UncoveredFiles> Uncovered) : Outcome
 {
     /// <summary>The references that are code: everything but a comment, a string literal or an import.</summary>
     public int CodeReferences => References.Count - Noise;
@@ -248,9 +248,11 @@ public sealed class ReferenceSearch(ProjectIndexes indexes)
         // Which of the files holding the name were classified with the default shapes rather than a
         // profile's (#126). Over every matching file and not only the page, because the caveat is
         // about what the answer covers, and the files past the cap are part of what it covers.
+        // No shapeless languages to report: this search reads every file it matches whatever its
+        // language, so a profile with no declaration shapes costs it nothing (#129).
         var unprofiled = await ScopeCoverage.OfMatchesAsync(connection,
             $"{literally} AND regexp_matches(l.content, $q, '')", fileFilter,
-            [.. matchParameters, .. fileParameters], cancellationToken);
+            [.. matchParameters, .. fileParameters], [], cancellationToken);
 
         int filesExamined = matched.Select(line => line.FileId).Distinct().Count();
         return new ReferenceResult(totalFiles, filesExamined, totalLines, totalOccurrences, references,

@@ -337,6 +337,75 @@ public sealed class DefinitionTests : IDisposable
         Assert.DoesNotContain("no language profile covers", profiled);
     }
 
+    /// <summary>
+    ///     The other half of the same silence (#129): a language that has a profile but declares no
+    ///     declaration shapes contributes no branch to the candidate query, so not one of its lines is
+    ///     read — strictly less than the unprofiled case, which at least gets the default shapes. It
+    ///     earns its own sentence rather than #126's, which would promise shapes that never ran.
+    /// </summary>
+    [Fact]
+    public async Task A_profiled_language_with_no_declaration_shapes_says_nothing_was_scanned_there()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("markup", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Menu.cs"] = "public class Menu\n{\n    public void Open() { }\n}\n",
+                // HTML has a profile — comments, strings, imports — and no declaration shapes at all,
+                // so these two functions are invisible to the scan in a way a .rb file's is not. The
+                // second shares its name with the C# method, which is what puts the note on a reply
+                // that found something.
+                ["www/menu.html"] =
+                    "<script>\n  function toggleMenu(open) { return open; }\n  function Open() { }\n</script>\n",
+                // And an unprofiled language spelling the same name, so one reply has both reasons to
+                // report and has to keep them apart.
+                ["lib/menu.rb"] = "class Menu\n  def toggleMenu(n)\n    n\n  end\nend\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("markup");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "toggleMenu" });
+
+        Assert.Contains("No declaration of \"toggleMenu\" was recognised", text);
+        // Both reasons, each with its own clause — #126's says those files were read with the default
+        // shapes, and saying that of a file no shape ever reached would be the same silence in a more
+        // confident voice — and one consequence, because what to do about either is the same thing.
+        Assert.Contains("1 file spelling the name is .rb, which no language profile covers", text);
+        Assert.Contains("1 further file spelling the name is HTML", text);
+        Assert.Contains("whose declarations are not something that can be read from a line", text);
+        Assert.Contains("nothing in it was scanned", text);
+        Assert.Equal(1, text.Split("NOTE:").Length - 1);
+
+        // Alone, the unreadable clause opens the note and counts from itself: "further" is only true
+        // of a clause that follows one.
+        string markup = await FindAsync(client,
+            new Dictionary<string, object?> { ["symbol"] = "toggleMenu", ["ext"] = "html" });
+        Assert.Contains("1 file spelling the name is HTML", markup);
+        Assert.DoesNotContain("no language profile covers", markup);
+
+        // An answer that found a declaration is where the note is likeliest to be read as the whole
+        // of what there is, so it carries the same sentence — the HTML `Open` is not in the list.
+        string found = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Open" });
+        Assert.Contains("\"Open\" is declared in 1 place.", found);
+        Assert.Contains("one/src/Menu.cs", found);
+        Assert.Contains("whose declarations are not something that can be read from a line", found);
+
+        // find_references classifies an occurrence with the analyser whatever the language, so a
+        // shapeless profile costs it nothing and it says nothing about one (#129).
+        string references = await TestHost.CallAsync(client, "find_references",
+            new Dictionary<string, object?> { ["symbol"] = "toggleMenu" });
+        Assert.Contains("www/menu.html", references);
+        Assert.DoesNotContain("whose declarations are not something that can be read from a line",
+            references);
+
+        // A search that meets only profiled, readable files carries no note at all: a caveat on every
+        // reply is one an agent stops reading.
+        string clean = await FindAsync(client,
+            new Dictionary<string, object?> { ["symbol"] = "Open", ["ext"] = "cs" });
+        Assert.DoesNotContain("NOTE:", clean);
+    }
+
     [Fact]
     public async Task Malformed_input_is_explained_rather_than_answered_with_nothing()
     {
