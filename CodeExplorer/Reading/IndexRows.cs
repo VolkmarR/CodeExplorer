@@ -16,9 +16,8 @@ public sealed record IndexedFile(
     string? SkipReason,
     string? Module);
 
-/// <summary>A row of <c>repositories</c>: what the last build read and where it stood.</summary>
 /// <summary>
-///     One repository as the last build left it. <paramref name="Commits" /> is how much history was
+///     A row of <c>repositories</c>: one repository as the last build left it. <paramref name="Commits" /> is how much history was
 ///     imported for it and <paramref name="NewestCommit" /> the last one recorded; zero and null mean
 ///     none was, which is a different thing from a repository nobody has changed.
 ///     <paramref name="FirstCommitAt" /> and <paramref name="LastCommitAt" /> are the dates that
