@@ -42,7 +42,11 @@ export function describeWindow(days: number): string {
   return `Last ${days} days`
 }
 
-/** The URL of the default ranking, so no link has to spell the default window itself. */
-export function churnSearch(): ChurnParameters {
-  return { days: DEFAULT_CHURN_DAYS }
+/**
+ * The URL of a ranking over one window, of every repository or of the one named. The window defaults
+ * to the default, so no link has to spell it; the empty slug is translated for the reason
+ * `globSearch` gives at length.
+ */
+export function churnSearch(days = DEFAULT_CHURN_DAYS, repository?: string): ChurnParameters {
+  return { days, repository: repository === '' ? undefined : repository }
 }

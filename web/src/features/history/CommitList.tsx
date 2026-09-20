@@ -1,11 +1,11 @@
 import { Link, useNavigate } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
-import { commitSearch } from '@/features/history/commitParams'
-import type { HistoryParameters } from '@/features/history/historyParams'
+import { commitSearch } from '@/lib/urls/commitParams'
+import type { HistoryParameters } from '@/lib/urls/historyParams'
 import type { CommitEntry, CommitList as CommitPage } from '@/lib/api'
 import { DiffStat } from '@/components/DiffStat'
+import { Pager } from '@/components/Pager'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { formatCount, formatDate, shortSha } from '@/lib/format'
 
 /**
@@ -41,41 +41,21 @@ export function CommitList({
         ))}
       </ul>
 
-      {lastPage > 1 ? (
-        <div className="flex items-center justify-center gap-4">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={search.page <= 1}
-            onClick={() =>
-              void navigate({
-                params: { project },
-                search: { ...search, page: search.page - 1 },
-                to: '/projects/$project/history',
-              })
-            }
-          >
-            Newer
-          </Button>
-          <span className="text-sm text-muted-foreground">
-            Page {search.page} of {lastPage}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={search.page >= lastPage}
-            onClick={() =>
-              void navigate({
-                params: { project },
-                search: { ...search, page: search.page + 1 },
-                to: '/projects/$project/history',
-              })
-            }
-          >
-            Older
-          </Button>
-        </div>
-      ) : null}
+      {/* Newer and older rather than previous and next: a page of a log is a stretch of time, and
+          which way is "back" in one is the opposite of what a reader would guess. */}
+      <Pager
+        page={search.page}
+        lastPage={lastPage}
+        previousLabel="Newer"
+        nextLabel="Older"
+        onPage={(page) =>
+          void navigate({
+            params: { project },
+            search: { ...search, page },
+            to: '/projects/$project/history',
+          })
+        }
+      />
     </div>
   )
 }

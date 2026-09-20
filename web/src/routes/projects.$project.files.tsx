@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { BrowseUnavailable } from '@/features/files/BrowseUnavailable'
 import { BrowsePage } from '@/features/files/BrowsePage'
-import { validateBrowseSearch } from '@/features/files/browseParams'
+import { validateBrowseSearch } from '@/lib/urls/browseParams'
 import { browseQuery, treeQuery } from '@/features/files/queries'
 import { projectQuery } from '@/features/projects/queries'
 

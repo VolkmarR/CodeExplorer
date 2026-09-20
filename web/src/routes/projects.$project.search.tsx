@@ -3,7 +3,7 @@ import { RouteError } from '@/components/RouteError'
 import { projectQuery } from '@/features/projects/queries'
 import { SearchPage } from '@/features/search/SearchPage'
 import { searchQuery } from '@/features/search/queries'
-import { validateSearch } from '@/features/search/searchParams'
+import { validateSearch } from '@/lib/urls/searchParams'
 
 export const Route = createFileRoute('/projects/$project/search')({
   component: SearchPage,

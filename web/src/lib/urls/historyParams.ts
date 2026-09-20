@@ -20,7 +20,13 @@ export function validateHistorySearch(search: Record<string, unknown>): HistoryP
   }
 }
 
-/** The URL of the first page of everything, so no link has to remember the page it starts on. */
-export function historySearch(): HistoryParameters {
-  return { page: 1 }
+/**
+ * The URL of the first page of the log, of every repository or of the one named, so no link has to
+ * remember the page it starts on — page 7 of one repository is not page 7 of another.
+ *
+ * The empty slug is the select's way of saying "every repository" and is not what this parameter
+ * means by one, so it is translated here for the reason `globSearch` gives at length.
+ */
+export function historySearch(repository?: string): HistoryParameters {
+  return { page: 1, repository: repository === '' ? undefined : repository }
 }

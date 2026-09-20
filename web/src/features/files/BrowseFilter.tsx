@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
-import type { BrowseParameters } from '@/features/files/browseParams'
+import { useDraft } from '@/hooks/useDraft'
+import { globSearch, type BrowseParameters } from '@/lib/urls/browseParams'
 import { projectQuery } from '@/features/projects/queries'
 import { RepositorySelect } from '@/features/projects/RepositorySelect'
 import { Button } from '@/components/ui/button'
@@ -15,14 +15,7 @@ import { Label } from '@/components/ui/label'
 export function BrowseFilter({ project, search }: { project: string; search: BrowseParameters }) {
   const navigate = useNavigate()
   const { data: detail } = useSuspenseQuery(projectQuery(project))
-  const [draft, setDraft] = useState(search)
-
-  // Re-seeded when the URL changes under the form, for the reason SearchForm gives at length.
-  const [seeded, setSeeded] = useState(search)
-  if (seeded !== search) {
-    setSeeded(search)
-    setDraft(search)
-  }
+  const [draft, setDraft] = useDraft(search)
 
   // One repository has nothing to choose between; the tree's root already is it (ADR-0006).
   const multiRepository = !detail.singleRepository && detail.repositories.length > 1
@@ -32,11 +25,12 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
       className="flex flex-wrap items-end gap-3 rounded-lg border bg-card p-4"
       onSubmit={(event) => {
         event.preventDefault()
-        // Page 1, because the page a filter is submitted from belongs to the previous glob: page 7
-        // of a new match is a blank listing that reads as no matches at all.
+        // Through the builder, which starts at page 1: the page a filter is submitted from belongs
+        // to the previous glob, and page 7 of a new match is a blank listing that reads as no
+        // matches at all.
         void navigate({
           params: { project },
-          search: { ...draft, page: 1 },
+          search: globSearch(draft.glob, draft.repository, draft.path),
           to: '/projects/$project/files',
         })
       }}
@@ -65,7 +59,7 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
             id="browse-repository"
             repositories={detail.repositories}
             value={draft.repository ?? ''}
-            onChange={(slug) => setDraft({ ...draft, repository: slug || undefined })}
+            onChange={(slug) => setDraft(globSearch(draft.glob, slug, draft.path))}
           />
         </div>
       ) : null}

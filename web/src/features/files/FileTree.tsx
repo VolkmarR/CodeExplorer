@@ -1,7 +1,8 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { FileText, Folder, GitBranch } from 'lucide-react'
-import { treeSearch } from '@/features/files/browseParams'
+import { treeSearch } from '@/lib/urls/browseParams'
+import { fileSearch } from '@/lib/urls/fileParams'
 import { PathBreadcrumb } from '@/features/files/PathBreadcrumb'
 import { treeQuery } from '@/features/files/queries'
 import { formatBytes, formatCount } from '@/lib/format'
@@ -56,7 +57,7 @@ export function FileTree({ project, path }: { project: string; path: string }) {
                         to={isFile ? '/projects/$project/file' : '/projects/$project/files'}
                         params={{ project }}
                         search={
-                          isFile ? { path: entry.qualifiedPath } : treeSearch(entry.qualifiedPath)
+                          isFile ? fileSearch(entry.qualifiedPath) : treeSearch(entry.qualifiedPath)
                         }
                         className="flex items-center gap-2 hover:underline"
                       >

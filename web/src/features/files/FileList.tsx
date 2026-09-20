@@ -1,9 +1,9 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { fileSearch } from '@/features/files/fileParams'
-import type { BrowseParameters } from '@/features/files/browseParams'
+import { fileSearch } from '@/lib/urls/fileParams'
+import type { BrowseParameters } from '@/lib/urls/browseParams'
 import { browseQuery } from '@/features/files/queries'
-import { Button } from '@/components/ui/button'
+import { Pager } from '@/components/Pager'
 import { formatBytes, formatCount } from '@/lib/format'
 import {
   Table,
@@ -77,45 +77,19 @@ export function FileList({ project, search }: { project: string; search: BrowseP
         </Table>
       </div>
 
-      {/* The same pager the search results carry, because the two views page the same way and an
-          operator moves between them. */}
-      {lastPage > 1 ? (
-        <div className="flex items-center gap-4 pt-1">
-          <span className="text-sm text-muted-foreground tabular-nums">
-            Page {listing.page} of {formatCount(lastPage)}
-          </span>
-          <div className="ml-auto flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={listing.page <= 1}
-              onClick={() =>
-                void navigate({
-                  params: { project },
-                  search: { ...search, page: listing.page - 1 },
-                  to: '/projects/$project/files',
-                })
-              }
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={listing.page >= lastPage}
-              onClick={() =>
-                void navigate({
-                  params: { project },
-                  search: { ...search, page: listing.page + 1 },
-                  to: '/projects/$project/files',
-                })
-              }
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      {/* The page the server answered with rather than the one the URL asked for: a page past the
+          end comes back as the last one, and the pager must offer to leave where the reader is. */}
+      <Pager
+        page={listing.page}
+        lastPage={lastPage}
+        onPage={(page) =>
+          void navigate({
+            params: { project },
+            search: { ...search, page },
+            to: '/projects/$project/files',
+          })
+        }
+      />
     </div>
   )
 }

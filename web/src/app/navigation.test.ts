@@ -1,5 +1,5 @@
 import { expect, test } from 'vite-plus/test'
-import { activeView, pageTrail } from '@/components/appNavigation'
+import { activeView, pageTrail } from '@/app/navigation'
 
 /**
  * The sidebar is the only navigation there is, so an item that fails to light leaves the reader

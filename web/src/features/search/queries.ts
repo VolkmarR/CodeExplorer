@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
-import type { SearchParameters } from '@/features/search/searchParams'
+import type { SearchParameters } from '@/lib/urls/searchParams'
 import type { GrepResult } from '@/lib/api'
 import { api } from '@/lib/api'
 import { projectKey } from '@/lib/queryKeys'

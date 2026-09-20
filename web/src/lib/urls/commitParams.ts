@@ -1,4 +1,4 @@
-import { asView, type Origin } from '@/components/appNavigation'
+import { asView, type Origin } from '@/lib/urls/views'
 
 /**
  * What the commit view needs from the URL: which commit, and which view linked to it. The SHA is a

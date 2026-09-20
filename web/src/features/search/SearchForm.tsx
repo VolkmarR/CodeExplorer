@@ -1,10 +1,10 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { CaseSensitive, Regex, Search as SearchIcon } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useDraft } from '@/hooks/useDraft'
 import { projectQuery } from '@/features/projects/queries'
 import { searchQuery } from '@/features/search/queries'
-import type { SearchParameters } from '@/features/search/searchParams'
+import type { SearchParameters } from '@/lib/urls/searchParams'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -55,25 +55,10 @@ const MODES = [
 export function SearchForm({ project, search }: { project: string; search: SearchParameters }) {
   const navigate = useNavigate()
   const { data: detail } = useSuspenseQuery(projectQuery(project))
-  const [draft, setDraft] = useState(search)
+  const [draft, setDraft] = useDraft(search)
 
-  // The draft is seeded from the URL, and the URL can change under it: the pager navigates, and the
-  // back button rewinds to another query. Adjusting state during render — React's own answer to a
-  // prop the state derives from — re-seeds it then, where a plain `useState(search)` would show the
-  // previous query's text in the box for the results now on screen. The router hands out a new
-  // object per navigation, so identity is the right comparison.
-  const [seeded, setSeeded] = useState(search)
-  if (seeded !== search) {
-    setSeeded(search)
-    setDraft(search)
-  }
-
-  // Which switches are on, as the names the group speaks in. Memoised because it is a fresh array
-  // each render otherwise, and every item under the group would redraw with it.
-  const pressed = useMemo(
-    () => MODES.filter((mode) => draft[mode.field]).map((mode) => mode.field),
-    [draft],
-  )
+  // Which switches are on, as the names the group speaks in.
+  const pressed = MODES.filter((mode) => draft[mode.field]).map((mode) => mode.field)
 
   // Which repository the path glob names, if it is exactly the shape the select writes.
   const scoped = detail.repositories.find((r) => `${r.slug}/*` === draft.path)?.slug ?? ALL

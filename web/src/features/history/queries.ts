@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
-import type { HistoryParameters } from '@/features/history/historyParams'
+import type { HistoryParameters } from '@/lib/urls/historyParams'
 import { api } from '@/lib/api'
 import { projectKey } from '@/lib/queryKeys'
 
@@ -29,11 +29,16 @@ export function commitQuery(project: string, sha: string) {
 /**
  * The files one commit touched, beside the commit itself rather than with it: the list is as long as
  * the commit is wide, and the page draws the message and the sums without waiting for it.
+ *
+ * A sibling of the record above and not a key under it. Both hang off `…, 'commit', sha`, and this
+ * one was that prefix exactly — so invalidating the record, whose key it was a prefix of, refetched
+ * the file list with it, and anything invalidating the file list took the record too. Two requests
+ * that answer separately are keyed separately.
  */
 export function commitFilesQuery(project: string, sha: string) {
   return queryOptions({
     queryFn: () => api.commitFiles(project, sha),
-    queryKey: [...projectKey(project), 'commit', sha],
+    queryKey: [...projectKey(project), 'commit', sha, 'files'],
     staleTime: Infinity,
   })
 }

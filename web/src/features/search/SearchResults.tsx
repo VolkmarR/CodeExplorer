@@ -3,8 +3,8 @@ import { useNavigate } from '@tanstack/react-router'
 import { SearchResultGroup } from '@/features/search/SearchResultGroup'
 import { matchPattern } from '@/features/search/matchRanges'
 import { searchQuery } from '@/features/search/queries'
-import type { SearchParameters } from '@/features/search/searchParams'
-import { Button } from '@/components/ui/button'
+import type { SearchParameters } from '@/lib/urls/searchParams'
+import { Pager } from '@/components/Pager'
 import { formatCount } from '@/lib/format'
 
 /**
@@ -43,43 +43,17 @@ export function SearchResults({ project, search }: { project: string; search: Se
         ))}
       </ul>
 
-      {lastPage > 1 ? (
-        <div className="flex items-center gap-4 pt-1">
-          <span className="text-sm text-muted-foreground tabular-nums">
-            Page {search.page} of {lastPage}
-          </span>
-          <div className="ml-auto flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={search.page <= 1}
-              onClick={() =>
-                void navigate({
-                  params: { project },
-                  search: { ...search, page: search.page - 1 },
-                  to: '/projects/$project/search',
-                })
-              }
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={search.page >= lastPage}
-              onClick={() =>
-                void navigate({
-                  params: { project },
-                  search: { ...search, page: search.page + 1 },
-                  to: '/projects/$project/search',
-                })
-              }
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <Pager
+        page={search.page}
+        lastPage={lastPage}
+        onPage={(page) =>
+          void navigate({
+            params: { project },
+            search: { ...search, page },
+            to: '/projects/$project/search',
+          })
+        }
+      />
     </div>
   )
 }
