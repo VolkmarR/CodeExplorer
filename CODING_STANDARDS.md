@@ -149,8 +149,13 @@ Two kinds of failure, two mechanisms. Never mix them.
   filename matching the export.
 - **The web app mirrors the server's module folders** (ADR-0005): `web/src/features/<concept>/`
   holds that concept's components and its query definitions, `web/src/routes/` the file-based
-  routes, `web/src/components/` only what every feature uses, `web/src/lib/` the API client and the
-  shared query-key roots. A feature folder is a boundary, not a bucket.
+  routes, `web/src/components/` only what every feature uses, `web/src/lib/` the API client, the
+  shared query-key roots and the URL contracts in `lib/urls/`, and `web/src/hooks/` what more than
+  one feature reuses. A feature folder is a boundary, not a bucket. Neither `components/` nor `lib/`
+  may import from `features/`, and a lint rule fails `vp check` on one that does, as
+  `ModuleBoundaryTests` does for the server. `web/src/app/` is the frame — the sidebar, the top bar,
+  the root layout and the navigation table — and is the one shared folder that may depend on
+  features, since naming every view is what it is for.
 - Shareable state lives in the URL as TanStack Router search params, typed with `validateSearch`,
   so a view can be linked. No state library. TanStack Query is the read cache and not an exception
   to that: nothing a link should carry may live only in it.
