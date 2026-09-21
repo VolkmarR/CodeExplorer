@@ -71,6 +71,26 @@ public sealed class AuthorsTests(AuthorsFixture fixture) : IClassFixture<Authors
 
         Assert.Equal(ToolReply.NoHistory, await TestHost.CallAsync(client, "authors", []));
     }
+
+    /// <summary>
+    ///     The same under a path, which is the branch the closing note can reach and the plain call
+    ///     cannot: a path is resolved before the history is looked for, so an index with none still
+    ///     carries the scope it was asked about. The caveat about how scoping matches recorded commit
+    ///     paths, said under the sentence that nothing was recorded at all, would describe a read that
+    ///     never happened — so the answer stays the one sentence, exactly as the unscoped call's does.
+    /// </summary>
+    [Fact]
+    public async Task An_index_without_history_says_only_that_even_under_a_path()
+    {
+        await HistoryFixtures.OnlyRepositoryProjectAsync(_host, "unscoped",
+            new Dictionary<string, string> { ["src/a.cs"] = "class A;\n" });
+        await _host.ExecuteAsync("unscoped", "DELETE FROM commits");
+        await using var client = await _host.ConnectAsync("unscoped");
+
+        var scoped = new Dictionary<string, object?> { ["path"] = "only/src/a.cs" };
+        Assert.Equal(ToolReply.NoHistory, await TestHost.CallAsync(client, "authors", scoped));
+        Assert.Equal(ToolReply.NoHistory, await TestHost.CallAsync(client, "git_log", scoped));
+    }
 }
 
 /// <inheritdoc cref="HistoryFixture" />
