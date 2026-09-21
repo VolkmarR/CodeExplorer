@@ -65,6 +65,20 @@ public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, lon
     public const string IngestPhase = "Reading the repositories into the shadow index";
 
     /// <summary>
+    ///     Turning the import names the walk recorded into the files they name, which runs once the
+    ///     whole project is in the shadow and is therefore not part of any one repository's reading.
+    ///     A phase of the reading step rather than a step of its own: it finishes the job the walk
+    ///     started — the names were appended by it — and the seven steps are what the counter is read
+    ///     for, which nothing here asks to change.
+    ///     It had no phase at all until this, so its cost was billed to whichever repository the walk
+    ///     happened to report last. That is the fault #91 fixed for the overview and the full-text
+    ///     build, left in the one pass between them: on a project with paths to resolve it builds a
+    ///     lowercased copy of every path in it, so a timeline that does not name it is a timeline
+    ///     handing an operator one pass's cost under another pass's label (#92).
+    /// </summary>
+    public const string ResolveImportsPhase = "Resolving the imports to the files they name";
+
+    /// <summary>
     ///     The moment the refresh has the rebuild slot and has not yet reached the first repository.
     ///     It lasts milliseconds and was a literal at its call site while the only way to see it was
     ///     to poll inside them; it is a constant now that the timeline keeps what each phase cost
