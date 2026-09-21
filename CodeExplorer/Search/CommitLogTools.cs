@@ -57,7 +57,17 @@ internal sealed partial class HistoryTools
             answer => $"Narrow with repo, path or author, or raise page past {answer.Page}.");
     }
 
-    private static string Log(LogAnswer answer)
+    /// <summary>
+    ///     The commits, with the closing note after whichever shape the answer took. Applied here
+    ///     rather than in each branch, because the branches that need the note most are the empty ones
+    ///     and a note added branch by branch is a note the next branch forgets. It was appended in four
+    ///     branches across this file and one in <c>file_history</c> until it was not, and each of the
+    ///     five had to remember both the sentence and which of three ways to attach it (#131, #132).
+    /// </summary>
+    private static string Log(LogAnswer answer) =>
+        PathNote.After(LogBody(answer), Noted(answer.HasHistory, answer.Path), PathNoteFor.GitLog);
+
+    private static string LogBody(LogAnswer answer)
     {
         if (!answer.HasHistory) return ToolReply.NoHistory;
         // Before the empty-page reading, because an address that matches nobody and a page past the
@@ -77,15 +87,13 @@ internal sealed partial class HistoryTools
                            ? $"No commit's subject contains '{missed}'{By(answer.Author)}{where}. "
                              + "The subject is the only text searched — not the message body, and not the code. "
                              + "grep searches the code."
-                           : $"No commits{By(answer.Author)} are recorded{where}.")
-                   + ByRecordedPath(answer.Path, Reads("git_log"));
+                           : $"No commits{By(answer.Author)} are recorded{where}.");
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
             $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")}{By(answer.Author)}{Saying(answer.Message)}{where}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, answer.Repository is null && answer.Path is null);
         if (answer.Author is { } filter) Matched(text, filter, answer.Commits.Count);
-        AppendRecordedPathNote(text, answer.Path, Reads("git_log"));
         return text.ToString();
     }
 
@@ -97,13 +105,14 @@ internal sealed partial class HistoryTools
     ///     probably broken against is the one the name-shaped guess breaks.
     ///     It carries the <c>path</c> scope for the reason the count makes it actionable at all: the
     ///     addresses were counted under that scope, so a sentence that named only the repository would
-    ///     offer a number of a narrower thing as the project's. And a scope HEAD no longer holds has to
-    ///     say so here too — a miss under a path that is gone must not read as a miss under a live one.
+    ///     offer a number of a narrower thing as the project's. A scope HEAD no longer holds has to be
+    ///     said here too — a miss under a path that is gone must not read as a miss under a live one —
+    ///     and that sentence is <see cref="PathNote" />'s, applied to every branch of
+    ///     <see cref="LogBody" /> alike rather than remembered by each.
     /// </summary>
     private static string NoSuchAuthor(AuthorFilter filter, IndexedRepository? repository, PathScope? path) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"No address contains '{filter.Query}'{Scope(repository, path)} — `author` matches the address, not the name. {filter.AuthorsInScope} {ToolReply.Plural(filter.AuthorsInScope, "address", "addresses")} recorded; call authors to list them.")
-        + ByRecordedPath(path, Reads("git_log"));
+            $"No address contains '{filter.Query}'{Scope(repository, path)} — `author` matches the address, not the name. {filter.AuthorsInScope} {ToolReply.Plural(filter.AuthorsInScope, "address", "addresses")} recorded; call authors to list them.");
 
     /// <summary>
     ///     Who the filter matched, under the log it narrowed. Said where the header cannot already have
@@ -162,15 +171,34 @@ internal sealed partial class HistoryTools
             AuthorList, "Lower limit to see fewer, or scope with repo or path.");
     }
 
-    private static string AuthorList(AuthorsAnswer answer)
+    /// <summary>
+    ///     The authors, with the closing note after whichever shape the answer took. Applied for the
+    ///     reason <see cref="Log" /> gives: the empty branch is the one an agent most needs it on, and
+    ///     it is the one a branch-by-branch note is likeliest to be missing from.
+    /// </summary>
+    private static string AuthorList(AuthorsAnswer answer) =>
+        PathNote.After(AuthorListBody(answer), Noted(answer.HasHistory, answer.Path), PathNoteFor.Authors);
+
+    /// <summary>
+    ///     The scope these two reads note, or nothing where the project has no history. A path is
+    ///     resolved before the history is looked for, so an index with none still carries the scope it
+    ///     was asked about — and the caveat about how scoping matches recorded commit paths, said under
+    ///     the sentence that no commits were recorded at all, would describe a read that never happened.
+    ///     The three other reads need no such guard: neither the chain nor the gone sentence can be
+    ///     filled from an index with no commits in it, and the caveat is theirs to state in their tool
+    ///     description rather than in the reply.
+    /// </summary>
+    private static ScopeNote? Noted(bool hasHistory, PathScope? path) =>
+        hasHistory ? ScopeNote.Of(path) : null;
+
+    private static string AuthorListBody(AuthorsAnswer answer)
     {
         if (!answer.HasHistory) return ToolReply.NoHistory;
         // A project with history and no author is not reachable — a commit carries one — so this is
         // about a repository scope that holds no commits, and says that rather than "nobody".
         string where = Scope(answer.Repository, answer.Path);
         if (answer.Authors.Count == 0)
-            return $"No commits are recorded{where}, so no authors are."
-                   + ByRecordedPath(answer.Path, Reads("authors"));
+            return $"No commits are recorded{where}, so no authors are.";
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
@@ -180,7 +208,6 @@ internal sealed partial class HistoryTools
             ? string.Create(CultureInfo.InvariantCulture, $" ({answer.Authors.Count} shown, limit {answer.Limit}):\n\n")
             : ":\n\n");
         foreach (var author in answer.Authors) ToolReply.AuthorRow(text, "", author);
-        AppendRecordedPathNote(text, answer.Path, Reads("authors"));
         return text.ToString();
     }
 
