@@ -45,3 +45,6 @@ Thumbs.db
 # Build output of `dotnet run build.cs` — the container image goes to the daemon, the Windows zip
 # and its staging folder come here.
 artifacts/
+
+# Evaluation notes with sensitive customer material — kept locally, never committed.
+docs/evaluation/
