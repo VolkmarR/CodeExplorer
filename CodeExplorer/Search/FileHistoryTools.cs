@@ -43,7 +43,7 @@ internal sealed partial class HistoryTools
     ///     very rename it was describing, along with the count and the call (#131).
     /// </summary>
     private static string Changes(FileHistoryAnswer answer) =>
-        WithPreviousPath(ChangesBody(answer), answer.Path.Lineage, Reads("file_history"));
+        PathNote.After(ChangesBody(answer), ScopeNote.Of(answer.Path), PathNoteFor.FileHistory);
 
     private static string ChangesBody(FileHistoryAnswer answer)
     {
@@ -61,10 +61,6 @@ internal sealed partial class HistoryTools
         text.Append(CultureInfo.InvariantCulture,
             $"{answer.Commits.Count} {ToolReply.Plural(answer.Commits.Count, "commit")} changed {spelled}, newest first:\n\n");
         foreach (var commit in answer.Commits) Append(text, commit, false);
-        // The sentence git_log and authors end a gone scope with, word for word. One fact, one wording:
-        // a second spelling of it is how an agent ends up believing there are two.
-        if (NotAtHead(answer.Path) is { Length: > 0 } gone)
-            text.Append(CultureInfo.InvariantCulture, $"\n{gone.TrimStart()}\n");
         return text.ToString();
     }
 
@@ -327,7 +323,7 @@ internal sealed partial class HistoryTools
     ///     it most.
     /// </summary>
     private static string Ranking(ChurnAnswer answer, string projectSlug) =>
-        WithPreviousPath(RankingBody(answer, projectSlug), answer.Lineage, RanksPrevious);
+        PathNote.After(RankingBody(answer, projectSlug), new ScopeNote(answer.Lineage), PathNoteFor.HotFiles);
 
     private static string RankingBody(ChurnAnswer answer, string projectSlug)
     {

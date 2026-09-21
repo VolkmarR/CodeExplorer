@@ -49,8 +49,8 @@ internal sealed partial class HistoryTools
     ///     path HEAD no longer holds by design (#136), and a previous path is one by definition.
     /// </summary>
     private static string Coupling(CoChangeAnswer answer, string projectSlug) =>
-        WithPreviousPath(CouplingBody(answer, projectSlug), answer.Lineage,
-            SpansTheChain(answer.Coupling.Files.Count > 0));
+        PathNote.After(CouplingBody(answer, projectSlug), new ScopeNote(answer.Lineage),
+            answer.Coupling.Files.Count > 0 ? PathNoteFor.CoChangedRanking : PathNoteFor.CoChangedThin);
 
     private static string CouplingBody(CoChangeAnswer answer, string projectSlug)
     {
