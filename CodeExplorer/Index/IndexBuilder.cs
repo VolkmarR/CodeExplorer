@@ -56,6 +56,11 @@ public sealed class IndexBuilder(
         // After the whole walk and not inside it: a name resolves against every other file in the
         // project, and resolving as the files arrive would answer the first repository's edges
         // against half a project.
+        // Named while it runs, for the reason the overview below is (#91): it is the one pass of the
+        // build that reported nothing, so its cost was read back under the label of whichever
+        // repository the walk reported last.
+        report(new RefreshProgress(RefreshProgress.IngestStep, RefreshProgress.TotalStepCount,
+            RefreshProgress.ResolveImportsPhase));
         await imports.ResolveAsync(shadow, cancellationToken);
         // After the files, because attribution is joined onto them and a file row is what says which
         // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished

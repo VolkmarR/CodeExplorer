@@ -341,7 +341,8 @@ public sealed class RefreshTests : IDisposable
         await host.Services.GetRequiredService<ProjectRefresh>().RunAsync(project, reported.Add, Ct);
 
         List<string> expected =
-            [RefreshProgress.IngestPhase, RefreshProgress.AttributionPhase, RefreshProgress.OverviewPhase];
+            [RefreshProgress.IngestPhase, RefreshProgress.ResolveImportsPhase, RefreshProgress.AttributionPhase,
+                RefreshProgress.OverviewPhase];
         if (engine == SearchEngine.Fts) expected.Add(RefreshProgress.FullTextPhase);
         expected.AddRange([RefreshProgress.StorePhase, RefreshProgress.SwapPhase]);
         // Only the fixed phases: the counting ones in between name the repository they are working on,
@@ -384,7 +385,8 @@ public sealed class RefreshTests : IDisposable
         var status = await host.RefreshStatusAsync("alpha");
 
         List<string> expected =
-            [RefreshProgress.IngestPhase, RefreshProgress.AttributionPhase, RefreshProgress.OverviewPhase];
+            [RefreshProgress.IngestPhase, RefreshProgress.ResolveImportsPhase, RefreshProgress.AttributionPhase,
+                RefreshProgress.OverviewPhase];
         if (engine == SearchEngine.Fts) expected.Add(RefreshProgress.FullTextPhase);
         expected.AddRange([RefreshProgress.StorePhase, RefreshProgress.SwapPhase]);
         // The same phases the reports carry, in the same order, and now outliving the refresh that
@@ -435,7 +437,8 @@ public sealed class RefreshTests : IDisposable
 
     /// <summary>The phases with a wording of their own, as opposed to the counting ones naming a repository.</summary>
     private static bool Fixed(string phase) =>
-        phase is RefreshProgress.IngestPhase or RefreshProgress.AttributionPhase
+        phase is RefreshProgress.IngestPhase or RefreshProgress.ResolveImportsPhase
+            or RefreshProgress.AttributionPhase
             or RefreshProgress.OverviewPhase or RefreshProgress.FullTextPhase or RefreshProgress.StorePhase
             or RefreshProgress.SwapPhase;
 
@@ -449,6 +452,9 @@ public sealed class RefreshTests : IDisposable
     {
         RefreshProgress.StartPhase => 1,
         RefreshProgress.IngestPhase => 2,
+        // The reading step's second phase: the names were appended by the walk and resolve once the
+        // whole project is in the shadow, so it finishes that step rather than opening a new one.
+        RefreshProgress.ResolveImportsPhase => 2,
         RefreshProgress.AttributionPhase => 3,
         RefreshProgress.OverviewPhase => 4,
         RefreshProgress.FullTextPhase => 5,
