@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ModelContextProtocol.Client;
 using Xunit;
 
@@ -182,6 +183,48 @@ public sealed class ReferenceTests : IDisposable
             new Dictionary<string, object?> { ["symbol"] = "OrderStatus", ["ext"] = "cs", ["path"] = "one/" });
         Assert.Contains("one/src/Orders.cs", byExtension);
         Assert.DoesNotContain("two/lib/Report.cs", byExtension);
+    }
+
+    /// <summary>
+    ///     The count of files the filters hid comes out of the scan that found the references, not
+    ///     out of a second regex pass over the whole of <c>lines</c> (#173). The count is asserted as
+    ///     well as the plan, because one pass that answered a different number would be no saving.
+    /// </summary>
+    [Fact]
+    public async Task A_filtered_search_scans_the_lines_once_for_the_references_and_the_hidden_count()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string plans = _host!.ScratchFile("reference-plans");
+        string scoped;
+        using (QueryPlan.Recording(plans))
+            scoped = await FindAsync(client,
+                new Dictionary<string, object?> { ["symbol"] = "OrderStatus", ["repo"] = "two" });
+
+        Assert.Contains("your filters hid 2 further matching files", scoped);
+        // Identified by the symbol bound into them, since the recording is process-wide: the other
+        // searches for this name are in this class, whose tests run one at a time, and no other class
+        // runs a reference search for it.
+        string dump = Assert.Single(Directory.EnumerateFiles(plans, "*ReferenceSearch-QueryAsync.sql.txt"),
+            file => File.ReadAllText(file).Contains("OrderStatus", StringComparison.Ordinal));
+        // One statement is not yet one scan: a CTE the planner inlined into both of its readers would
+        // read `lines` twice inside it. The profile is what says how often the table was read.
+        using var profile = JsonDocument.Parse(File.ReadAllText(
+            dump.Replace(".sql.txt", ".json", StringComparison.Ordinal)));
+        Assert.Single(Operators(profile.RootElement), op =>
+            op.GetProperty("operator_type").GetString() == "TABLE_SCAN"
+            && op.GetProperty("extra_info").GetProperty("Table").GetString()!.EndsWith(".lines",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>Every operator of a DuckDB JSON profile, depth first.</summary>
+    private static IEnumerable<JsonElement> Operators(JsonElement node)
+    {
+        if (node.TryGetProperty("operator_type", out _)) yield return node;
+        if (!node.TryGetProperty("children", out var children)) yield break;
+        foreach (var child in children.EnumerateArray())
+        foreach (var op in Operators(child))
+            yield return op;
     }
 
     [Fact]
