@@ -177,8 +177,7 @@ public sealed class DurabilityTests : IDisposable
         await host.AddRepositoryAsync("alpha", "one",
             host.CreateGitRepository("one", new Dictionary<string, string> { ["src/A.cs"] = "class A;\n" }));
 
-        host.DeleteControlDatabase();
-        host.Restart();
+        host.RestartWithoutControlDatabase();
 
         using var http = host.CreateClient();
         var detail = await http.GetFromJsonAsync<ProjectDetail>("/api/projects/alpha", Ct);
@@ -197,9 +196,8 @@ public sealed class DurabilityTests : IDisposable
         // The backup an older build left: projects without single_repository, which is the column
         // ADR-0006 added. Replacing the stored copy is how a wake meets one.
         await WritePreMigrationBackupAsync(host);
-        host.DeleteControlDatabase();
 
-        host.Restart();
+        host.RestartWithoutControlDatabase();
 
         // Restored, migrated, and stored again. Without the last step the store would still hold the
         // older shape, and every wake until someone happened to create a project would migrate afresh.
@@ -216,9 +214,8 @@ public sealed class DurabilityTests : IDisposable
         var host = Start(SearchEngine.Substring);
         await host.CreateProjectAsync("alpha");
         var written = File.GetLastWriteTimeUtc(host.DurableControlBackup);
-        host.DeleteControlDatabase();
 
-        host.Restart();
+        host.RestartWithoutControlDatabase();
 
         // The ordinary wake: the restored file is already the shape this build reads, so the statements
         // change nothing and the store is not written again. Uploading on every wake would be the
