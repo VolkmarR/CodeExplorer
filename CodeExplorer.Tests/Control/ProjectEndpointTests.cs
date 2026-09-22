@@ -38,8 +38,7 @@ public sealed class ProjectEndpointTests : IDisposable
         await using var client = await _host.ConnectAsync("alpha");
         Assert.Contains("Alpha Project", await WhichProjectAsync(client));
 
-        using (var control = await _host.OpenControlDatabaseAsync())
-            await control.ExecuteAsync("DELETE FROM projects WHERE slug = 'alpha'", Ct);
+        await _host.ExecuteOnControlDatabaseAsync("DELETE FROM projects WHERE slug = 'alpha'");
 
         Assert.Contains("Alpha Project", await WhichProjectAsync(client));
     }

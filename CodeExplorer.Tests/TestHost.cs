@@ -163,6 +163,13 @@ public sealed class TestHost : IDisposable
         return connection;
     }
 
+    /// <summary>A statement run on the server's control database, through a connection of its own.</summary>
+    public async Task ExecuteOnControlDatabaseAsync(string sql)
+    {
+        using var connection = await OpenControlDatabaseAsync();
+        await connection.ExecuteAsync(sql, Ct);
+    }
+
     /// <summary>A database file and the write-ahead log beside it, which a stop leaves behind.</summary>
     private static void DeleteDatabase(string path)
     {

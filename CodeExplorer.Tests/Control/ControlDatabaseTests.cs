@@ -4,11 +4,8 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     The control database's native instance, kept open for the life of the process (#172).
-///     DuckDB.NET keeps one instance per file only while some connection to it is open, and a call
-///     that opened and closed its own connection tore the whole instance down behind it — file open,
-///     WAL replay and a checkpoint on close, on every uncached lookup, twice for a write and once more
-///     for its backup.
+///     The control database's native instance, kept open for the life of the process (#172). Why it
+///     is, and what that costs, is at <see cref="ControlDatabase" />'s anchor.
 /// </summary>
 public sealed class ControlDatabaseTests : IDisposable
 {
@@ -29,28 +26,22 @@ public sealed class ControlDatabaseTests : IDisposable
     {
         await _host.CreateProjectAsync("alpha");
 
-        using (var first = await _host.OpenControlDatabaseAsync())
-            await first.ExecuteAsync("ATTACH ':memory:' AS marker", Ct);
+        await _host.ExecuteOnControlDatabaseAsync("ATTACH ':memory:' AS marker");
 
         using var second = await _host.OpenControlDatabaseAsync();
-        using var command = second.CreateCommand();
-        command.CommandText = "SELECT count(*) FROM duckdb_databases() WHERE database_name = 'marker'";
-        Assert.Equal(1L, await command.ExecuteScalarAsync(Ct));
+        Assert.Equal(1L, await second.CountAsync(
+            "SELECT count(*) FROM duckdb_databases() WHERE database_name = 'marker'", [], Ct));
     }
 
     /// <summary>
-    ///     The price of an instance that lives: what one backup leaves attached, the next one finds. A
-    ///     snapshot whose <c>COPY</c> threw never reached its <c>DETACH</c>, and while every call closed
-    ///     the instance that was tidied up for free. Now it would make every later backup fail on the
-    ///     name, and this file is the only copy of the credentials. The stray catalog is attached by
-    ///     hand because a failing <c>COPY</c> cannot be arranged from outside.
+    ///     A backup catalog a failed snapshot left attached does not stop the next backup from being
+    ///     stored. Attached by hand, because a failing <c>COPY</c> cannot be arranged from outside.
     /// </summary>
     [Fact]
     public async Task A_backup_left_attached_by_a_failed_snapshot_does_not_stop_the_next()
     {
         await _host.CreateProjectAsync("alpha");
-        using (var control = await _host.OpenControlDatabaseAsync())
-            await control.ExecuteAsync("ATTACH ':memory:' AS backup", Ct);
+        await _host.ExecuteOnControlDatabaseAsync("ATTACH ':memory:' AS backup");
 
         await _host.CreateProjectAsync("beta");
 
