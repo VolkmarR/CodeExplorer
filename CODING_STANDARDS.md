@@ -65,6 +65,25 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
 - Cover the states a client can catch the server in, not just the happy path: project restoring,
   rebuild in progress, a swap mid-query.
 
+## Performance
+
+- **A performance change is proven by a before/after run on a real index**, the kind in
+  `CodeExplorer/data/indexes`. A green test shows the answer stayed the same; it does not show the
+  read got cheaper.
+- Measure with the query-plan switch, `CODEEXPLORER_EXPLAIN_DIR`. `Reading/QueryPlan.cs` says what
+  it writes for each read and how a test turns it on. The numbers to compare are DuckDB's own, in
+  the profile beside each statement: `latency` at the root, `operator_cardinality` per operator.
+  1. **Record the baseline first**, on a clean `HEAD`, before anything is edited. Start the server
+     with the switch on and call the affected endpoint or tool about ten times per case. Keep the
+     answers too.
+  2. Make the change and repeat into a second directory, against the same index. A refresh in
+     between makes the baseline stale: take it again.
+  3. Report, per case, the median `latency` before and after, the row count at the operator the
+     change targets, and whether the answers are identical.
+- A change already written with no baseline gets one by stashing only its source
+  (`git stash push -- <file>`), then popping it.
+- Plans taken on a customer index go in `docs/evaluation/`, which is gitignored.
+
 ## Errors
 
 Two kinds of failure, two mechanisms. Never mix them.
