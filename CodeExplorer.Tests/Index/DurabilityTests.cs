@@ -285,6 +285,33 @@ public sealed class DurabilityTests : IDisposable
         Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
     }
 
+    [Fact]
+    public async Task A_durable_copy_an_older_schema_wrote_is_refused_before_its_other_tables_are_fetched()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+        host.DeleteIndexFile("alpha");
+        await WriteOldIndexInfoAsync(host, "alpha");
+
+        // Every table but index_info held open exclusively, so a fetch that reaches any of them fails
+        // where one that stopped at index_info answers absent.
+        var held = Directory.EnumerateFiles(host.DurableIndexDirectory("alpha"))
+            .Where(path => Path.GetFileName(path) != "index_info.parquet")
+            .Select(path => File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            .ToList();
+        try
+        {
+            Assert.NotEmpty(held);
+            Assert.Null(await host.Indexes.OpenAsync("alpha", Ct));
+        }
+        finally
+        {
+            foreach (var file in held) await file.DisposeAsync();
+        }
+
+        Assert.False(host.Indexes.HasIndex("alpha"));
+    }
+
     /// <summary>
     ///     The rule ADR-0004 states and CODING_STANDARDS repeats: absent configuration selects a folder,
     ///     so a plain <c>dotnet run</c> with an empty <c>appsettings</c> keeps a durable copy and needs
