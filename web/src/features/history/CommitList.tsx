@@ -1,5 +1,4 @@
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronRight } from 'lucide-react'
 import { commitSearch } from '@/lib/urls/commitParams'
 import type { HistoryParameters } from '@/lib/urls/historyParams'
 import type { CommitEntry, CommitList as CommitPage } from '@/features/history/api'
@@ -66,8 +65,8 @@ export function CommitList({
  * subject rarely says which.
  *
  * The whole row is the link to the commit's page. It expanded in place before, which meant the body
- * and the file list were drawn here as well as there; the chevron stays because it is what says the
- * row leads somewhere, and now it points at a page rather than at a fold.
+ * and the file list were drawn here as well as there. Its chevron went with the fold: next to a row
+ * it reads as "opens here", and the hover underline already says the row is a link.
  */
 function CommitRow({
   project,
@@ -86,7 +85,6 @@ function CommitRow({
         search={commitSearch(commit.sha, 'history')}
         className="group flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-muted/40"
       >
-        <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex min-w-0 items-baseline gap-2">
             {showRepository ? (
