@@ -26,26 +26,41 @@ public abstract record CloneOpen
 }
 
 /// <summary>
-///     One file committed at HEAD. Size and the binary flag are read from the blob header, and the text
-///     only on <see cref="Text" />, so a build can decide to skip a file without loading it. The blob
-///     itself stays here: no LibGit2Sharp type leaves <c>Git/</c>.
+///     One file committed at HEAD. The size is read from the object header and the text only on
+///     <see cref="Text" />, so a build can decide to skip a file without loading it. The blob itself
+///     stays here: no LibGit2Sharp type leaves <c>Git/</c>.
+///     Each <c>Blob</c> property read is a lookup of its own, and libgit2 caches no blob by default, so
+///     every one inflates the object and applies its delta chain again. Reading the size that way made
+///     a text file cost three inflations and a binary two.
 /// </summary>
 public sealed class CommittedFile
 {
     private readonly Blob _blob;
+    private readonly ObjectDatabase _objects;
+    private long? _size;
 
-    internal CommittedFile(string path, Blob blob)
+    internal CommittedFile(string path, Blob blob, ObjectDatabase objects)
     {
         Path = path;
         _blob = blob;
+        _objects = objects;
     }
 
     /// <summary>Repository-relative, with forward slashes, as git stores it.</summary>
     public string Path { get; }
 
-    public long Size => _blob.Size;
+    /// <summary>
+    ///     In bytes, from the object header alone: for a delta, the size the chain resolves to, which
+    ///     libgit2 reads off the start of the delta without applying the chain. Kept, because a build
+    ///     asks more than once.
+    /// </summary>
+    public long Size => _size ??= _objects.RetrieveObjectMetadata(_blob.Id).Size;
 
-    /// <summary>libgit2's call, made the way git makes it: a NUL in the first bytes.</summary>
+    /// <summary>
+    ///     libgit2's call, made the way git makes it: a NUL in the first bytes. It is the one inflation
+    ///     a skipped file costs, and left to libgit2 because a heuristic of our own would change which
+    ///     files are skipped.
+    /// </summary>
     public bool IsBinary => _blob.IsBinary;
 
     /// <summary>The whole content decoded as text. Call it once; there is no cache behind it.</summary>
@@ -220,13 +235,13 @@ public sealed class LocalCopy : IDisposable
         return false;
     }
 
-    private static IEnumerable<CommittedFile> Files(Tree tree, string prefix)
+    private IEnumerable<CommittedFile> Files(Tree tree, string prefix)
     {
         foreach (var entry in tree)
             switch (entry.TargetType)
             {
                 case TreeEntryTargetType.Blob:
-                    yield return new CommittedFile(prefix + entry.Name, (Blob)entry.Target);
+                    yield return new CommittedFile(prefix + entry.Name, (Blob)entry.Target, _repository.ObjectDatabase);
                     break;
                 case TreeEntryTargetType.Tree:
                     foreach (var child in Files((Tree)entry.Target, prefix + entry.Name + "/")) yield return child;
