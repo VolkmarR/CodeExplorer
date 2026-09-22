@@ -73,17 +73,17 @@ public sealed class ProjectIndexTests : IDisposable
             {
                 ["a.cs"] = "// café\nclass A {}\n",
                 ["logo.png"] = "PNG\0\0binary",
-                ["dump.sql"] = new string('x', 4 * 1024 * 1024 + 1)
+                ["dump.sql"] = new string('x', 25 * 1024 * 1024 + 1)
             }
         });
 
         var files = await host.ScalarsAsync("alpha",
             "SELECT path || '|' || size_bytes || '|' || coalesce(skip_reason, '') FROM files ORDER BY path");
-        Assert.Equal(["a.cs|20|", "dump.sql|4194305|larger than 4 MiB", "logo.png|11|binary"], files);
+        Assert.Equal(["a.cs|20|", "dump.sql|26214401|larger than 25 MiB", "logo.png|11|binary"], files);
 
-        // Skipped files count towards the repository's bytes: 20 + 4194305 + 11.
+        // Skipped files count towards the repository's bytes: 20 + 26214401 + 11.
         var bytes = await host.ScalarsAsync("alpha", "SELECT byte_count::VARCHAR FROM repositories");
-        Assert.Equal(["4194336"], bytes);
+        Assert.Equal(["26214432"], bytes);
     }
 
     [Fact]

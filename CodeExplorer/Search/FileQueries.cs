@@ -90,9 +90,9 @@ public sealed class FileQueries(IndexReaders readers)
 
     /// <summary>
     ///     The most lines one window may reach, whoever asks. A file view scrolls and asks for the whole
-    ///     file, and the index refuses files over <c>Index:MaxFileBytes</c> (4 MiB by default), which
-    ///     bounds this well below it. A tool that protects an agent's context sets a lower ceiling of its
-    ///     own; this one protects the server.
+    ///     file. <c>Index:MaxFileBytes</c> (25 MiB by default) admits files longer than this, and a window
+    ///     over one stops here. A tool that protects an agent's context sets a lower ceiling of its own;
+    ///     this one protects the server.
     /// </summary>
     private const int MaxLinesPerWindow = 100_000;
 

@@ -27,7 +27,7 @@ public sealed class IndexBuilder(
     ///     the reason, so a tree listing and a search can tell the agent about it. A project of large
     ///     hand-written sources raises the setting rather than losing them.
     /// </summary>
-    private const long DefaultMaxFileBytes = 4 * 1024 * 1024;
+    private const long DefaultMaxFileBytes = 25 * 1024 * 1024;
 
     private readonly long _maxFileBytes = configuration.GetValue("Index:MaxFileBytes", DefaultMaxFileBytes);
 
