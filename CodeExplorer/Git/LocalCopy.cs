@@ -30,20 +30,17 @@ public abstract record CloneOpen
 ///     <see cref="Text" />, so a build can decide to skip a file without loading it. The blob itself
 ///     stays here: no LibGit2Sharp type leaves <c>Git/</c>.
 ///     Each <c>Blob</c> property read is a lookup of its own, and libgit2 caches no blob by default, so
-///     every one inflates the object and applies its delta chain again. Reading the size that way made
-///     a text file cost three inflations and a binary two.
+///     every one inflates the object and applies its delta chain again.
 /// </summary>
 public sealed class CommittedFile
 {
     private readonly Blob _blob;
-    private readonly ObjectDatabase _objects;
-    private long? _size;
 
-    internal CommittedFile(string path, Blob blob, ObjectDatabase objects)
+    internal CommittedFile(string path, Blob blob, long size)
     {
         Path = path;
         _blob = blob;
-        _objects = objects;
+        Size = size;
     }
 
     /// <summary>Repository-relative, with forward slashes, as git stores it.</summary>
@@ -51,10 +48,9 @@ public sealed class CommittedFile
 
     /// <summary>
     ///     In bytes, from the object header alone: for a delta, the size the chain resolves to, which
-    ///     libgit2 reads off the start of the delta without applying the chain. Kept, because a build
-    ///     asks more than once.
+    ///     libgit2 reads off the start of the delta without applying the chain.
     /// </summary>
-    public long Size => _size ??= _objects.RetrieveObjectMetadata(_blob.Id).Size;
+    public long Size { get; }
 
     /// <summary>
     ///     libgit2's call, made the way git makes it: a NUL in the first bytes. It is the one inflation
@@ -241,7 +237,8 @@ public sealed class LocalCopy : IDisposable
             switch (entry.TargetType)
             {
                 case TreeEntryTargetType.Blob:
-                    yield return new CommittedFile(prefix + entry.Name, (Blob)entry.Target, _repository.ObjectDatabase);
+                    yield return new CommittedFile(prefix + entry.Name, (Blob)entry.Target,
+                        _repository.ObjectDatabase.RetrieveObjectMetadata(entry.Target.Id).Size);
                     break;
                 case TreeEntryTargetType.Tree:
                     foreach (var child in Files((Tree)entry.Target, prefix + entry.Name + "/")) yield return child;
