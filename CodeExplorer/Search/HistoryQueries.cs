@@ -89,9 +89,9 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     private const int MaxRollupDepth = 10;
 
     /// <summary>
-    ///     The most lines one blame may cover. The index refuses files over <c>Index:MaxFileBytes</c>
-    ///     (4 MiB by default), which bounds this well below it; a caller that protects an agent's
-    ///     context caps the runs it prints, and this one protects the server.
+    ///     The most lines one blame may cover. <c>Index:MaxFileBytes</c> (25 MiB by default) admits files
+    ///     longer than this, and a blame over one stops here; a caller that protects an agent's context
+    ///     caps the runs it prints, and this one protects the server.
     /// </summary>
     private const int MaxLinesPerFile = 100_000;
 
