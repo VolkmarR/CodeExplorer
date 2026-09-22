@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -367,6 +368,97 @@ public sealed class CommitTests(CommitFixture fixture) : IClassFixture<CommitFix
 
         Assert.Contains("src/Widget.cs", reply, StringComparison.Ordinal);
         Assert.DoesNotContain("only/src/Widget.cs", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     One clone added twice holds every commit twice under one SHA. The commit's own page names the
+    ///     copy recorded first, which is the last the newest-first log lists, and counts it the way that
+    ///     row did — whichever copy DuckDB happened to reach first would make a link open a different
+    ///     commit from one refresh to the next.
+    /// </summary>
+    [Fact]
+    public async Task One_commit_held_by_two_repositories_answers_the_copy_recorded_first()
+    {
+        string source = _host.CreateEmptyGitRepository("twinned-one");
+        _host.CommitToGitRepositoryAs("twinned-one",
+            new Dictionary<string, string> { ["src/Api.cs"] = "a\nb\n", ["docs/Note.md"] = "note\n" },
+            "Add the module", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs("twinned-one",
+            new Dictionary<string, string> { ["src/Api.cs"] = "a\nc\n" },
+            "Change the module", "Grace", "grace@example.invalid", 1);
+        await _host.CreateProjectAsync("twinned");
+        await _host.AddRepositoryAsync("twinned", "left", source);
+        await _host.AddRepositoryAsync("twinned", "right", source);
+        await _host.RefreshAsync("twinned");
+
+        using var http = _host.CreateClient();
+        var log = await http.GetFromJsonAsync<ChangeLogAnswer>("/api/projects/twinned/commits",
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(log);
+        Assert.Equal(4, log.Total);
+        string sha = log.Commits.Single(c => c.RepositorySlug == "left" && c.Subject == "Add the module").Sha;
+        var copies = log.Commits.Where(c => c.Sha == sha).ToList();
+        Assert.Equal(["left", "right"], copies.Select(c => c.RepositorySlug).Order());
+
+        var one = await http.GetFromJsonAsync<LoggedCommit>($"/api/projects/twinned/commits/{sha}",
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(one);
+        Assert.Equal(copies[^1], one);
+        Assert.Equal(2, one.FilesChanged);
+        Assert.Equal(3, one.Added);
+    }
+
+    /// <summary>
+    ///     A page of the change log sums what its own commits did and nothing else (#171). Summed over
+    ///     every commit in scope and cut afterwards, a page of fifty aggregated the whole of
+    ///     <c>commit_files</c>, because a limit cannot be pushed beneath the aggregate it follows.
+    ///     Asserted on the profile the query-plan switch writes, as the rename-chain test in
+    ///     <c>PathLineageTests</c> is: that is what a developer looking at a slow page turns on. The newest commit touches one file
+    ///     and the one before it three, so an aggregate over more than the page reads more than one row.
+    /// </summary>
+    [Fact]
+    public async Task A_page_of_the_change_log_sums_only_the_commits_on_it()
+    {
+        string source = _host.CreateEmptyGitRepository("paged-one");
+        _host.CommitToGitRepositoryAs("paged-one",
+            new Dictionary<string, string> { ["a.txt"] = "a\n", ["b.txt"] = "b\n", ["c.txt"] = "c\n" },
+            "Add three", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs("paged-one", new Dictionary<string, string> { ["a.txt"] = "a2\n" },
+            "Change one", "Ada", "ada@example.invalid", 1);
+        await _host.CreateProjectAsync("paged");
+        await _host.AddRepositoryAsync("paged", "paged", source);
+        await _host.RefreshAsync("paged");
+
+        string plans = _host.ScratchFile("change-log-plans");
+        using var http = _host.CreateClient();
+        ChangeLogAnswer? page;
+        using (QueryPlan.Recording(plans))
+            page = await http.GetFromJsonAsync<ChangeLogAnswer>("/api/projects/paged/commits?repository=paged&pageSize=1",
+                TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        var commit = Assert.Single(page.Commits);
+        Assert.Equal("Change one", commit.Subject);
+        Assert.Equal((1, 1, 1), (commit.FilesChanged, commit.Added, commit.Deleted));
+
+        string dump = Directory.EnumerateFiles(plans, "*CommitLogQueries-LoggedAsync.sql.txt")
+            .Single(file => File.ReadAllText(file).Contains("$r = paged", StringComparison.Ordinal));
+        using var profile = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(
+            Path.ChangeExtension(dump, null), ".json")));
+        var aggregate = Assert.Single(Operators(profile.RootElement),
+            op => op.GetProperty("operator_type").GetString()!.EndsWith("GROUP_BY", StringComparison.Ordinal));
+        Assert.Equal(1, aggregate.GetProperty("children").EnumerateArray()
+            .Sum(child => child.GetProperty("operator_cardinality").GetInt64()));
+    }
+
+    /// <summary>Every operator of a DuckDB JSON profile, depth first.</summary>
+    private static IEnumerable<JsonElement> Operators(JsonElement node)
+    {
+        if (node.TryGetProperty("operator_type", out _)) yield return node;
+        if (!node.TryGetProperty("children", out var children)) yield break;
+        foreach (var child in children.EnumerateArray())
+        foreach (var op in Operators(child))
+            yield return op;
     }
 
     /// <summary>
