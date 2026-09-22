@@ -35,18 +35,19 @@ public sealed class DurableCopy(string directory, Telemetry.DurableCopyRecording
 public sealed class DurableIndex(IConfiguration configuration, DurableStore store, ILogger<DurableIndex> logger)
 {
     /// <summary>
-    ///     The one table a fetch reads before the others and a load does not copy straight back: it
-    ///     carries the schema version, and whether a BM25 index exists.
+    ///     Held apart from <see cref="ContentTables" />: it carries the schema version, which decides
+    ///     whether the rest is worth fetching at all.
     /// </summary>
     private const string IndexInfo = "index_info";
 
     /// <summary>
-    ///     The tables of a project index, in the order a restore may insert them. There is no foreign
-    ///     key between them, so the order is for readability rather than for the engine.
+    ///     The tables of a project index besides <see cref="IndexInfo" />, in the order a restore may
+    ///     insert them. There is no foreign key between them, so the order is for readability rather
+    ///     than for the engine.
     /// </summary>
-    private static readonly string[] Tables =
+    private static readonly string[] ContentTables =
     [
-        IndexInfo, "repositories", "files", "lines", "commits", "commit_files", "attribution",
+        "repositories", "files", "lines", "commits", "commit_files", "attribution",
         // The rename chains the build derived (#148). Derived and still carried: a restore does not
         // re-walk, so an index that lost this would stop telling a caller what a scope was called
         // before — silently, because a missing chain is indistinguishable from a path nobody renamed.
@@ -60,6 +61,9 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         // computing it at build time rather than per call.
         "project_overview"
     ];
+
+    /// <summary>Every table a store writes.</summary>
+    private static readonly string[] Tables = [IndexInfo, ..ContentTables];
 
     /// <summary>
     ///     Where <c>COPY TO</c> writes and a fetch lands: on the volume ADR-0003 budgets, next to the
@@ -131,7 +135,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
                 return Absent(copy);
             }
 
-            foreach (string table in Tables.Where(table => table != IndexInfo))
+            foreach (string table in ContentTables)
                 if (!await FetchTableAsync(copy, slug, table, cancellationToken))
                     // A partial set is as good as none: every table is written by one store, so a
                     // missing one is a store that never finished and a half-loaded index would be worse.
@@ -156,17 +160,17 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     public async Task LoadAsync(DuckDBConnection connection, DurableCopy copy, bool ftsAvailable,
         CancellationToken cancellationToken)
     {
-        foreach (string table in Tables)
-        {
-            // index_info is the one table not copied straight back: whether a BM25 index exists is a
-            // property of this replica and of the load below, not of the build that wrote the Parquet.
-            string columns = table == IndexInfo
-                ? $"schema_version, built_at, {(ftsAvailable ? "true" : "false")} AS fts_indexed, single_repository"
-                : "*";
+        // index_info is the one table not copied straight back: whether a BM25 index exists is a
+        // property of this replica and of the load below, not of the build that wrote the Parquet.
+        await connection.ExecuteAsync(
+            $"INSERT INTO {IndexInfo} SELECT schema_version, built_at, "
+            + $"{(ftsAvailable ? "true" : "false")} AS fts_indexed, single_repository "
+            + $"FROM read_parquet('{Escape(Parquet(copy, IndexInfo))}')",
+            cancellationToken);
+        foreach (string table in ContentTables)
             await connection.ExecuteAsync(
-                $"INSERT INTO {table} SELECT {columns} FROM read_parquet('{Escape(Parquet(copy, table))}')",
+                $"INSERT INTO {table} SELECT * FROM read_parquet('{Escape(Parquet(copy, table))}')",
                 cancellationToken);
-        }
 
         if (ftsAvailable) await FtsExtension.CreateIndexAsync(connection, cancellationToken);
 

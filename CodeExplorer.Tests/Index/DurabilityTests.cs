@@ -277,24 +277,9 @@ public sealed class DurabilityTests : IDisposable
         await WriteOldIndexInfoAsync(host, "alpha");
 
         // Not an error and not a restore: the columns no longer fit the tables this build creates, so
-        // the project reads as unindexed and a refresh rebuilds it from git.
-        Assert.Null(await host.Indexes.OpenAsync("alpha", Ct));
-        Assert.False(host.Indexes.HasIndex("alpha"));
-
-        await host.RefreshAsync("alpha");
-        Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
-    }
-
-    [Fact]
-    public async Task A_durable_copy_an_older_schema_wrote_is_refused_before_its_other_tables_are_fetched()
-    {
-        var host = Start(SearchEngine.Substring);
-        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
-        host.DeleteIndexFile("alpha");
-        await WriteOldIndexInfoAsync(host, "alpha");
-
-        // Every table but index_info held open exclusively, so a fetch that reaches any of them fails
-        // where one that stopped at index_info answers absent.
+        // the project reads as unindexed and a refresh rebuilds it from git. Refused on index_info
+        // alone (#170): every other table is held open exclusively, so a fetch that reached any of
+        // them would fail where one that stopped at the version answers absent.
         var held = Directory.EnumerateFiles(host.DurableIndexDirectory("alpha"))
             .Where(path => Path.GetFileName(path) != "index_info.parquet")
             .Select(path => File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -310,6 +295,9 @@ public sealed class DurabilityTests : IDisposable
         }
 
         Assert.False(host.Indexes.HasIndex("alpha"));
+
+        await host.RefreshAsync("alpha");
+        Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
     }
 
     /// <summary>
