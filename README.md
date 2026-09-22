@@ -90,6 +90,8 @@ docker run -p 8080:8080 codeexplorer
 ```
 
 One build from a clean checkout: the `Dockerfile` builds the UI, publishes the API and serves both.
+It is built on the chiseled ASP.NET image, so there is no shell to `docker exec` into and no package
+manager; it carries only the native libraries of its own architecture (linux-x64 on Container Apps).
 It runs as the non-root `app` user, contains no `git` binary — LibGit2Sharp bundles libgit2 — and
 carries the DuckDB `fts` extension, installed during the build so that nothing reaches the network
 for it at runtime. That last one is the reason the image exists at all. `INSTALL fts` fails silently
