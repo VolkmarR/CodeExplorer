@@ -154,14 +154,39 @@ public sealed class ReferenceSearch(IndexReaders readers)
 
         var matchParameters = new List<DuckDBParameter> { new("q", pattern) };
         string literally = SearchQuery.Literally(symbol, matchParameters);
+        // What a match is, spelled once for the scan and for the coverage count, so the two cannot drift.
+        string matches = $"{literally} AND regexp_matches(l.content, $q, '')";
+
+        // Unlike grep this counts the unfiltered files whenever filters were given rather than only on
+        // an empty answer: the footgun here is a result that looks complete because the file declaring
+        // the symbol — a generated partial, most often — was excluded. The count is a superset of the
+        // filtered answer, so both come out of one regex pass over `lines`: `matched` is every line
+        // naming the symbol, and the filters are applied to it rather than to the scan (#173). It is
+        // materialised because it is read twice, and a CTE inlined into both would be the two scans
+        // this replaced. Without filters there is no second count, and the scan keeps its join. The
+        // filter tail starts with `AND`, hence `WHERE true` in front of it.
+        string hits = filter.Any
+            ? $"""
+               matched AS MATERIALIZED (
+                   SELECT l.file_id, l.line_number, l.content FROM lines l
+                   WHERE {matches}),
+               hits AS (
+                   SELECT m.file_id, m.line_number, m.content, f.qualified_path, f.extension
+                   FROM matched m JOIN files f USING (file_id)
+                   WHERE true{fileFilter}),
+               """
+            : $"""
+               hits AS (
+                   SELECT l.file_id, l.line_number, l.content, f.qualified_path, f.extension
+                   FROM lines l JOIN files f USING (file_id)
+                   WHERE {matches}),
+               """;
+        string everyFile = filter.Any ? ", (SELECT count(DISTINCT file_id) FROM matched) AS every_file" : "";
 
         // totals drives the join so that a symbol matching nothing still returns one row carrying the
         // zero counts, the way grep's page-past-the-end does.
         string sql = $"""
-                      WITH hits AS (
-                          SELECT l.file_id, l.line_number, l.content, f.qualified_path, f.extension
-                          FROM lines l JOIN files f USING (file_id)
-                          WHERE {literally} AND regexp_matches(l.content, $q, ''){fileFilter}),
+                      WITH {hits}
                       -- `occurrences` runs the pattern a second time over the hit lines, which the
                       -- first pass has already narrowed the table down to: a line naming the symbol
                       -- twice is two references, so counting rows would undercount the project total
@@ -185,8 +210,8 @@ public sealed class ReferenceSearch(IndexReaders readers)
                                      row_number() OVER (PARTITION BY h.file_id ORDER BY h.line_number) AS rn
                               FROM hits h JOIN page_files p USING (file_id))
                           WHERE rn <= {MaxLinesPerFile})
-                      SELECT t.total_files, t.total_lines, t.total_occurrences, k.file_id, k.qualified_path, k.extension,
-                             k.line_number, k.content
+                      SELECT t.total_files, t.total_lines, t.total_occurrences{everyFile},
+                             k.file_id, k.qualified_path, k.extension, k.line_number, k.content
                       FROM totals t LEFT JOIN kept k ON true
                       ORDER BY k.qualified_path, k.line_number
                       """;
@@ -195,6 +220,7 @@ public sealed class ReferenceSearch(IndexReaders readers)
         int totalFiles = 0;
         long totalLines = 0;
         long totalOccurrences = 0;
+        int? withoutFilters = null;
         using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
         using (var reader = await command.ReaderAsync(cancellationToken))
         {
@@ -203,21 +229,13 @@ public sealed class ReferenceSearch(IndexReaders readers)
                 totalFiles = (int)reader.Int64("total_files");
                 totalLines = reader.Int64("total_lines");
                 totalOccurrences = reader.Int64("total_occurrences");
+                if (filter.Any) withoutFilters = (int)reader.Int64("every_file");
                 if (reader.IsNull("qualified_path")) continue;
                 matched.Add(new MatchedLine(reader.Int64("file_id"), reader.Text("qualified_path"),
                     Languages.Default.For(reader.Text("extension")), reader.Int32("line_number"),
                     reader.Text("content")));
             }
         }
-
-        // Unlike grep this recounts whenever filters were given rather than only on an empty answer:
-        // the footgun here is a result that looks complete because the file declaring the symbol —
-        // a generated partial, most often — was excluded.
-        int? withoutFilters = null;
-        if (filter.Any)
-            withoutFilters = (int)await connection.CountAsync(
-                $"SELECT count(DISTINCT l.file_id) FROM lines l WHERE {literally} AND regexp_matches(l.content, $q, '')",
-                matchParameters, cancellationToken);
 
         var scopes = await ScopesAsync(connection, matched, cancellationToken);
         // Where each matched line's file stands at the start of it, which is what keeps a line inside
@@ -245,8 +263,8 @@ public sealed class ReferenceSearch(IndexReaders readers)
         // about what the answer covers, and the files past the cap are part of what it covers.
         // No shapeless languages to report: this search reads every file it matches whatever its
         // language, so a profile with no declaration shapes costs it nothing (#129).
-        var unprofiled = await ScopeCoverage.OfMatchesAsync(connection,
-            $"{literally} AND regexp_matches(l.content, $q, '')", fileFilter,
+        var extensions = await ScopeCoverage.ExtensionsAsync(connection, cancellationToken);
+        var unprofiled = await ScopeCoverage.OfMatchesAsync(connection, extensions, matches, fileFilter,
             [.. matchParameters, .. fileParameters], [], cancellationToken);
 
         int filesExamined = matched.Select(line => line.FileId).Distinct().Count();

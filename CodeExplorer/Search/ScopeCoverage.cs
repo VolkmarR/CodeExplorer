@@ -55,15 +55,30 @@ internal static class ScopeCoverage
     public const int MaxExtensionsNamed = 4;
 
     /// <summary>
+    ///     Every extension in the project, read once per search and handed to whatever needs it:
+    ///     <see cref="DefinitionSearch" /> builds its declaration shapes from the same list this class
+    ///     checks for gaps, and read twice it was two statements for one answer (#173).
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> ExtensionsAsync(DuckDBConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var extensions = new List<string>();
+        using var command = connection.Query("SELECT DISTINCT extension FROM files", []);
+        using var reader = await command.ReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) extensions.Add(reader.Text("extension"));
+        return extensions;
+    }
+
+    /// <summary>
     ///     The languages a search could not read among the files its own predicate matches, most files
     ///     first. Empty where every extension in the project either has a profile with shapes or is
-    ///     not code at all, which is the cheap answer and the common one: the extensions are read from
-    ///     <c>files</c> first — a small table, and the same read <see cref="DefinitionSearch" />
-    ///     already makes to build its declaration shapes — so a project whose code this build profiles
-    ///     never reaches the count over <c>lines</c>. A project that really does hold a language with
-    ///     no profile pays one aggregate for the fact, which is the fact it most needs.
+    ///     not code at all, which is the cheap answer and the common one: the check runs over the
+    ///     project's extensions (<see cref="ExtensionsAsync" />) first, so a project whose code this
+    ///     build profiles never reaches the count over <c>lines</c>. A project that really does hold a
+    ///     language with no profile pays one aggregate for the fact, which is the fact it most needs.
     /// </summary>
     /// <param name="connection">The index, already bound to its project.</param>
+    /// <param name="extensions">Every extension in the project, as <see cref="ExtensionsAsync" /> read them.</param>
     /// <param name="matchPredicate">What the search counts as a match, against the <c>lines</c> alias <c>l</c>.</param>
     /// <param name="fileFilter">The caller's <see cref="FileFilter" /> tail, against the <c>files</c> alias <c>f</c>.</param>
     /// <param name="parameters">Everything those two spell; copied, never appended to.</param>
@@ -73,29 +88,26 @@ internal static class ScopeCoverage
     ///     whatever its language — <c>find_references</c> classifies an occurrence either way, so a
     ///     shapeless profile costs it nothing and it has nothing to report here.
     /// </param>
-    /// <param name="cancellationToken">Threaded to both commands, as every read here is.</param>
+    /// <param name="cancellationToken">Threaded to the count, as every read here is.</param>
     public static async Task<IReadOnlyList<UncoveredFiles>> OfMatchesAsync(DuckDBConnection connection,
-        string matchPredicate, string fileFilter, IReadOnlyList<DuckDBParameter> parameters,
-        IReadOnlyCollection<string> unreadable, CancellationToken cancellationToken)
+        IReadOnlyList<string> extensions, string matchPredicate, string fileFilter,
+        IReadOnlyList<DuckDBParameter> parameters, IReadOnlyCollection<string> unreadable,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(extensions);
         ArgumentNullException.ThrowIfNull(unreadable);
         var gaps = new Dictionary<string, CoverageGap>(StringComparer.Ordinal);
-        using (var command = connection.Query("SELECT DISTINCT extension FROM files", []))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        foreach (string extension in extensions)
         {
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                string extension = reader.Text("extension");
-                // Prose, data and build metadata are skipped rather than reported: a README that
-                // mentions the name is not a file this failed to read, and a caveat about Markdown on
-                // every reply is what teaches an agent to skip the caveat that matters. It is also
-                // what keeps the count below off a well-profiled project entirely.
-                if (!Languages.MightHoldCode(extension)) continue;
-                // The shapeless case is asked first: those extensions are profiled, so the test below
-                // would pass over them, and they are the ones nothing was read from at all.
-                if (unreadable.Contains(extension)) gaps[extension] = CoverageGap.Unreadable;
-                else if (!Languages.Name(extension).Mapped) gaps[extension] = CoverageGap.Unprofiled;
-            }
+            // Prose, data and build metadata are skipped rather than reported: a README that
+            // mentions the name is not a file this failed to read, and a caveat about Markdown on
+            // every reply is what teaches an agent to skip the caveat that matters. It is also
+            // what keeps the count below off a well-profiled project entirely.
+            if (!Languages.MightHoldCode(extension)) continue;
+            // The shapeless case is asked first: those extensions are profiled, so the test below
+            // would pass over them, and they are the ones nothing was read from at all.
+            if (unreadable.Contains(extension)) gaps[extension] = CoverageGap.Unreadable;
+            else if (!Languages.Name(extension).Mapped) gaps[extension] = CoverageGap.Unprofiled;
         }
 
         if (gaps.Count == 0) return [];

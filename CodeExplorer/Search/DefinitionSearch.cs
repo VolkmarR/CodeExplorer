@@ -110,7 +110,9 @@ public sealed class DefinitionSearch(IndexReaders readers)
         var symbolPattern = new DuckDBParameter("q", SymbolText.WholeWordPattern(symbol));
         var parameters = new List<DuckDBParameter> { symbolPattern };
         string literally = SearchQuery.Literally(symbol, parameters);
-        var shapes = await ShapesAsync(connection, parameters, cancellationToken);
+        // Read once and handed to both the shapes and the coverage note, which ask about the same list.
+        var extensions = await ScopeCoverage.ExtensionsAsync(connection, cancellationToken);
+        var shapes = Shapes(extensions, parameters);
         string declarationShapes = shapes.Sql;
         string fileFilter = filter.Sql(parameters);
 
@@ -200,7 +202,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
         // and not instead of them: an answer that found three declarations may still be missing the
         // one written in a language no profile covers, and the reply says so either way (#126) — or
         // in one this asked the engine for no lines of at all (#129).
-        var uncovered = await ScopeCoverage.OfMatchesAsync(connection,
+        var uncovered = await ScopeCoverage.OfMatchesAsync(connection, extensions,
             $"{literally} AND regexp_matches(l.content, $q, '')", fileFilter, parameters, shapes.Unreadable,
             cancellationToken);
 
@@ -232,16 +234,9 @@ public sealed class DefinitionSearch(IndexReaders readers)
     ///     one place that knows them and a reply owes them a sentence: a file no branch asked for is
     ///     not a file that was searched and held nothing (#129).
     /// </summary>
-    private static async Task<(string Sql, IReadOnlyList<string> Unreadable)> ShapesAsync(
-        DuckDBConnection connection, List<DuckDBParameter> parameters, CancellationToken cancellationToken)
+    private static (string Sql, IReadOnlyList<string> Unreadable) Shapes(IReadOnlyList<string> extensions,
+        List<DuckDBParameter> parameters)
     {
-        var extensions = new List<string>();
-        using (var command = connection.Query("SELECT DISTINCT extension FROM files", []))
-        using (var reader = await command.ReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken)) extensions.Add(reader.Text("extension"));
-        }
-
         var branches = new List<string>();
         var unreadable = new List<string>();
         foreach (var language in extensions.GroupBy(Languages.Default.For))
