@@ -58,6 +58,34 @@ public sealed class ProjectIndexTests : IDisposable
         Assert.Equal(["console.log(one);"], second);
     }
 
+    /// <summary>
+    ///     The size is the blob's byte count, which is not its character count once a file holds more
+    ///     than ASCII, and it is what both skip reasons are decided on: a binary is sized too, and a
+    ///     text file one byte over the limit is refused by it.
+    /// </summary>
+    [Fact]
+    public async Task A_file_is_sized_in_bytes_and_skipped_by_its_size_or_content()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["main"] = new()
+            {
+                ["a.cs"] = "// café\nclass A {}\n",
+                ["logo.png"] = "PNG\0\0binary",
+                ["dump.sql"] = new string('x', 4 * 1024 * 1024 + 1)
+            }
+        });
+
+        var files = await host.ScalarsAsync("alpha",
+            "SELECT path || '|' || size_bytes || '|' || coalesce(skip_reason, '') FROM files ORDER BY path");
+        Assert.Equal(["a.cs|20|", "dump.sql|4194305|larger than 4 MiB", "logo.png|11|binary"], files);
+
+        // Skipped files count towards the repository's bytes: 20 + 4194305 + 11.
+        var bytes = await host.ScalarsAsync("alpha", "SELECT byte_count::VARCHAR FROM repositories");
+        Assert.Equal(["4194336"], bytes);
+    }
+
     [Fact]
     public async Task A_refresh_reports_what_it_indexed()
     {
