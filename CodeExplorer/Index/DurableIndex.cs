@@ -35,12 +35,18 @@ public sealed class DurableCopy(string directory, Telemetry.DurableCopyRecording
 public sealed class DurableIndex(IConfiguration configuration, DurableStore store, ILogger<DurableIndex> logger)
 {
     /// <summary>
+    ///     The one table a fetch reads before the others and a load does not copy straight back: it
+    ///     carries the schema version, and whether a BM25 index exists.
+    /// </summary>
+    private const string IndexInfo = "index_info";
+
+    /// <summary>
     ///     The tables of a project index, in the order a restore may insert them. There is no foreign
     ///     key between them, so the order is for readability rather than for the engine.
     /// </summary>
     private static readonly string[] Tables =
     [
-        "index_info", "repositories", "files", "lines", "commits", "commit_files", "attribution",
+        IndexInfo, "repositories", "files", "lines", "commits", "commit_files", "attribution",
         // The rename chains the build derived (#148). Derived and still carried: a restore does not
         // re-walk, so an index that lost this would stop telling a caller what a scope was called
         // before — silently, because a missing chain is indistinguishable from a path nobody renamed.
@@ -109,22 +115,29 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         var copy = new DurableCopy(Scratch(slug), Telemetry.DurableCopy(slug, Telemetry.FetchOperation));
         try
         {
-            foreach (string table in Tables)
-                if (!await store.FetchAsync(Name(slug, table), Path.Combine(copy.Directory, table + ".parquet"),
-                        cancellationToken))
+            // index_info alone first, and the version read before anything else is fetched: lines is
+            // the largest table by far, and after a schema bump every project's first open would
+            // otherwise transfer its whole copy only to throw it away.
+            if (!await FetchTableAsync(copy, slug, IndexInfo, cancellationToken)) return Absent(copy);
+
+            int version = await SchemaVersionAsync(copy, cancellationToken);
+            if (version != ProjectIndexes.SchemaVersion)
+            {
+                if (logger.IsEnabled(LogLevel.Information))
+                    logger.LogInformation(
+                        "The durable copy of project {Project} was written for schema version {Found}, and this "
+                        + "build reads version {Expected}; its index is rebuilt from git instead of restored",
+                        slug, version, ProjectIndexes.SchemaVersion);
+                return Absent(copy);
+            }
+
+            foreach (string table in Tables.Where(table => table != IndexInfo))
+                if (!await FetchTableAsync(copy, slug, table, cancellationToken))
                     // A partial set is as good as none: every table is written by one store, so a
                     // missing one is a store that never finished and a half-loaded index would be worse.
                     return Absent(copy);
 
-            int version = await SchemaVersionAsync(copy, cancellationToken);
-            if (version == ProjectIndexes.SchemaVersion) return copy;
-
-            if (logger.IsEnabled(LogLevel.Information))
-                logger.LogInformation(
-                    "The durable copy of project {Project} was written for schema version {Found}, and this "
-                    + "build reads version {Expected}; its index is rebuilt from git instead of restored",
-                    slug, version, ProjectIndexes.SchemaVersion);
-            return Absent(copy);
+            return copy;
         }
         catch
         {
@@ -147,7 +160,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         {
             // index_info is the one table not copied straight back: whether a BM25 index exists is a
             // property of this replica and of the load below, not of the build that wrote the Parquet.
-            string columns = table == "index_info"
+            string columns = table == IndexInfo
                 ? $"schema_version, built_at, {(ftsAvailable ? "true" : "false")} AS fts_indexed, single_repository"
                 : "*";
             await connection.ExecuteAsync(
@@ -190,7 +203,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         // read_parquet reads the footer for the columns and only the one row group for the value, so
         // this costs a stat and a few kilobytes rather than the whole set.
         command.CommandText =
-            $"SELECT schema_version FROM read_parquet('{Escape(Parquet(copy, "index_info"))}') LIMIT 1";
+            $"SELECT schema_version FROM read_parquet('{Escape(Parquet(copy, IndexInfo))}') LIMIT 1";
         try
         {
             return await command.ExecuteScalarAsync(cancellationToken) is int version ? version : -1;
@@ -202,6 +215,10 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
             return -1;
         }
     }
+
+    private Task<bool> FetchTableAsync(DurableCopy copy, string slug, string table,
+        CancellationToken cancellationToken) =>
+        store.FetchAsync(Name(slug, table), Parquet(copy, table), cancellationToken);
 
     private static string Parquet(DurableCopy copy, string table) =>
         Path.Combine(copy.Directory, table + ".parquet");
