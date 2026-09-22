@@ -156,6 +156,13 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     walk went back to a root — a first build, or a history rewritten under the watermark — and the
     ///     state starts empty instead, because whatever was carried over describes a tree no commit in
     ///     this walk descends from.
+    ///     A refresh that continues the history loads, deletes and rewrites only the paths its commits
+    ///     touch — each change's path and the path it moved or copied from, which are the only two
+    ///     <see cref="Apply" /> reads or writes. Every other path's runs are already what replaying would
+    ///     write back, so they stay where they are. Measured on a copy of the Radix index (#175): 20
+    ///     ordinary commits touch 718 of 40,910 paths, and loading their state takes ~66 ms against
+    ///     ~377 ms for all 1,450,784 runs. A commit that moves most of the tree touches most of it, and
+    ///     then costs what the full rewrite did.
     ///     A file whose edits do not fit the lines the state has for it is dropped rather than guessed
     ///     at, and stays unattributed until a rebuild; one file the replay cannot follow must not cost a
     ///     project its history. Returns how many files hold attribution afterwards.
@@ -164,25 +171,75 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         List<(int Id, RecordedCommit Commit)> fresh, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
-        if (fresh.Count == 0)
-            return Scalar(connection,
-                $"SELECT count(DISTINCT path) FROM attribution WHERE repo_slug = {Literal(slug)}", cancellationToken);
+        string inRepository = $"repo_slug = {Literal(slug)}";
+        if (fresh.Count == 0) return AttributedPaths(connection, inRepository, cancellationToken);
 
-        var state = fresh[0].Commit.ParentSha is null
-            ? new Dictionary<string, List<int>>(StringComparer.Ordinal)
-            : LoadState(connection, slug, cancellationToken);
-
-        int done = 0;
-        foreach (var (id, commit) in fresh)
+        bool fromRoot = fresh[0].Commit.ParentSha is null;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (done++ % RefreshProgress.ReportEvery == 0)
-                report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
-                    $"Attributing the lines of '{slug}'", done, fresh.Count));
-            foreach (var change in commit.Files) Apply(state, change, id);
+            // The rows this replay owns: the whole repository from a root, since the carried-over state
+            // describes a tree nothing in this walk descends from; otherwise only the touched paths.
+            // One predicate for the load and the delete, so they cannot disagree about which rows those are.
+            string owned = fromRoot ? inRepository : $"{inRepository} AND path IN (SELECT path FROM touched_paths)";
+            if (!fromRoot) StageTouchedPaths(connection, fresh, cancellationToken);
+            var state = fromRoot
+                ? new Dictionary<string, List<int>>(StringComparer.Ordinal)
+                : LoadState(connection, owned, cancellationToken);
+
+            int done = 0;
+            foreach (var (id, commit) in fresh)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (done++ % RefreshProgress.ReportEvery == 0)
+                    report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
+                        $"Attributing the lines of '{slug}'", done, fresh.Count));
+                foreach (var change in commit.Files) Apply(state, change, id);
+            }
+
+            connection.Execute($"DELETE FROM attribution WHERE {owned}", cancellationToken);
+            // What is left of the repository after the delete is exactly the untouched paths, each with
+            // at least one run, so this plus the state is the count a full rewrite reported.
+            long untouched = fromRoot ? 0 : AttributedPaths(connection, inRepository, cancellationToken);
+            Write(connection, catalog, slug, state);
+            return untouched + state.Count;
+        }
+        finally
+        {
+            // In a finally for the reason Materialise drops its scratch: a failed build must not leave
+            // it on a connection the pool hands out again.
+            connection.Execute("DROP TABLE IF EXISTS touched_paths", CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    ///     Every path the new commits read or write, into a temporary table the load and the delete
+    ///     join against. A table filled by an appender rather than an inline list, for the reason
+    ///     <c>ImportBuilder</c> gives: one commit can touch thousands of paths, and a path is text from
+    ///     the repository, which an appender carries without any quoting to get right.
+    /// </summary>
+    private static void StageTouchedPaths(DuckDBConnection connection, List<(int Id, RecordedCommit Commit)> fresh,
+        CancellationToken cancellationToken)
+    {
+        var touched = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (_, commit) in fresh)
+        foreach (var change in commit.Files)
+        {
+            touched.Add(change.Path);
+            touched.Add(change.OldPath);
         }
 
-        connection.Execute($"DELETE FROM attribution WHERE repo_slug = {Literal(slug)}", cancellationToken);
+        connection.Execute("CREATE OR REPLACE TEMP TABLE touched_paths (path VARCHAR)", cancellationToken);
+        using var rows = connection.CreateAppender("temp", "main", "touched_paths");
+        foreach (string path in touched) rows.CreateRow().AppendValue(path).EndRow();
+    }
+
+    private static int AttributedPaths(DuckDBConnection connection, string inRepository,
+        CancellationToken cancellationToken) =>
+        Scalar(connection, $"SELECT count(DISTINCT path) FROM attribution WHERE {inRepository}", cancellationToken);
+
+    private static void Write(DuckDBConnection connection, string catalog, string slug,
+        Dictionary<string, List<int>> state)
+    {
         using var appender = connection.CreateAppender(catalog, "main", "attribution");
         foreach (var (path, lines) in state)
         {
@@ -199,8 +256,6 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
                 start = end;
             }
         }
-
-        return state.Count;
     }
 
     /// <summary>
@@ -265,17 +320,18 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     }
 
     /// <summary>
-    ///     The carried-over attribution of one repository, expanded from runs to one entry per line.
-    ///     A gap between runs — lines a build could not attribute — comes back as zeros, which no
-    ///     commit_id is, so the replay carries the gap along and the writer leaves it out again.
+    ///     The carried-over attribution of the rows <paramref name="owned" /> selects, expanded from runs
+    ///     to one entry per line. A gap between runs — lines a build could not attribute — comes back as
+    ///     zeros, which no commit_id is, so the replay carries the gap along and the writer leaves it out
+    ///     again.
     /// </summary>
-    private static Dictionary<string, List<int>> LoadState(DuckDBConnection connection, string slug,
+    private static Dictionary<string, List<int>> LoadState(DuckDBConnection connection, string owned,
         CancellationToken cancellationToken)
     {
         var state = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         using var command = connection.CreateCommand();
         command.CommandText =
-            $"SELECT path, start_line, end_line, commit_id FROM attribution WHERE repo_slug = {Literal(slug)} ORDER BY path, start_line";
+            $"SELECT path, start_line, end_line, commit_id FROM attribution WHERE {owned} ORDER BY path, start_line";
         cancellationToken.ThrowIfCancellationRequested();
         using var reader = command.ExecuteReader();
         while (reader.Read())
