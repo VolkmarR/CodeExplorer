@@ -329,7 +329,7 @@ public sealed partial class HistoryQueries
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
         using var command = index.Connection.Query(
-            LoggedStatement(scope, $"LIMIT {limit} OFFSET {skip}", newestFirst: true), parameters);
+            LoggedStatement(scope, limit, skip, newestFirst: true), parameters);
         using var reader = await command.ReaderAsync(cancellationToken);
         var commits = new List<LoggedCommit>();
         while (await reader.ReadAsync(cancellationToken)) commits.Add(Logged(reader));
@@ -347,14 +347,15 @@ public sealed partial class HistoryQueries
         CancellationToken cancellationToken)
     {
         using var command = index.Connection.Query(
-            LoggedStatement("WHERE sha = $sha", "LIMIT 1", newestFirst: false), [new DuckDBParameter("sha", sha)]);
+            LoggedStatement("WHERE sha = $sha", 1, 0, newestFirst: false), [new DuckDBParameter("sha", sha)]);
         using var reader = await command.ReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? Logged(reader) : null;
     }
 
     /// <summary>
-    ///     The statement for the logged commits that <paramref name="scope" /> and <paramref name="limit" />
-    ///     pick out of <c>commits</c>, ordered by <c>commit_id</c>, with the sums of what each one did. One
+    ///     The statement for the logged commits that <paramref name="scope" />, <paramref name="limit" /> and
+    ///     <paramref name="skip" /> pick out of <c>commits</c>, ordered by <c>commit_id</c>, with the sums of
+    ///     what each one did. One
     ///     statement rather than a copy per caller, because the page of the log and a commit's own page
     ///     must count the same way — two spellings would drift the first time one of them learned to
     ///     count something else. The direction is one flag for the same reason: the page is cut in one
@@ -364,14 +365,14 @@ public sealed partial class HistoryQueries
     ///     aggregate it follows. The sums are cast because DuckDB widens <c>sum</c> of an INTEGER to
     ///     HUGEINT, which the driver hands back as a BigInteger.
     /// </summary>
-    private static string LoggedStatement(string scope, string limit, bool newestFirst)
+    private static string LoggedStatement(string scope, int limit, int skip, bool newestFirst)
     {
-        // A literal chosen here, never caller text, so it is safe to inline.
+        // A literal chosen here and two integers, never caller text, so all three are safe to inline.
         string order = newestFirst ? "DESC" : "ASC";
         return $"""
          -- page holds the commits being listed and nothing else, so the join and the sums below
          -- are over its rows of commit_files alone.
-         WITH page AS (SELECT * FROM commits {scope} ORDER BY commit_id {order} {limit})
+         WITH page AS (SELECT * FROM commits {scope} ORDER BY commit_id {order} LIMIT {limit} OFFSET {skip})
          SELECT c.sha, c.repo_slug, c.author_name, c.author_email, c.authored_at, c.subject, c.body,
                 count(cf.path)::INTEGER AS files_changed,
                 coalesce(sum(cf.added), 0)::INTEGER AS added,

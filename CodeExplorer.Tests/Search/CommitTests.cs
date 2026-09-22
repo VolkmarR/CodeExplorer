@@ -412,8 +412,8 @@ public sealed class CommitTests(CommitFixture fixture) : IClassFixture<CommitFix
     ///     A page of the change log sums what its own commits did and nothing else (#171). Summed over
     ///     every commit in scope and cut afterwards, a page of fifty aggregated the whole of
     ///     <c>commit_files</c>, because a limit cannot be pushed beneath the aggregate it follows.
-    ///     Asserted on the profile the query-plan switch writes, as the rename-chain test in
-    ///     <c>PathLineageTests</c> is: that is what a developer looking at a slow page turns on. The newest commit touches one file
+    ///     Asserted through the query-plan switch, as the rename-chain test in <c>PathLineageTests</c>
+    ///     is, and on the profile it writes: that is what a developer looking at a slow page turns on. The newest commit touches one file
     ///     and the one before it three, so an aggregate over more than the page reads more than one row.
     /// </summary>
     [Fact]
@@ -443,12 +443,12 @@ public sealed class CommitTests(CommitFixture fixture) : IClassFixture<CommitFix
 
         string dump = Directory.EnumerateFiles(plans, "*CommitLogQueries-LoggedAsync.sql.txt")
             .Single(file => File.ReadAllText(file).Contains("$r = paged", StringComparison.Ordinal));
-        using var profile = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(
-            Path.ChangeExtension(dump, null), ".json")));
+        using var profile = JsonDocument.Parse(File.ReadAllText(
+            dump.Replace(".sql.txt", ".json", StringComparison.Ordinal)));
         var aggregate = Assert.Single(Operators(profile.RootElement),
             op => op.GetProperty("operator_type").GetString()!.EndsWith("GROUP_BY", StringComparison.Ordinal));
-        Assert.Equal(1, aggregate.GetProperty("children").EnumerateArray()
-            .Sum(child => child.GetProperty("operator_cardinality").GetInt64()));
+        Assert.Equal(1, Assert.Single(aggregate.GetProperty("children").EnumerateArray())
+            .GetProperty("operator_cardinality").GetInt64());
     }
 
     /// <summary>Every operator of a DuckDB JSON profile, depth first.</summary>
