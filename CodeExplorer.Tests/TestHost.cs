@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using DuckDB.NET.Data;
 using LibGit2Sharp;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -117,6 +118,18 @@ public sealed class TestHost : IDisposable
     }
 
     /// <summary>
+    ///     A restart whose wipe took the control database too, so the new server has only its backup
+    ///     to start from. The file goes between the stop and the start, which is the only moment it can:
+    ///     a running server holds it open for the life of the process (#172).
+    /// </summary>
+    public void RestartWithoutControlDatabase()
+    {
+        Factory.Dispose();
+        DeleteDatabase(ControlDatabaseFile);
+        Factory = Build();
+    }
+
+    /// <summary>
     ///     Removes a project's index file, which is what the container's disk being wiped leaves behind:
     ///     a project that exists, has a durable copy, and has nothing local to answer from.
     /// </summary>
@@ -135,8 +148,20 @@ public sealed class TestHost : IDisposable
         await command.ExecuteNonQueryAsync(Ct);
     }
 
-    /// <summary>The same for the control database, whose backup is a file rather than a Parquet set.</summary>
-    public void DeleteControlDatabase() => DeleteDatabase(Path.Combine(DataDirectory, "control.duckdb"));
+    private string ControlDatabaseFile => Path.Combine(DataDirectory, "control.duckdb");
+
+    /// <summary>
+    ///     A connection to the running server's control database, for a test that looks behind
+    ///     <see cref="ControlDatabase" />. DuckDB.NET keeps one native instance per file in a process,
+    ///     so this is the server's instance and not a second one: it sees what the server wrote, and
+    ///     the server sees what it changes.
+    /// </summary>
+    public async Task<DuckDBConnection> OpenControlDatabaseAsync()
+    {
+        var connection = new DuckDBConnection($"Data Source={ControlDatabaseFile}");
+        await connection.OpenAsync(Ct);
+        return connection;
+    }
 
     /// <summary>A database file and the write-ahead log beside it, which a stop leaves behind.</summary>
     private static void DeleteDatabase(string path)

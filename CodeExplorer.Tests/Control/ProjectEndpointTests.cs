@@ -22,9 +22,11 @@ public sealed class ProjectEndpointTests : IDisposable
     ///     Binding a project reads the control database once and then remembers it (#149). Every
     ///     request under a project route and every MCP call asked "does this slug name a project", and
     ///     each one opened a control-database connection to find out.
-    ///     Proved by taking the database away. The file is deleted after the first resolution, so a
-    ///     second call that went back to it would open a fresh, empty one and fail on the missing
-    ///     table — there is no way for this to pass except by not asking.
+    ///     Proved by taking the row away behind the server's back, through the server's own instance.
+    ///     A second call that went back to the database would find no such project and refuse the
+    ///     session — there is no way for this to pass except by not asking. Deleting the file stopped
+    ///     proving it once the server held the file open for its whole life (#172): the instance
+    ///     outlives the file, so a query would still have answered.
     ///     <c>which_project</c> is the call, because it is the one that reads the bound project and
     ///     nothing else. Its neighbours here legitimately read the control database again — a project's
     ///     page lists its repositories — and this is about the binding, not about them.
@@ -36,7 +38,8 @@ public sealed class ProjectEndpointTests : IDisposable
         await using var client = await _host.ConnectAsync("alpha");
         Assert.Contains("Alpha Project", await WhichProjectAsync(client));
 
-        _host.DeleteControlDatabase();
+        using (var control = await _host.OpenControlDatabaseAsync())
+            await control.ExecuteAsync("DELETE FROM projects WHERE slug = 'alpha'", Ct);
 
         Assert.Contains("Alpha Project", await WhichProjectAsync(client));
     }

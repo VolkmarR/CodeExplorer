@@ -49,6 +49,14 @@ public sealed partial class ControlDatabase : IDisposable
     // engine, so the wait is on the upload and not on the work.
     private readonly SemaphoreSlim _backupGate = new(1, 1);
 
+    // DuckDB.NET has no connection pool. What it has is one native instance per file, reference
+    // counted, and closed with the last connection to it — so a call that opened and closed its own
+    // connection opened the whole database each time: the file, the WAL replay, the thread pool and a
+    // checkpoint on the way out, twice for a write and once more for its backup (#172). This
+    // connection is never queried after the constructor; it only keeps the instance, which makes
+    // every connection a call opens a cheap one onto it. ProjectIndexes holds its instance the same way.
+    private readonly DuckDBConnection _anchor;
+
     // The projects <see cref="FindAsync" /> has resolved. Bounded by what exists, because only a
     // project that was found goes in, and emptied of a slug by each of the two writers that can end
     // its life. Concurrent because every request reads it and any request may be the one that fills it.
@@ -86,9 +94,28 @@ public sealed partial class ControlDatabase : IDisposable
         }
 
         // Synchronous on purpose: this runs once at startup, before any request could cancel it.
-        using var connection = new DuckDBConnection(_connectionString);
-        connection.Open();
-        using var command = connection.CreateCommand();
+        _anchor = new DuckDBConnection(_connectionString);
+        _anchor.Open();
+        try
+        {
+            Migrate(logger);
+        }
+        catch
+        {
+            // A constructor that throws leaves the container nothing to dispose, so the anchor would
+            // hold the file open for the rest of the process.
+            _anchor.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     Brings the file to the shape this build reads, and stores that shape when it was not the
+    ///     shape it restored.
+    /// </summary>
+    private void Migrate(ILogger logger)
+    {
+        using var command = _anchor.CreateCommand();
         // Asked before the statements below run, because afterwards there is no telling whether they
         // did anything. A wake that migrates nothing must not upload the file again every time, and a
         // wake that does migrate must not leave the store holding the shape the older build wrote —
@@ -127,7 +154,7 @@ public sealed partial class ControlDatabase : IDisposable
         if (!migrating) return;
 
         // No gate: this is still the constructor, so nothing else can be holding this instance to back
-        // it up at the same time. The connection above is reused rather than opened again, which the
+        // it up at the same time. The anchor is used rather than a connection of its own, which the
         // snapshot allows because it is the source catalog it copies from.
         Snapshot(command);
         _store.Store(BackupName, SnapshotPath);
@@ -144,7 +171,14 @@ public sealed partial class ControlDatabase : IDisposable
     [GeneratedRegex("^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")]
     private static partial Regex SlugPattern { get; }
 
-    public void Dispose() => _backupGate.Dispose();
+    public void Dispose()
+    {
+        // Once the requests have finished with theirs, the anchor is the last connection, and closing
+        // it is what checkpoints the file and releases it — so a restart over the same directory, a
+        // test's or a replica's, finds it closed.
+        _anchor.Dispose();
+        _backupGate.Dispose();
+    }
 
     public static bool IsValidSlug(string slug) => SlugPattern.IsMatch(slug);
 
@@ -398,6 +432,12 @@ public sealed partial class ControlDatabase : IDisposable
     /// </summary>
     private void Snapshot(DuckDBCommand command)
     {
+        // A snapshot whose COPY threw never reached its DETACH, and the instance now lives for the
+        // process (#172), so the catalog would still be attached: the ATTACH below would fail on the
+        // name, and every backup after it with it. First, because the file cannot be deleted while
+        // the instance holds it.
+        command.CommandText = "DETACH DATABASE IF EXISTS backup";
+        command.ExecuteNonQuery();
         Delete(SnapshotPath);
         command.CommandText = $"""
                                ATTACH '{SnapshotPath.Replace("'", "''")}' AS backup;
@@ -414,6 +454,11 @@ public sealed partial class ControlDatabase : IDisposable
         File.Delete(path + ".wal");
     }
 
+    /// <summary>
+    ///     A connection of the call's own onto the instance the anchor holds, which costs a native
+    ///     connect and nothing more. Not the anchor itself: one connection cannot run two requests'
+    ///     statements at once, and requests arrive together.
+    /// </summary>
     private async Task<DuckDBConnection> OpenAsync(CancellationToken cancellationToken)
     {
         var connection = new DuckDBConnection(_connectionString);
