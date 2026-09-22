@@ -341,6 +341,61 @@ public sealed class HistoryTests : IDisposable
     }
 
     /// <summary>
+    ///     A refresh rewrites the attribution of only the paths its new commits touched, so what it leaves
+    ///     must be what rewriting every path would have: the same runs, naming the same commits. The full
+    ///     rewrite is forced by declaring the index an older schema, which re-walks from the root. Each
+    ///     kind of change is here because each reaches the state differently — a rename through the path
+    ///     it moved from, a deletion by leaving nothing to write — and one path is left alone, so
+    ///     "untouched" is checked against something that was there to lose. The copy arrives as an
+    ///     addition: the walk diffs with libgit2's defaults, which detect renames and not copies, so the
+    ///     replay's copy branch is unreachable from a real repository and is not what this exercises.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_leaves_the_attribution_a_full_rewrite_would()
+    {
+        string source = _host.CreateEmptyGitRepository("one");
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string>
+        {
+            ["src/Edit.cs"] = "a\nb\nc\n", ["src/Move.cs"] = "m\nn\no\n", ["src/Copy.cs"] = "x\ny\nz\n",
+            ["src/Drop.cs"] = "d\n", ["src/Keep.cs"] = "k\nl\n"
+        }, "Start", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Move.cs"] = "m\nn-changed\no\n", ["src/Keep.cs"] = "k\nl2\n" },
+            "Touch before the refresh", "Grace", "grace@example.invalid", 1);
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "one", source);
+        await _host.RefreshAsync("alpha");
+
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string>
+        {
+            ["src/Edit.cs"] = "a\nb-changed\nc\n", ["src/Copied.cs"] = "x\ny\nz\n"
+        }, "Edit and copy", "Linus", "linus@example.invalid", 2);
+        _host.MoveInGitRepositoryAs("one", new Dictionary<string, string> { ["src/Move.cs"] = "src/Moved.cs" },
+            "Move", "Linus", "linus@example.invalid", 3);
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Moved.cs"] = "m\nn-changed\no\np\n" },
+            "Extend the moved file", "Linus", "linus@example.invalid", 4);
+        _host.RemoveInGitRepositoryAs("one", ["src/Drop.cs"], "Drop", "Linus", "linus@example.invalid", 5);
+        await _host.RefreshAsync("alpha");
+
+        const string sql =
+            """
+            SELECT a.path || ':' || a.start_line || '-' || a.end_line || ' ' || c.sha
+            FROM attribution a JOIN commits c USING (commit_id) ORDER BY a.path, a.start_line
+            """;
+        var incremental = await _host.ScalarsAsync("alpha", sql);
+        var paths = await _host.ScalarsAsync("alpha", "SELECT DISTINCT path FROM attribution ORDER BY path");
+        // Not vacuous: the untouched path survived the refresh, the moved one arrived under its new name
+        // and the deleted one is gone, so the comparison below is over a state that actually moved.
+        Assert.Equal(["src/Copied.cs", "src/Copy.cs", "src/Edit.cs", "src/Keep.cs", "src/Moved.cs"], paths);
+
+        await _host.ExecuteAsync("alpha", "UPDATE index_info SET schema_version = schema_version - 1");
+        await _host.RefreshAsync("alpha");
+
+        Assert.Equal(await _host.ScalarsAsync("alpha", sql), incremental);
+    }
+
+    /// <summary>
     ///     The runs are expanded to one row per line to write attribution, and that expansion is scratch
     ///     for one statement. A table left behind would be in the file about to be swapped in, roughly
     ///     doubling it, and would then be carried nowhere and read by nothing.
