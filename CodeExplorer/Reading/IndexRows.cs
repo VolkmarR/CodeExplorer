@@ -1,5 +1,3 @@
-using CodeExplorer.Infrastructure;
-
 namespace CodeExplorer.Reading;
 
 /// <summary>
@@ -68,7 +66,7 @@ public sealed record AttributedBy(string Sha, string AuthorName, DateTimeOffset 
 ///     display name: a person who respells their name is one author under their newest spelling, and
 ///     two people who share a first name are two. The name is the one on their most recent commit.
 ///     Here rather than beside the query that reads it, because three surfaces draw the same row
-///     through <see cref="ToolReply.AuthorRow" /> and the renderer may not reach into Search
+///     through <see cref="CodeExplorer.Infrastructure.ToolReply.AuthorRow" /> and the renderer may not reach into Search
 ///     (ADR-0005).
 /// </summary>
 public sealed record RecordedAuthor(string Name, string Email, long Commits, DateTimeOffset LastCommit);

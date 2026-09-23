@@ -13,12 +13,12 @@ namespace CodeExplorer.Infrastructure;
 ///     and not one per module, because the tag set is the thing worth keeping identical and a
 ///     recording split across folders drifts.
 ///     Nothing here needs telemetry to be switched on: an <see cref="ActivitySource" /> with no
-///     listener returns a null activity and a <see cref="_meter" /> with no listener discards a
+///     listener returns a null activity and a <see cref="Meter" /> with no listener discards a
 ///     measurement, so the whole path costs a few nanoseconds when no OTLP endpoint is configured.
 /// </summary>
 public static class Telemetry
 {
-    /// <summary>Names the <see cref="ActivitySource" />, the <see cref="_meter" /> and the OTLP resource alike.</summary>
+    /// <summary>Names the <see cref="ActivitySource" />, the <see cref="Meter" /> and the OTLP resource alike.</summary>
     public const string ServiceName = "CodeExplorer";
 
     /// <summary>

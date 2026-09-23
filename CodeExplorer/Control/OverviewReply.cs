@@ -53,7 +53,7 @@ internal static class OverviewReply
                 $"  {language.Name,-14}{language.Files,7:N0} {ToolReply.Plural(language.Files, "file"),-6}{language.Lines,9:N0} {ToolReply.Plural(language.Lines, "line"),-6}");
             // Said on the row rather than in a footnote: an agent reading ".vh" beside "C#" has to be
             // able to tell that the first is an extension nobody mapped and not a language this
-            // server recognized.
+            // server recognised.
             if (!language.Mapped) text.Append("  (extension; no language profile covers it)");
             if (language.Skipped > 0)
                 text.Append(CultureInfo.InvariantCulture,
