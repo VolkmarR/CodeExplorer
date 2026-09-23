@@ -42,11 +42,6 @@ public sealed partial class IndexReader : IDisposable
     private IReadOnlyList<IndexedRepository>? _repositories;
     private ProjectPaths? _paths;
 
-    // Which optional tables this index turned out to have, answered once each. An index is a file on
-    // disk that some earlier version of this server wrote, so the set is a property of that file and
-    // cannot change while it is attached.
-    private readonly Dictionary<string, bool> _tables = [];
-
     internal IndexReader(DuckDBConnection connection, bool fullTextLoaded, IDisposable lease, string projectSlug)
     {
         Connection = connection;
@@ -80,34 +75,6 @@ public sealed partial class IndexReader : IDisposable
         if (!_fullTextLoaded) return false;
         using var command = Connection.Query("SELECT fts_indexed FROM index_info", []);
         return await command.ScalarAsync(cancellationToken) is true;
-    }
-
-    /// <summary>
-    ///     Whether this index holds a table a later version of the build started writing. An index is
-    ///     a file some earlier version of this server wrote and a restore rebuilds it from the Parquet
-    ///     set it had, so a live index can be older than the code reading it — and a read that assumed
-    ///     otherwise fails with DuckDB's own catalog error, which reaches a caller as a 500 and says
-    ///     nothing about the index being out of date (measured on an index predating
-    ///     <c>path_lineage</c>, #148).
-    ///     For OPTIONAL tables only — ones whose absence has a true answer, such as "no rename chain
-    ///     was recorded". A read that cannot answer without its table must not quietly say nothing;
-    ///     it should let the miss surface as the broken index it is.
-    ///     Answered once per table per reader: the catalog of an attached file cannot change under it.
-    /// </summary>
-    public async Task<bool> HasTableAsync(string table, CancellationToken cancellationToken)
-    {
-        if (_tables.TryGetValue(table, out bool known)) return known;
-
-        // Scoped to this reader's own attached database, because every project's index is attached to
-        // the same connection under its slug and an unscoped catalog query would answer about any of
-        // them. Bound and not interpolated, the way every other value this server queries with is.
-        using var command = Connection.Query(
-            "SELECT count(*) FROM duckdb_tables() WHERE database_name = $d AND schema_name = 'main' "
-            + "AND table_name = $t",
-            [new DuckDBParameter("d", ProjectSlug), new DuckDBParameter("t", table)]);
-        bool exists = await command.ScalarAsync(cancellationToken) is > 0L;
-        _tables[table] = exists;
-        return exists;
     }
 
     /// <summary>Releases the lease as well as the connection, which is what lets a swap proceed.</summary>

@@ -67,11 +67,6 @@ public sealed partial class HistoryQueries
         string pathInRepository, Func<string, string> spell, CancellationToken cancellationToken)
     {
         if (pathInRepository.Length == 0) return null;
-        // An index built before #148 has no chains to report, which is the same answer as a path
-        // nobody renamed — and the right one, because the note is additive and every count beside it
-        // is unaffected. Without this, every directory-scoped churn ranking and hot_files call
-        // against such an index failed on DuckDB's catalog error instead.
-        if (!await index.HasTableAsync("path_lineage", cancellationToken)) return null;
 
         using var command = index.Connection.Query("""
                                                    SELECT previous_path, previous_commits, combined_commits
