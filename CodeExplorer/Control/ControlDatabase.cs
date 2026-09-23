@@ -440,7 +440,7 @@ public sealed partial class ControlDatabase : IDisposable
         command.ExecuteNonQuery();
         Delete(SnapshotPath);
         command.CommandText = $"""
-                               ATTACH '{SnapshotPath.Replace("'", "''")}' AS backup;
+                               ATTACH {IndexQuery.Literal(SnapshotPath)} AS backup;
                                COPY FROM DATABASE control TO backup;
                                DETACH backup;
                                """;
