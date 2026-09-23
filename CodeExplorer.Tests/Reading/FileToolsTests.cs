@@ -776,10 +776,10 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
         int TimesRun(string label, string parameter) =>
             Directory.EnumerateFiles(plans, $"*{label}.sql.txt")
                 .Count(file => File.ReadAllText(file).Split('\n').Contains($"-- {parameter}"));
-    }
 
-    private static Task<string> HistoryReadAsync(McpClient client, params string[] paths) =>
-        CallAsync(client, "read_file", new Dictionary<string, object?> { ["paths"] = paths, ["withHistory"] = true });
+        Task<string> HistoryReadAsync(McpClient client, params string[] paths) =>
+            CallAsync(client, "read_file", new Dictionary<string, object?> { ["paths"] = paths, ["withHistory"] = true });
+    }
 
     private Task<McpClient> StartAsync() => _host.ConnectAsync(FileToolsFixture.Alpha);
 
