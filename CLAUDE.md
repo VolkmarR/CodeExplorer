@@ -9,6 +9,11 @@ shape, cancellation, telemetry and comments. Formatting and style are enforced b
 Read its Performance section before any performance change: it is proven by a before/after run
 with the query-plan switch (`CODEEXPLORER_EXPLAIN_DIR`).
 
+## Pull requests
+
+Merge with rebase: `gh pr merge <number> --rebase --delete-branch`. Never squash or create merge
+commits. Each commit lands on `master` as written, so write every commit message to stand on its own.
+
 ## Agent skills
 
 ### Issue tracker
