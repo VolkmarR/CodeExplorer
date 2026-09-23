@@ -153,8 +153,7 @@ public sealed partial class HistoryQueries
                         ?? new PathScope(file!.QualifiedPath, file.RepositorySlug, file.PathInRepository);
             scope = scope with
             {
-                Lineage = await LineageAsync(index, scope.RepositorySlug, scope.PathInRepository,
-                    await SpellerAsync(index, scope.RepositorySlug, token), token)
+                Lineage = await LineageAsync(index, scope.RepositorySlug, scope.PathInRepository, token)
             };
 
             bool hasHistory = await HasHistoryAsync(index, token);
@@ -253,8 +252,7 @@ public sealed partial class HistoryQueries
                 // previous path to have, and an unscoped ranking must not pay for asking.
                 var lineage = repositorySlug is null || directoryInRepository is null
                     ? null
-                    : await LineageAsync(index, repositorySlug, directoryInRepository,
-                        await SpellerAsync(index, repositorySlug, token), token);
+                    : await LineageAsync(index, repositorySlug, directoryInRepository, token);
                 return new ChurnAnswer(spelled, hasHistory, window, ranked, extensions, coverage, depth, hidden,
                     lineage);
             }, cancellationToken), (ChurnAnswer answer) => new Telemetry.Measured(answer.Files.Count, 0));

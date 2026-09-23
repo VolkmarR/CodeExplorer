@@ -1,4 +1,3 @@
-using System.Globalization;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer;
@@ -93,23 +92,17 @@ public sealed partial class IndexReader
         // zero there would read as "nothing matched", which is the opposite of "you walked past the
         // last page". Counted separately only in that case, so the common answer stays one statement.
         if (files.Count == 0 && skip > 0)
-        {
-            using var command = Connection.Query($"""
-                                                  SELECT count(*)
-                                                  {FileSource}
-                                                  WHERE lower(f.qualified_path) GLOB $g{scope}
-                                                  """, parameters);
-            total = Convert.ToInt32(await command.ScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-        }
+            total = (int)await Connection.CountAsync($"""
+                                                      SELECT count(*)
+                                                      {FileSource}
+                                                      WHERE lower(f.qualified_path) GLOB $g{scope}
+                                                      """, parameters, cancellationToken);
 
         int? elsewhere = null;
         if (total == 0 && Repository is not null)
-        {
-            using var command = Connection.Query("SELECT count(*) FROM files f WHERE lower(f.qualified_path) GLOB $g",
-                [new DuckDBParameter("g", glob.ToLowerInvariant())]);
-            elsewhere = Convert.ToInt32(await command.ScalarAsync(cancellationToken),
-                CultureInfo.InvariantCulture);
-        }
+            elsewhere = (int)await Connection.CountAsync(
+                "SELECT count(*) FROM files f WHERE lower(f.qualified_path) GLOB $g",
+                [new DuckDBParameter("g", glob.ToLowerInvariant())], cancellationToken);
 
         return new GlobResult(total, files, elsewhere);
     }

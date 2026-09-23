@@ -127,14 +127,13 @@ public sealed class IndexReaders(ProjectIndexes indexes)
             : await indexes.PeekAsync(projectSlug, cancellationToken);
         if (lease is null) return null;
 
-        // epoch() hands back seconds as a double, which is the one representation of a TIMESTAMPTZ that
-        // does not depend on whether the ICU extension is loaded to decide the session time zone.
+        // epoch() for the reason ReaderColumns.EpochInstant gives.
         using var command = lease.Connection.Query(
             "SELECT epoch(built_at) AS built_seconds, fts_indexed, single_repository FROM index_info", []);
         using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return null;
 
-        var builtAt = DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("built_seconds"));
+        var builtAt = reader.EpochInstant("built_seconds");
         bool ftsIndexed = reader.Flag("fts_indexed");
         bool singleRepository = reader.Flag("single_repository");
         return new IndexStatus(builtAt, ftsIndexed, singleRepository,

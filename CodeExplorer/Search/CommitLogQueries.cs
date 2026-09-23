@@ -251,9 +251,8 @@ public sealed partial class HistoryQueries
                                                     SELECT author_email,
                                                            arg_max(author_name, authored_at) AS author_name,
                                                            count(*) AS commits,
-                                                           -- epoch() because seconds as a double do not
-                                                           -- depend on whether ICU is loaded to decide
-                                                           -- the session time zone.
+                                                           -- epoch() for the reason ReaderColumns.EpochInstant
+                                                           -- gives.
                                                            epoch(max(authored_at)) AS last_commit,
                                                            -- Over the groups, before LIMIT: one row per
                                                            -- address, so this counts addresses. The sum
@@ -273,7 +272,7 @@ public sealed partial class HistoryQueries
         {
             authors.Add(new RecordedAuthor(reader.Text("author_name"), reader.Text("author_email"),
                 reader.Int64("commits"),
-                DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("last_commit"))));
+                reader.EpochInstant("last_commit")));
             (addresses, commits) = (reader.Int64("addresses"), reader.Int64("matched_commits"));
         }
 
@@ -293,11 +292,10 @@ public sealed partial class HistoryQueries
     private static async Task<long> AuthorCountAsync(IndexReader index, string? repositorySlug, PathScope? path,
         CancellationToken cancellationToken)
     {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, null, null,
-            path?.RepositorySlug, path?.PathInRepository);
-        using var command = index.Connection.Query($"SELECT count(DISTINCT author_email) FROM commits {scope}",
-            parameters);
-        return (long)(await command.ScalarAsync(cancellationToken) ?? 0L);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug,
+            pathRepositorySlug: path?.RepositorySlug, pathInRepository: path?.PathInRepository);
+        return await index.Connection.CountAsync($"SELECT count(DISTINCT author_email) FROM commits {scope}",
+            parameters, cancellationToken);
     }
 
     /// <summary>
@@ -321,8 +319,8 @@ public sealed partial class HistoryQueries
         CancellationToken cancellationToken)
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
-        using var command = index.Connection.Query($"SELECT count(*) FROM commits {scope}", parameters);
-        return (long)(await command.ScalarAsync(cancellationToken) ?? 0L);
+        return await index.Connection.CountAsync($"SELECT count(*) FROM commits {scope}", parameters,
+            cancellationToken);
     }
 
     /// <summary>

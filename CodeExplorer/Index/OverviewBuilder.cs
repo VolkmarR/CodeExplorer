@@ -233,9 +233,8 @@ public sealed class OverviewBuilder
                                               SELECT author_email,
                                                      arg_max(author_name, authored_at) AS author_name,
                                                      count(*)::INTEGER AS commits,
-                                                     -- epoch() for the reason the window reads it that
-                                                     -- way: seconds as a double do not depend on whether
-                                                     -- ICU is loaded to decide the session time zone.
+                                                     -- epoch() for the reason ReaderColumns.EpochInstant
+                                                     -- gives.
                                                      epoch(max(authored_at)) AS last_commit
                                               FROM commits
                                               GROUP BY author_email
@@ -247,7 +246,7 @@ public sealed class OverviewBuilder
         while (await reader.ReadAsync(cancellationToken))
             authors.Add(new OverviewAuthor(reader.Text("author_name"), reader.Text("author_email"),
                 reader.Int32("commits"),
-                DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("last_commit"))));
+                reader.EpochInstant("last_commit")));
         return authors;
     }
 }

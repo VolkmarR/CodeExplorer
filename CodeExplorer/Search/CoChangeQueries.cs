@@ -88,8 +88,7 @@ public sealed partial class HistoryQueries
                     : null;
                 // Resolved before the pairing rather than after it: the pairing spans the chain now, so
                 // it is an input and no longer only something the reply says (#143).
-                var lineage = await LineageAsync(index, file.RepositorySlug, file.PathInRepository,
-                    await SpellerAsync(index, file.RepositorySlug, token), token);
+                var lineage = await LineageAsync(index, file.RepositorySlug, file.PathInRepository, token);
                 // The untruncated chain, so the ranking covers exactly what the combined total counted.
                 IReadOnlyList<string> anchored = [file.PathInRepository, ..lineage?.Chain ?? []];
                 var coupling = window is null
