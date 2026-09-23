@@ -54,6 +54,15 @@ internal static class ReaderColumns
         reader.GetDouble(reader.GetOrdinal(column));
 
     /// <summary>
+    ///     A column selected as <c>epoch(&lt;timestamptz&gt;)</c>, back as the instant it names. Seconds as a
+    ///     double are the one representation of a <c>TIMESTAMP WITH TIME ZONE</c> that does not depend on
+    ///     whether the ICU extension is loaded to decide the session time zone, so a query that wants an
+    ///     instant rather than a <see cref="Timestamp" /> selects it this way and reads it here.
+    /// </summary>
+    public static DateTimeOffset EpochInstant(this DbDataReader reader, string column) =>
+        DateTimeOffset.FromUnixTimeSeconds((long)reader.Double(column));
+
+    /// <summary>
     ///     A <c>TIMESTAMP WITH TIME ZONE</c> column. Read through <c>GetFieldValue</c> and not
     ///     <c>GetDateTime</c>, because that is the getter the driver hands a
     ///     <see cref="DateTimeOffset" /> back from; the rest of this file resolves where a value is and

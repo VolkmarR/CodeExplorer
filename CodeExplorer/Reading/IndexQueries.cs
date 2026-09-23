@@ -1,3 +1,4 @@
+using System.Data.Common;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer;
@@ -65,13 +66,12 @@ internal static class IndexQueries
         string? repositorySlug, CancellationToken cancellationToken)
     {
         var (scope, parameters) = CommitScope(repositorySlug);
-        // epoch() for the reason StatusAsync gives: seconds as a double are the one representation of
-        // a TIMESTAMPTZ that does not depend on whether ICU is loaded to decide the session time zone.
+        // epoch() for the reason ReaderColumns.EpochInstant gives.
         using var command = connection.Query($"SELECT epoch(max(authored_at)) AS newest FROM commits {scope}",
             parameters);
         using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) || reader.IsNull("newest")) return null;
-        return HistoryWindow.Ending(DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("newest")), days);
+        return HistoryWindow.Ending(reader.EpochInstant("newest"), days);
     }
 
     /// <summary>
@@ -130,18 +130,7 @@ internal static class IndexQueries
                                               ORDER BY commits DESC, added + deleted DESC, path
                                               """, parameters);
         using var reader = await command.ReaderAsync(cancellationToken);
-        var files = new List<ChurnedFile>();
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            // Spelled from the repository and the path rather than read off a files row, because the
-            // paths that have none are exactly the ones no longer at HEAD — and those are ranked and
-            // must still be named.
-            string slug = reader.Text("repo_slug");
-            files.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug, reader.Flag("at_head"),
-                reader.Int32("commits"), reader.Int64("added"), reader.Int64("deleted")));
-        }
-
-        return files;
+        return await ReadChurnedAsync(reader, paths, cancellationToken);
     }
 
     /// <summary>
@@ -233,15 +222,28 @@ internal static class IndexQueries
                                               ORDER BY commits DESC, added + deleted DESC, path
                                               """, parameters);
         using var reader = await command.ReaderAsync(cancellationToken);
-        var directories = new List<ChurnedFile>();
+        return await ReadChurnedAsync(reader, paths, cancellationToken);
+    }
+
+    /// <summary>
+    ///     The rows both rankings answer with, a file's and a directory's alike. The reader is opened
+    ///     by the caller, so the query plan is labelled with the ranking that ran and not with this.
+    /// </summary>
+    private static async Task<IReadOnlyList<ChurnedFile>> ReadChurnedAsync(DbDataReader reader, ProjectPaths paths,
+        CancellationToken cancellationToken)
+    {
+        var churned = new List<ChurnedFile>();
         while (await reader.ReadAsync(cancellationToken))
         {
+            // Spelled from the repository and the path rather than read off a files row, because the
+            // paths that have none are exactly the ones no longer at HEAD — and those are ranked and
+            // must still be named.
             string slug = reader.Text("repo_slug");
-            directories.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug, reader.Flag("at_head"),
+            churned.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug, reader.Flag("at_head"),
                 reader.Int32("commits"), reader.Int64("added"), reader.Int64("deleted")));
         }
 
-        return directories;
+        return churned;
     }
 
     /// <summary>
@@ -273,14 +275,12 @@ internal static class IndexQueries
         // what keeps one dropped by both from being counted twice.
         conditions.Add($"({string.Join(" OR ", dropped)})");
 
-        using var command = connection.Query($"""
-                                              SELECT count(*) AS hidden FROM (
-                                                  SELECT DISTINCT c.repo_slug, cf.path
-                                                  FROM commit_files cf JOIN commits c USING (commit_id)
-                                                  WHERE {string.Join(" AND ", conditions)})
-                                              """, parameters);
-        using var reader = await command.ReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? (int)reader.Int64("hidden") : 0;
+        return (int)await connection.CountAsync($"""
+                                                 SELECT count(*) FROM (
+                                                     SELECT DISTINCT c.repo_slug, cf.path
+                                                     FROM commit_files cf JOIN commits c USING (commit_id)
+                                                     WHERE {string.Join(" AND ", conditions)})
+                                                 """, parameters, cancellationToken);
     }
 
     /// <summary>
@@ -428,49 +428,49 @@ internal static class IndexQueries
          """;
 
     /// <summary>
-    ///     The WHERE clause and its parameter for one repository's commits, or neither for the
-    ///     project's. Public because every read of the commit tables narrows the same way — the change
-    ///     log and the commit count as much as the ranking — and two spellings of one clause is one of
-    ///     them eventually being wrong.
+    ///     The WHERE clause and its parameters for the commits a read covers, or neither where it covers
+    ///     every commit of the project. Public because every read of the commit tables narrows the same
+    ///     way — the change log and the commit count as much as the ranking — and two spellings of one
+    ///     clause is one of them eventually being wrong.
+    ///     The clause names <c>commits</c> by its table name: the path filter's semi-join correlates on
+    ///     <c>commits.commit_id</c>, so it binds only in a statement that selects <c>FROM commits</c>
+    ///     unaliased.
     /// </summary>
-    public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug) =>
-        CommitScope(repositorySlug, null);
-
-    /// <summary>
-    ///     The same, narrowed to the commits of one author as well. The author is matched on the
-    ///     address and never the display name: the address is the identity git records, it is what the
-    ///     overview groups authors by, and it is stable where a name is not — one person commits as
-    ///     "Grace Hopper", "grace" and "Grace M. Hopper" from one address, and two people share a
-    ///     first name. Matching both would make the same call mean different things depending on which
-    ///     spelling a commit happened to carry.
+    /// <param name="repositorySlug">One repository, or null for every one in the project.</param>
+    /// <param name="author">
+    ///     Narrows to one author's commits, matched on the address and never the display name: the
+    ///     address is the identity git records, it is what the overview groups authors by, and it is
+    ///     stable where a name is not — one person commits as "Grace Hopper", "grace" and "Grace M.
+    ///     Hopper" from one address, and two people share a first name. Matching both would make the
+    ///     same call mean different things depending on which spelling a commit happened to carry.
     ///     A case-insensitive substring, because an agent has an address it read off an overview or a
     ///     blame, and a local part ("grace") is the half of it worth typing. A substring can still
     ///     match two addresses, so what it matched is named in the reply rather than assumed
     ///     (<see cref="HistoryQueries.LogAsync" />).
-    ///     The pattern is escaped and bound, never interpolated: it is caller text, and `%` or `_` in
-    ///     it would otherwise widen the match silently.
-    /// </summary>
-    /// <summary>
-    ///     The same again, narrowed to the commits whose subject carries some text.
-    ///     The subject and not the body: an identifier that brings an agent here — a ticket key, a PR
-    ///     number, a release name — is put in the subject line by every convention that puts it in a
-    ///     commit at all, and matching the body as well would make a passing mention in a paragraph
-    ///     rank equal with the commit that declares itself. Said in the tool's own words, so a caller
-    ///     that meant the body knows this did not search it.
-    ///     A case-insensitive substring for the reason the address is one, and escaped and bound for
-    ///     the same reason too: this is caller text, and a `%` in it would widen the match rather than
-    ///     fail to find one.
-    ///     The same again, narrowed to the commits that recorded a path at or beneath
-    ///     <paramref name="pathInRepository" /> of <paramref name="pathRepositorySlug" /> — a semi-join
-    ///     on <c>commit_files</c>, which is the join <c>file_history</c> already makes for one exact
-    ///     path, widened here from a path to a prefix (#118).
+    /// </param>
+    /// <param name="message">
+    ///     Narrows to the commits whose subject carries this text. The subject and not the body: an
+    ///     identifier that brings an agent here — a ticket key, a PR number, a release name — is put in
+    ///     the subject line by every convention that puts it in a commit at all, and matching the body
+    ///     as well would make a passing mention in a paragraph rank equal with the commit that declares
+    ///     itself. Said in the tool's own words, so a caller that meant the body knows this did not
+    ///     search it. A case-insensitive substring for the reason the address is one.
+    ///     Both this and <paramref name="author" /> are escaped and bound, never interpolated: they are
+    ///     caller text, and `%` or `_` in them would otherwise widen the match silently.
+    /// </param>
+    /// <param name="pathRepositorySlug">The repository <paramref name="pathInRepository" /> is inside.</param>
+    /// <param name="pathInRepository">
+    ///     Narrows to the commits that recorded a path at or beneath this one — a semi-join on
+    ///     <c>commit_files</c>, which is the join <c>file_history</c> already makes for one exact path,
+    ///     widened here from a path to a prefix (#118).
     ///     Matched on the path a commit recorded, so the scope begins where a file was last renamed;
     ///     every reply that uses it says so, because a reorganised directory would otherwise read as a
     ///     quiet one. Taken literally rather than as a glob, for the reason
     ///     <see cref="AtHeadExists" /> gives: it is a name and `[slug]` is a character class (#122).
-    /// </summary>
-    public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug, string? author,
-        string? message = null, string? pathRepositorySlug = null, string? pathInRepository = null)
+    /// </param>
+    public static (string Scope, List<DuckDBParameter> Parameters) CommitScope(string? repositorySlug,
+        string? author = null, string? message = null, string? pathRepositorySlug = null,
+        string? pathInRepository = null)
     {
         var clauses = new List<string>(3);
         var parameters = new List<DuckDBParameter>(3);

@@ -191,11 +191,12 @@ public sealed partial class IndexReader : IDisposable
     {
         if (await SlugPrefixAsync(path, cancellationToken) is not { } prefix) return null;
         var paths = await PathsAsync(cancellationToken);
-        var under = await TreeAsync(new QualifiedPath(paths.RepositorySlug, prefix.Corrected), 1, cancellationToken);
         // A file at the corrected path counts too. `list_tree("alpha/README.md")` is the slug mistake
         // and a file named as a directory at once, and suppressing the diagnosis because the corrected
-        // path holds no children would answer the smaller of the two questions.
-        if (under.Count == 0 && await FindFileAsync(prefix.Corrected, cancellationToken) is null) return null;
+        // path holds no children would answer the smaller of the two questions. The path probe takes
+        // the exact spelling and the file lookup the case an agent misremembered, so both are asked.
+        if (!await HoldsPathAsync(paths.RepositorySlug, prefix.Corrected, cancellationToken)
+            && await FindFileAsync(prefix.Corrected, cancellationToken) is null) return null;
         return SlugAdvice(prefix.Slug, prefix.Corrected);
     }
 
@@ -281,12 +282,8 @@ public sealed partial class IndexReader : IDisposable
             return (null, new Problem(
                 $"'{path}' names no file: {await PathRuleAsync(cancellationToken)} Write it like `{paths.Example()}`."));
 
-        var repository = await FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
-        if (repository is null)
-            return (null, new Problem(
-                $"{await UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these."));
-
-        string spelled = paths.Format(qualified with { RepositorySlug = repository.Slug });
+        var (repository, spelled, unknown) = await RespellAsync(qualified, cancellationToken);
+        if (repository is null) return (null, unknown);
         if (await FindFileAsync(spelled, cancellationToken) is { } file) return (file, null);
 
         string explanation = $"No indexed file '{spelled}' in repository '{repository.Slug}' of project "
@@ -330,13 +327,27 @@ public sealed partial class IndexReader : IDisposable
         if (qualified is null)
             return (null, new Problem($"'{path}' names no directory: {await PathRuleAsync(cancellationToken)}"));
 
-        var repository = await FindRepositoryAsync(qualified.RepositorySlug, cancellationToken);
-        if (repository is null)
-            return (null, new Problem(
+        var (repository, spelled, unknown) = await RespellAsync(qualified, cancellationToken);
+        return repository is null
+            ? (null, unknown)
+            : (new IndexedDirectory(repository, qualified.PathInRepository, spelled), null);
+    }
+
+    /// <summary>
+    ///     The half of locating a file and a directory that is one rule: the first segment must name a
+    ///     repository of this index, and the path is then spelled the way the index holds that
+    ///     repository's slug, whatever case the agent wrote it in. The parse before it is each caller's,
+    ///     because what a malformed path is told differs between a file and a directory.
+    /// </summary>
+    private async Task<(IndexedRepository? Repository, string Spelled, Problem? Unknown)> RespellAsync(
+        QualifiedPath qualified, CancellationToken cancellationToken)
+    {
+        if (await FindRepositoryAsync(qualified.RepositorySlug, cancellationToken) is not { } repository)
+            return (null, "", new Problem(
                 $"{await UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these."));
 
-        string spelled = paths.Format(qualified with { RepositorySlug = repository.Slug });
-        return (new IndexedDirectory(repository, qualified.PathInRepository, spelled), null);
+        var paths = await PathsAsync(cancellationToken);
+        return (repository, paths.Format(qualified with { RepositorySlug = repository.Slug }), null);
     }
 
     /// <summary>
@@ -352,9 +363,12 @@ public sealed partial class IndexReader : IDisposable
         CancellationToken cancellationToken)
     {
         if (pathInRepository.Length == 0) return true;
+        // EXISTS and not count(*) > 0, for the reason RecordsPathAsync gives: a count cannot stop early.
         using var command = Connection.Query("""
-                                             SELECT count(*) > 0 FROM files f JOIN repositories r USING (repo_id)
-                                             WHERE r.slug = $r AND (f.path = $p OR starts_with(f.path, $p || '/'))
+                                             SELECT EXISTS (
+                                                 SELECT 1 FROM files f JOIN repositories r USING (repo_id)
+                                                 WHERE r.slug = $r AND (f.path = $p OR starts_with(f.path, $p || '/'))
+                                             )
                                              """,
             [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
         return await command.ScalarAsync(cancellationToken) is true;

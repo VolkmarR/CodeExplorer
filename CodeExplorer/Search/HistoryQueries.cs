@@ -243,20 +243,7 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
         // that needs it. Never gated on an empty answer: the case this exists for returned nine
         // commits, and a zero-gated check would have skipped it (#131).
         return (new PathScope(directory.QualifiedPath, repository.Slug, directory.PathInRepository, atHead,
-            await LineageAsync(index, repository.Slug, directory.PathInRepository,
-                await SpellerAsync(index, repository.Slug, cancellationToken), cancellationToken)), null);
-    }
-
-    /// <summary>
-    ///     How this index turns a repository-relative path back into the qualified one an agent would
-    ///     type (ADR-0006). Read once per scope rather than per hop: the rule is a property of the
-    ///     project, and the chain walk would otherwise ask for it three times to spell three paths.
-    /// </summary>
-    private static async Task<Func<string, string>> SpellerAsync(IndexReader index, string repositorySlug,
-        CancellationToken cancellationToken)
-    {
-        var paths = await index.PathsAsync(cancellationToken);
-        return path => paths.Format(repositorySlug, path);
+            await LineageAsync(index, repository.Slug, directory.PathInRepository, cancellationToken)), null);
     }
 
     /// <summary>
@@ -266,7 +253,9 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     /// </summary>
     private static async Task<bool> HasHistoryAsync(IndexReader index, CancellationToken cancellationToken)
     {
-        using var command = index.Connection.Query("SELECT count(*) > 0 FROM commits", []);
+        // EXISTS and not count(*) > 0: the question is whether there is a commit, and a semi-join may
+        // stop at the first one where a count is not allowed to.
+        using var command = index.Connection.Query("SELECT EXISTS (SELECT 1 FROM commits)", []);
         return await command.ScalarAsync(cancellationToken) is true;
     }
 

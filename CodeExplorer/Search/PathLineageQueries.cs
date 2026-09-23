@@ -61,12 +61,15 @@ public sealed partial class HistoryQueries
     /// <param name="index">The index being read.</param>
     /// <param name="repositorySlug">The repository the scope resolved to. A rename never crosses one.</param>
     /// <param name="pathInRepository">The scope inside it. Empty — a repository root — has no previous path.</param>
-    /// <param name="spell">How to turn a repository-relative path back into a qualified one (ADR-0006).</param>
     /// <param name="cancellationToken">Threaded to the command.</param>
     private static async Task<PathLineage?> LineageAsync(IndexReader index, string repositorySlug,
-        string pathInRepository, Func<string, string> spell, CancellationToken cancellationToken)
+        string pathInRepository, CancellationToken cancellationToken)
     {
         if (pathInRepository.Length == 0) return null;
+
+        // Each previous path is printed as a call to make, so it is spelled the way the project names
+        // a file (ADR-0006); every caller wanted that spelling and none another.
+        var paths = await index.PathsAsync(cancellationToken);
 
         using var command = index.Connection.Query("""
                                                    SELECT previous_path, previous_commits, combined_commits
@@ -82,7 +85,7 @@ public sealed partial class HistoryQueries
         while (await reader.ReadAsync(cancellationToken))
         {
             string previous = reader.Text("previous_path");
-            found.Add(new PreviousPath(spell(previous), previous, reader.Int32("previous_commits")));
+            found.Add(new PreviousPath(paths.Format(repositorySlug, previous), previous, reader.Int32("previous_commits")));
             combined = reader.Int32("combined_commits");
         }
 
