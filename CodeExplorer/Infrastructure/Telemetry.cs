@@ -344,7 +344,11 @@ public static class Telemetry
         /// <summary>A fresh tag set carrying the project, which every measurement of this operation adds to.</summary>
         public TagList Tags => new() { { ProjectTag, slug } };
 
-        public void Tag(string tag, object? value) => _activity?.SetTag(tag, value);
+        /// <summary>
+        ///     Generic so that a count is boxed only when there is a span to hold it: the conditional
+        ///     access skips the conversion to <c>object</c> along with the call.
+        /// </summary>
+        public void Tag<T>(string tag, T value) => _activity?.SetTag(tag, value);
 
         private static Activity? StartTagged(string name, string slug)
         {

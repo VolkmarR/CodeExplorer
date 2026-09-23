@@ -27,7 +27,8 @@ internal sealed class ProjectTools(
         "Reports which project this MCP endpoint is bound to. The project comes from the URL you connected to, not from an argument; use it to confirm the server before searching.")]
     public string WhichProject()
     {
-        return $"This endpoint serves the project '{Bound.Name}' (slug: {Bound.Slug}).";
+        var project = Bound;
+        return $"This endpoint serves the project '{project.Name}' (slug: {project.Slug}).";
     }
 
     [McpServerTool(Name = "repo_info", ReadOnly = true, Idempotent = true, Title = "Describe the project's index")]
@@ -39,22 +40,23 @@ internal sealed class ProjectTools(
                  """)]
     public async Task<string> RepoInfo(CancellationToken cancellationToken = default)
     {
-        var configured = await control.ListRepositoriesAsync(Bound.Slug, cancellationToken);
+        var project = Bound;
+        var configured = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
 
         // Null covers a build that was interrupted while filling the file as well as a project never
         // built: the reader will not report half-built tables as the project, and either way the
         // agent's next move is the same.
-        var status = await readers.StatusAsync(Bound.Slug, true, cancellationToken);
+        var status = await readers.StatusAsync(project.Slug, true, cancellationToken);
         if (status is null)
-            return IndexReader.NoIndex(Bound.Slug) + (configured.Count == 0
-                ? $" The project has no repositories yet either; add one with POST /api/projects/{Bound.Slug}/repositories."
+            return IndexReader.NoIndex(project.Slug) + (configured.Count == 0
+                ? $" The project has no repositories yet either; add one with POST /api/projects/{project.Slug}/repositories."
                 : $" Repositories waiting to be indexed: {string.Join(", ", configured.Select(r => r.Slug))}.");
 
         var indexed = status.Repositories;
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture,
-            $"Project '{Bound.Slug}' ({Bound.Name}): {indexed.Count} {ToolReply.Plural(indexed.Count, "repository", "repositories")} indexed, {status.Files} files, {status.Lines} lines.\n");
+            $"Project '{project.Slug}' ({project.Name}): {indexed.Count} {ToolReply.Plural(indexed.Count, "repository", "repositories")} indexed, {status.Files} files, {status.Lines} lines.\n");
         // One time for the project: a refresh rebuilds every repository together (CONTEXT.md), so there
         // is no per-repository index time to report.
         text.Append(CultureInfo.InvariantCulture,
@@ -75,7 +77,7 @@ internal sealed class ProjectTools(
 
         foreach (var repository in configured.Where(c => indexed.All(i => i.Slug != c.Slug)))
             text.Append(repository.Slug.PadRight(width)).Append(CultureInfo.InvariantCulture,
-                $"  not indexed yet: added after the last refresh. The operator includes it with POST /api/projects/{Bound.Slug}/refresh.\n");
+                $"  not indexed yet: added after the last refresh. The operator includes it with POST /api/projects/{project.Slug}/refresh.\n");
 
         return text.ToString();
     }
@@ -117,8 +119,9 @@ internal sealed class ProjectTools(
         // The repositories come from the index's own table rather than from the stored row: they are
         // already one join-free read, and a second copy inside the overview would be a second
         // definition of what this project holds (IndexOverview says the same).
-        return await readers.OverIndexAsync(Bound.Slug, null,
-            async (index, token) => OverviewReply.Render(Bound, await index.RepositoriesAsync(token),
+        var project = Bound;
+        return await readers.OverIndexAsync(project.Slug, null,
+            async (index, token) => OverviewReply.Render(project, await index.RepositoriesAsync(token),
                 await index.OverviewAsync(token)),
             problem => problem.Explanation, cancellationToken);
     }

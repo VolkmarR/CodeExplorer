@@ -165,12 +165,19 @@ internal sealed partial class SearchTools
             text.Append("  ").Append(file.Key).Append('\n');
             int width = file.Max(hit => hit.LineNumber.ToString(CultureInfo.InvariantCulture).Length);
             foreach (var hit in file)
+            {
                 text.Append("  ")
                     .Append(hit.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
                     .Append(": ")
-                    .Append(hit.Label is null ? "" : $"[{hit.Label}] ")
-                    .Append(ToolReply.Clip(hit.Text).TrimStart())
-                    .Append('\n');
+                    .Append(hit.Label is null ? "" : $"[{hit.Label}] ");
+                // Clipped first and trimmed at the start after, as the string form did: the clip counts
+                // the indentation, so trimming it first would move the cut and the count it reports.
+                int from = text.Length;
+                ToolReply.Clip(text, hit.Text);
+                int indent = 0;
+                while (from + indent < text.Length && char.IsWhiteSpace(text[from + indent])) indent++;
+                text.Remove(from, indent).Append('\n');
+            }
         }
     }
 
@@ -251,8 +258,10 @@ internal sealed partial class SearchTools
             .Append("\ncount  files  value\n");
 
         foreach (var match in result.Matches)
-            text.Append(CultureInfo.InvariantCulture,
-                $"{match.Count,5}  {match.Files,5}  {ToolReply.Clip(match.Value.Trim())}\n");
+        {
+            text.Append(CultureInfo.InvariantCulture, $"{match.Count,5}  {match.Files,5}  ");
+            ToolReply.Clip(text, match.Value.AsSpan().TrimStart()).Append('\n');
+        }
 
         return text.ToString();
     }
