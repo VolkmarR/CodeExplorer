@@ -245,8 +245,8 @@ public sealed partial class HistoryQueries
     private static async Task<AuthorTally> AuthorsAsync(IndexReader index, string? repositorySlug,
         string? author, PathScope? path, int limit, CancellationToken cancellationToken)
     {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, null,
-            path?.RepositorySlug, path?.PathInRepository);
+        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author,
+            pathRepositorySlug: path?.RepositorySlug, pathInRepository: path?.PathInRepository);
         using var command = index.Connection.Query($"""
                                                     SELECT author_email,
                                                            arg_max(author_name, authored_at) AS author_name,

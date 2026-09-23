@@ -120,4 +120,19 @@ internal static class IndexQuery
         return Convert.ToInt64(await command.ScalarAsync(cancellationToken, file, member),
             CultureInfo.InvariantCulture);
     }
+
+    /// <summary>
+    ///     Whether <paramref name="sql" /> returns any row, asked as <c>EXISTS</c> around it. Never
+    ///     <c>count(*) &gt; 0</c>: a count has to read every matching row, and a semi-join may stop at
+    ///     the first — the difference between a probe and a scan on the history tables, which have no
+    ///     index on path. Said here so a probe does not have to justify it again. What
+    ///     <paramref name="sql" /> projects does not matter.
+    /// </summary>
+    public static async Task<bool> ExistsAsync(this DuckDBConnection connection, string sql,
+        IEnumerable<DuckDBParameter> parameters, CancellationToken cancellationToken,
+        [CallerFilePath] string file = "", [CallerMemberName] string member = "")
+    {
+        using var command = connection.Query($"SELECT EXISTS ({sql})", parameters);
+        return await command.ScalarAsync(cancellationToken, file, member) is true;
+    }
 }

@@ -282,8 +282,9 @@ public sealed partial class IndexReader : IDisposable
             return (null, new Problem(
                 $"'{path}' names no file: {await PathRuleAsync(cancellationToken)} Write it like `{paths.Example()}`."));
 
-        var (repository, spelled, unknown) = await RespellAsync(qualified, cancellationToken);
-        if (repository is null) return (null, unknown);
+        var (resolved, unknown) = await RespellAsync(paths, qualified, cancellationToken);
+        if (resolved is null) return (null, unknown);
+        var (repository, spelled) = (resolved.Repository!, resolved.QualifiedPath);
         if (await FindFileAsync(spelled, cancellationToken) is { } file) return (file, null);
 
         string explanation = $"No indexed file '{spelled}' in repository '{repository.Slug}' of project "
@@ -327,10 +328,7 @@ public sealed partial class IndexReader : IDisposable
         if (qualified is null)
             return (null, new Problem($"'{path}' names no directory: {await PathRuleAsync(cancellationToken)}"));
 
-        var (repository, spelled, unknown) = await RespellAsync(qualified, cancellationToken);
-        return repository is null
-            ? (null, unknown)
-            : (new IndexedDirectory(repository, qualified.PathInRepository, spelled), null);
+        return await RespellAsync(paths, qualified, cancellationToken);
     }
 
     /// <summary>
@@ -339,15 +337,15 @@ public sealed partial class IndexReader : IDisposable
     ///     repository's slug, whatever case the agent wrote it in. The parse before it is each caller's,
     ///     because what a malformed path is told differs between a file and a directory.
     /// </summary>
-    private async Task<(IndexedRepository? Repository, string Spelled, Problem? Unknown)> RespellAsync(
+    private async Task<(IndexedDirectory? Resolved, Problem? Unknown)> RespellAsync(ProjectPaths paths,
         QualifiedPath qualified, CancellationToken cancellationToken)
     {
         if (await FindRepositoryAsync(qualified.RepositorySlug, cancellationToken) is not { } repository)
-            return (null, "", new Problem(
+            return (null, new Problem(
                 $"{await UnknownRepositoryAsync(qualified.RepositorySlug, cancellationToken)} The first path segment must be one of these."));
 
-        var paths = await PathsAsync(cancellationToken);
-        return (repository, paths.Format(qualified with { RepositorySlug = repository.Slug }), null);
+        return (new IndexedDirectory(repository, qualified.PathInRepository,
+            paths.Format(qualified with { RepositorySlug = repository.Slug })), null);
     }
 
     /// <summary>
@@ -363,15 +361,11 @@ public sealed partial class IndexReader : IDisposable
         CancellationToken cancellationToken)
     {
         if (pathInRepository.Length == 0) return true;
-        // EXISTS and not count(*) > 0, for the reason RecordsPathAsync gives: a count cannot stop early.
-        using var command = Connection.Query("""
-                                             SELECT EXISTS (
-                                                 SELECT 1 FROM files f JOIN repositories r USING (repo_id)
-                                                 WHERE r.slug = $r AND (f.path = $p OR starts_with(f.path, $p || '/'))
-                                             )
-                                             """,
-            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
-        return await command.ScalarAsync(cancellationToken) is true;
+        return await Connection.ExistsAsync("""
+                                            SELECT 1 FROM files f JOIN repositories r USING (repo_id)
+                                            WHERE r.slug = $r AND (f.path = $p OR starts_with(f.path, $p || '/'))
+                                            """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)], cancellationToken);
     }
 
     /// <summary>
@@ -389,19 +383,16 @@ public sealed partial class IndexReader : IDisposable
         CancellationToken cancellationToken)
     {
         if (pathInRepository.Length == 0) return true;
-        // EXISTS and not count(*) > 0: a count cannot stop early, and commit_files is the largest
-        // table here with no index on path. The scan this saves is the one a mistyped scope pays —
-        // the common case, and the one that used to be refused after reading files alone.
-        using var command = Connection.Query("""
-                                             SELECT EXISTS (
-                                                 SELECT 1
-                                                 FROM commit_files cf JOIN commits c USING (commit_id)
-                                                 WHERE c.repo_slug = $r
-                                                   AND (cf.path = $p OR starts_with(cf.path, $p || '/'))
-                                             )
-                                             """,
-            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
-        return await command.ScalarAsync(cancellationToken) is true;
+        // commit_files is the largest table here, so the early stop ExistsAsync buys matters most on
+        // the probe a mistyped scope pays — the common case, and the one that used to be refused after
+        // reading files alone.
+        return await Connection.ExistsAsync("""
+                                            SELECT 1
+                                            FROM commit_files cf JOIN commits c USING (commit_id)
+                                            WHERE c.repo_slug = $r
+                                              AND (cf.path = $p OR starts_with(cf.path, $p || '/'))
+                                            """,
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)], cancellationToken);
     }
 
     /// <summary>
