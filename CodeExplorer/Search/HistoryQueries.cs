@@ -251,12 +251,7 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     ///     every repository failed to walk, has the tables and nothing in them — and "no commits
     ///     recorded" must never be answered as "this file was never changed", which reads as a fact.
     /// </summary>
-    private static async Task<bool> HasHistoryAsync(IndexReader index, CancellationToken cancellationToken)
-    {
-        // EXISTS and not count(*) > 0: the question is whether there is a commit, and a semi-join may
-        // stop at the first one where a count is not allowed to.
-        using var command = index.Connection.Query("SELECT EXISTS (SELECT 1 FROM commits)", []);
-        return await command.ScalarAsync(cancellationToken) is true;
-    }
+    private static Task<bool> HasHistoryAsync(IndexReader index, CancellationToken cancellationToken) =>
+        index.Connection.ExistsAsync("SELECT 1 FROM commits", [], cancellationToken);
 
 }

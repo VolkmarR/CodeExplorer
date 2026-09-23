@@ -341,7 +341,7 @@ internal static class IndexQueries
         HistoryWindow window, string? repositorySlug, string? directoryInRepository, ChurnFilters filters)
     {
         // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
-        // WindowAsync reads it that way: it keeps the comparison off the session time zone, and it
+        // ReaderColumns.EpochInstant gives: it keeps the comparison off the session time zone, and it
         // keeps a DateTimeOffset out of the driver's parameter mapping entirely.
         var parameters = new List<DuckDBParameter>
         {
