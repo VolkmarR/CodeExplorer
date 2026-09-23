@@ -114,11 +114,19 @@ public sealed class FileQueries(IndexReaders readers)
         return readers.OverIndexAsync(slug, null, async (index, token) =>
         {
             var reads = new List<FileRead>(request.Windows.Count);
+            // Per request, because the tool invites several windows into one file and each was locating
+            // it and reading its history again (#180). The lease holds the index still, so a remembered
+            // answer is the answer. Keyed by the path exactly as written, because a miss quotes that
+            // spelling back, so a respelled path is located on its own and gets its own sentence.
+            var located = new Dictionary<string, (IndexedFile? File, Problem? Problem)>(StringComparer.Ordinal);
+            var commits = new Dictionary<long, FileCommits>();
             foreach (var window in request.Windows)
             {
                 // The path rule and the refusal sentences are the reader's, so an agent that got the path
                 // wrong is told the same thing here as by imports or file_history.
-                var (file, problem) = await index.LocateAsync(window.Path, request.Suggestions, token);
+                if (!located.TryGetValue(window.Path, out var found))
+                    located[window.Path] = found = await index.LocateAsync(window.Path, request.Suggestions, token);
+                var (file, problem) = found;
                 if (file is null)
                 {
                     reads.Add(new FileRead(window, null, problem, [], null));
@@ -132,7 +140,9 @@ public sealed class FileQueries(IndexReaders readers)
                     : [];
                 // Carried on the read and not fetched separately: they are columns on the row the read
                 // already has in hand, so a second request would be one for data this one was holding.
-                var history = request.WithHistory ? await index.FileCommitsAsync(file.FileId, token) : null;
+                FileCommits? history = null;
+                if (request.WithHistory && !commits.TryGetValue(file.FileId, out history))
+                    commits[file.FileId] = history = await index.FileCommitsAsync(file.FileId, token);
                 reads.Add(new FileRead(window with { Start = start, End = end }, file, null, lines, history));
             }
 
