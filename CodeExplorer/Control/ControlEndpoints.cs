@@ -1,4 +1,6 @@
-namespace CodeExplorer;
+using CodeExplorer.Infrastructure;
+
+namespace CodeExplorer.Control;
 
 /// <summary>
 ///     <paramref name="SingleRepository" /> is absent on an older client's request and defaults to the

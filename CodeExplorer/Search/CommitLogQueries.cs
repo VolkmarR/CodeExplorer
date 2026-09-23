@@ -1,7 +1,9 @@
 using System.Data.Common;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>One commit as a tool reports it: enough to name it and to say who and when, and no body.</summary>
 public sealed record RecordedChange(
@@ -117,13 +119,13 @@ public sealed partial class HistoryQueries
     ///     "no history was imported" are answered with opposite sentences.
     /// </summary>
     public Task<Outcome> LogAsync(string slug, LogRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
+        Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             var (path, unresolved) = await ScopeAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
 
             bool hasHistory = await HasHistoryAsync(index, token);
-            int limit = Math.Clamp(request.Limit, 1, MaxCommits);
+            int limit = Math.Clamp(request.Limit, 1, _maxCommits);
             int page = Math.Max(1, request.Page);
             string? scope = index.Repository?.Slug;
             // Who the filter matched is read before the page is, so that a page which comes back empty
@@ -151,13 +153,13 @@ public sealed partial class HistoryQueries
     ///     in scope so a cut listing says what it left out.
     /// </summary>
     public Task<Outcome> AuthorsAsync(string slug, AuthorsRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
+        Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             var (path, unresolved) = await ScopeAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
 
             bool hasHistory = await HasHistoryAsync(index, token);
-            int limit = Math.Clamp(request.Limit, 1, MaxAuthors);
+            int limit = Math.Clamp(request.Limit, 1, _maxAuthors);
             string? scope = index.Repository?.Slug;
             var tally = hasHistory ? await AuthorsAsync(index, scope, null, path, limit, token) : AuthorTally.None;
             return new AuthorsAnswer(hasHistory, index.Repository, tally.Addresses, limit, tally.Authors, path);
@@ -169,9 +171,9 @@ public sealed partial class HistoryQueries
     /// </summary>
     public Task<Outcome> ChangeLogAsync(string slug, ChangeLogRequest request,
         CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
+        Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
-            int pageSize = Math.Clamp(request.PageSize, 1, MaxCommits);
+            int pageSize = Math.Clamp(request.PageSize, 1, _maxCommits);
             int page = Math.Max(1, request.Page);
             string? scope = index.Repository?.Slug;
             long total = await CommitCountAsync(index, scope, token);
@@ -189,13 +191,13 @@ public sealed partial class HistoryQueries
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, message,
             path?.RepositorySlug, path?.PathInRepository);
-        using var command = index.Connection.Query($"""
-                                                    SELECT sha, repo_slug, author_name, author_email, authored_at,
-                                                           subject
-                                                    FROM commits {scope}
-                                                    ORDER BY commit_id DESC
-                                                    LIMIT {limit} OFFSET {skip}
-                                                    """, parameters);
+        await using var command = index.Connection.Query($"""
+                                                          SELECT sha, repo_slug, author_name, author_email, authored_at,
+                                                                 subject
+                                                          FROM commits {scope}
+                                                          ORDER BY commit_id DESC
+                                                          LIMIT {limit} OFFSET {skip}
+                                                          """, parameters);
         return await ChangesAsync(command, cancellationToken);
     }
 
@@ -207,14 +209,14 @@ public sealed partial class HistoryQueries
     private static async Task<IReadOnlyList<RecordedChange>> PathCommitsAsync(IndexReader index,
         string repositorySlug, string path, int limit, CancellationToken cancellationToken)
     {
-        using var command = index.Connection.Query($"""
-                                                    SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
-                                                           c.authored_at, c.subject
-                                                    FROM commit_files cf JOIN commits c USING (commit_id)
-                                                    WHERE c.repo_slug = $r AND cf.path = $p
-                                                    ORDER BY c.commit_id DESC
-                                                    LIMIT {limit}
-                                                    """,
+        await using var command = index.Connection.Query($"""
+                                                          SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
+                                                                 c.authored_at, c.subject
+                                                          FROM commit_files cf JOIN commits c USING (commit_id)
+                                                          WHERE c.repo_slug = $r AND cf.path = $p
+                                                          ORDER BY c.commit_id DESC
+                                                          LIMIT {limit}
+                                                          """,
             [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path)]);
         return await ChangesAsync(command, cancellationToken);
     }
@@ -222,7 +224,7 @@ public sealed partial class HistoryQueries
     private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
         CancellationToken cancellationToken)
     {
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var changes = new List<RecordedChange>();
         while (await reader.ReadAsync(cancellationToken))
             changes.Add(new RecordedChange(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
@@ -247,25 +249,25 @@ public sealed partial class HistoryQueries
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author,
             pathRepositorySlug: path?.RepositorySlug, pathInRepository: path?.PathInRepository);
-        using var command = index.Connection.Query($"""
-                                                    SELECT author_email,
-                                                           arg_max(author_name, authored_at) AS author_name,
-                                                           count(*) AS commits,
-                                                           -- epoch() for the reason ReaderColumns.EpochInstant
-                                                           -- gives.
-                                                           epoch(max(authored_at)) AS last_commit,
-                                                           -- Over the groups, before LIMIT: one row per
-                                                           -- address, so this counts addresses. The sum
-                                                           -- is cast because DuckDB widens it to HUGEINT,
-                                                           -- which the driver hands back as a BigInteger.
-                                                           count(*) OVER () AS addresses,
-                                                           (sum(count(*)) OVER ())::BIGINT AS matched_commits
-                                                    FROM commits {scope}
-                                                    GROUP BY author_email
-                                                    ORDER BY commits DESC, author_email
-                                                    LIMIT {limit}
-                                                    """, parameters);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = index.Connection.Query($"""
+                                                          SELECT author_email,
+                                                                 arg_max(author_name, authored_at) AS author_name,
+                                                                 count(*) AS commits,
+                                                                 -- epoch() for the reason ReaderColumns.EpochInstant
+                                                                 -- gives.
+                                                                 epoch(max(authored_at)) AS last_commit,
+                                                                 -- Over the groups, before LIMIT: one row per
+                                                                 -- address, so this counts addresses. The sum
+                                                                 -- is cast because DuckDB widens it to HUGEINT,
+                                                                 -- which the driver hands back as a BigInteger.
+                                                                 count(*) OVER () AS addresses,
+                                                                 (sum(count(*)) OVER ())::BIGINT AS matched_commits
+                                                          FROM commits {scope}
+                                                          GROUP BY author_email
+                                                          ORDER BY commits DESC, author_email
+                                                          LIMIT {limit}
+                                                          """, parameters);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var authors = new List<RecordedAuthor>();
         long addresses = 0, commits = 0;
         while (await reader.ReadAsync(cancellationToken))
@@ -309,7 +311,7 @@ public sealed partial class HistoryQueries
     private static async Task<AuthorFilter> MatchedAsync(IndexReader index, string? repositorySlug, string author,
         PathScope? path, CancellationToken cancellationToken)
     {
-        var matched = await AuthorsAsync(index, repositorySlug, author, path, MaxAuthors, cancellationToken);
+        var matched = await AuthorsAsync(index, repositorySlug, author, path, _maxAuthors, cancellationToken);
         return new AuthorFilter(author, matched.Commits, matched.Addresses, matched.Authors,
             matched.Addresses > 0 ? 0 : await AuthorCountAsync(index, repositorySlug, path, cancellationToken));
     }
@@ -331,9 +333,9 @@ public sealed partial class HistoryQueries
         int limit, int skip, CancellationToken cancellationToken)
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
-        using var command = index.Connection.Query(
+        await using var command = index.Connection.Query(
             LoggedStatement(scope, limit, skip, newestFirst: true), parameters);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var commits = new List<LoggedCommit>();
         while (await reader.ReadAsync(cancellationToken)) commits.Add(Logged(reader));
         return commits;
@@ -349,9 +351,9 @@ public sealed partial class HistoryQueries
     private static async Task<LoggedCommit?> OneLoggedAsync(IndexReader index, string sha,
         CancellationToken cancellationToken)
     {
-        using var command = index.Connection.Query(
+        await using var command = index.Connection.Query(
             LoggedStatement("WHERE sha = $sha", 1, 0, newestFirst: false), [new DuckDBParameter("sha", sha)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? Logged(reader) : null;
     }
 

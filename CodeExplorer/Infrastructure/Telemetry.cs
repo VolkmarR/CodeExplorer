@@ -6,19 +6,19 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     Every instrument this server owns, and the two recordings that write to them. It is one class
 ///     and not one per module, because the tag set is the thing worth keeping identical and a
 ///     recording split across folders drifts.
 ///     Nothing here needs telemetry to be switched on: an <see cref="ActivitySource" /> with no
-///     listener returns a null activity and a <see cref="Meter" /> with no listener discards a
+///     listener returns a null activity and a <see cref="_meter" /> with no listener discards a
 ///     measurement, so the whole path costs a few nanoseconds when no OTLP endpoint is configured.
 /// </summary>
 public static class Telemetry
 {
-    /// <summary>Names the <see cref="ActivitySource" />, the <see cref="Meter" /> and the OTLP resource alike.</summary>
+    /// <summary>Names the <see cref="ActivitySource" />, the <see cref="_meter" /> and the OTLP resource alike.</summary>
     public const string ServiceName = "CodeExplorer";
 
     /// <summary>
@@ -136,50 +136,50 @@ public static class Telemetry
     /// </summary>
     public const string NoEngine = "none";
 
-    private static readonly ActivitySource Source = new(ServiceName);
-    private static readonly Meter Meter = new(ServiceName);
+    private static readonly ActivitySource _source = new(ServiceName);
+    private static readonly Meter _meter = new(ServiceName);
 
     // Seconds, which is what OTLP's semantic conventions use for a duration histogram; a backend's
     // default bucket boundaries assume it.
-    private static readonly Histogram<double> ToolSeconds =
-        Meter.CreateHistogram<double>(ToolDuration, "s", "How long one MCP tool call took inside the server.");
+    private static readonly Histogram<double> _toolSeconds =
+        _meter.CreateHistogram<double>(ToolDuration, "s", "How long one MCP tool call took inside the server.");
 
-    private static readonly Histogram<double> LeaseSeconds =
-        Meter.CreateHistogram<double>(LeaseDuration, "s", "How long acquiring one lease on a project index took.");
+    private static readonly Histogram<double> _leaseSeconds =
+        _meter.CreateHistogram<double>(LeaseDuration, "s", "How long acquiring one lease on a project index took.");
 
-    private static readonly Histogram<double> SearchSeconds =
-        Meter.CreateHistogram<double>(SearchDuration, "s", "How long a search took, end to end.");
+    private static readonly Histogram<double> _searchSeconds =
+        _meter.CreateHistogram<double>(SearchDuration, "s", "How long a search took, end to end.");
 
-    private static readonly Histogram<long> SearchFileCount =
-        Meter.CreateHistogram<long>(SearchFiles, "{file}", "Files matched by one search, across every repository.");
+    private static readonly Histogram<long> _searchFileCount =
+        _meter.CreateHistogram<long>(SearchFiles, "{file}", "Files matched by one search, across every repository.");
 
-    private static readonly Histogram<long> SearchLineCount =
-        Meter.CreateHistogram<long>(SearchLines, "{line}", "Lines matched by one search.");
+    private static readonly Histogram<long> _searchLineCount =
+        _meter.CreateHistogram<long>(SearchLines, "{line}", "Lines matched by one search.");
 
-    private static readonly Histogram<double> IndexSeconds =
-        Meter.CreateHistogram<double>(IndexDuration, "s", "How long an index build took.");
+    private static readonly Histogram<double> _indexSeconds =
+        _meter.CreateHistogram<double>(IndexDuration, "s", "How long an index build took.");
 
-    private static readonly Histogram<long> IndexFileCount =
-        Meter.CreateHistogram<long>(IndexFiles, "{file}", "Files read into an index by one build.");
+    private static readonly Histogram<long> _indexFileCount =
+        _meter.CreateHistogram<long>(IndexFiles, "{file}", "Files read into an index by one build.");
 
-    private static readonly Histogram<long> IndexLineCount =
-        Meter.CreateHistogram<long>(IndexLines, "{line}", "Lines read into an index by one build.");
+    private static readonly Histogram<long> _indexLineCount =
+        _meter.CreateHistogram<long>(IndexLines, "{line}", "Lines read into an index by one build.");
 
-    private static readonly Histogram<double> HistorySeconds =
-        Meter.CreateHistogram<double>(HistoryDuration, "s", "How long a history pass of a build took.");
+    private static readonly Histogram<double> _historySeconds =
+        _meter.CreateHistogram<double>(HistoryDuration, "s", "How long a history pass of a build took.");
 
-    private static readonly Histogram<long> HistoryCommitCount =
-        Meter.CreateHistogram<long>(HistoryCommits, "{commit}", "Commits appended by one history pass.");
+    private static readonly Histogram<long> _historyCommitCount =
+        _meter.CreateHistogram<long>(HistoryCommits, "{commit}", "Commits appended by one history pass.");
 
-    private static readonly Histogram<long> HistoryFileCount =
-        Meter.CreateHistogram<long>(HistoryFiles, "{file}", "Files blamed by one history pass.");
+    private static readonly Histogram<long> _historyFileCount =
+        _meter.CreateHistogram<long>(HistoryFiles, "{file}", "Files blamed by one history pass.");
 
-    private static readonly Counter<long> AttachGateEntries =
-        Meter.CreateCounter<long>(AttachGate, "{attach}",
+    private static readonly Counter<long> _attachGateEntries =
+        _meter.CreateCounter<long>(AttachGate, "{attach}",
             "Attaches that had to take the instance-wide ATTACH gate.");
 
-    private static readonly Histogram<double> DurableSeconds =
-        Meter.CreateHistogram<double>(DurableDuration, "s",
+    private static readonly Histogram<double> _durableSeconds =
+        _meter.CreateHistogram<double>(DurableDuration, "s",
             "How long a project's durable copy took to store or to fetch.");
 
     /// <summary>
@@ -189,10 +189,10 @@ public static class Telemetry
     ///     configuration key so that the app and the exporter cannot disagree on whether it is on.
     /// </summary>
     public static Uri? OtlpEndpoint(IConfiguration configuration) =>
-        Setting.Url(configuration, "Telemetry:OtlpEndpoint", Remedy)
-        ?? Setting.Url(configuration, "OTEL_EXPORTER_OTLP_ENDPOINT", Remedy);
+        Setting.Url(configuration, "Telemetry:OtlpEndpoint", _remedy)
+        ?? Setting.Url(configuration, "OTEL_EXPORTER_OTLP_ENDPOINT", _remedy);
 
-    private const string Remedy =
+    private const string _remedy =
         "Give it one such as http://localhost:4317, or remove it to run without telemetry.";
 
     /// <summary>
@@ -284,7 +284,7 @@ public static class Telemetry
     ///     Rising steadily on a busy replica is the symptom worth an alert — it means projects are
     ///     being detached as fast as they are attached, which is a swap loop rather than contention.
     /// </summary>
-    public static void AttachGated(string slug) => AttachGateEntries.Add(1, new TagList { { ProjectTag, slug } });
+    public static void AttachGated(string slug) => _attachGateEntries.Add(1, new TagList { { ProjectTag, slug } });
 
     /// <summary>
     ///     Wraps the call-tool pipeline in a span and a duration, so that what an agent waits for is
@@ -352,7 +352,7 @@ public static class Telemetry
 
         private static Activity? StartTagged(string name, string slug)
         {
-            var activity = Source.StartActivity(name, ActivityKind.Internal);
+            var activity = _source.StartActivity(name, ActivityKind.Internal);
             activity?.SetTag(ProjectTag, slug);
             return activity;
         }
@@ -407,7 +407,7 @@ public static class Telemetry
             _operation.Tag(ToolTag, _tool);
         }
 
-        public void Dispose() => _operation.Complete(ToolSeconds, _outcome, ToolTag, _tool);
+        public void Dispose() => _operation.Complete(_toolSeconds, _outcome, ToolTag, _tool);
 
         public void Answered() => _outcome = AnsweredOutcome;
     }
@@ -424,7 +424,7 @@ public static class Telemetry
 
         internal LeaseRecording(string slug) => _operation = new Operation(LeaseSpan, slug);
 
-        public void Dispose() => _operation.Complete(LeaseSeconds, _outcome);
+        public void Dispose() => _operation.Complete(_leaseSeconds, _outcome);
 
         /// <summary>A lease was granted, and the caller now holds the project open against a swap.</summary>
         public void Opened() => _outcome = OpenedOutcome;
@@ -449,7 +449,7 @@ public static class Telemetry
 
         internal SearchRecording(string slug) => _operation = new Operation(SearchSpan, slug);
 
-        public void Dispose() => _operation.Complete(SearchSeconds, _outcome, EngineTag, _engine);
+        public void Dispose() => _operation.Complete(_searchSeconds, _outcome, EngineTag, _engine);
 
         /// <summary>A search that reached an engine. Zero files is an answer and is recorded as one.</summary>
         public void Matched(string engine, int files, long lines)
@@ -458,8 +458,8 @@ public static class Telemetry
             _outcome = MatchedOutcome;
             var tags = _operation.Tags;
             tags.Add(EngineTag, engine);
-            SearchFileCount.Record(files, tags);
-            SearchLineCount.Record(lines, tags);
+            _searchFileCount.Record(files, tags);
+            _searchLineCount.Record(lines, tags);
             _operation.Tag(FilesTag, files);
             _operation.Tag(LinesTag, lines);
             _operation.Tag(EngineTag, engine);
@@ -484,13 +484,13 @@ public static class Telemetry
 
         internal IndexBuildRecording(string slug) => _operation = new Operation(IndexSpan, slug);
 
-        public void Dispose() => _operation.Complete(IndexSeconds, _outcome);
+        public void Dispose() => _operation.Complete(_indexSeconds, _outcome);
 
         public void Built(long files, long lines)
         {
             _outcome = BuiltOutcome;
-            IndexFileCount.Record(files, _operation.Tags);
-            IndexLineCount.Record(lines, _operation.Tags);
+            _indexFileCount.Record(files, _operation.Tags);
+            _indexLineCount.Record(lines, _operation.Tags);
             _operation.Tag(FilesTag, files);
             _operation.Tag(LinesTag, lines);
         }
@@ -508,13 +508,13 @@ public static class Telemetry
 
         internal HistoryBuildRecording(string slug) => _operation = new Operation(HistorySpan, slug);
 
-        public void Dispose() => _operation.Complete(HistorySeconds, _outcome);
+        public void Dispose() => _operation.Complete(_historySeconds, _outcome);
 
         public void Built(long commits, long files)
         {
             _outcome = BuiltOutcome;
-            HistoryCommitCount.Record(commits, _operation.Tags);
-            HistoryFileCount.Record(files, _operation.Tags);
+            _historyCommitCount.Record(commits, _operation.Tags);
+            _historyFileCount.Record(files, _operation.Tags);
             _operation.Tag(CommitsTag, commits);
             _operation.Tag(FilesTag, files);
         }
@@ -540,7 +540,7 @@ public static class Telemetry
             _operation.Tag(DurableTag, operation);
         }
 
-        public void Dispose() => _operation.Complete(DurableSeconds, _outcome, DurableTag, _which);
+        public void Dispose() => _operation.Complete(_durableSeconds, _outcome, DurableTag, _which);
 
         /// <summary>The copy was written, or read back and loaded.</summary>
         public void Moved() => _outcome = MovedOutcome;

@@ -1,3 +1,4 @@
+using CodeExplorer.Git;
 using LibGit2Sharp;
 using Xunit;
 

@@ -1,5 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using CodeExplorer.Control;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using ModelContextProtocol.Client;
 using Xunit;
 

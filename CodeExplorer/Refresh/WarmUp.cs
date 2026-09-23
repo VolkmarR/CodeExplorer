@@ -1,4 +1,7 @@
-namespace CodeExplorer;
+using CodeExplorer.Control;
+using CodeExplorer.Index;
+
+namespace CodeExplorer.Refresh;
 
 /// <summary>
 ///     What a warm-up did to one project. <paramref name="Ready" /> false with no

@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     A span of history to read over: everything authored between <see cref="Since" /> and

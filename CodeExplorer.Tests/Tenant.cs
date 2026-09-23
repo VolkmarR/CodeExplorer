@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text;
+using CodeExplorer.Infrastructure;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;

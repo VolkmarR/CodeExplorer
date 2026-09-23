@@ -1,3 +1,4 @@
+using CodeExplorer.Index;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
 using Xunit;

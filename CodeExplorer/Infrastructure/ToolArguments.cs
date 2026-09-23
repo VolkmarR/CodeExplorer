@@ -4,7 +4,7 @@ using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     What a tool owes a caller about the arguments it was called with, in the two places the tool
@@ -35,7 +35,7 @@ internal static class ToolArguments
     ///     no opinion" travels as a type that fits everything rather than as an empty set, which would
     ///     fit nothing and blame every value.
     /// </summary>
-    private const string AnyType = "value";
+    private const string _anyType = "value";
 
     /// <summary>
     ///     Wraps the call-tool pipeline, in two halves for two degrees of certainty.
@@ -268,11 +268,11 @@ internal static class ToolArguments
     /// </summary>
     private static List<string> AllowedTypes(JsonElement declared)
     {
-        if (!declared.TryGetProperty("type", out var type)) return [AnyType];
+        if (!declared.TryGetProperty("type", out var type)) return [_anyType];
 
         return type.ValueKind == JsonValueKind.Array
             ? type.EnumerateArray().Select(entry => entry.GetString()).OfType<string>().ToList()
-            : [type.GetString() ?? AnyType];
+            : [type.GetString() ?? _anyType];
     }
 
     /// <summary>The schema's name for what arrived. The one table the two directions are read from.</summary>

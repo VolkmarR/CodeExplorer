@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Refresh;
 
 /// <summary>
 ///     Runs the warm-up once, when the application starts, for a deployment that keeps a replica

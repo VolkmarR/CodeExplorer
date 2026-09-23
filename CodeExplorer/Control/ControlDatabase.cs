@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 using Microsoft.AspNetCore.DataProtection;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Control;
 
 /// <summary>Outcome of creating a project. The handler maps each case to a status code and nothing more.</summary>
 public enum CreateProjectOutcome
@@ -42,7 +44,7 @@ public sealed partial class ControlDatabase : IDisposable
     ///     and never exported to Parquet (ADR-0004): it is not shadow-rebuilt, it is small, and what is
     ///     in it — credentials above all — cannot be rebuilt from anything else if it is lost.
     /// </summary>
-    private const string BackupName = "control/control.duckdb";
+    private const string _backupName = "control/control.duckdb";
 
     // Backups are serialised so that two operator actions at once cannot land out of order and leave
     // the store holding the older of the two states. Each takes its own consistent snapshot inside the
@@ -85,7 +87,7 @@ public sealed partial class ControlDatabase : IDisposable
         // The container's disk is wiped on every stop, so an absent file is the ordinary state of a
         // replica waking up rather than a first run. Restoring before the CREATE TABLEs below is what
         // keeps the statements harmless: against a restored file they all find their tables already there.
-        if (!File.Exists(_path) && _store.Fetch(BackupName, _path))
+        if (!File.Exists(_path) && _store.Fetch(_backupName, _path))
         {
             // The backup is a clean copy taken inside the engine, so anything named .wal beside this
             // path belongs to an earlier life of it and would replay a tail from a different file.
@@ -157,7 +159,7 @@ public sealed partial class ControlDatabase : IDisposable
         // it up at the same time. The anchor is used rather than a connection of its own, which the
         // snapshot allows because it is the source catalog it copies from.
         Snapshot(command);
-        _store.Store(BackupName, SnapshotPath);
+        _store.Store(_backupName, SnapshotPath);
         Delete(SnapshotPath);
         logger.LogInformation("Migrated the control database and stored the migrated shape as its backup");
     }
@@ -194,8 +196,8 @@ public sealed partial class ControlDatabase : IDisposable
 
         if (string.IsNullOrWhiteSpace(name)) return CreateProjectOutcome.MissingName;
 
-        using var connection = await OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
         // ON CONFLICT DO NOTHING keeps the existence check and the insert one statement, so two
         // concurrent creates cannot both succeed.
         command.CommandText = """
@@ -222,10 +224,10 @@ public sealed partial class ControlDatabase : IDisposable
     /// </summary>
     public async Task<IReadOnlyList<Project>> ListAsync(CancellationToken cancellationToken)
     {
-        using var connection = await OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT slug, name, single_repository FROM projects ORDER BY slug";
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var projects = new List<Project>();
         while (await reader.ReadAsync(cancellationToken))
             projects.Add(new Project(reader.Text("slug"), reader.Text("name"), reader.Flag("single_repository")));
@@ -248,11 +250,11 @@ public sealed partial class ControlDatabase : IDisposable
     {
         if (_bySlug.TryGetValue(slug, out var known)) return known;
 
-        using var connection = await OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT name, single_repository FROM projects WHERE slug = $slug";
         command.Parameters.Add(new DuckDBParameter("slug", slug));
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return null;
 
         var project = new Project(slug, reader.Text("name"), reader.Flag("single_repository"));
@@ -268,10 +270,10 @@ public sealed partial class ControlDatabase : IDisposable
     /// </summary>
     public async Task<IReadOnlyDictionary<string, int>> CountRepositoriesAsync(CancellationToken cancellationToken)
     {
-        using var connection = await OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT project_slug, count(*) AS repositories FROM repositories GROUP BY project_slug";
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
         while (await reader.ReadAsync(cancellationToken))
             counts[reader.Text("project_slug")] = (int)reader.Int64("repositories");
@@ -311,8 +313,8 @@ public sealed partial class ControlDatabase : IDisposable
 
         var repository = new ProjectRepository(projectSlug, slug, url.Trim(),
             string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));
-        using var connection = await OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
         command.CommandText = """
                               INSERT INTO repositories (project_slug, slug, url, credential)
                               VALUES ($project, $slug, $url, $credential) ON CONFLICT DO NOTHING
@@ -331,12 +333,12 @@ public sealed partial class ControlDatabase : IDisposable
     public async Task<IReadOnlyList<ProjectRepository>> ListRepositoriesAsync(
         string projectSlug, CancellationToken cancellationToken)
     {
-        using var connection = await OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
         command.CommandText =
             "SELECT slug, url, credential FROM repositories WHERE project_slug = $project ORDER BY slug";
         command.Parameters.Add(new DuckDBParameter("project", projectSlug));
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var repositories = new List<ProjectRepository>();
         while (await reader.ReadAsync(cancellationToken))
             repositories.Add(new ProjectRepository(projectSlug, reader.Text("slug"), reader.Text("url"),
@@ -351,9 +353,9 @@ public sealed partial class ControlDatabase : IDisposable
     /// </summary>
     public async Task<bool> DeleteProjectAsync(string slug, CancellationToken cancellationToken)
     {
-        using var connection = await OpenAsync(cancellationToken);
-        using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
         command.Transaction = (DuckDBTransaction)transaction;
         command.CommandText = "DELETE FROM repositories WHERE project_slug = $slug";
         command.Parameters.Add(new DuckDBParameter("slug", slug));
@@ -374,8 +376,8 @@ public sealed partial class ControlDatabase : IDisposable
     public async Task<bool> DeleteRepositoryAsync(string projectSlug, string slug,
         CancellationToken cancellationToken)
     {
-        using var connection = await OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM repositories WHERE project_slug = $project AND slug = $slug";
         command.Parameters.Add(new DuckDBParameter("project", projectSlug));
         command.Parameters.Add(new DuckDBParameter("slug", slug));
@@ -401,13 +403,13 @@ public sealed partial class ControlDatabase : IDisposable
         await _backupGate.WaitAsync(CancellationToken.None);
         try
         {
-            using (var connection = await OpenAsync(CancellationToken.None))
+            await using (var connection = await OpenAsync(CancellationToken.None))
             {
-                using var command = connection.CreateCommand();
+                await using var command = connection.CreateCommand();
                 Snapshot(command);
             }
 
-            await _store.StoreAsync(BackupName, SnapshotPath, CancellationToken.None);
+            await _store.StoreAsync(_backupName, SnapshotPath, CancellationToken.None);
             Delete(SnapshotPath);
         }
         finally

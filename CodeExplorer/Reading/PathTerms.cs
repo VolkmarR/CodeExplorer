@@ -1,6 +1,7 @@
+using CodeExplorer.Search;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     How a churn ranking is narrowed past its window and its scope: <see cref="Extensions" /> is the

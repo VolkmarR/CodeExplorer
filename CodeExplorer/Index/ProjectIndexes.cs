@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     Which engine answers text searches. Configured as <c>Index:SearchEngine</c>; absent means
@@ -104,7 +106,7 @@ public sealed class ShadowIndex(DuckDBConnection connection, string catalog, str
             await FtsExtension.CreateIndexAsync(Connection, cancellationToken);
         }
 
-        using var command = Connection.CreateCommand();
+        await using var command = Connection.CreateCommand();
         command.CommandText =
             $"INSERT INTO index_info VALUES ({ProjectIndexes.SchemaVersion}, now(), {(fullTextLoaded ? "true" : "false")}, {(singleRepository ? "true" : "false")})";
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -133,7 +135,7 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     The tables a new shadow inherits from the live index instead of rebuilding. They are the
     ///     append-only ones (ADR-0007); everything else is a function of the clone and is written afresh.
     /// </summary>
-    private static readonly string[] HistoryTables = ["commits", "commit_files", "attribution"];
+    private static readonly string[] _historyTables = ["commits", "commit_files", "attribution"];
 
     /// <summary>
     ///     Default for <c>Index:DrainSeconds</c>: how long a swap waits for in-flight queries before
@@ -142,7 +144,7 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     and the straggler fails on its next statement, which ADR-0003 established is all
     ///     <c>DETACH</c> offers: it never blocks, so the wait is entirely ours and so is its limit.
     /// </summary>
-    private const int DefaultDrainSeconds = 30;
+    private const int _defaultDrainSeconds = 30;
 
     // Attached databases and loaded extensions belong to the instance, and DuckDB.NET disposes the
     // instance once its last connection closes. This connection is never used for queries; it only
@@ -190,7 +192,7 @@ public sealed partial class ProjectIndexes : IDisposable
         _logger = logger;
         _directory = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "indexes");
         Directory.CreateDirectory(_directory);
-        _drainTimeout = TimeSpan.FromSeconds(configuration.GetValue("Index:DrainSeconds", DefaultDrainSeconds));
+        _drainTimeout = TimeSpan.FromSeconds(configuration.GetValue("Index:DrainSeconds", _defaultDrainSeconds));
         // The instance needs a default catalog; this file holds nothing and exists only so that every
         // connection with this string shares one buffer pool and one memory_limit (ADR-0003).
         _connectionString = $"Data Source={Path.Combine(_directory, "instance.duckdb")}";
@@ -371,7 +373,7 @@ public sealed partial class ProjectIndexes : IDisposable
 
             string path = RestorePath(slug);
             string catalog = RestoreCatalog(slug);
-            using (var connection = await ConnectAsync(cancellationToken))
+            await using (var connection = await ConnectAsync(cancellationToken))
             {
                 await AttachEmptyAsync(connection, catalog, path, cancellationToken);
                 await _durable.LoadAsync(connection, copy, FtsAvailable, cancellationToken);
@@ -445,7 +447,7 @@ public sealed partial class ProjectIndexes : IDisposable
         await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
         if (!await LiveSchemaMatchesAsync(connection, slug, cancellationToken)) return;
 
-        foreach (string table in HistoryTables)
+        foreach (string table in _historyTables)
             await connection.ExecuteAsync(
                 $"INSERT INTO {table} SELECT * FROM {Quote(slug)}.main.{table}", cancellationToken);
     }
@@ -467,7 +469,7 @@ public sealed partial class ProjectIndexes : IDisposable
                 [new DuckDBParameter("slug", slug)], cancellationToken) == 0)
             return false;
 
-        using var version = connection.CreateCommand();
+        await using var version = connection.CreateCommand();
         version.CommandText = $"SELECT max(schema_version) FROM {Quote(slug)}.main.index_info";
         return await version.ExecuteScalarAsync(cancellationToken) is int found && found == SchemaVersion;
     }
@@ -533,7 +535,7 @@ public sealed partial class ProjectIndexes : IDisposable
     /// </summary>
     public async Task DiscardShadowAsync(string slug, CancellationToken cancellationToken)
     {
-        using var connection = await ConnectAsync(cancellationToken);
+        await using var connection = await ConnectAsync(cancellationToken);
         // No drain: nothing reads a shadow, so there is nobody to wait for. This is the one attach-gate
         // caller that is not replacing what the readers are using.
         await UnderAttachGateAsync(async () =>
@@ -635,7 +637,7 @@ public sealed partial class ProjectIndexes : IDisposable
         PoolFor(slug).Discard();
         try
         {
-            using var connection = await ConnectAsync(cancellationToken);
+            await using var connection = await ConnectAsync(cancellationToken);
             await UnderAttachGateAsync(() => work(connection), cancellationToken);
         }
         finally
@@ -770,7 +772,7 @@ public sealed partial class ProjectIndexes : IDisposable
         }, cancellationToken);
 
         await connection.ExecuteAsync($"USE {Quote(catalog)}", cancellationToken);
-        await connection.ExecuteAsync(Schema, cancellationToken);
+        await connection.ExecuteAsync(_schema, cancellationToken);
     }
 
     private async Task<DuckDBConnection> ConnectAsync(CancellationToken cancellationToken)
@@ -831,7 +833,7 @@ public sealed partial class ProjectIndexes : IDisposable
         ///     they are being held. A burst beyond it is served and its connections closed on the way
         ///     back rather than refused.
         /// </summary>
-        private const int MaxIdle = 4;
+        private const int _maxIdle = 4;
 
         private readonly ConcurrentBag<DuckDBConnection> _idle = [];
         private int _generation;
@@ -854,7 +856,7 @@ public sealed partial class ProjectIndexes : IDisposable
 
         public void Return(DuckDBConnection connection, int generation)
         {
-            if (generation != Volatile.Read(ref _generation) || Volatile.Read(ref _idleCount) >= MaxIdle)
+            if (generation != Volatile.Read(ref _generation) || Volatile.Read(ref _idleCount) >= _maxIdle)
             {
                 connection.Dispose();
                 return;

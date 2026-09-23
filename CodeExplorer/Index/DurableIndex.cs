@@ -1,6 +1,8 @@
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     A project's durable copy, fetched and waiting to be loaded: the Parquet files in a scratch
@@ -35,17 +37,17 @@ public sealed class DurableCopy(string directory, Telemetry.DurableCopyRecording
 public sealed class DurableIndex(IConfiguration configuration, DurableStore store, ILogger<DurableIndex> logger)
 {
     /// <summary>
-    ///     Held apart from <see cref="ContentTables" />: it carries the schema version, which decides
+    ///     Held apart from <see cref="_contentTables" />: it carries the schema version, which decides
     ///     whether the rest is worth fetching at all.
     /// </summary>
-    private const string IndexInfo = "index_info";
+    private const string _indexInfo = "index_info";
 
     /// <summary>
-    ///     The tables of a project index besides <see cref="IndexInfo" />, in the order a restore may
+    ///     The tables of a project index besides <see cref="_indexInfo" />, in the order a restore may
     ///     insert them. There is no foreign key between them, so the order is for readability rather
     ///     than for the engine.
     /// </summary>
-    private static readonly string[] ContentTables =
+    private static readonly string[] _contentTables =
     [
         "repositories", "files", "lines", "commits", "commit_files", "attribution",
         // The rename chains the build derived (#148). Derived and still carried: a restore does not
@@ -62,8 +64,8 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         "project_overview"
     ];
 
-    /// <summary>Every table a store writes, in order: <see cref="IndexInfo" /> last, for the reason <see cref="StoreAsync" /> gives.</summary>
-    private static readonly string[] Tables = [..ContentTables, IndexInfo];
+    /// <summary>Every table a store writes, in order: <see cref="_indexInfo" /> last, for the reason <see cref="StoreAsync" /> gives.</summary>
+    private static readonly string[] _tables = [.._contentTables, _indexInfo];
 
     /// <summary>
     ///     Where <c>COPY TO</c> writes and a fetch lands: on the volume ADR-0003 budgets, next to the
@@ -78,7 +80,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     store under the project's own prefix. The connection is already bound to the project with
     ///     <c>USE</c>, so <c>COPY</c> resolves the tables in it and this never picks a catalog of its own.
     ///     A re-store overwrites one table at a time, so one that stops part-way would leave every name
-    ///     in place and two generations behind them (#187). Removing <see cref="IndexInfo" /> first and
+    ///     in place and two generations behind them (#187). Removing <see cref="_indexInfo" /> first and
     ///     writing it last makes that state a copy without it, which a fetch already reads as none: the
     ///     next refresh rebuilds from git rather than carrying history forward from a mixed set.
     /// </summary>
@@ -88,8 +90,8 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         string scratch = Scratch(slug);
         try
         {
-            await store.RemoveOneAsync(Name(slug, IndexInfo), cancellationToken);
-            foreach (string table in Tables)
+            await store.RemoveOneAsync(Name(slug, _indexInfo), cancellationToken);
+            foreach (string table in _tables)
             {
                 string local = Path.Combine(scratch, table + ".parquet");
                 // ZSTD over the default SNAPPY: the transfer and the blob bill are what this is paying
@@ -127,7 +129,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
             // index_info alone first, and the version read before anything else is fetched: lines is
             // the largest table by far, and after a schema bump every project's first open would
             // otherwise transfer its whole copy only to throw it away.
-            if (!await FetchTableAsync(copy, slug, IndexInfo, cancellationToken)) return Absent(copy);
+            if (!await FetchTableAsync(copy, slug, _indexInfo, cancellationToken)) return Absent(copy);
 
             int version = await SchemaVersionAsync(copy, cancellationToken);
             if (version != ProjectIndexes.SchemaVersion)
@@ -140,7 +142,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
                 return Absent(copy);
             }
 
-            foreach (string table in ContentTables)
+            foreach (string table in _contentTables)
                 if (!await FetchTableAsync(copy, slug, table, cancellationToken))
                     // A partial set is as good as none: every table is written by one store, so a
                     // missing one is a store that never finished and a half-loaded index would be worse.
@@ -168,11 +170,11 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         // index_info is the one table not copied straight back: whether a BM25 index exists is a
         // property of this replica and of the load below, not of the build that wrote the Parquet.
         await connection.ExecuteAsync(
-            $"INSERT INTO {IndexInfo} SELECT schema_version, built_at, "
+            $"INSERT INTO {_indexInfo} SELECT schema_version, built_at, "
             + $"{(ftsAvailable ? "true" : "false")} AS fts_indexed, single_repository "
-            + $"FROM read_parquet({IndexQuery.Literal(Parquet(copy, IndexInfo))})",
+            + $"FROM read_parquet({IndexQuery.Literal(Parquet(copy, _indexInfo))})",
             cancellationToken);
-        foreach (string table in ContentTables)
+        foreach (string table in _contentTables)
             await connection.ExecuteAsync(
                 $"INSERT INTO {table} SELECT * FROM read_parquet({IndexQuery.Literal(Parquet(copy, table))})",
                 cancellationToken);
@@ -206,13 +208,13 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         // The one memory database in this codebase, and CODING_STANDARDS forbids it in tests rather
         // than here: nothing is stored in it, it only reads a file the caller already has on disk, and
         // giving it a file of its own would be a file to clean up for a single scalar.
-        using var connection = new DuckDBConnection("Data Source=:memory:");
+        await using var connection = new DuckDBConnection("Data Source=:memory:");
         await connection.OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         // read_parquet reads the footer for the columns and only the one row group for the value, so
         // this costs a stat and a few kilobytes rather than the whole set.
         command.CommandText =
-            $"SELECT schema_version FROM read_parquet({IndexQuery.Literal(Parquet(copy, IndexInfo))}) LIMIT 1";
+            $"SELECT schema_version FROM read_parquet({IndexQuery.Literal(Parquet(copy, _indexInfo))}) LIMIT 1";
         try
         {
             return await command.ExecuteScalarAsync(cancellationToken) is int version ? version : -1;

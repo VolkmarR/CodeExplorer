@@ -1,6 +1,9 @@
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     How much of a file's declarations this was in a position to read at all, which is what keeps an
@@ -130,11 +133,11 @@ public sealed class FileDeclarations(IndexReaders readers)
             // in SQL because a candidate line is only a declaration once its analyser has placed it —
             // the engine cannot count what it cannot classify, so the page is taken from the walk.
             int seen = 0;
-            using (var command = index.Connection.Query($"""
-                                                         SELECT line_number, content, ({test}) AS wanted
-                                                         FROM lines WHERE file_id = $f
-                                                         ORDER BY line_number
-                                                         """, parameters))
+            await using (var command = index.Connection.Query($"""
+                                                               SELECT line_number, content, ({test}) AS wanted
+                                                               FROM lines WHERE file_id = $f
+                                                               ORDER BY line_number
+                                                               """, parameters))
             {
                 await FilePositions.WalkAsync(command, analyzer, line =>
                 {

@@ -3,8 +3,9 @@ using Azure.Core;
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using CodeExplorer.Control;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     Where the durable copy lives (CONTEXT.md): the Parquet set of every project index and the

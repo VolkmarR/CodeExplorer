@@ -1,4 +1,4 @@
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     How far a running refresh has got, as the status endpoint reports it and the project page draws

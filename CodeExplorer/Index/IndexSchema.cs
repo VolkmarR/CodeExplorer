@@ -1,4 +1,4 @@
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     The tables a project index holds, and the version stamped into every one of them. They sit
@@ -26,7 +26,7 @@ public sealed partial class ProjectIndexes
     ///     attach, one durable copy and one delete cover both and neither can be at a different commit
     ///     than the other.
     /// </summary>
-    private const string Schema = """
+    private const string _schema = """
                                   CREATE TABLE index_info (
                                       schema_version    INTEGER NOT NULL,
                                       built_at          TIMESTAMPTZ NOT NULL,

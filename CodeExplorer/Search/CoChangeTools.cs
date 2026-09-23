@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     <c>co_changed</c>, and the four sentences it answers with when nothing pairs. They are four
@@ -31,7 +33,7 @@ internal sealed partial class HistoryTools
         [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
         int days = HistoryWindow.DefaultDays,
         [Description("Files to return, 1-100. Default 20.")]
-        int limit = DefaultRankedFiles,
+        int limit = _defaultRankedFiles,
         CancellationToken cancellationToken = default)
     {
         string project = Bound.Slug;
@@ -127,11 +129,11 @@ internal sealed partial class HistoryTools
     /// </summary>
     private static string WhyNoCommits(RecordedPath? recorded)
     {
-        const string ByPath =
+        const string byPath =
             "History here is matched by the path a commit recorded, so it begins where the file was last renamed.";
 
         if (recorded is not { Commits: > 0 } some)
-            return $"{ByPath} No commit at all is recorded under this path, which is what an unrelated bulk "
+            return $"{byPath} No commit at all is recorded under this path, which is what an unrelated bulk "
                    + "rename leaves behind — a long-lived file that looks brand new. Widening days will not "
                    + "reach it; blame follows content across a rename and can still say who changed these lines.";
 
@@ -142,7 +144,7 @@ internal sealed partial class HistoryTools
         // which is the opposite fact from the one above; saying "this is usually a rename" of a path
         // with four hundred recorded commits would put both facts back in one sentence.
         return string.Create(CultureInfo.InvariantCulture,
-            $"{some.Commits} {ToolReply.Plural(some.Commits, "commit")} {ToolReply.Plural(some.Commits, "is", "are")} recorded under this path{newest}, all of them older than the window; raise days to reach them. {ByPath} blame follows content across a rename and is not bounded by the window.");
+            $"{some.Commits} {ToolReply.Plural(some.Commits, "commit")} {ToolReply.Plural(some.Commits, "is", "are")} recorded under this path{newest}, all of them older than the window; raise days to reach them. {byPath} blame follows content across a rename and is not bounded by the window.");
     }
 
     /// <summary>

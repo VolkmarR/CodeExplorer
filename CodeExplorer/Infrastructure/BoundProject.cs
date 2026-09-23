@@ -1,6 +1,7 @@
+using CodeExplorer.Control;
 using ModelContextProtocol;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     The project a request is bound to (ADR-0002). A route group declares with <see cref="BindProject" />

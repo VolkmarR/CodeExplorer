@@ -1,5 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Operator;
+using CodeExplorer.Reading;
+using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.Configuration;
 using Xunit;

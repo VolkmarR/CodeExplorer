@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     The history tools that answer about one file or one commit — <c>file_history</c>,
@@ -28,7 +30,7 @@ internal sealed partial class HistoryTools
         [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
         string path,
         [Description("Commits to return, 1-200. Default 30.")]
-        int limit = DefaultCommits,
+        int limit = _defaultCommits,
         CancellationToken cancellationToken = default)
     {
         return ToolReply.Render<FileHistoryAnswer>(
@@ -100,7 +102,7 @@ internal sealed partial class HistoryTools
 
         var text = new StringBuilder();
         text.Append(CultureInfo.InvariantCulture, $"{spelled}, who last changed each line:\n\n");
-        foreach (var run in answer.Runs.Take(MaxBlameRuns))
+        foreach (var run in answer.Runs.Take(_maxBlameRuns))
         {
             string lines = run.StartLine == run.EndLine
                 ? run.StartLine.ToString(CultureInfo.InvariantCulture)
@@ -114,9 +116,9 @@ internal sealed partial class HistoryTools
             text.Append(entry);
         }
 
-        if (answer.Runs.Count > MaxBlameRuns)
+        if (answer.Runs.Count > _maxBlameRuns)
             text.Append(CultureInfo.InvariantCulture,
-                $"\n{answer.Runs.Count - MaxBlameRuns} further {ToolReply.Plural(answer.Runs.Count - MaxBlameRuns, "run")} not shown; narrow with startLine and endLine.\n");
+                $"\n{answer.Runs.Count - _maxBlameRuns} further {ToolReply.Plural(answer.Runs.Count - _maxBlameRuns, "run")} not shown; narrow with startLine and endLine.\n");
         return text.ToString();
     }
 
@@ -215,7 +217,7 @@ internal sealed partial class HistoryTools
     ///     inside. So the page ends at whichever comes first, and the offset it names is the one it
     ///     actually reached.
     /// </summary>
-    private const int MaxPathChars = 36 * 1024;
+    private const int _maxPathChars = 36 * 1024;
 
     private static string Touched(CommitFilesAnswer answer, int offset)
     {
@@ -238,7 +240,7 @@ internal sealed partial class HistoryTools
             // The same mark every ranking drawn from history uses, for the same reason: one surface
             // spelling it its own way is an agent sent to open a file that is not there.
             ToolReply.RankedPath(row, file.QualifiedPath, file.AtHead);
-            if (rows.Count > 0 && spent + row.Length > MaxPathChars) break;
+            if (rows.Count > 0 && spent + row.Length > _maxPathChars) break;
             spent += row.Length;
             rows.Add(row.ToString());
         }
@@ -273,7 +275,7 @@ internal sealed partial class HistoryTools
     ///     are equally rarely what anybody was looking for. One number because the two tools also tell
     ///     an agent the same range in their own prose, and two would eventually disagree.
     /// </summary>
-    private const int DefaultRankedFiles = 20;
+    private const int _defaultRankedFiles = 20;
 
     [McpServerTool(Name = "hot_files", ReadOnly = true, Idempotent = true, Title = "Rank files by how much they changed")]
     [Description("""
@@ -294,7 +296,7 @@ internal sealed partial class HistoryTools
             "Qualified path of a directory to rank within, e.g. \"main/src/Api\", or a repository slug alone for one repository. Matched by the path each commit recorded, so it begins where a directory was last renamed or moved. Default: the whole project.")]
         string? directory = null,
         [Description("Rows to return — files, or directories under `depth` — 1-100. Default 20.")]
-        int limit = DefaultRankedFiles,
+        int limit = _defaultRankedFiles,
         [Description(
             "Rank directories instead of files, grouped by this many path segments beneath the scope, 1-10. Unscoped, that is the first segments of the qualified path, so in a multi-repository project depth 1 ranks repositories and depth 2 their top-level directories. A directory's count is the commits that touched anything beneath it, each counted once. Default: rank files.")]
         int? depth = null,

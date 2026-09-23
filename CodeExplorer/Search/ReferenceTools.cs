@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     <c>find_references</c>: where an identifier is used (CONTEXT.md, Reference), and what the
@@ -147,7 +149,7 @@ internal sealed partial class SearchTools
     ///     What an unprofiled extension costs a reference answer: the matching is unaffected — a
     ///     pattern is a pattern in every language — and the classification is what was guessed at.
     /// </summary>
-    private const string ReferenceCost =
+    private const string _referenceCost =
         "Their lines were matched like any other, but what each appearance is — a call, a write, a "
         + "comment — was read from shapes that are not this language's, so treat those rows as weaker "
         + "evidence and read the file where one of them matters.";
@@ -204,7 +206,7 @@ internal sealed partial class SearchTools
 
         // Beside the other notes about what this answer does not cover, and above the listing for the
         // reason they are: a caveat under a long list is one the reply cap can cut (#126).
-        if (CoverageNote(result.Uncovered, ReferenceCost) is { Length: > 0 } unprofiled)
+        if (CoverageNote(result.Uncovered, _referenceCost) is { Length: > 0 } unprofiled)
             text.Append("  ").Append(unprofiled);
 
         Section("DECLARATIONS", ReferenceKind.Definition);

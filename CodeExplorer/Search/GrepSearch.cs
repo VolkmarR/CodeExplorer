@@ -1,9 +1,12 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>Everything a grep call asks for. Bounds are enforced by <see cref="GrepSearch" />, not by the caller.</summary>
 public sealed record GrepRequest(
@@ -104,9 +107,9 @@ public sealed partial class GrepSearch(IndexReaders readers)
     ///     back from RE2 itself. Control characters, because source text does not contain them; a
     ///     stray one would only shift a line number by one within that file.
     /// </summary>
-    private const char MatchStart = '';
+    private const char _matchStart = '';
 
-    private const char MatchEnd = '';
+    private const char _matchEnd = '';
 
     /// <summary>
     ///     Every search goes through here — the MCP tool, the operator endpoint and whatever comes
@@ -266,8 +269,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
         var files = new List<GrepFile>();
         int totalFiles = 0;
         long totalLines = 0;
-        using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             string? currentPath = null;
             int currentCount = 0;
@@ -405,16 +408,16 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // when regexp_matches is false, empty matches and empty documents included, so testing
         // regexp_matches first would run the pattern over every matching document twice.
         var counts = new List<(long FileId, string Path, int Count)>();
-        using (var command = connection.Query($"""
-                                                  {Documents(fileFilter + literalFilter)}
-                                                  SELECT file_id, qualified_path, match_count FROM (
-                                                      SELECT file_id, qualified_path,
-                                                             len(regexp_extract_all(content, $q, 0, $flags)) AS match_count
-                                                      FROM docs)
-                                                  WHERE match_count > 0
-                                                  ORDER BY match_count DESC, qualified_path
-                                                  """, [.. matchParameters, .. fileParameters]))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = connection.Query($"""
+                                                     {Documents(fileFilter + literalFilter)}
+                                                     SELECT file_id, qualified_path, match_count FROM (
+                                                         SELECT file_id, qualified_path,
+                                                                len(regexp_extract_all(content, $q, 0, $flags)) AS match_count
+                                                         FROM docs)
+                                                     WHERE match_count > 0
+                                                     ORDER BY match_count DESC, qualified_path
+                                                     """, [.. matchParameters, .. fileParameters]))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
                 counts.Add((reader.Int64("file_id"), reader.Text("qualified_path"),
@@ -439,14 +442,14 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // request, so inlining them is safe.
         string ids = string.Join(",", pageFiles.Select(f => f.FileId.ToString(CultureInfo.InvariantCulture)));
         var marked = new Dictionary<long, string>();
-        using (var command = connection.Query($"""
-                                                  {Documents($" AND f.file_id IN ({ids})")}
-                                                  SELECT file_id,
-                                                         regexp_replace(content, '(' || $q || ')', chr(1) || '\1' || chr(2), $gflags) AS marked
-                                                  FROM docs
-                                                  """,
-                   [new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = connection.Query($"""
+                                                     {Documents($" AND f.file_id IN ({ids})")}
+                                                     SELECT file_id,
+                                                            regexp_replace(content, '(' || $q || ')', chr(1) || '\1' || chr(2), $gflags) AS marked
+                                                     FROM docs
+                                                     """,
+                         [new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken)) marked[reader.Int64("file_id")] = reader.Text("marked");
         }
@@ -480,8 +483,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
     }
 
     /// <summary>
-    ///     Walks content in which every match is wrapped in <see cref="MatchStart" /> and
-    ///     <see cref="MatchEnd" />, marks every line a match spans, adds the context window, and returns
+    ///     Walks content in which every match is wrapped in <see cref="_matchStart" /> and
+    ///     <see cref="_matchEnd" />, marks every line a match spans, adds the context window, and returns
     ///     the lines with how many matches they cover. Empty matches are skipped: they span nothing.
     ///     The walk records only where each line starts; text is cut out, markers removed, for the
     ///     shown lines alone, because a file on the page can be thousands of lines around a few matches.
@@ -495,11 +498,11 @@ public sealed partial class GrepSearch(IndexReaders readers)
         for (int index = 0; index < marked.Length; index++)
             switch (marked[index])
             {
-                case MatchStart:
+                case _matchStart:
                     matchStartLine = lineStarts.Count;
                     matchStartIndex = index;
                     break;
-                case MatchEnd:
+                case _matchEnd:
                     // Nothing between the markers, not even a newline: an empty match.
                     if (index == matchStartIndex + 1) break;
                     int line = lineStarts.Count;
@@ -526,11 +529,11 @@ public sealed partial class GrepSearch(IndexReaders readers)
             int start = lineStarts[line - 1];
             int end = line < lineStarts.Count ? lineStarts[line] - 1 : marked.Length;
             var span = marked.AsSpan(start, end - start);
-            if (span.IndexOfAny(MatchStart, MatchEnd) < 0) return new string(span);
+            if (span.IndexOfAny(_matchStart, _matchEnd) < 0) return new string(span);
 
             var text = new StringBuilder(span.Length);
             foreach (char c in span)
-                if (c is not (MatchStart or MatchEnd))
+                if (c is not (_matchStart or _matchEnd))
                     text.Append(c);
             return text.ToString();
         }

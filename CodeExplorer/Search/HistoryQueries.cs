@@ -1,4 +1,7 @@
-namespace CodeExplorer;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
+
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     A path a history read was narrowed to: the qualified path as the project spells it, and the
@@ -42,14 +45,14 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
 
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell a history read apart from a scan.</summary>
-    private const string Engine = "history";
+    private const string _engine = "history";
 
     /// <summary>
     ///     The most commits one read may return, whoever asks. Both surfaces had settled on the same
     ///     number from opposite directions — a page of the change log and a tool reply are both read
     ///     top-down — so it is one ceiling here rather than two that can drift.
     /// </summary>
-    private const int MaxCommits = 200;
+    private const int _maxCommits = 200;
 
     /// <summary>
     ///     Ceiling on the authors one answer names. A project of two hundred contributors is a
@@ -57,13 +60,13 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     ///     addresses a filter reports matching — where more than a handful means the caller asked for
     ///     something far too broad, and the count says so without the reply becoming the list.
     /// </summary>
-    private const int MaxAuthors = 200;
+    private const int _maxAuthors = 200;
 
     /// <summary>
     ///     The most files either ranking may return. A hundred is already more than anybody reads off a
     ///     ranking, and past it the reply cap or the page's own scroll is what would bite.
     /// </summary>
-    private const int MaxRankedFiles = 100;
+    private const int _maxRankedFiles = 100;
 
     /// <summary>
     ///     How many extensions a churn answer offers as a filter. A window holds far fewer distinct
@@ -71,7 +74,7 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     ///     become a second thing to search — the tail of it is one-off fixtures, not what the project
     ///     is written in.
     /// </summary>
-    private const int MaxRankedExtensions = 24;
+    private const int _maxRankedExtensions = 24;
 
     /// <summary>
     ///     Previous paths a reply names before it starts counting the rest. Three is a rename, a
@@ -79,21 +82,21 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     ///     past it the note would be a listing and the combined total — the number the agent actually
     ///     wanted — would be below it (#131).
     /// </summary>
-    private const int MaxPreviousPaths = 3;
+    private const int _maxPreviousPaths = 3;
 
     /// <summary>
     ///     The deepest a churn ranking may be rolled up to. Ten segments below the scope is past the
     ///     depth of any layout anybody nests by hand, and past it the rollup is the file ranking with a
     ///     different name on it — which is the call the caller should be making instead.
     /// </summary>
-    private const int MaxRollupDepth = 10;
+    private const int _maxRollupDepth = 10;
 
     /// <summary>
     ///     The most lines one blame may cover. <c>Index:MaxFileBytes</c> (25 MiB by default) admits files
     ///     longer than this, and a blame over one stops here; a caller that protects an agent's context
     ///     caps the runs it prints, and this one protects the server.
     /// </summary>
-    private const int MaxLinesPerFile = 100_000;
+    private const int _maxLinesPerFile = 100_000;
 
     /// <summary>
     ///     Default for <c>History:MaxCommitPaths</c>, the most paths a commit may touch and still be
@@ -104,9 +107,9 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     ///     it. It is a setting and not a constant because what counts as a mass commit differs between
     ///     a repository of two hundred files and one of eighty thousand.
     /// </summary>
-    private const int DefaultMaxCommitPaths = 200;
+    private const int _defaultMaxCommitPaths = 200;
 
-    private readonly int _maxCommitPaths = configuration.GetValue("History:MaxCommitPaths", DefaultMaxCommitPaths);
+    private readonly int _maxCommitPaths = configuration.GetValue("History:MaxCommitPaths", _defaultMaxCommitPaths);
 
     /// <summary>
     ///     Where one path resolved for a tool that takes a single file. Exactly one of the three is set:
@@ -164,7 +167,7 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     ///     the newest recorded commit, so there is genuinely nothing to attribute here; the refusal is
     ///     the right answer and only its wording was wrong (#136).
     /// </summary>
-    private const string BlameCannot =
+    private const string _blameCannot =
         "attribution is line ranges of the file as of the newest recorded commit (ADR-0007), and there is no file here to have lines.";
 
     /// <summary>
@@ -172,7 +175,7 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     ///     which is why this says the decision rather than an inability: a fourth state here would meet
     ///     the rename-severed branches of #115 and #127, and that is its own question.
     /// </summary>
-    private const string CoChangedCannot =
+    private const string _coChangedCannot =
         "its pairing is not answered for an anchor HEAD has lost, because coupling reported for a path a rename severed would read as the coupling of the file that replaced it.";
 
     /// <summary>

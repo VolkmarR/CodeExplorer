@@ -1,4 +1,7 @@
-namespace CodeExplorer;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
+
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     The one way into a project's index from outside <c>Index/</c>. Every reader — the MCP tools, the
@@ -128,9 +131,9 @@ public sealed class IndexReaders(ProjectIndexes indexes)
         if (lease is null) return null;
 
         // epoch() for the reason ReaderColumns.EpochInstant gives.
-        using var command = lease.Connection.Query(
+        await using var command = lease.Connection.Query(
             "SELECT epoch(built_at) AS built_seconds, fts_indexed, single_repository FROM index_info", []);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return null;
 
         var builtAt = reader.EpochInstant("built_seconds");

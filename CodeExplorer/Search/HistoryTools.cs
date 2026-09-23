@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     The MCP tools that answer from a project's history (CONTEXT.md): what changed, who changed a
@@ -21,19 +23,19 @@ namespace CodeExplorer;
 [McpServerToolType]
 internal sealed partial class HistoryTools(IHttpContextAccessor httpContextAccessor, HistoryQueries history)
 {
-    private const int DefaultCommits = 30;
+    private const int _defaultCommits = 30;
 
     /// <summary>
     ///     Authors named by default. The overview stops at ten, which answers "who to ask"; this answers
     ///     who has been here at all, so it is a page of a team rather than its top.
     /// </summary>
-    private const int DefaultAuthors = 30;
+    private const int _defaultAuthors = 30;
 
     /// <summary>
     ///     A whole mid-sized file's blame in one call. Runs, not lines, so this is far more of a file
     ///     than the number suggests — a 2000-line file is usually well under a hundred runs.
     /// </summary>
-    private const int MaxBlameRuns = 400;
+    private const int _maxBlameRuns = 400;
 
     private Project Bound => BoundProject.Get(httpContextAccessor);
 

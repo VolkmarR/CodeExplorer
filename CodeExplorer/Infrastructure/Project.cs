@@ -1,4 +1,4 @@
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     A project (CONTEXT.md): the stable slug agents address it by, and a display name that can

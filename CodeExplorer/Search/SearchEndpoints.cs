@@ -1,4 +1,7 @@
-namespace CodeExplorer;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
+
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     One file as the file view shows it. <paramref name="SkipReason" /> set means the file is
@@ -158,7 +161,7 @@ internal static class SearchEndpoints
     ///     to be worth scrolling rather than a second page nobody asked for. A glob over a large
     ///     project matches thousands, and every row of them rendered at once is what this replaces.
     /// </summary>
-    private const int DefaultFilePageSize = 50;
+    private const int _defaultFilePageSize = 50;
 
     public static void MapSearch(this RouteGroupBuilder api)
     {
@@ -184,7 +187,7 @@ internal static class SearchEndpoints
         // what was asked rather than a ceiling the client then has to live within.
         project.MapGet("/files",
             async (Project project, FileQueries files, CancellationToken ct, string glob = "*",
-                    string? repository = null, int page = 1, int pageSize = DefaultFilePageSize) =>
+                    string? repository = null, int page = 1, int pageSize = _defaultFilePageSize) =>
                 Answer<GlobListing>(
                     await files.GlobAsync(project.Slug, new GlobRequest(glob, repository, pageSize, page), ct),
                     listing => FileList(listing, pageSize)));
@@ -229,7 +232,7 @@ internal static class SearchEndpoints
         // page of fifty commits touching a few hundred paths each would be mostly paths nobody opens.
         project.MapGet("/commits",
             async (Project project, HistoryQueries history, CancellationToken ct, string? repository = null,
-                    int page = 1, int pageSize = DefaultCommitPage) =>
+                    int page = 1, int pageSize = _defaultCommitPage) =>
                 Answer<ChangeLogAnswer>(
                     await history.ChangeLogAsync(project.Slug, new ChangeLogRequest(repository, page, pageSize), ct),
                     Commits));
@@ -251,7 +254,7 @@ internal static class SearchEndpoints
             async (Project project, HistoryQueries history, CancellationToken ct, string? repository = null,
                     string? directory = null, int? depth = null, string? extensions = null,
                     string? exclude = null, int days = HistoryWindow.DefaultDays,
-                    int limit = ChurnFilesShown) =>
+                    int limit = _churnFilesShown) =>
                 Answer<ChurnAnswer>(
                     await history.ChurnAsync(project.Slug,
                         new ChurnRequest(string.IsNullOrEmpty(directory) ? repository : directory, days, limit,
@@ -272,7 +275,7 @@ internal static class SearchEndpoints
     }
 
     /// <summary>Commits per page of the change log when the caller does not say. A screen and a bit.</summary>
-    private const int DefaultCommitPage = 50;
+    private const int _defaultCommitPage = 50;
 
     /// <summary>
     ///     A page of the change log, as the read already holds it: the total, the page, its size and the
@@ -285,7 +288,7 @@ internal static class SearchEndpoints
     ///     Files in a churn ranking when the caller does not say. A screenful: the ranking is read from
     ///     the top down, and its tail is noise.
     /// </summary>
-    private const int ChurnFilesShown = 25;
+    private const int _churnFilesShown = 25;
 
     /// <summary>
     ///     The most-changed files of a window. A scope with no commits at all draws an empty ranking and

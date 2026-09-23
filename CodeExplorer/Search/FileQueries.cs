@@ -1,4 +1,7 @@
-namespace CodeExplorer;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
+
+namespace CodeExplorer.Search;
 
 /// <summary>One entry of a read: a qualified path and the inclusive line window asked of it.</summary>
 public sealed record FileWindow(string Path, int Start, int End);
@@ -86,7 +89,7 @@ public sealed record ExtensionListing(IndexedRepository? Repository, IReadOnlyLi
 public sealed class FileQueries(IndexReaders readers)
 {
     /// <summary>Named on the search telemetry, so a dashboard can tell a listing apart from a scan.</summary>
-    private const string Engine = "index listing";
+    private const string _engine = "index listing";
 
     /// <summary>
     ///     The most lines one window may reach, whoever asks. A file view scrolls and asks for the whole
@@ -94,14 +97,14 @@ public sealed class FileQueries(IndexReaders readers)
     ///     over one stops here. A tool that protects an agent's context sets a lower ceiling of its own;
     ///     this one protects the server.
     /// </summary>
-    private const int MaxLinesPerWindow = 100_000;
+    private const int _maxLinesPerWindow = 100_000;
 
     /// <summary>
     ///     The windows asked for, each answered on its own, over one open of the index. The one refusal
     ///     that is the request's rather than an entry's is having asked for nothing.
     /// </summary>
     public Task<Outcome> ReadAsync(string slug, ReadRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => RunReadAsync(slug, request, cancellationToken),
+        Telemetry.Search(slug, _engine, () => RunReadAsync(slug, request, cancellationToken),
             (ReadResult result) => new Telemetry.Measured(result.Files.Count(f => f.File is not null),
                 result.Files.Sum(f => (long)f.Lines.Count)));
 
@@ -134,7 +137,7 @@ public sealed class FileQueries(IndexReaders readers)
                 }
 
                 int start = Math.Max(1, window.Start);
-                int end = (int)Math.Min(file.LineCount, Math.Min(window.End, (long)start + MaxLinesPerWindow - 1));
+                int end = (int)Math.Min(file.LineCount, Math.Min(window.End, (long)start + _maxLinesPerWindow - 1));
                 IReadOnlyList<string> lines = file.SkipReason is null && start <= end
                     ? await index.LinesAsync(file.FileId, start, end, token)
                     : [];
@@ -151,7 +154,7 @@ public sealed class FileQueries(IndexReaders readers)
     }
 
     public Task<Outcome> GlobAsync(string slug, GlobRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => RunGlobAsync(slug, request, cancellationToken),
+        Telemetry.Search(slug, _engine, () => RunGlobAsync(slug, request, cancellationToken),
             (GlobListing listing) =>
                 new Telemetry.Measured(listing.Total, listing.Files.Sum(f => (long)f.LineCount)));
 
@@ -170,7 +173,7 @@ public sealed class FileQueries(IndexReaders readers)
     }
 
     public Task<Outcome> TreeAsync(string slug, TreeRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => RunTreeAsync(slug, request, cancellationToken),
+        Telemetry.Search(slug, _engine, () => RunTreeAsync(slug, request, cancellationToken),
             (TreeListing listing) =>
                 new Telemetry.Measured(listing.Entries.Count, listing.Entries.Sum(e => e.Lines)));
 
@@ -217,7 +220,7 @@ public sealed class FileQueries(IndexReaders readers)
 
     public Task<Outcome> ExtensionsAsync(string slug, ExtensionsRequest request,
         CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine,
+        Telemetry.Search(slug, _engine,
             () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
                 new ExtensionListing(index.Repository,
                     (await IndexQueries.ExtensionCountsAsync(index.Connection, index.Repository?.Slug, token))

@@ -1,4 +1,4 @@
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     What every index-backed answer is: its result, or a <see cref="Problem" />. A semantic failure

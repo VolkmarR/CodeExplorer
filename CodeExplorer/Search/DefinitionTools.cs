@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     <c>find_definition</c>, which answers with declarations (CONTEXT.md, Declaration), and
@@ -77,7 +79,7 @@ internal sealed partial class SearchTools
         // Which of those two a miss actually is, where the index can say: "a language this indexes
         // without profiling" is a possibility in the sentence above and a fact here, named with the
         // files it applies to (#126) — and beside it the files nothing was read from at all (#129).
-        if (CoverageNote(result.Uncovered, DefinitionCost) is { Length: > 0 } uncovered)
+        if (CoverageNote(result.Uncovered, _definitionCost) is { Length: > 0 } uncovered)
             text.Append('\n').Append(uncovered);
         return text.ToString();
     }
@@ -91,7 +93,7 @@ internal sealed partial class SearchTools
     ///     read with none: which of the two it was is the note's own sentence, and what to do about it
     ///     is the same either way.
     /// </summary>
-    private const string DefinitionCost =
+    private const string _definitionCost =
         "A declaration written the way those languages write one is not in this answer at all, "
         + "so it is silent about those files rather than negative about them: grep the name "
         + "there, or read one of them to see how the language declares things.";
@@ -109,7 +111,7 @@ internal sealed partial class SearchTools
         // Above the sites, where a reply that found something is most likely to be read as the whole
         // of what there is: an answer of three declarations can still be missing the one written in a
         // language no profile covers (#126) or in one nothing was scanned from (#129).
-        text.Append(CoverageNote(result.Uncovered, DefinitionCost));
+        text.Append(CoverageNote(result.Uncovered, _definitionCost));
 
         // Headings where the language draws the distinction they name, and none where it does not.
         // Whether this ANSWER holds both kinds decides nothing: a Delphi routine found only in its

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeExplorer.Infrastructure;
 using Xunit;
 
 namespace CodeExplorer.Tests;

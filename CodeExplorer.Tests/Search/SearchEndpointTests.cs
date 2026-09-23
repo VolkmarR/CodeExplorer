@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using CodeExplorer.Index;
+using CodeExplorer.Search;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -141,7 +143,7 @@ public sealed class SearchEndpointTests
         // full-text matches whole identifier tokens, so `WidgetFactory` is not a hit for `Widget`,
         // while a substring scan finds it. Neither is wrong; the UI shows which one ran.
         Assert.Equal(expected, result.TotalFiles);
-        Assert.Equal(engine == SearchEngine.Fts ? GrepSearch.TokenEngine : GrepSearch.SubstringEngine,
+        Assert.Equal(engine == SearchEngine.Fts ? Search.GrepSearch.TokenEngine : Search.GrepSearch.SubstringEngine,
             result.Engine);
     }
 

@@ -1,4 +1,7 @@
 using System.Net;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 

@@ -1,3 +1,6 @@
+using CodeExplorer.Index;
+using CodeExplorer.Reading;
+using CodeExplorer.Search;
 using LibGit2Sharp;
 using ModelContextProtocol.Client;
 using Xunit;

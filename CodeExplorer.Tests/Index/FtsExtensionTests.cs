@@ -1,3 +1,4 @@
+using CodeExplorer.Index;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -68,7 +69,7 @@ public sealed class FtsExtensionTests : IDisposable
         string text = await TestHost.CallAsync(client, "grep",
             new Dictionary<string, object?> { ["query"] = "needle" });
 
-        Assert.Contains($"({GrepSearch.TokenEngine} engine)", text);
+        Assert.Contains($"({Search.GrepSearch.TokenEngine} engine)", text);
         Assert.Contains("one/src/Orders.cs", text);
     }
 }

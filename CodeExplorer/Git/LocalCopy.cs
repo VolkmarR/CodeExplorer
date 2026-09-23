@@ -1,6 +1,6 @@
 using LibGit2Sharp;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Git;
 
 /// <summary>
 ///     What opening a repository's local copy for a refresh came to. The three answers a fetched clone
@@ -174,7 +174,7 @@ public sealed class LocalCopy : IDisposable
     ///     Pinned by <c>Edits_are_the_same_whether_or_not_libgit2_renders_context</c>, which diffs the
     ///     same commits both ways and asserts the edit lists are equal.
     /// </summary>
-    private static readonly CompareOptions NoContext = new() { ContextLines = 0 };
+    private static readonly CompareOptions _noContext = new() { ContextLines = 0 };
 
     /// <summary>
     ///     The stored name of a change, the enum name lower-cased. The kinds a tree diff produces are
@@ -207,7 +207,7 @@ public sealed class LocalCopy : IDisposable
     {
         var parent = commit.Parents.FirstOrDefault();
         var files = new List<ChangedPath>();
-        foreach (var change in _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null, NoContext))
+        foreach (var change in _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null, _noContext))
             files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
                 change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
                 change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));

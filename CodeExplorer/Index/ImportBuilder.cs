@@ -1,7 +1,9 @@
 using System.Text;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     What one file's lines said about its dependencies: the names it imports with the line each was
@@ -104,7 +106,7 @@ public sealed class ImportBuilder
         // An extension no profile covers has no declared import forms, whatever the fallback reads
         // for the sake of classifying a reference: an edge read out of it would be a guess with a
         // path on the end of it, which is the one thing this table must not hold.
-        if (analyzer.Language is null || !analyzer.HasImports) return Nothing;
+        if (analyzer.Language is null || !analyzer.HasImports) return _nothing;
 
         var edges = new List<ImportEdge>();
         string? module = null;
@@ -124,10 +126,10 @@ public sealed class ImportBuilder
             position = analyzer.After(position, line);
         }
 
-        return edges.Count == 0 && module is null ? Nothing : new ReadImports(edges, module);
+        return edges.Count == 0 && module is null ? _nothing : new ReadImports(edges, module);
     }
 
-    private static readonly ReadImports Nothing = new([], null);
+    private static readonly ReadImports _nothing = new([], null);
 
     /// <summary>
     ///     Turns the names the walk recorded into the files they name, for the ones where that can be
@@ -174,13 +176,13 @@ public sealed class ImportBuilder
         // where every name is a module — never builds the map below. On a large project that map is
         // a lowercased copy of every path in it.
         var edges = new List<(long Id, string Name, int Repo, string Directory, string Extension)>();
-        using (var command = connection.Query(
-                   $"""
-                    SELECT i.import_id, i.name, f.repo_id, f.directory, f.extension
-                    FROM imports i JOIN files f USING (file_id)
-                    WHERE i.shape = '{ImportColumns.PathShape}'
-                    """, []))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        await using (var command = connection.Query(
+                         $"""
+                          SELECT i.import_id, i.name, f.repo_id, f.directory, f.extension
+                          FROM imports i JOIN files f USING (file_id)
+                          WHERE i.shape = '{ImportColumns.PathShape}'
+                          """, []))
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
                 edges.Add((reader.Int64("import_id"), reader.Text("name"), reader.Int32("repo_id"),
@@ -197,8 +199,8 @@ public sealed class ImportBuilder
         // The extension list per extension, because the registry resolves by a walk of the profiles
         // and this asks it once per path edge otherwise.
         var extensions = new Dictionary<string, ImportPathRules>(StringComparer.Ordinal);
-        using (var command = connection.Query("SELECT file_id, repo_id, lower(path) AS path FROM files", []))
-        using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        await using (var command = connection.Query("SELECT file_id, repo_id, lower(path) AS path FROM files", []))
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
                 byPath[(reader.Int32("repo_id"), reader.Text("path"))] = reader.Int64("file_id");

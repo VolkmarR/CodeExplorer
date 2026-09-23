@@ -2,6 +2,9 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using CodeExplorer.Index;
+using CodeExplorer.Reading;
+using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using LibGit2Sharp;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -152,7 +155,7 @@ public sealed class TestHost : IDisposable
 
     /// <summary>
     ///     A connection to the running server's control database, for a test that looks behind
-    ///     <see cref="ControlDatabase" />. DuckDB.NET keeps one native instance per file in a process,
+    ///     <see cref="Control.ControlDatabase" />. DuckDB.NET keeps one native instance per file in a process,
     ///     so this is the server's instance and not a second one: it sees what the server wrote, and
     ///     the server sees what it changes.
     /// </summary>

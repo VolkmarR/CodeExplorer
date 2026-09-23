@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using CodeExplorer.Index;
+using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -332,7 +334,7 @@ public sealed class RefreshTests : IDisposable
     {
         using var host = new TestHost(engine);
         await host.IndexedProjectAsync("alpha", Fixture());
-        var project = await host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct);
+        var project = await host.Services.GetRequiredService<Control.ControlDatabase>().FindAsync("alpha", Ct);
         Assert.NotNull(project);
 
         // The refresh is run directly rather than through the service, which reports into a status that

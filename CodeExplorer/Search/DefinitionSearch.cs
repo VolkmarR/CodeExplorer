@@ -1,6 +1,9 @@
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>Everything a find_definition call asks for. Bounds are enforced by <see cref="DefinitionSearch" />.</summary>
 /// <param name="Symbol">The identifier to look for, matched on word boundaries and case-sensitively.</param>
@@ -79,7 +82,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
     ///     of magnitude for anything but a name shared across a whole code base — where the sites the
     ///     cap cost would have been thrown away by <see cref="MaxSites" /> regardless.
     /// </summary>
-    private const int MaxCandidates = 1_000;
+    private const int _maxCandidates = 1_000;
 
     /// <summary>
     ///     Every definition search goes through here, which is what makes this the one place such a
@@ -117,17 +120,17 @@ public sealed class DefinitionSearch(IndexReaders readers)
         string fileFilter = filter.Sql(parameters);
 
         var candidates = new List<Candidate>();
-        using (var command = connection.Query($"""
-                                                  SELECT f.file_id, f.qualified_path, f.extension,
-                                                         l.line_number, l.content
-                                                  FROM lines l JOIN files f USING (file_id)
-                                                  WHERE {literally}
-                                                    AND regexp_matches(l.content, $q, ''){fileFilter}
-                                                    AND ({declarationShapes})
-                                                  ORDER BY f.qualified_path, l.line_number
-                                                  LIMIT {MaxCandidates}
-                                                  """, parameters))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = connection.Query($"""
+                                                     SELECT f.file_id, f.qualified_path, f.extension,
+                                                            l.line_number, l.content
+                                                     FROM lines l JOIN files f USING (file_id)
+                                                     WHERE {literally}
+                                                       AND regexp_matches(l.content, $q, ''){fileFilter}
+                                                       AND ({declarationShapes})
+                                                     ORDER BY f.qualified_path, l.line_number
+                                                     LIMIT {_maxCandidates}
+                                                     """, parameters))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
                 candidates.Add(new Candidate(reader.Int64("file_id"), reader.Text("qualified_path"),
@@ -182,7 +185,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
             // Both counts in one pass. The unfiltered one is a superset of the filtered one, so asking
             // twice is two scans of `lines` for one answer — and the second is only wanted at all
             // because a declaration hidden by a filter reads exactly like one that does not exist.
-            using var command = connection.Query(
+            await using var command = connection.Query(
                 $"""
                  SELECT count(DISTINCT l.file_id) FILTER (WHERE f.file_id IS NOT NULL) AS filtered,
                         count(DISTINCT l.file_id) AS every_file
@@ -190,7 +193,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
                    USING (file_id)
                  WHERE {literally} AND regexp_matches(l.content, $q, '')
                  """, parameters);
-            using var reader = await command.ReaderAsync(cancellationToken);
+            await using var reader = await command.ReaderAsync(cancellationToken);
             if (await reader.ReadAsync(cancellationToken))
             {
                 naming = (int)reader.Int64("filtered");

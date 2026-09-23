@@ -1,6 +1,8 @@
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     Computes a project's overview and stores it with the index that produced it (<c>#51</c>).
@@ -20,7 +22,7 @@ public sealed class OverviewBuilder
     ///     project is written in plus its configuration and documentation extensions, short enough that
     ///     one repository of scattered one-off extensions does not become the whole answer.
     /// </summary>
-    private const int LanguagesShown = 20;
+    private const int _languagesShown = 20;
 
     /// <summary>
     ///     Top-level entries kept per repository. A repository root is a screenful in every codebase
@@ -28,22 +30,22 @@ public sealed class OverviewBuilder
     ///     root files cannot make this row the largest thing in the index, and what it drops is counted
     ///     rather than hidden.
     /// </summary>
-    private const int TreeEntriesShown = 100;
+    private const int _treeEntriesShown = 100;
 
     /// <summary>
     ///     Enough to warn a caller off the files that would swamp a read, and not a size ranking of the
     ///     project: the tail of one is every file, in order.
     /// </summary>
-    private const int LargestFilesShown = 10;
+    private const int _largestFilesShown = 10;
 
     /// <summary>A screenful of a ranking read from the top down, the same judgement <c>hot_files</c> makes.</summary>
-    private const int ChurnFilesShown = 10;
+    private const int _churnFilesShown = 10;
 
     /// <summary>
     ///     Authors named. Past ten it stops being "who knows this code" and becomes a contributor list,
     ///     which is a question about a repository rather than about the code in it.
     /// </summary>
-    private const int AuthorsShown = 10;
+    private const int _authorsShown = 10;
 
     /// <summary>
     ///     Fills the overview row of a shadow index. The build reports this as
@@ -74,7 +76,7 @@ public sealed class OverviewBuilder
             await ChurnAsync(connection, paths, cancellationToken),
             await AuthorsAsync(connection, cancellationToken));
 
-        using var insert = connection.Query("INSERT INTO project_overview VALUES ($document)",
+        await using var insert = connection.Query("INSERT INTO project_overview VALUES ($document)",
             [new DuckDBParameter("document", overview.ToDocument())]);
         await insert.ExecuteNonQueryAsync(cancellationToken);
         return overview;
@@ -87,8 +89,8 @@ public sealed class OverviewBuilder
     private static async Task<List<string>> SlugsAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
     {
-        using var command = connection.Query("SELECT slug FROM repositories ORDER BY repo_id", []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var command = connection.Query("SELECT slug FROM repositories ORDER BY repo_id", []);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var slugs = new List<string>();
         while (await reader.ReadAsync(cancellationToken)) slugs.Add(reader.Text("slug"));
         return slugs;
@@ -123,7 +125,7 @@ public sealed class OverviewBuilder
             .ThenByDescending(share => share.Files)
             .ThenBy(share => share.Name, StringComparer.Ordinal)
             .ToList();
-        return (ordered.Take(LanguagesShown).ToList(), Math.Max(0, ordered.Count - LanguagesShown));
+        return (ordered.Take(_languagesShown).ToList(), Math.Max(0, ordered.Count - _languagesShown));
     }
 
     /// <summary>
@@ -137,24 +139,24 @@ public sealed class OverviewBuilder
         // Grouped before the join, not after: the aggregate reduces every file in the project to a few
         // dozen top-level rows, and joining repositories onto those costs a lookup per row instead of
         // one per source file.
-        using var command = connection.Query("""
-                                             WITH tops AS (
-                                                 SELECT repo_id,
-                                                        split_part(path, '/', 1) AS segment,
-                                                        -- A file directly at the root is its own first
-                                                        -- segment; anything else is a directory, and
-                                                        -- git cannot hold both names at one level.
-                                                        bool_and(path = split_part(path, '/', 1)) AS is_file,
-                                                        count(*)::INTEGER AS files,
-                                                        sum(line_count)::BIGINT AS lines,
-                                                        sum(size_bytes)::BIGINT AS bytes
-                                                 FROM files
-                                                 GROUP BY repo_id, segment)
-                                             SELECT r.slug AS repo_slug, tops.*
-                                             FROM tops JOIN repositories r USING (repo_id)
-                                             ORDER BY r.repo_id, is_file, segment
-                                             """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var command = connection.Query("""
+                                                   WITH tops AS (
+                                                       SELECT repo_id,
+                                                              split_part(path, '/', 1) AS segment,
+                                                              -- A file directly at the root is its own first
+                                                              -- segment; anything else is a directory, and
+                                                              -- git cannot hold both names at one level.
+                                                              bool_and(path = split_part(path, '/', 1)) AS is_file,
+                                                              count(*)::INTEGER AS files,
+                                                              sum(line_count)::BIGINT AS lines,
+                                                              sum(size_bytes)::BIGINT AS bytes
+                                                       FROM files
+                                                       GROUP BY repo_id, segment)
+                                                   SELECT r.slug AS repo_slug, tops.*
+                                                   FROM tops JOIN repositories r USING (repo_id)
+                                                   ORDER BY r.repo_id, is_file, segment
+                                                   """, []);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var entries = new List<OverviewEntry>();
         // Counted per repository and not across the project: one repository of a thousand root files
         // would otherwise spend the whole cap and drop every later repository's top level entirely,
@@ -165,7 +167,7 @@ public sealed class OverviewBuilder
         {
             string slug = reader.Text("repo_slug");
             int taken = kept.GetValueOrDefault(slug);
-            if (taken == TreeEntriesShown)
+            if (taken == _treeEntriesShown)
             {
                 others++;
                 continue;
@@ -189,13 +191,13 @@ public sealed class OverviewBuilder
     {
         // No join: qualified_path already names the repository wherever the project's naming puts one
         // there (ADR-0006), so repositories has nothing to add to a row of this section.
-        using var command = connection.Query($"""
-                                              SELECT qualified_path, line_count, size_bytes
-                                              FROM files
-                                              ORDER BY size_bytes DESC, qualified_path
-                                              LIMIT {LargestFilesShown}
-                                              """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var command = connection.Query($"""
+                                                    SELECT qualified_path, line_count, size_bytes
+                                                    FROM files
+                                                    ORDER BY size_bytes DESC, qualified_path
+                                                    LIMIT {_largestFilesShown}
+                                                    """, []);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var files = new List<OverviewFile>();
         while (await reader.ReadAsync(cancellationToken))
             files.Add(new OverviewFile(reader.Text("qualified_path"), reader.Int32("line_count"),
@@ -215,7 +217,7 @@ public sealed class OverviewBuilder
         var window = await IndexQueries.WindowAsync(connection, HistoryWindow.DefaultDays, null, cancellationToken);
         if (window is null) return OverviewChurn.None(HistoryWindow.DefaultDays);
 
-        var ranked = await IndexQueries.RankAsync(connection, paths, window, null, null, ChurnFilters.None, ChurnFilesShown,
+        var ranked = await IndexQueries.RankAsync(connection, paths, window, null, null, ChurnFilters.None, _churnFilesShown,
             cancellationToken);
         return new OverviewChurn(window.Days, window.Since, window.Until, ranked);
     }
@@ -229,19 +231,19 @@ public sealed class OverviewBuilder
     private static async Task<IReadOnlyList<OverviewAuthor>> AuthorsAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
     {
-        using var command = connection.Query($"""
-                                              SELECT author_email,
-                                                     arg_max(author_name, authored_at) AS author_name,
-                                                     count(*)::INTEGER AS commits,
-                                                     -- epoch() for the reason ReaderColumns.EpochInstant
-                                                     -- gives.
-                                                     epoch(max(authored_at)) AS last_commit
-                                              FROM commits
-                                              GROUP BY author_email
-                                              ORDER BY commits DESC, author_email
-                                              LIMIT {AuthorsShown}
-                                              """, []);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await using var command = connection.Query($"""
+                                                    SELECT author_email,
+                                                           arg_max(author_name, authored_at) AS author_name,
+                                                           count(*)::INTEGER AS commits,
+                                                           -- epoch() for the reason ReaderColumns.EpochInstant
+                                                           -- gives.
+                                                           epoch(max(authored_at)) AS last_commit
+                                                    FROM commits
+                                                    GROUP BY author_email
+                                                    ORDER BY commits DESC, author_email
+                                                    LIMIT {_authorsShown}
+                                                    """, []);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var authors = new List<OverviewAuthor>();
         while (await reader.ReadAsync(cancellationToken))
             authors.Add(new OverviewAuthor(reader.Text("author_name"), reader.Text("author_email"),

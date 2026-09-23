@@ -1,4 +1,4 @@
-namespace CodeExplorer;
+namespace CodeExplorer.Language;
 
 /// <summary>
 ///     How an answer about a file's language was reached. Every answer carries one, because a

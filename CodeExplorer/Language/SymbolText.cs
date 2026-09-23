@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Text;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Language;
 
 /// <summary>
 ///     Reading an identifier out of a line, and writing one into a pattern. Where a word ends, how
@@ -19,7 +19,7 @@ public static class SymbolText
     ///     which also escapes whitespace and <c>#</c> in ways RE2 rejects — and a literal here may be
     ///     a phrase with a space in it, which would fail inside DuckDB rather than at the call site.
     /// </summary>
-    private static readonly SearchValues<char> Metacharacters = SearchValues.Create(@"\.+*?()|[]{}^$");
+    private static readonly SearchValues<char> _metacharacters = SearchValues.Create(@"\.+*?()|[]{}^$");
 
     /// <summary>
     ///     This text as an RE2 pattern matching it literally. One copy, because both halves of a
@@ -30,13 +30,13 @@ public static class SymbolText
     public static string Re2Literal(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        int first = text.AsSpan().IndexOfAny(Metacharacters);
+        int first = text.AsSpan().IndexOfAny(_metacharacters);
         if (first < 0) return text;
 
         var pattern = new StringBuilder(text.Length + 8).Append(text, 0, first);
         foreach (char c in text.AsSpan(first))
         {
-            if (Metacharacters.Contains(c)) pattern.Append('\\');
+            if (_metacharacters.Contains(c)) pattern.Append('\\');
             pattern.Append(c);
         }
 

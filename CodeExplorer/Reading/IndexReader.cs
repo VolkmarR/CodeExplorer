@@ -1,7 +1,8 @@
 using System.Data.Common;
+using CodeExplorer.Infrastructure;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Reading;
 /// <summary>
 ///     One project's index, open for one call. <see cref="IndexReaders.OverIndexAsync{T}" /> is the seam
 ///     every reader crosses — the MCP tools, the operator UI's endpoints and the three text searches —
@@ -25,10 +26,10 @@ public sealed partial class IndexReader : IDisposable
 
     // The join is for the slug only; qualified_path already carries it as a prefix, but splitting a
     // string to recover what a column holds would be the worse choice.
-    private const string FileColumns =
+    private const string _fileColumns =
         "SELECT f.file_id, f.qualified_path, r.slug, f.path, f.line_count, f.size_bytes, f.skip_reason, f.module";
 
-    private const string FileSource = "FROM files f JOIN repositories r USING (repo_id)";
+    private const string _fileSource = "FROM files f JOIN repositories r USING (repo_id)";
 
     // The lease itself, held only to be disposed. Its type is named in IndexReaders and nowhere else
     // in Reading, which is what keeps the one allowed arrow into Index to a single file.
@@ -73,7 +74,7 @@ public sealed partial class IndexReader : IDisposable
     public async Task<bool> HasFullTextAsync(CancellationToken cancellationToken)
     {
         if (!_fullTextLoaded) return false;
-        using var command = Connection.Query("SELECT fts_indexed FROM index_info", []);
+        await using var command = Connection.Query("SELECT fts_indexed FROM index_info", []);
         return await command.ScalarAsync(cancellationToken) is true;
     }
 
@@ -245,14 +246,14 @@ public sealed partial class IndexReader : IDisposable
     /// </summary>
     public async Task<IndexedFile?> FindFileAsync(string qualifiedPath, CancellationToken cancellationToken)
     {
-        using var command = Connection.Query($"""
-                                              {FileColumns}
-                                              {FileSource}
-                                              WHERE lower(f.qualified_path) = lower($p)
-                                              ORDER BY f.qualified_path = $p DESC
-                                              LIMIT 1
-                                              """, [new DuckDBParameter("p", qualifiedPath)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = Connection.Query($"""
+                                                    {_fileColumns}
+                                                    {_fileSource}
+                                                    WHERE lower(f.qualified_path) = lower($p)
+                                                    ORDER BY f.qualified_path = $p DESC
+                                                    LIMIT 1
+                                                    """, [new DuckDBParameter("p", qualifiedPath)]);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadFile(reader) : null;
     }
 
@@ -300,7 +301,7 @@ public sealed partial class IndexReader : IDisposable
             return (null, new Problem(explanation + "Use glob or list_tree to locate it.", ProblemKind.Missing));
 
         string name = qualified.PathInRepository[(qualified.PathInRepository.LastIndexOf('/') + 1)..];
-        var similar = await FilesNamedAsync(name, MaxSuggestions, cancellationToken);
+        var similar = await FilesNamedAsync(name, _maxSuggestions, cancellationToken);
         return (null, new Problem(explanation + (similar.Count > 0
                 ? $"Did you mean {string.Join(" or ", similar)}? Otherwise use glob or list_tree to locate it."
                 : "Use glob or list_tree to locate it; the path is case-insensitive here but must otherwise match the committed path."),
@@ -413,19 +414,19 @@ public sealed partial class IndexReader : IDisposable
         CancellationToken cancellationToken)
     {
         if (pathInRepository.Length == 0) return null;
-        using var command = Connection.Query("""
-                                             SELECT cf.path
-                                             FROM commit_files cf JOIN commits c USING (commit_id)
-                                             WHERE c.repo_slug = $r AND lower(cf.path) = lower($p)
-                                             ORDER BY cf.path = $p DESC
-                                             LIMIT 1
-                                             """,
+        await using var command = Connection.Query("""
+                                                   SELECT cf.path
+                                                   FROM commit_files cf JOIN commits c USING (commit_id)
+                                                   WHERE c.repo_slug = $r AND lower(cf.path) = lower($p)
+                                                   ORDER BY cf.path = $p DESC
+                                                   LIMIT 1
+                                                   """,
             [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
         return await command.ScalarAsync(cancellationToken) as string;
     }
 
     /// <summary>A "did you mean" longer than this is a glob result, and glob is the better tool for it.</summary>
-    private const int MaxSuggestions = 5;
+    private const int _maxSuggestions = 5;
 
     /// <summary>
     ///     The commits a file was first and last changed by, both null where no history was imported for
@@ -435,19 +436,19 @@ public sealed partial class IndexReader : IDisposable
     {
         // Both attributions are aliased to the names ReaderColumns.Attribution reads, prefixed, so that
         // the one helper reads them and a rename in this SELECT is a rename it follows.
-        using var command = Connection.Query("""
-                                             SELECT first.sha AS first_sha, first.author_name AS first_author_name,
-                                                    first.authored_at AS first_authored_at,
-                                                    first.subject AS first_subject,
-                                                    last.sha AS last_sha, last.author_name AS last_author_name,
-                                                    last.authored_at AS last_authored_at,
-                                                    last.subject AS last_subject
-                                             FROM files f
-                                             LEFT JOIN commits first ON first.commit_id = f.first_commit
-                                             LEFT JOIN commits last ON last.commit_id = f.last_commit
-                                             WHERE f.file_id = $f
-                                             """, [new DuckDBParameter("f", fileId)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = Connection.Query("""
+                                                   SELECT first.sha AS first_sha, first.author_name AS first_author_name,
+                                                          first.authored_at AS first_authored_at,
+                                                          first.subject AS first_subject,
+                                                          last.sha AS last_sha, last.author_name AS last_author_name,
+                                                          last.authored_at AS last_authored_at,
+                                                          last.subject AS last_subject
+                                                   FROM files f
+                                                   LEFT JOIN commits first ON first.commit_id = f.first_commit
+                                                   LEFT JOIN commits last ON last.commit_id = f.last_commit
+                                                   WHERE f.file_id = $f
+                                                   """, [new DuckDBParameter("f", fileId)]);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return new FileCommits(null, null);
         return new FileCommits(reader.Attribution("first_"), reader.Attribution("last_"));
     }
@@ -474,14 +475,14 @@ public sealed partial class IndexReader : IDisposable
         // EXISTS rather than a count: the question is whether a repository was walked at all, and a
         // semi-join stops at the first commit where count(*) reads every one of them. Matched on the
         // slug, not the id, because that is what commits records (ADR-0007).
-        using var command = Connection.Query("""
-                                             SELECT r.slug,
-                                                    EXISTS (SELECT 1 FROM commits c WHERE c.repo_slug = r.slug)
-                                                        AS walked
-                                             FROM repositories r
-                                             ORDER BY r.repo_id
-                                             """, []);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = Connection.Query("""
+                                                   SELECT r.slug,
+                                                          EXISTS (SELECT 1 FROM commits c WHERE c.repo_slug = r.slug)
+                                                              AS walked
+                                                   FROM repositories r
+                                                   ORDER BY r.repo_id
+                                                   """, []);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var all = new List<(string Slug, bool Walked)>();
         while (await reader.ReadAsync(cancellationToken)) all.Add((reader.Text("slug"), reader.Flag("walked")));
         // One repository cannot be contrasted with another, so there is nothing to say about it here;
@@ -498,10 +499,10 @@ public sealed partial class IndexReader : IDisposable
     public async Task<IReadOnlyList<string>> FilesNamedAsync(string name, int limit,
         CancellationToken cancellationToken)
     {
-        using var command = Connection.Query(
+        await using var command = Connection.Query(
             $"SELECT qualified_path FROM files WHERE lower(name) = lower($n) ORDER BY qualified_path LIMIT {limit}",
             [new DuckDBParameter("n", name)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var result = new List<string>();
         while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("qualified_path"));
         return result;
@@ -520,13 +521,13 @@ public sealed partial class IndexReader : IDisposable
     {
         if (_repositories is not null) return;
 
-        using var command = Connection.Query("""
-                                             SELECT r.slug, r.url, r.head_commit, r.file_count, r.line_count,
-                                                    (SELECT single_repository FROM index_info) AS single_repository
-                                             FROM repositories r
-                                             ORDER BY r.repo_id
-                                             """, []);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = Connection.Query("""
+                                                   SELECT r.slug, r.url, r.head_commit, r.file_count, r.line_count,
+                                                          (SELECT single_repository FROM index_info) AS single_repository
+                                                   FROM repositories r
+                                                   ORDER BY r.repo_id
+                                                   """, []);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var repositories = new List<IndexedRepository>();
         bool singleRepository = false;
         while (await reader.ReadAsync(cancellationToken))
@@ -545,7 +546,7 @@ public sealed partial class IndexReader : IDisposable
         // The history each repository has, joined on the slug rather than the id, because that is what
         // commits records (ADR-0007). A repository with no commits keeps a null newest commit and a zero
         // count, which the page draws as "no history" rather than as a repository that never changed.
-        using var command = connection.Query(
+        await using var command = connection.Query(
             """
             SELECT r.slug, r.url, r.head_commit, r.file_count, r.line_count,
                    coalesce(h.commits, 0) AS commits, h.sha, h.author_name, h.authored_at, h.subject,
@@ -561,7 +562,7 @@ public sealed partial class IndexReader : IDisposable
                        FROM commits GROUP BY repo_slug) h ON h.repo_slug = r.slug
             ORDER BY r.repo_id
             """, []);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var result = new List<IndexedRepository>();
         // The history columns are read only here. The other caller, LoadShapeAsync, is the path every
         // tool takes to learn the repository names, and it has no use for a join onto commits.
@@ -581,7 +582,7 @@ public sealed partial class IndexReader : IDisposable
         reader.Int32("file_count"), reader.Int64("line_count"));
 
     /// <summary>
-    ///     Reads the columns <see cref="FileColumns" /> selects, by name: the glob query appends a
+    ///     Reads the columns <see cref="_fileColumns" /> selects, by name: the glob query appends a
     ///     window count to that list, so a positional read here would break the moment another caller
     ///     prepends anything to its own projection.
     /// </summary>

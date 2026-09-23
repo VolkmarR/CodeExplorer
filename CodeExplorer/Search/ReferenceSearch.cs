@@ -1,7 +1,10 @@
 using System.Globalization;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>Everything a find_references call asks for. Bounds are enforced by <see cref="ReferenceSearch" />.</summary>
 /// <param name="Symbol">The identifier to look for, matched on word boundaries and case-sensitively.</param>
@@ -221,8 +224,8 @@ public sealed class ReferenceSearch(IndexReaders readers)
         long totalLines = 0;
         long totalOccurrences = 0;
         int? withoutFilters = null;
-        using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -308,12 +311,12 @@ public sealed class ReferenceSearch(IndexReaders readers)
             // The ids came from the query above and never from the request, so inlining them is safe
             // and saves binding one parameter per file.
             string ids = string.Join(",", fileIds.Select(id => id.ToString(CultureInfo.InvariantCulture)));
-            using var command = connection.Query($"""
-                                                     SELECT file_id, line_number, content FROM lines
-                                                     WHERE file_id IN ({ids}){narrowing}
-                                                     ORDER BY file_id, line_number
-                                                     """, parameters);
-            using var reader = await command.ReaderAsync(cancellationToken);
+            await using var command = connection.Query($"""
+                                                        SELECT file_id, line_number, content FROM lines
+                                                        WHERE file_id IN ({ids}){narrowing}
+                                                        ORDER BY file_id, line_number
+                                                        """, parameters);
+            await using var reader = await command.ReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
                 string content = reader.Text("content");

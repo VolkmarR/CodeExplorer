@@ -1,6 +1,8 @@
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     Why a symbol search was not in a position to read a file. Two reasons and not one, because
@@ -63,8 +65,8 @@ internal static class ScopeCoverage
         CancellationToken cancellationToken)
     {
         var extensions = new List<string>();
-        using var command = connection.Query("SELECT DISTINCT extension FROM files", []);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = connection.Query("SELECT DISTINCT extension FROM files", []);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken)) extensions.Add(reader.Text("extension"));
         return extensions;
     }
@@ -127,15 +129,15 @@ internal static class ScopeCoverage
         // contribute before the line predicate is evaluated over them: the question here is only
         // which of these extensions hold the name, never how often.
         var found = new List<(string Language, int Files, CoverageGap Gap)>();
-        using (var command = connection.Query($"""
-                                               SELECT f.extension, count(DISTINCT l.file_id)::INTEGER AS files
-                                               FROM lines l JOIN files f USING (file_id)
-                                               WHERE f.extension IN ({string.Join(", ", names)}){fileFilter}
-                                                 AND {matchPredicate}
-                                               GROUP BY f.extension
-                                               ORDER BY files DESC, f.extension
-                                               """, counted))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = connection.Query($"""
+                                                     SELECT f.extension, count(DISTINCT l.file_id)::INTEGER AS files
+                                                     FROM lines l JOIN files f USING (file_id)
+                                                     WHERE f.extension IN ({string.Join(", ", names)}){fileFilter}
+                                                       AND {matchPredicate}
+                                                     GROUP BY f.extension
+                                                     ORDER BY files DESC, f.extension
+                                                     """, counted))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {

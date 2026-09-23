@@ -1,4 +1,6 @@
-namespace CodeExplorer;
+using CodeExplorer.Infrastructure;
+
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     A qualified path (CONTEXT.md) taken apart: which repository, and where inside it. How it is

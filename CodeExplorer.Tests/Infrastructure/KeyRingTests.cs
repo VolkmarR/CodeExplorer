@@ -1,5 +1,7 @@
 using System.Reflection;
 using Azure.Storage.Blobs;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
@@ -139,7 +141,7 @@ public sealed class KeyRingTests
         // then substitutes a different key ring into. The wipe itself is the README's manual check.
         host.Restart();
 
-        var control = host.Services.GetRequiredService<ControlDatabase>();
+        var control = host.Services.GetRequiredService<Control.ControlDatabase>();
         var repository = Assert.Single(await control.ListRepositoriesAsync("keyring", Ct));
         Assert.NotNull(repository.ProtectedCredential);
         // Through the same purpose GitClones unprotects with, so a purpose that drifted fails here too.

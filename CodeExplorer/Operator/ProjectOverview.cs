@@ -1,4 +1,9 @@
-namespace CodeExplorer;
+using CodeExplorer.Control;
+using CodeExplorer.Git;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
+
+namespace CodeExplorer.Operator;
 
 /// <summary>
 ///     What a project's index holds. <paramref name="BuiltAt" /> is null when the project has never

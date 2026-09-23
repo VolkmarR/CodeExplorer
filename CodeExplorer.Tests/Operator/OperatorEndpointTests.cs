@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using CodeExplorer.Index;
+using CodeExplorer.Operator;
 using Xunit;
 
 namespace CodeExplorer.Tests;

@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     The MCP tool over the import graph (ADR-0005, <c>Search/</c>): what a file imports.
@@ -21,14 +23,14 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
     private Project Bound => BoundProject.Get(httpContextAccessor);
 
     /// <summary>The sentence every reply here ends with, whatever the listing above it came to.</summary>
-    private const string Caveat =
+    private const string _caveat =
         "and a name is resolved only where it names exactly one file in this project. Strong evidence, not proof.";
 
     /// <summary>
     ///     What a reply with no edges of its own claims: a file that wrote no import line has no
     ///     evidence of its own to report, and the caveat still has to say how it was read.
     /// </summary>
-    private static readonly Evidence[] Textual = [Evidence.Text];
+    private static readonly Evidence[] _textual = [Evidence.Text];
 
     /// <summary>
     ///     The pivot this tool makes when the import graph has nothing to say. An empty answer here is
@@ -44,7 +46,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
     ///     reverse lookup that used to sit beside it is gone (#160) — so it says the whole route and
     ///     not just the next tool.
     /// </summary>
-    private const string WayIn =
+    private const string _wayIn =
         "Run list_declarations on it, then find_references on one of the names it declares, to find the files that use it.";
 
     /// <summary>
@@ -104,7 +106,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
 
         if (result.Imports.Count == 0)
             return Finish(text.Append(
-                "\nNo import line was read in it. In a language that has them, that means the file imports nothing — not that nothing was looked for.\n"), Textual);
+                "\nNo import line was read in it. In a language that has them, that means the file imports nothing — not that nothing was looked for.\n"), _textual);
 
         if (result.Capped)
             text.Append(CultureInfo.InvariantCulture,
@@ -115,7 +117,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
         // this tool cannot make: a dependency with no import line to write is invisible here.
         if (resolved.Count == 0)
             text.Append(CultureInfo.InvariantCulture,
-                $"NOTE: none of the {result.Imports.Count} {ToolReply.Plural(result.Imports.Count, "name")} resolved to a file in this project. That is not evidence the file has no project-local dependencies — where a language or dialect makes them visible without an import line, there is nothing here to resolve. {WayIn}\n");
+                $"NOTE: none of the {result.Imports.Count} {ToolReply.Plural(result.Imports.Count, "name")} resolved to a file in this project. That is not evidence the file has no project-local dependencies — where a language or dialect makes them visible without an import line, there is nothing here to resolve. {_wayIn}\n");
 
         if (resolved.Count > 0)
         {
@@ -141,5 +143,5 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
     ///     than a line of the listing: how the edges were read, and what a resolved name is worth.
     /// </summary>
     private static string Finish(StringBuilder text, IEnumerable<Evidence> evidence) =>
-        text.Append(CultureInfo.InvariantCulture, $"\n{How(evidence)} {Caveat}\n").ToString();
+        text.Append(CultureInfo.InvariantCulture, $"\n{How(evidence)} {_caveat}\n").ToString();
 }

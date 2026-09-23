@@ -1,11 +1,13 @@
 using System.Net;
+using CodeExplorer.Index;
+using CodeExplorer.Reading;
 using Xunit;
 
 namespace CodeExplorer.Tests;
 
 /// <summary>
 ///     The control database's native instance, kept open for the life of the process (#172). Why it
-///     is, and what that costs, is at <see cref="ControlDatabase" />'s anchor.
+///     is, and what that costs, is at <see cref="Control.ControlDatabase" />'s anchor.
 /// </summary>
 public sealed class ControlDatabaseTests : IDisposable
 {

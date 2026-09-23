@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Control;
 
 /// <summary>
 ///     An <see cref="IndexOverview" /> as <c>project_overview</c> hands it to an agent. It is its own
@@ -51,7 +53,7 @@ internal static class OverviewReply
                 $"  {language.Name,-14}{language.Files,7:N0} {ToolReply.Plural(language.Files, "file"),-6}{language.Lines,9:N0} {ToolReply.Plural(language.Lines, "line"),-6}");
             // Said on the row rather than in a footnote: an agent reading ".vh" beside "C#" has to be
             // able to tell that the first is an extension nobody mapped and not a language this
-            // server recognised.
+            // server recognized.
             if (!language.Mapped) text.Append("  (extension; no language profile covers it)");
             if (language.Skipped > 0)
                 text.Append(CultureInfo.InvariantCulture,
@@ -128,5 +130,4 @@ internal static class OverviewReply
             ToolReply.AuthorRow(text, "  ",
                 new RecordedAuthor(author.Name, author.Email, author.Commits, author.LastCommit));
     }
-
 }

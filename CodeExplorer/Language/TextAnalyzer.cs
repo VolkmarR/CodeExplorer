@@ -2,7 +2,7 @@ using System.Buffers;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Language;
 
 /// <summary>
 ///     The <see cref="ILanguageAnalyzer" /> that answers from a <see cref="LanguageProfile" /> and the
@@ -28,14 +28,14 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     as a .NET regex: <see cref="PatternOrNull" /> reads it as "no pattern" and the candidate
     ///     predicate leaves it out.
     /// </summary>
-    private const string MatchesNothing = @"[^\s\S]";
+    private const string _matchesNothing = @"[^\s\S]";
 
     /// <summary>
     ///     The compound assignments, which are the same list wherever a language has any of them and
     ///     are therefore not a profile fact. Written without the trailing <c>=</c>, which is added
     ///     once below.
     /// </summary>
-    private static readonly string[] CompoundOperators =
+    private static readonly string[] _compoundOperators =
         ["+", "-", "*", "/", "%", "|", "&", "^", "??", "<<", ">>"];
 
     /// <summary>
@@ -46,7 +46,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     file is <see cref="Lexical.Unknown" />, which is the answer that keeps a reference rather
     ///     than placing it wrongly.
     /// </summary>
-    private const int MaxNesting = 8;
+    private const int _maxNesting = 8;
 
     /// <summary>
     ///     How deeply a type argument list may nest before the member shape stops reading it. A
@@ -55,7 +55,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     past what these codebases write, and a type nested deeper is a declaration this does not
     ///     find rather than one reported wrongly.
     /// </summary>
-    private const int MaxTypeArgumentDepth = 3;
+    private const int _maxTypeArgumentDepth = 3;
 
     // Each null where the profile gives the shape nothing to match, rather than a compiled pattern
     // that matches nothing and is still run on every candidate line.
@@ -248,7 +248,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         // these codebases write — and a type nested deeper is a miss rather than a wrong answer,
         // which is the direction this module errs in everywhere (CONTEXT.md, Declaration).
         string arguments = "<[^<>]*>";
-        for (int depth = 1; depth < MaxTypeArgumentDepth; depth++) arguments = $"<(?:[^<>]|{arguments})*>";
+        for (int depth = 1; depth < _maxTypeArgumentDepth; depth++) arguments = $"<(?:[^<>]|{arguments})*>";
 
         // A name, the argument list where there is one, and the markers that ride after it: `?` for
         // a nullable, `[]` for an array, and both together.
@@ -258,8 +258,8 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
             $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+{guard}{type}\s+(\w+)\s*[\(<{{=;]";
 
         // The wider of the two, and the one published as a candidate predicate.
-        string memberPattern = modifiers is null ? MatchesNothing : MemberPattern("");
-        string memberDeclarationPattern = modifiers is null ? MatchesNothing : MemberPattern(typeGuard);
+        string memberPattern = modifiers is null ? _matchesNothing : MemberPattern("");
+        string memberDeclarationPattern = modifiers is null ? _matchesNothing : MemberPattern(typeGuard);
         // The xBase, Delphi and SQL shape: the introducing word and then the name, with the return
         // type — where there is one — after it rather than before. The name may be qualified, which
         // is how every language that splits declaration from implementation writes the second half:
@@ -272,17 +272,17 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
             ? $@"|\s(?:{words})\b"
             : "";
         string keywordPattern = modifiers is null || !profile.DeclarationNamesFollowKeyword
-            ? MatchesNothing
+            ? _matchesNothing
             : $@"^\s*(?:(?:{modifiers})\s+)+(?:(\w+)\s*\.\s*)?(\w+)\s*(?:[\(<{{=;:]{openers})";
         string? typeKeywords = Alternation(profile.DeclarationKeywords);
         string typePattern = typeKeywords is null
-            ? MatchesNothing
+            ? _matchesNothing
             : $@"^\s*(?:\[[^\]]*\]\s*)*(?:[\w]+\s+)*\b(?:{typeKeywords})\s+(\w+)";
         // Delphi's `TCustomer = class(TBase)`, where the name is in front of the word that says what
         // kind of thing it is. Written out as its own shape rather than folded into the one above: an
         // alternation covering both would match a line that is neither.
         string precedingTypePattern = typeKeywords is null || !profile.TypeNamesPrecedeKeyword
-            ? MatchesNothing
+            ? _matchesNothing
             : $@"^\s*(\w+)\s*=\s*(?:{typeKeywords})\b";
 
         _memberDeclaration = PatternOrNull(flag, memberDeclarationPattern);
@@ -292,7 +292,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         // Only the shapes this language actually writes. A language that declares nothing this can
         // read asks the engine for no lines at all, rather than for the lines a pattern that matches
         // nothing would return.
-        string[] shapes = [.. new[] { memberPattern, keywordPattern, typePattern, precedingTypePattern }.Where(p => p != MatchesNothing)];
+        string[] shapes = [.. new[] { memberPattern, keywordPattern, typePattern, precedingTypePattern }.Where(p => p != _matchesNothing)];
         DeclarationCandidates = shapes.Length == 0
             ? CandidateLines.None
             : CandidateLines.Matching($"{flag}{string.Join("|", shapes.Select(p => $"(?:{p})"))}");
@@ -324,14 +324,14 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     so a source generator cannot build them; the shapes that are the same for every profile are
     ///     the <c>[GeneratedRegex]</c> methods below.
     /// </summary>
-    private const RegexOptions PatternOptions = RegexOptions.CultureInvariant | RegexOptions.Compiled;
+    private const RegexOptions _patternOptions = RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
     /// <summary>
     ///     The pattern built and compiled, or null where the profile gave it nothing to match. A shape
     ///     this language does not write costs neither the compile nor a run per candidate line.
     /// </summary>
     private static Regex? PatternOrNull(string flag, string pattern) =>
-        pattern == MatchesNothing ? null : new Regex(flag + pattern, PatternOptions);
+        pattern == _matchesNothing ? null : new Regex(flag + pattern, _patternOptions);
 
     /// <summary>
     ///     Everything that may legally sit between the start of a declaration and its name. Shared by
@@ -369,7 +369,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     {
         ArgumentNullException.ThrowIfNull(position);
         ArgumentNullException.ThrowIfNull(line);
-        Span<Frame> frames = stackalloc Frame[MaxNesting];
+        Span<Frame> frames = stackalloc Frame[_maxNesting];
         var cursor = new LineCursor(this, position, line, frames);
         // The whole line, because what it leaves open is decided by its last character and not by its
         // last match.
@@ -381,7 +381,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     {
         ArgumentNullException.ThrowIfNull(position);
         ArgumentNullException.ThrowIfNull(line);
-        Span<Frame> frames = stackalloc Frame[MaxNesting];
+        Span<Frame> frames = stackalloc Frame[_maxNesting];
         var cursor = new LineCursor(this, position, line, frames);
         // A position off the end of the line is answered with the state the line ends in rather than
         // with a default, because the default would be `Code` — the one claim that must never be a
@@ -926,7 +926,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
 
         var placed = new List<Answer<ReferenceKind>>();
         if (symbol.Length == 0) return placed;
-        Span<Frame> frames = stackalloc Frame[MaxNesting];
+        Span<Frame> frames = stackalloc Frame[_maxNesting];
         var cursor = new LineCursor(this, position, line, frames);
 
         // What the line is, asked once and only once an appearance is known to be code: every other
@@ -1010,8 +1010,8 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     /// </summary>
     private static string AssignmentPattern(IReadOnlyList<string> assignments)
     {
-        if (assignments.Count == 0) return MatchesNothing;
-        var operators = CompoundOperators.Select(op => op + "=").Concat(assignments)
+        if (assignments.Count == 0) return _matchesNothing;
+        var operators = _compoundOperators.Select(op => op + "=").Concat(assignments)
             .OrderByDescending(op => op.Length).Select(SymbolText.Re2Literal);
         return $@"^\s*(?:{string.Join("|", operators)})(?!=|>)";
     }
@@ -1163,7 +1163,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     /// </summary>
     private int CodeEnd(FilePosition position, string line)
     {
-        Span<Frame> frames = stackalloc Frame[MaxNesting];
+        Span<Frame> frames = stackalloc Frame[_maxNesting];
         var cursor = new LineCursor(this, position, line, frames);
         // One walk of the line, and the answer read off it. Asked per character instead — which is
         // what this did first — a minified bundle cost a call per character of a line several
@@ -1284,14 +1284,14 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     /// </summary>
     private static string? Quoted(string clause)
     {
-        int open = clause.IndexOfAny(QuoteOpeners);
+        int open = clause.IndexOfAny(_quoteOpeners);
         if (open < 0) return null;
         char closer = clause[open] == '<' ? '>' : clause[open];
         int close = clause.IndexOf(closer, open + 1);
         return close < 0 ? null : clause[(open + 1)..close];
     }
 
-    private static readonly char[] QuoteOpeners = ['"', '\'', '`', '<'];
+    private static readonly char[] _quoteOpeners = ['"', '\'', '`', '<'];
 
     /// <summary>
     ///     The quoted value of one attribute inside a tag. Read no further than the tag's own

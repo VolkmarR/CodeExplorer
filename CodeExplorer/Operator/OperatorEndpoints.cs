@@ -1,4 +1,6 @@
-namespace CodeExplorer;
+using CodeExplorer.Infrastructure;
+
+namespace CodeExplorer.Operator;
 
 /// <summary>
 ///     What the operator UI reads and the two things it removes. The creating endpoints are in

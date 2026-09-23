@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using CodeExplorer.Infrastructure;
 
 namespace CodeExplorer.Tests;
 

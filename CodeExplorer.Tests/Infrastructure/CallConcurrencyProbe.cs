@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using Xunit;
 
 namespace CodeExplorer.Tests;

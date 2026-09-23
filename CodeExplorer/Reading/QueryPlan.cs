@@ -1,7 +1,7 @@
 using System.Globalization;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     Writes the query plan of a read to a directory, for working out where a slow one spends its
@@ -89,11 +89,11 @@ internal static class QueryPlan
             await SetAsync(connection, $"SET profiling_output='{json}'", cancellationToken);
             try
             {
-                using var command = connection.CreateCommand();
+                await using var command = connection.CreateCommand();
                 command.CommandText = sql;
                 foreach (var parameter in parameters)
                     command.Parameters.Add(new DuckDBParameter(parameter.ParameterName, parameter.Value));
-                using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
                 while (await reader.ReadAsync(cancellationToken)) { }
             }
             finally
@@ -130,7 +130,7 @@ internal static class QueryPlan
 
     private static async Task SetAsync(DuckDBConnection connection, string sql, CancellationToken cancellationToken)
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

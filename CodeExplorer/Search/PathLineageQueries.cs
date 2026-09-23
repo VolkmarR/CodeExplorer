@@ -1,7 +1,8 @@
 using System.Globalization;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     One earlier spelling of a path scope, reached by a rename edge a commit recorded.
@@ -52,7 +53,7 @@ public sealed partial class HistoryQueries
     ///     history table for one scoped answer, every time the same question was asked of the same
     ///     index.
     ///     The hop cap and the rename-ring guard are the build's, so nothing here has to bound a walk
-    ///     it no longer performs; <see cref="MaxPreviousPaths" /> is this side's, because it is about
+    ///     it no longer performs; <see cref="_maxPreviousPaths" /> is this side's, because it is about
     ///     what a reply prints and not about what is true.
     ///     Signalled and not followed (#131): nothing here changes what the scope's own query counts.
     ///     The combined total covers the whole chain, including the hops the cap does not name — it is
@@ -71,14 +72,14 @@ public sealed partial class HistoryQueries
         // a file (ADR-0006); every caller wanted that spelling and none another.
         var paths = await index.PathsAsync(cancellationToken);
 
-        using var command = index.Connection.Query("""
-                                                   SELECT previous_path, previous_commits, combined_commits
-                                                   FROM path_lineage
-                                                   WHERE repo_slug = $r AND path = $p
-                                                   ORDER BY hop
-                                                   """,
+        await using var command = index.Connection.Query("""
+                                                         SELECT previous_path, previous_commits, combined_commits
+                                                         FROM path_lineage
+                                                         WHERE repo_slug = $r AND path = $p
+                                                         ORDER BY hop
+                                                         """,
             [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", pathInRepository)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var found = new List<PreviousPath>();
         // The same on every row of a scope, so the last read wins and none has to be singled out.
         int combined = 0;
@@ -90,8 +91,8 @@ public sealed partial class HistoryQueries
         }
 
         if (found.Count == 0) return null;
-        return new PathLineage(found.Take(MaxPreviousPaths).ToList(),
-            Math.Max(0, found.Count - MaxPreviousPaths), combined,
+        return new PathLineage(found.Take(_maxPreviousPaths).ToList(),
+            Math.Max(0, found.Count - _maxPreviousPaths), combined,
             found.Select(previous => previous.PathInRepository).ToList());
     }
 

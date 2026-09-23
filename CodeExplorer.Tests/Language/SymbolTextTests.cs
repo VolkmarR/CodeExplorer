@@ -1,3 +1,4 @@
+using CodeExplorer.Language;
 using Xunit;
 
 namespace CodeExplorer.Tests;
