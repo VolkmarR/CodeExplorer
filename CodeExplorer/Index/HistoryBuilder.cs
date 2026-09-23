@@ -79,7 +79,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     private static void Prune(DuckDBConnection connection, IReadOnlyList<OpenedRepository> repositories,
         CancellationToken cancellationToken)
     {
-        string slugs = string.Join(", ", repositories.Select(open => Literal(open.Repository.Slug)));
+        string slugs = string.Join(", ", repositories.Select(open => IndexQuery.Literal(open.Repository.Slug)));
         // An empty list is a project whose every repository failed to open, which the refresh refuses
         // before it gets here; guarding anyway, because `IN ()` is a syntax error and not an empty set.
         string kept = slugs.Length == 0 ? "false" : $"repo_slug IN ({slugs})";
@@ -104,7 +104,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         string catalog, string slug, LocalCopy copy, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
-        var known = Strings(connection, $"SELECT sha FROM commits WHERE repo_slug = {Literal(slug)}",
+        var known = Strings(connection, $"SELECT sha FROM commits WHERE repo_slug = {IndexQuery.Literal(slug)}",
             cancellationToken);
         var fresh = new List<RecordedCommit>();
         foreach (var commit in copy.History(known, cancellationToken))
@@ -171,7 +171,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         List<(int Id, RecordedCommit Commit)> fresh, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
-        string inRepository = $"repo_slug = {Literal(slug)}";
+        string inRepository = $"repo_slug = {IndexQuery.Literal(slug)}";
         if (fresh.Count == 0) return AttributedPaths(connection, inRepository, cancellationToken);
 
         bool fromRoot = fresh[0].Commit.ParentSha is null;
@@ -474,11 +474,4 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         while (reader.Read()) values.Add(reader.GetString(0));
         return values;
     }
-
-    /// <summary>
-    ///     A slug as a SQL string literal. Slugs are validated on the way into the control database and
-    ///     never come from a tool call, but they are still the one value here that did not come from this
-    ///     process, so they are escaped rather than trusted.
-    /// </summary>
-    private static string Literal(string value) => $"'{value.Replace("'", "''")}'";
 }

@@ -6,11 +6,12 @@ using DuckDB.NET.Data;
 namespace CodeExplorer;
 
 /// <summary>
-///     The two things every search service does to a connection it was handed: build a command with
-///     its parameters bound, and read a single count back. They are here rather than repeated as
-///     private statics in each service because three copies of "bind the parameters" is three places
-///     for a parameter to stop being bound, and an inlined value is how user text reaches the parser
-///     in the first place.
+///     What every service does to a connection it was handed: build a command with its parameters
+///     bound, read a single count back, run a statement, and spell the one kind of value that is
+///     inlined rather than bound. They are here rather than repeated as private statics in each
+///     service because three copies of "bind the parameters" is three places for a parameter to stop
+///     being bound, and an inlined value is how user text reaches the parser in the first place —
+///     which is why <see cref="Literal" /> is kept to values this deployment makes itself.
 /// </summary>
 internal static class IndexQuery
 {
@@ -98,6 +99,16 @@ internal static class IndexQuery
         cancellationToken.ThrowIfCancellationRequested();
         command.ExecuteNonQuery();
     }
+
+    /// <summary>
+    ///     Text as a SQL string literal, quotes included, for the SQL the index layer assembles as a
+    ///     string: <c>ATTACH</c>, <c>COPY</c> and <c>SET</c> take no parameters at all, and a build's
+    ///     statements run through <see cref="Execute" />, which binds none. Only for values this
+    ///     deployment makes — a path from configuration, a slug, a table name — never for text from a
+    ///     request, which is bound through <see cref="Query" /> instead. A slug is validated on the way
+    ///     into the control database and is still escaped here rather than trusted.
+    /// </summary>
+    public static string Literal(string value) => $"'{value.Replace("'", "''")}'";
 
     /// <summary>
     ///     The single number a <c>SELECT count(...)</c> answers with. Read as a <see cref="long" />

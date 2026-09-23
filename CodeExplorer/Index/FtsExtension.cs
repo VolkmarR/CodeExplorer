@@ -115,7 +115,7 @@ public static class FtsExtension
         using var command = connection.CreateCommand();
         // Inlined rather than parameterised: SET takes no parameters in DuckDB, and the value comes
         // from this deployment's own configuration rather than from a request.
-        command.CommandText = $"SET extension_directory = '{directory.Replace("'", "''")}'";
+        command.CommandText = $"SET extension_directory = {IndexQuery.Literal(directory)}";
         command.ExecuteNonQuery();
     }
 }
