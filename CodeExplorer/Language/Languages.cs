@@ -1,5 +1,4 @@
 using System.Collections.Frozen;
-using CodeExplorer.Reading;
 
 namespace CodeExplorer.Language;
 
@@ -524,7 +523,7 @@ public static class Languages
     ///     The extension of a path as <c>files.extension</c> stores it: lowercase, without the dot.
     ///     Written once because the build derives it when it writes the column and every read derives
     ///     it again from the path, and two spellings of one rule are a rule that drifts — the same
-    ///     reason <see cref="ProjectPaths" /> both parses and formats a qualified path.
+    ///     reason <see cref="CodeExplorer.Reading.ProjectPaths" /> both parses and formats a qualified path.
     /// </summary>
     public static string ExtensionOf(string path)
     {

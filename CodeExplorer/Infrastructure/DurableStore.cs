@@ -3,7 +3,6 @@ using Azure.Core;
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
-using CodeExplorer.Control;
 
 namespace CodeExplorer.Infrastructure;
 
@@ -84,7 +83,7 @@ public sealed class DurableStore
 
     /// <summary>
     ///     The same, synchronously, for the one caller that runs before the server accepts a request:
-    ///     <see cref="ControlDatabase" />'s constructor has to have the file before it opens it. Both
+    ///     <see cref="CodeExplorer.Control.ControlDatabase" />'s constructor has to have the file before it opens it. Both
     ///     paths are genuinely synchronous here, so nothing blocks a thread on an async call
     ///     (CODING_STANDARDS, Async).
     /// </summary>

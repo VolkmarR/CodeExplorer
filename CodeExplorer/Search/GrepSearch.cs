@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
-using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
@@ -628,7 +627,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
 
     /// <summary>
     ///     How the full-text index splits text into tokens — <c>ignore = '[^a-z0-9_]+'</c> in
-    ///     <see cref="FtsExtension" /> — applied to the query so the word tests match what BM25 matched.
+    ///     <see cref="CodeExplorer.Index.FtsExtension" /> — applied to the query so the word tests match what BM25 matched.
     ///     The two have to stay in step: a query split one way and an index built another would answer
     ///     with lines that do not contain what was asked for.
     /// </summary>

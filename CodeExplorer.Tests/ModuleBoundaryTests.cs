@@ -5,9 +5,10 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     The check ADR-0005 asks for once four modules exist. Everything is in one <c>CodeExplorer</c>
-///     namespace, so the compiler enforces nothing and a folder is only a convention; this turns the
-///     convention into a failing build.
+///     The check ADR-0005 asks for once four modules exist. Each module folder is its own
+///     <c>CodeExplorer.*</c> namespace, but a namespace restricts nothing in C#: any module can name
+///     any public type of another, so the compiler enforces no arrow; this turns the convention into
+///     a failing build.
 ///     It is not reflection, because reflection cannot see a folder. The declaring folder comes from
 ///     the source tree and the references from the source text, which is the only place both are
 ///     visible at once.
@@ -133,7 +134,7 @@ public sealed partial class ModuleBoundaryTests
     [MemberData(nameof(ModulePairs))]
     public void A_module_references_only_the_modules_ADR_0005_allows(string from, string to)
     {
-        var found = ReferencesFrom(from, TypesDeclaredIn(to));
+        var found = ReferencesFrom(from, to, TypesDeclaredIn(to));
         if (Allowed.Contains($"{from} -> {to}"))
         {
             // An allowed arrow nobody draws is an entry that has outlived its reason and silently
@@ -170,6 +171,16 @@ public sealed partial class ModuleBoundaryTests
     [InlineData("_ = outcome.Kind == Kind.RefusedByLfs;", false)]
     public void A_name_counts_as_a_reference_only_where_C_sharp_puts_a_type(string line, bool isAReference) =>
         Assert.Equal(isAReference, TypePosition("Refused").IsMatch(line));
+
+    [Theory]
+    // Seen: the module's namespace written in front of the type, with or without the root.
+    [InlineData("Control.ControlDatabase control,", true)]
+    [InlineData("GetRequiredService<CodeExplorer.Control.ControlDatabase>()", true)]
+    // Left alone: a member path that ends in the same words, and a longer type name.
+    [InlineData("var db = host.Control.ControlDatabase;", false)]
+    [InlineData("Control.ControlDatabaseOptions options,", false)]
+    public void A_name_qualified_by_its_module_counts_as_a_reference(string line, bool isAReference) =>
+        Assert.Equal(isAReference, Qualified("Control", "ControlDatabase").IsMatch(line));
 
     /// <summary>
     ///     The test project mirrors the host's folders (CODING_STANDARDS, Layout), so a module's tests
@@ -223,8 +234,8 @@ public sealed partial class ModuleBoundaryTests
     ///     <c>Refused</c>, <c>Empty</c>, <c>Opened</c> — that a pairwise sweep would otherwise report
     ///     from every file that happens to use the word.
     ///     A top-level declaration is one that starts at column 0, which is what the formatter guarantees
-    ///     for a file in the single <c>CodeExplorer</c> namespace and what no nested declaration can look
-    ///     like.
+    ///     under a file-scoped namespace (the only kind <c>.editorconfig</c> allows) and what no nested
+    ///     declaration can look like.
     /// </summary>
     private static HashSet<string> TypesDeclaredIn(string module)
     {
@@ -241,22 +252,35 @@ public sealed partial class ModuleBoundaryTests
     ///     <c>Refused</c> is written bare inside the file that declares it, which is indistinguishable
     ///     from a reference to a <c>Refused</c> somewhere else by looking at the text alone. C# resolves
     ///     the inner one, so the file is skipped for that name rather than reported for it.
+    ///     Two more forms count, both because a module is a namespace. A <c>using</c> of the other
+    ///     module is the compiler's own record of the arrow: IDE0005 fails the build on one nothing
+    ///     needs, so every such line is a reference, including to what no regex here sees, such as an
+    ///     extension method. And a name qualified by its module, <c>Control.ControlDatabase</c>, needs
+    ///     no <c>using</c> at all from inside another <c>CodeExplorer</c> namespace, and the type
+    ///     positions refuse it for the leading <c>.</c> that keeps <c>copy.Reference</c> out.
     /// </summary>
-    private static List<string> ReferencesFrom(string module, HashSet<string> names)
+    private static List<string> ReferencesFrom(string module, string to, HashSet<string> names)
     {
         var found = new List<string>();
+        var imports = new Regex($@"^\s*using\s+CodeExplorer\.{Regex.Escape(to)}\s*;", RegexOptions.Multiline);
         foreach (string file in Directory.EnumerateFiles(SourceTree.Server(module), "*.cs"))
         {
             string source = SourceTree.Code(file);
+            if (imports.IsMatch(source)) found.Add($"  {Path.GetFileName(file)} imports CodeExplorer.{to}");
             var own = DeclaredAnywherePattern.Matches(source)
                 .Select(m => m.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
             foreach (string name in names)
-                if (!own.Contains(name) && TypePosition(name).IsMatch(source))
+                if ((!own.Contains(name) && TypePosition(name).IsMatch(source))
+                    || Qualified(to, name).IsMatch(source))
                     found.Add($"  {Path.GetFileName(file)} references {name}");
         }
 
         return found;
     }
+
+    private static Regex Qualified(string module, string name) =>
+        Patterns.GetOrAdd($"{module}.{name}",
+            _ => new Regex($@"(?<![\w.])(?:CodeExplorer\.)?{Regex.Escape(module)}\.{Regex.Escape(name)}\b"));
 
     /// <summary>
     ///     Where a name means the type rather than a member, a parameter or an English word. The bare

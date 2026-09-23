@@ -1,7 +1,6 @@
 using System.Data.Common;
 using System.Globalization;
 using System.Runtime.CompilerServices;
-using CodeExplorer.Index;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer.Reading;
@@ -88,7 +87,7 @@ internal static class IndexQuery
 
     /// <summary>
     ///     The same statement from a build, which runs synchronously on a worker thread because the
-    ///     git calls beside it do (<see cref="HistoryBuilder" />). The token is checked before the
+    ///     git calls beside it do (<see cref="CodeExplorer.Index.HistoryBuilder" />). The token is checked before the
     ///     statement and not threaded into it: DuckDB's synchronous <c>ExecuteNonQuery</c> takes none,
     ///     so a build is cancellable between statements and not inside one.
     /// </summary>

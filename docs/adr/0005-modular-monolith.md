@@ -241,3 +241,23 @@ that nobody draws fails it too, so the list and this paragraph are edited togeth
 anything stopped being true but because both arrows were drawn by files that are now in `Reading/`.
 The test project mirrors the new folder: `CodeExplorer.Tests/Reading/` holds the tests of the tools
 that are nothing but a read — `read_file`, `glob`, `list_tree`, `list_extensions` and `repo_info`.
+
+## Revisited on 2026-09-23: a module is a namespace
+
+The Shape above said one `CodeExplorer` namespace throughout, so that a folder was a boundary and a
+place to look but never a `using` line. That no longer holds: every module folder is now its own
+namespace — `CodeExplorer.Control`, `CodeExplorer.Git`, `CodeExplorer.Index` and so on, matching
+the folder — and a file that crosses a module says so in a `using` at its top.
+
+- **The arrows are unchanged.** The table above is still the allow-list. A C# namespace restricts
+  nothing, so the compiler still enforces no arrow and `ModuleBoundaryTests` is still what does.
+- **A `using` is now evidence the test reads.** IDE0005 fails the build on an unused one, so every
+  `using CodeExplorer.<Module>;` is an arrow the compiler has confirmed, including one no text
+  pattern sees, such as an extension method. The test counts it, and it counts a name qualified by
+  its module (`Control.ControlDatabase`), which needs no `using` from inside another `CodeExplorer`
+  namespace and which the type positions refuse for its leading `.`.
+- **A doc comment is still not an arrow.** A cross-module `<see cref>` is written fully qualified
+  (`CodeExplorer.Search.FileFilter`) rather than through a `using`: comments are stripped before
+  the sweep, and a `using` kept alive only by a cref would otherwise read as an arrow nobody draws
+  in code. Three did at the move — `Language/` → `Reading/`, `Reading/` → `Search/` and `Search/` →
+  `Index/` — and none of them was a reference the table allows.

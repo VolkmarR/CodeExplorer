@@ -1,5 +1,4 @@
 using System.Data.Common;
-using CodeExplorer.Search;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer.Reading;
@@ -447,7 +446,7 @@ internal static class IndexQueries
     ///     A case-insensitive substring, because an agent has an address it read off an overview or a
     ///     blame, and a local part ("grace") is the half of it worth typing. A substring can still
     ///     match two addresses, so what it matched is named in the reply rather than assumed
-    ///     (<see cref="HistoryQueries.LogAsync" />).
+    ///     (<see cref="CodeExplorer.Search.HistoryQueries.LogAsync" />).
     /// </param>
     /// <param name="message">
     ///     Narrows to the commits whose subject carries this text. The subject and not the body: an

@@ -28,8 +28,9 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
   `Index/`, `Reading/` (how an index is read: the reader, the shared statements and the row records
   every reading module is handed), `Search/`, `Refresh/`, `Operator/`, `Language/` (what a file is
   written in, and everything that follows from it — ADR-0008). Folders follow the module boundary, never the
-  ticket or the endpoint; a refresh touches `Refresh/`, not a folder per endpoint. Everything stays
-  in the single `CodeExplorer` namespace, so a folder is navigation and a boundary, not a `using`.
+  ticket or the endpoint; a refresh touches `Refresh/`, not a folder per endpoint. Each folder is its
+  own namespace (`CodeExplorer.Search` for `Search/`), so crossing a module is a `using`, and a
+  cross-module `<see cref>` is written fully qualified instead, so no `using` exists for a comment.
   A module reaches another only through its public types; `Search/` never opens `control.duckdb`.
   What no concept owns and more than one module is handed — telemetry, the durable store, the key
   ring, authentication, settings, the project record and its route binding, the outcome type every
