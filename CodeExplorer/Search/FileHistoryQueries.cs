@@ -185,9 +185,11 @@ public sealed partial class HistoryQueries
                 // Anything below 1 is the end of the file, which is the caller saying "all of it" in the
                 // two spellings its surface allows: an omitted argument and a zero.
                 int? last = request.EndLine is null or < 1 ? null : request.EndLine;
+                // The ceiling counts lines from the first one asked for: taken as a last line, it made
+                // every range past it an empty answer.
+                int end = (int)Math.Min(last ?? int.MaxValue, (long)first + MaxLinesPerFile - 1);
                 IReadOnlyList<AttributedLines> runs = file!.SkipReason is null
-                    ? await RunsAsync(index, file.FileId, first, Math.Min(last ?? MaxLinesPerFile, MaxLinesPerFile),
-                        token)
+                    ? await RunsAsync(index, file.FileId, first, end, token)
                     : [];
                 return new BlameAnswer(file, hasHistory, first, last, runs);
             }, cancellationToken), (BlameAnswer answer) => new Telemetry.Measured(answer.Runs.Count, 0));
