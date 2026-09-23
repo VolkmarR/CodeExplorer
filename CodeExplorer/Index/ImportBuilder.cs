@@ -1,3 +1,4 @@
+using System.Text;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer;
@@ -204,32 +205,30 @@ public sealed class ImportBuilder
         }
 
         var resolved = new List<(long Import, long? Target, string? Unresolved)>();
+        foreach (var (id, name, repo, directory, extension) in edges)
         {
-            foreach (var (id, name, repo, directory, extension) in edges)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsExternal(name))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (IsExternal(name))
+                resolved.Add((id, null, Outside));
+                continue;
+            }
+
+            // The importing file's own language decides how short a path may be written: a
+            // TypeScript `./orders` may leave off its extension and may name a directory, and a
+            // CSS `@import "theme"` may do neither.
+            if (!extensions.TryGetValue(extension, out var rules))
+                extensions[extension] = rules = Languages.Default.For(extension).ImportPaths;
+            long? target = null;
+            foreach (string candidate in Candidates(directory, name, rules))
+                if (byPath.TryGetValue((repo, candidate), out long found))
                 {
-                    resolved.Add((id, null, Outside));
-                    continue;
+                    target = found;
+                    break;
                 }
 
-                // The importing file's own language decides how short a path may be written: a
-                // TypeScript `./orders` may leave off its extension and may name a directory, and a
-                // CSS `@import "theme"` may do neither.
-                if (!extensions.TryGetValue(extension, out var rules))
-                    extensions[extension] = rules = Languages.Default.For(extension).ImportPaths;
-                long? target = null;
-                foreach (string candidate in Candidates(directory, name, rules))
-                    if (byPath.TryGetValue((repo, candidate), out long found))
-                    {
-                        target = found;
-                        break;
-                    }
-
-                resolved.Add((id, target,
-                    target is not null ? null : IsPackage(name) ? Package : NoSuchFile));
-            }
+            resolved.Add((id, target,
+                target is not null ? null : IsPackage(name) ? Package : NoSuchFile));
         }
 
         await WriteAsync(connection, resolved, cancellationToken);
@@ -272,13 +271,15 @@ public sealed class ImportBuilder
     /// </summary>
     private static string? Normalize(string path)
     {
-        var segments = new List<string>();
-        foreach (string segment in path.Split('/'))
+        var text = path.AsSpan();
+        var segments = new List<Range>();
+        foreach (var range in text.Split('/'))
         {
-            if (segment.Length == 0 || segment == ".") continue;
-            if (segment != "..")
+            var segment = text[range];
+            if (segment is "" or ".") continue;
+            if (segment is not "..")
             {
-                segments.Add(segment);
+                segments.Add(range);
                 continue;
             }
 
@@ -286,7 +287,14 @@ public sealed class ImportBuilder
             segments.RemoveAt(segments.Count - 1);
         }
 
-        return string.Join('/', segments);
+        var walked = new StringBuilder(path.Length);
+        foreach (var range in segments)
+        {
+            if (walked.Length > 0) walked.Append('/');
+            walked.Append(text[range]);
+        }
+
+        return walked.ToString();
     }
 
     /// <summary>

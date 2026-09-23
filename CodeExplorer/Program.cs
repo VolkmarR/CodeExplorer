@@ -64,14 +64,14 @@ builder.Services.AddSingleton<WarmUpService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WarmUpService>());
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMcpServer().WithHttpTransport()
-    // An argument the SDK cannot bind is answered by the tool's own schema rather than by the
-    // transport's one sentence (#85, ToolArguments). Registered once for every tool, present and
-    // future.
-    // Outermost first: the tool span has to cover everything an agent waits for, including the
-    // argument filter below it, because what #90 is looking for is the time that is NOT in the query
-    // span further in. Registered once for every tool, present and future (#90).
+    // Each filter is registered once for every tool, present and future.
     .WithRequestFilters(filters => filters
+        // Outermost first: the tool span has to cover everything an agent waits for, including the
+        // argument filter below it, because what #90 is looking for is the time that is NOT in the
+        // query span further in.
         .AddCallToolFilter(Telemetry.ToolFilter)
+        // An argument the SDK cannot bind is answered by the tool's own schema rather than by the
+        // transport's one sentence (#85, ToolArguments).
         .AddCallToolFilter(ToolArguments.Filter))
     .WithTools<ProjectTools>()
     .WithTools<SearchTools>()
@@ -128,7 +128,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapFallbackToFile("index.html");
 
-app.Run();
+await app.RunAsync();
 // Spelled out because the install switch above returns a code, which makes every exit an int.
 return 0;
 

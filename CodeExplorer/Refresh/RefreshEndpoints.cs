@@ -28,7 +28,7 @@ internal static class RefreshEndpoints
         // a page polling this once a second while a rebuild runs — answers from memory, and a project
         // that never refreshed gets the idle status.
         project.MapGet("/refresh", (Project project, RefreshService refreshes) =>
-            refreshes.Find(project.Slug) ?? refreshes.Status(project.Slug));
+            refreshes.Status(project.Slug));
 
         // POST because it does work rather than reports it, and no UI calls it: an external cron fires
         // this before working hours so the first agent of the morning does not wait for a restore (#9).

@@ -30,7 +30,7 @@ internal static class SearchQuery
         if (symbol.Any(char.IsWhiteSpace))
             return $"\"{symbol}\" is not one identifier. {tool} looks for a single name; "
                    + "use grep for a phrase, or regex=true for a pattern.";
-        if (!symbol.Any(c => char.IsLetterOrDigit(c) || c == '_'))
+        if (!symbol.Any(SymbolText.IsWordChar))
             return $"\"{symbol}\" holds no identifier characters, so it names no symbol. "
                    + "Use grep for punctuation and operators.";
         return null;

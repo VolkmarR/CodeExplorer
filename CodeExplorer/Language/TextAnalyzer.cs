@@ -1184,29 +1184,27 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     /// </summary>
     private static string? NameOf(string text, ImportShape shape)
     {
-        string name = Clean(text);
-        if (name.Length == 0) return null;
-        if (shape == ImportShape.Path) return name;
+        var name = Clean(text);
+        if (name.IsEmpty) return null;
+        if (shape == ImportShape.Path) return name.ToString();
 
         // An alias names the module on the right of the `=` and binds it to the name on the left:
         // `using Grid = System.Windows.Controls.Grid;` imports the Grid, not the alias. The left has
         // to be one identifier, which is what a declaration written with the same word is not —
         // `var reader` is two.
-        int equals = name.IndexOf('=', StringComparison.Ordinal);
+        int equals = name.IndexOf('=');
         if (equals >= 0)
         {
-            if (!IsIdentifier(name.AsSpan(0, equals).Trim())) return null;
+            if (!IsIdentifier(name[..equals].Trim())) return null;
             name = name[(equals + 1)..].Trim();
         }
 
         // The last word, so that a qualifier in front of the name — C#'s `using static System.Math`
         // — is read past rather than read as part of it.
-        int space = name.LastIndexOfAny(Whitespace);
+        int space = name.LastIndexOfAny(' ', '\t');
         if (space >= 0) name = name[(space + 1)..];
-        return IsDottedIdentifier(name) ? name : null;
+        return IsDottedIdentifier(name) ? name.ToString() : null;
     }
-
-    private static readonly char[] Whitespace = [' ', '\t'];
 
     /// <summary>
     ///     Whether this is a name and nothing else: letters, digits and underscores, not starting
@@ -1223,11 +1221,11 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     }
 
     /// <summary>Identifiers joined by dots, which is how every language here spells a module.</summary>
-    private static bool IsDottedIdentifier(string text)
+    private static bool IsDottedIdentifier(ReadOnlySpan<char> text)
     {
-        if (text.Length == 0) return false;
+        if (text.IsEmpty) return false;
         foreach (var part in text.Split('.'))
-            if (!IsIdentifier(part))
+            if (!IsIdentifier(text[part]))
                 return false;
         return true;
     }
@@ -1238,9 +1236,9 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     ///     file and must not read as two. The trailing brace goes for the same reason: C# writes both
     ///     <c>namespace Foo;</c> and <c>namespace Foo {</c>.
     /// </summary>
-    private static string Clean(string text)
+    private static ReadOnlySpan<char> Clean(string text)
     {
-        string name = text.Trim().TrimEnd(';', '{').Trim();
+        var name = text.AsSpan().Trim().TrimEnd(";{").Trim();
         if (name.Length >= 2 && (name[0] == '"' || name[0] == '\'') && name[^1] == name[0])
             name = name[1..^1].Trim();
         return name;

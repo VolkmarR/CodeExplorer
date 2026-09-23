@@ -528,7 +528,7 @@ public static class Languages
     public static string ExtensionOf(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
-        return Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+        return Path.GetExtension(path.AsSpan()).TrimStart('.').ToString().ToLowerInvariant();
     }
 
     /// <summary>
