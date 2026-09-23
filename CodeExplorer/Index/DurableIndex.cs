@@ -91,7 +91,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
                 // for, and line content compresses far enough that the extra CPU is repaid on the way
                 // back too.
                 await connection.ExecuteAsync(
-                    $"COPY (SELECT * FROM {table}) TO '{Escape(local)}' (FORMAT parquet, COMPRESSION zstd)",
+                    $"COPY (SELECT * FROM {table}) TO {IndexQuery.Literal(local)} (FORMAT parquet, COMPRESSION zstd)",
                     cancellationToken);
                 await store.StoreAsync(Name(slug, table), local, cancellationToken);
             }
@@ -165,11 +165,11 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         await connection.ExecuteAsync(
             $"INSERT INTO {IndexInfo} SELECT schema_version, built_at, "
             + $"{(ftsAvailable ? "true" : "false")} AS fts_indexed, single_repository "
-            + $"FROM read_parquet('{Escape(Parquet(copy, IndexInfo))}')",
+            + $"FROM read_parquet({IndexQuery.Literal(Parquet(copy, IndexInfo))})",
             cancellationToken);
         foreach (string table in ContentTables)
             await connection.ExecuteAsync(
-                $"INSERT INTO {table} SELECT * FROM read_parquet('{Escape(Parquet(copy, table))}')",
+                $"INSERT INTO {table} SELECT * FROM read_parquet({IndexQuery.Literal(Parquet(copy, table))})",
                 cancellationToken);
 
         if (ftsAvailable) await FtsExtension.CreateIndexAsync(connection, cancellationToken);
@@ -207,7 +207,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         // read_parquet reads the footer for the columns and only the one row group for the value, so
         // this costs a stat and a few kilobytes rather than the whole set.
         command.CommandText =
-            $"SELECT schema_version FROM read_parquet('{Escape(Parquet(copy, IndexInfo))}') LIMIT 1";
+            $"SELECT schema_version FROM read_parquet({IndexQuery.Literal(Parquet(copy, IndexInfo))}) LIMIT 1";
         try
         {
             return await command.ExecuteScalarAsync(cancellationToken) is int version ? version : -1;
@@ -237,10 +237,4 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
 
     /// <summary>Every project under its own prefix, which is what makes one project's copy removable on its own.</summary>
     private static string Name(string slug, string table) => $"indexes/{slug}/{table}.parquet";
-
-    /// <summary>
-    ///     A path as a SQL string literal. Paths are built from configuration, the slug and a table name
-    ///     from the list above, never from a request.
-    /// </summary>
-    private static string Escape(string path) => path.Replace("'", "''");
 }

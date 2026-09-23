@@ -159,8 +159,8 @@ public sealed partial class ProjectIndexes : IDisposable
 
     // Whether the file each project's catalog is attached to was written by this build's schema,
     // remembered so that the question costs one query per attach rather than one per lease. It is
-    // forgotten wherever the live file is replaced — every such place detaches the catalog and
-    // removes it from the set above, and the two are removed together for the same reason.
+    // forgotten wherever the live file is replaced — every such place detaches the catalog through
+    // DetachAsync, which removes it from both sets, and the two go together for the same reason.
     private readonly ConcurrentDictionary<string, bool> _readable = new(StringComparer.Ordinal);
 
     // One pool per project, because a pooled connection is handed back still bound to that project and
@@ -179,13 +179,11 @@ public sealed partial class ProjectIndexes : IDisposable
     // restore all replace the same file, and a restore does not hold the server's single rebuild slot
     // the way a refresh does. Per project and not one shared gate, because a wake that restores a
     // large index must not hold up a swap of a small one.
-    private readonly Dictionary<string, SemaphoreSlim> _writerGates = [];
-    private readonly Lock _writerGatesSync = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _writerGates = new(StringComparer.Ordinal);
 
     // One gate per project, kept for the life of the process: the count is bounded by the control
     // database, and a gate holds nothing but a reader count.
-    private readonly Dictionary<string, SwapGate> _swapGates = [];
-    private readonly Lock _swapGatesSync = new();
+    private readonly ConcurrentDictionary<string, SwapGate> _swapGates = new(StringComparer.Ordinal);
 
     public ProjectIndexes(IConfiguration configuration, DurableIndex durable, ILogger<ProjectIndexes> logger)
     {
@@ -376,19 +374,7 @@ public sealed partial class ProjectIndexes : IDisposable
             string catalog = RestoreCatalog(slug);
             using (var connection = await ConnectAsync(cancellationToken))
             {
-                await UnderAttachGateAsync(async () =>
-                {
-                    // Whatever an abandoned restore left is worthless, for the reason an abandoned
-                    // shadow is: the file is written from the Parquet from scratch every time.
-                    await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-                    _attached.TryRemove(catalog, out _);
-                    DeleteIndexFile(path);
-                    await connection.ExecuteAsync($"ATTACH {Literal(path)} AS {Quote(catalog)}", cancellationToken);
-                    _attached[catalog] = 0;
-                }, cancellationToken);
-
-                await connection.ExecuteAsync($"USE {Quote(catalog)}", cancellationToken);
-                await connection.ExecuteAsync(Schema, cancellationToken);
+                await AttachEmptyAsync(connection, catalog, path, cancellationToken);
                 await _durable.LoadAsync(connection, copy, FtsAvailable, cancellationToken);
             }
 
@@ -396,11 +382,8 @@ public sealed partial class ProjectIndexes : IDisposable
             // it twice would deadlock on a semaphore that is deliberately not reentrant.
             await ReplaceFileAsync(slug, "the restored index was put in place anyway", async connection =>
             {
-                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-                _attached.TryRemove(catalog, out _);
-                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
-                _attached.TryRemove(slug, out _);
-                _readable.TryRemove(slug, out _);
+                await DetachAsync(connection, catalog, cancellationToken);
+                await DetachAsync(connection, slug, cancellationToken);
                 File.Move(path, FilePath(slug), true);
                 File.Delete(FilePath(slug) + ".wal");
                 File.Delete(path + ".wal");
@@ -427,20 +410,7 @@ public sealed partial class ProjectIndexes : IDisposable
         try
         {
             string catalog = ShadowCatalog(slug);
-            await UnderAttachGateAsync(async () =>
-            {
-                // Whatever a previous refresh left behind is worthless: the shadow is written from
-                // scratch every time, and an abandoned one is only a file in the way.
-                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-                _attached.TryRemove(catalog, out _);
-                DeleteIndexFile(ShadowPath(slug));
-                await connection.ExecuteAsync($"ATTACH {Literal(ShadowPath(slug))} AS {Quote(catalog)}",
-                    cancellationToken);
-                _attached[catalog] = 0;
-            }, cancellationToken);
-
-            await connection.ExecuteAsync($"USE {Quote(catalog)}", cancellationToken);
-            await connection.ExecuteAsync(Schema, cancellationToken);
+            await AttachEmptyAsync(connection, catalog, ShadowPath(slug), cancellationToken);
             await CarryHistoryAsync(connection, slug, cancellationToken);
             return new ShadowIndex(connection, catalog, slug, FtsAvailable);
         }
@@ -458,8 +428,10 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     Done here rather than by the caller, so that "a shadow starts out knowing what the live index
     ///     knew" is a property of creating one and not of a caller remembering to ask. The build prunes
     ///     what no longer belongs — a repository since removed — because only it knows what was read.
-    ///     Nothing to carry is the ordinary case for a first build, and for a live file an older schema
-    ///     wrote: the tables are checked for rather than the failure caught, so a real error still throws.
+    ///     Nothing to carry is the ordinary case for a first build. A live file at the current version
+    ///     holds every history table: the schema creates them all in one statement and the
+    ///     <c>index_info</c> row that says which version it is was written last, so once the version
+    ///     matches there is no table left to probe for.
     ///     An older <see cref="SchemaVersion" /> carries nothing at all. The durable copy is already
     ///     refused on that test, and the live file on disk needs the same one for the same reason: these
     ///     tables are copied column for column, so a history table that gained a column would be
@@ -475,11 +447,8 @@ public sealed partial class ProjectIndexes : IDisposable
         if (!await LiveSchemaMatchesAsync(connection, slug, cancellationToken)) return;
 
         foreach (string table in HistoryTables)
-        {
-            if (!await HasTableAsync(connection, slug, table, cancellationToken)) continue;
             await connection.ExecuteAsync(
                 $"INSERT INTO {table} SELECT * FROM {Quote(slug)}.main.{table}", cancellationToken);
-        }
     }
 
     /// <summary>
@@ -487,13 +456,21 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     "no", which is the safe direction in every case it covers — an interrupted build that wrote
     ///     the tables and never the <c>index_info</c> row, a file with no tables at all, an older
     ///     version: a re-walk is slow, and a carry-over from a shape this build does not know is either
-    ///     a failed refresh or a quietly wrong answer. The table is probed the way the carry-over probes
-    ///     the three it copies, rather than the failure caught, so a real error still throws.
+    ///     a failed refresh or a quietly wrong answer. The table is probed for rather than the failure
+    ///     caught, so a real error still throws.
     /// </summary>
     private static async Task<bool> LiveSchemaMatchesAsync(DuckDBConnection connection, string slug,
         CancellationToken cancellationToken)
     {
-        if (!await HasTableAsync(connection, slug, "index_info", cancellationToken)) return false;
+        using (var exists = connection.CreateCommand())
+        {
+            // A file with no tables at all has no index_info to ask, and selecting from it would throw.
+            exists.CommandText =
+                $"SELECT count(*) FROM duckdb_tables() WHERE database_name = {IndexQuery.Literal(slug)} "
+                + "AND schema_name = 'main' AND table_name = 'index_info'";
+            if (await exists.ExecuteScalarAsync(cancellationToken) is not > 0L) return false;
+        }
+
         using var version = connection.CreateCommand();
         version.CommandText = $"SELECT max(schema_version) FROM {Quote(slug)}.main.index_info";
         return await version.ExecuteScalarAsync(cancellationToken) is int found && found == SchemaVersion;
@@ -527,17 +504,6 @@ public sealed partial class ProjectIndexes : IDisposable
     /// </summary>
     public bool SchemaOutdated(string slug) => _readable.TryGetValue(slug, out bool current) && !current;
 
-    /// <summary>Whether the attached catalog holds this table, which an interrupted build may not have written.</summary>
-    private static async Task<bool> HasTableAsync(DuckDBConnection connection, string slug, string table,
-        CancellationToken cancellationToken)
-    {
-        using var exists = connection.CreateCommand();
-        exists.CommandText =
-            $"SELECT count(*) FROM duckdb_tables() WHERE database_name = '{slug.Replace("'", "''")}' "
-            + $"AND schema_name = 'main' AND table_name = '{table}'";
-        return await exists.ExecuteScalarAsync(cancellationToken) is > 0L;
-    }
-
     /// <summary>
     ///     Makes the finished shadow index the live one: waits for in-flight queries to finish with a
     ///     hard timeout, detaches both catalogs, replaces the file and lets the next caller attach it.
@@ -550,14 +516,10 @@ public sealed partial class ProjectIndexes : IDisposable
             "the new index was swapped in anyway",
             async connection =>
             {
-                string catalog = ShadowCatalog(slug);
                 // Both catalogs go first: DETACH is what closes the file handles, and neither file can
                 // be deleted or moved while the instance holds one.
-                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-                _attached.TryRemove(catalog, out _);
-                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
-                _attached.TryRemove(slug, out _);
-                _readable.TryRemove(slug, out _);
+                await DetachAsync(connection, ShadowCatalog(slug), cancellationToken);
+                await DetachAsync(connection, slug, cancellationToken);
                 // One overwriting move, never delete-then-move: a move that fails after the old file was
                 // deleted would leave the project with no index at all, and the caller's cleanup would
                 // then take the shadow too. Overwrite replaces the file or leaves it exactly as it was.
@@ -580,9 +542,7 @@ public sealed partial class ProjectIndexes : IDisposable
         // caller that is not replacing what the readers are using.
         await UnderAttachGateAsync(async () =>
         {
-            string catalog = ShadowCatalog(slug);
-            await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-            _attached.TryRemove(catalog, out _);
+            await DetachAsync(connection, ShadowCatalog(slug), cancellationToken);
             DeleteIndexFile(ShadowPath(slug));
         }, cancellationToken);
     }
@@ -598,9 +558,7 @@ public sealed partial class ProjectIndexes : IDisposable
             "the project was deleted anyway",
             async connection =>
             {
-                await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(slug)}", cancellationToken);
-                _attached.TryRemove(slug, out _);
-                _readable.TryRemove(slug, out _);
+                await DetachAsync(connection, slug, cancellationToken);
                 DeleteIndexFile(FilePath(slug));
             }, cancellationToken);
 
@@ -714,16 +672,11 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     The gate for a project, created on first use. Kept afterwards: the count is bounded by the
     ///     control database, a gate holds nothing but a reader count, and dropping one while a reader
     ///     waits on it would let the next caller past a hold that has not ended. A deleted project's
-    ///     gate is the cost of that, and it is a few bytes.
+    ///     gate is the cost of that, and it is a few bytes. Taken on every lease, so without a lock: two
+    ///     first callers may each build one, but <c>GetOrAdd</c> hands both the same winner, and the
+    ///     loser is dropped before anyone has entered it.
     /// </summary>
-    private SwapGate GateFor(string slug)
-    {
-        lock (_swapGatesSync)
-        {
-            if (!_swapGates.TryGetValue(slug, out var gate)) _swapGates[slug] = gate = new SwapGate();
-            return gate;
-        }
-    }
+    private SwapGate GateFor(string slug) => _swapGates.GetOrAdd(slug, _ => new SwapGate());
 
     /// <summary>The project's pool, created on first use and kept for the same reason its gate is.</summary>
     private ConnectionPool PoolFor(string slug) => _pools.GetOrAdd(slug, _ => new ConnectionPool());
@@ -744,10 +697,14 @@ public sealed partial class ProjectIndexes : IDisposable
     {
         try
         {
-            await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
-            await connection.ExecuteAsync($"USE {Quote(slug)}", cancellationToken);
+            await AttachAndUse();
         }
         catch (DuckDBException) when (!_attached.ContainsKey(slug) && !cancellationToken.IsCancellationRequested)
+        {
+            await AttachAndUse();
+        }
+
+        async Task AttachAndUse()
         {
             await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
             await connection.ExecuteAsync($"USE {Quote(slug)}", cancellationToken);
@@ -780,10 +737,46 @@ public sealed partial class ProjectIndexes : IDisposable
         return UnderAttachGateAsync(async () =>
         {
             if (_attached.ContainsKey(catalog)) return;
-            await connection.ExecuteAsync($"ATTACH IF NOT EXISTS {Literal(path)} AS {Quote(catalog)}",
+            await connection.ExecuteAsync($"ATTACH IF NOT EXISTS {IndexQuery.Literal(path)} AS {Quote(catalog)}",
                 cancellationToken);
             _attached[catalog] = 0;
         }, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Detaches a catalog if the instance holds it, and forgets that it was attached and whether its
+    ///     file was readable, so the next attach asks both again. Run under the attach gate, like every
+    ///     other write to <c>_attached</c>. Only a project's own catalog is ever in <c>_readable</c>; for
+    ///     a shadow or a restore catalog that removal finds nothing.
+    /// </summary>
+    private async Task DetachAsync(DuckDBConnection connection, string catalog,
+        CancellationToken cancellationToken)
+    {
+        await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+        _attached.TryRemove(catalog, out _);
+        _readable.TryRemove(catalog, out _);
+    }
+
+    /// <summary>
+    ///     Attaches an empty file under a catalog of its own and binds the connection to it with the
+    ///     tables created: how a restore and a shadow both start. Whatever an abandoned one of either
+    ///     left behind is worthless, since the file is written from scratch every time, so it is
+    ///     detached and deleted rather than reused.
+    /// </summary>
+    private async Task AttachEmptyAsync(DuckDBConnection connection, string catalog, string path,
+        CancellationToken cancellationToken)
+    {
+        await UnderAttachGateAsync(async () =>
+        {
+            await DetachAsync(connection, catalog, cancellationToken);
+            DeleteIndexFile(path);
+            await connection.ExecuteAsync($"ATTACH {IndexQuery.Literal(path)} AS {Quote(catalog)}",
+                cancellationToken);
+            _attached[catalog] = 0;
+        }, cancellationToken);
+
+        await connection.ExecuteAsync($"USE {Quote(catalog)}", cancellationToken);
+        await connection.ExecuteAsync(Schema, cancellationToken);
     }
 
     private async Task<DuckDBConnection> ConnectAsync(CancellationToken cancellationToken)
@@ -807,15 +800,11 @@ public sealed partial class ProjectIndexes : IDisposable
     /// <summary>The catalog a restore fills, kept apart from the live one the way a shadow's is.</summary>
     private static string RestoreCatalog(string slug) => slug + "$restore";
 
-    /// <summary>The gate that lets one writer of a project run at a time, created on first use.</summary>
-    private SemaphoreSlim WriterGateFor(string slug)
-    {
-        lock (_writerGatesSync)
-        {
-            if (!_writerGates.TryGetValue(slug, out var gate)) _writerGates[slug] = gate = new SemaphoreSlim(1, 1);
-            return gate;
-        }
-    }
+    /// <summary>
+    ///     The gate that lets one writer of a project run at a time, created on first use. A semaphore
+    ///     that loses the <c>GetOrAdd</c> race was never waited on, so dropping it undisposed holds nothing.
+    /// </summary>
+    private SemaphoreSlim WriterGateFor(string slug) => _writerGates.GetOrAdd(slug, _ => new SemaphoreSlim(1, 1));
 
     /// <summary>
     ///     The catalog the shadow of a project is attached under. A slug is lowercase letters, digits
@@ -828,9 +817,6 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     it as an identifier is safe. The quotes are for the hyphen, which is not an identifier character.
     /// </summary>
     private static string Quote(string slug) => $"\"{slug}\"";
-
-    /// <summary>A file path as a SQL string literal. Paths come from configuration and the slug, never from a request.</summary>
-    private static string Literal(string path) => $"'{path.Replace("'", "''")}'";
 
     /// <summary>
     ///     One project's idle connections. Opening a DuckDB connection and binding it was most of what
