@@ -101,12 +101,9 @@ internal static class IndexQuery
     }
 
     /// <summary>
-    ///     Text as a SQL string literal, quotes included, for the SQL the index layer assembles as a
-    ///     string: <c>ATTACH</c>, <c>COPY</c> and <c>SET</c> take no parameters at all, and a build's
-    ///     statements run through <see cref="Execute" />, which binds none. Only for values this
-    ///     deployment makes — a path from configuration, a slug, a table name — never for text from a
-    ///     request, which is bound through <see cref="Query" /> instead. A slug is validated on the way
-    ///     into the control database and is still escaped here rather than trusted.
+    ///     Text as a SQL string literal, quotes included, where nothing can be bound: <c>ATTACH</c>,
+    ///     <c>COPY</c> and <c>SET</c> take no parameters, and a build's <see cref="Execute" /> binds none.
+    ///     A slug is validated on the way into the control database and is still escaped rather than trusted.
     /// </summary>
     public static string Literal(string value) => $"'{value.Replace("'", "''")}'";
 

@@ -159,8 +159,7 @@ public sealed partial class ProjectIndexes : IDisposable
 
     // Whether the file each project's catalog is attached to was written by this build's schema,
     // remembered so that the question costs one query per attach rather than one per lease. It is
-    // forgotten wherever the live file is replaced — every such place detaches the catalog through
-    // DetachAsync, which removes it from both sets, and the two go together for the same reason.
+    // forgotten with the attach, in DetachAsync, which every replacement of the live file goes through.
     private readonly ConcurrentDictionary<string, bool> _readable = new(StringComparer.Ordinal);
 
     // One pool per project, because a pooled connection is handed back still bound to that project and
@@ -462,14 +461,11 @@ public sealed partial class ProjectIndexes : IDisposable
     private static async Task<bool> LiveSchemaMatchesAsync(DuckDBConnection connection, string slug,
         CancellationToken cancellationToken)
     {
-        using (var exists = connection.CreateCommand())
-        {
-            // A file with no tables at all has no index_info to ask, and selecting from it would throw.
-            exists.CommandText =
-                $"SELECT count(*) FROM duckdb_tables() WHERE database_name = {IndexQuery.Literal(slug)} "
-                + "AND schema_name = 'main' AND table_name = 'index_info'";
-            if (await exists.ExecuteScalarAsync(cancellationToken) is not > 0L) return false;
-        }
+        if (await connection.CountAsync(
+                "SELECT count(*) FROM duckdb_tables() "
+                + "WHERE database_name = $slug AND schema_name = 'main' AND table_name = 'index_info'",
+                [new DuckDBParameter("slug", slug)], cancellationToken) == 0)
+            return false;
 
         using var version = connection.CreateCommand();
         version.CommandText = $"SELECT max(schema_version) FROM {Quote(slug)}.main.index_info";
@@ -744,10 +740,8 @@ public sealed partial class ProjectIndexes : IDisposable
     }
 
     /// <summary>
-    ///     Detaches a catalog if the instance holds it, and forgets that it was attached and whether its
-    ///     file was readable, so the next attach asks both again. Run under the attach gate, like every
-    ///     other write to <c>_attached</c>. Only a project's own catalog is ever in <c>_readable</c>; for
-    ///     a shadow or a restore catalog that removal finds nothing.
+    ///     Detaches a catalog and forgets what was remembered about it, so the next attach asks again.
+    ///     The caller holds the attach gate, which is not reentrant.
     /// </summary>
     private async Task DetachAsync(DuckDBConnection connection, string catalog,
         CancellationToken cancellationToken)
