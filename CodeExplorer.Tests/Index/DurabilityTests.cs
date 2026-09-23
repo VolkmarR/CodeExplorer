@@ -16,6 +16,14 @@ namespace CodeExplorer.Tests;
 /// </summary>
 public sealed class DurabilityTests : IDisposable
 {
+    /// <summary>The Parquet set a completed store leaves, in name order.</summary>
+    private static readonly string[] StoredFiles =
+    [
+        "attribution.parquet", "commit_files.parquet", "commits.parquet", "files.parquet",
+        "imports.parquet", "index_info.parquet", "lines.parquet", "path_lineage.parquet",
+        "project_overview.parquet", "repositories.parquet"
+    ];
+
     private TestHost? _host;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -32,12 +40,7 @@ public sealed class DurabilityTests : IDisposable
         // adding it to the durable copy fails here instead of on the next scale to zero. The history
         // tables are as much of the index as the code ones are (ADR-0007), and that includes the
         // rename chains the build derives from them (#148): a restore does not re-walk.
-        Assert.Equal([
-                "attribution.parquet", "commit_files.parquet", "commits.parquet", "files.parquet",
-                "imports.parquet", "index_info.parquet", "lines.parquet", "path_lineage.parquet",
-                "project_overview.parquet", "repositories.parquet"
-            ],
-            Directory.EnumerateFiles(host.DurableIndexDirectory("alpha")).Select(Path.GetFileName).Order());
+        Assert.Equal(StoredFiles, StoredFileNames(host, "alpha"));
     }
 
     [Fact]
@@ -266,13 +269,8 @@ public sealed class DurabilityTests : IDisposable
     }
 
     /// <summary>
-    ///     A re-store that stopped part-way (#187), which unlike a first store leaves every table name
-    ///     in place: the tables it reached are the new generation and the rest the old. Interrupted at
-    ///     each table in turn, the history ones included — a copy mixed between <c>commits</c> and
-    ///     <c>attribution</c> is the one a refresh could not repair, because the newer commits read as
-    ///     already recorded and nothing is replayed.
-    ///     The interruption is a durable file held open exclusively, so the store's write of that one
-    ///     table fails the way a lost connection would.
+    ///     A re-store that stopped part-way (#187), at each table in turn and the history ones included.
+    ///     The interruption is that table's durable file held open exclusively, so its write fails.
     /// </summary>
     [Theory]
     [InlineData("repositories")]
@@ -307,7 +305,7 @@ public sealed class DurabilityTests : IDisposable
         // with writes the whole set again.
         await host.RefreshAsync("alpha");
         Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
-        Assert.Equal(10, Directory.EnumerateFiles(host.DurableIndexDirectory("alpha")).Count());
+        Assert.Equal(StoredFiles, StoredFileNames(host, "alpha"));
         host.DeleteIndexFile("alpha");
         Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
         // The history the mixed copy would have left stale, restored whole with the rest.
@@ -446,6 +444,9 @@ public sealed class DurabilityTests : IDisposable
         Assert.NotNull(detail);
         return detail;
     }
+
+    private static IEnumerable<string?> StoredFileNames(TestHost host, string slug) =>
+        Directory.EnumerateFiles(host.DurableIndexDirectory(slug)).Select(Path.GetFileName).Order();
 
     /// <summary>One repository of one file. The slug names the fixture on disk too, so two projects need two.</summary>
     private static Dictionary<string, Dictionary<string, string>> Repository(string content, string slug = "one") =>

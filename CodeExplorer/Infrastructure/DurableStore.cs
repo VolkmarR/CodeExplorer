@@ -170,8 +170,7 @@ public sealed class DurableStore
         // to drop and a prefix is all that separates one project's durable copy from another's.
         await foreach (var blob in _container.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix,
                            cancellationToken))
-            await _container.DeleteBlobIfExistsAsync(blob.Name, DeleteSnapshotsOption.IncludeSnapshots,
-                cancellationToken: cancellationToken);
+            await RemoveOneAsync(blob.Name, cancellationToken);
     }
 
     private void CopyOut(string name, string localPath)

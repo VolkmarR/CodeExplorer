@@ -62,10 +62,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         "project_overview"
     ];
 
-    /// <summary>
-    ///     Every table a store writes, in the order it writes them: <see cref="IndexInfo" /> last, so a
-    ///     stored one also means the rest of the set was written.
-    /// </summary>
+    /// <summary>Every table a store writes, in order: <see cref="IndexInfo" /> last, for the reason <see cref="StoreAsync" /> gives.</summary>
     private static readonly string[] Tables = [..ContentTables, IndexInfo];
 
     /// <summary>
@@ -129,8 +126,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         {
             // index_info alone first, and the version read before anything else is fetched: lines is
             // the largest table by far, and after a schema bump every project's first open would
-            // otherwise transfer its whole copy only to throw it away. A store writes it last, so its
-            // absence is also how a store that stopped part-way reads (#187).
+            // otherwise transfer its whole copy only to throw it away.
             if (!await FetchTableAsync(copy, slug, IndexInfo, cancellationToken)) return Absent(copy);
 
             int version = await SchemaVersionAsync(copy, cancellationToken);
