@@ -163,20 +163,12 @@ internal sealed partial class SearchTools
         foreach (var file in hits.GroupBy(hit => hit.Path))
         {
             text.Append("  ").Append(file.Key).Append('\n');
-            int width = file.Max(hit => hit.LineNumber.ToString(CultureInfo.InvariantCulture).Length);
+            int width = ToolReply.Digits(file.Max(hit => hit.LineNumber));
             foreach (var hit in file)
             {
-                text.Append("  ")
-                    .Append(hit.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
-                    .Append(": ")
-                    .Append(hit.Label is null ? "" : $"[{hit.Label}] ");
-                // Clipped first and trimmed at the start after, as the string form did: the clip counts
-                // the indentation, so trimming it first would move the cut and the count it reports.
-                int from = text.Length;
-                ToolReply.Clip(text, hit.Text);
-                int indent = 0;
-                while (from + indent < text.Length && char.IsWhiteSpace(text[from + indent])) indent++;
-                text.Remove(from, indent).Append('\n');
+                ToolReply.LineNumber(text.Append("  "), hit.LineNumber, width).Append(": ");
+                if (hit.Label is not null) text.Append('[').Append(hit.Label).Append("] ");
+                ToolReply.Clip(text, hit.Text, trimStart: true).Append('\n');
             }
         }
     }

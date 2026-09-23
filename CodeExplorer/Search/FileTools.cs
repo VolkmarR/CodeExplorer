@@ -161,7 +161,7 @@ internal sealed partial class FileTools(
         if (read.History is { } history) text.Append(History(history));
         text.Append('\n');
 
-        int width = end.ToString(CultureInfo.InvariantCulture).Length;
+        int width = ToolReply.Digits(end);
         int budget = text.Length + allowance;
         int last = end;
         for (int i = 0; i < read.Lines.Count; i++)
@@ -174,7 +174,7 @@ internal sealed partial class FileTools(
                 break;
             }
 
-            text.Append((start + i).ToString(CultureInfo.InvariantCulture).PadLeft(width)).Append("  ");
+            ToolReply.LineNumber(text, start + i, width).Append("  ");
             ToolReply.Clip(text, read.Lines[i]).Append('\n');
         }
 

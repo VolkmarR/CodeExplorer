@@ -38,7 +38,7 @@ internal static class ToolReply
     /// <param name="answer">What this tool makes of its result.</param>
     /// <param name="advice">How the caller gets the rest, said only if the cap bites.</param>
     public static string Render<T>(Outcome outcome, Func<T, string> answer, string advice) where T : Outcome =>
-        outcome is Problem problem ? problem.Explanation : Cap(answer((T)outcome), advice);
+        Render(outcome, answer, advice, null);
 
     /// <summary>
     ///     The same where the advice names something the answer knows — the page a caller has reached,
@@ -47,12 +47,17 @@ internal static class ToolReply
     ///     when the cap bites, because every other reply would build it to throw it away.
     /// </summary>
     public static string Render<T>(Outcome outcome, Func<T, string> answer, Func<T, string> advice)
+        where T : Outcome =>
+        Render(outcome, answer, null, advice);
+
+    /// <summary>The body of both overloads, with the advice as whichever of the two a tool has.</summary>
+    private static string Render<T>(Outcome outcome, Func<T, string> answer, string? advice, Func<T, string>? adviceOf)
         where T : Outcome
     {
         if (outcome is Problem problem) return problem.Explanation;
         var result = (T)outcome;
         string text = answer(result);
-        return text.Length <= MaxOutputChars ? text : Cap(text, advice(result));
+        return text.Length <= MaxOutputChars ? text : Cap(text, advice ?? adviceOf!(result));
     }
 
     /// <summary>
@@ -129,26 +134,54 @@ internal static class ToolReply
             advice, "\n");
     }
 
+    /// <summary>
+    ///     <see cref="Clip(StringBuilder, ReadOnlySpan{char}, bool)" /> as a string, for a line that is
+    ///     part of an interpolation rather than appended. A line under the limit is returned as it is.
+    /// </summary>
     public static string Clip(string text)
     {
         string trimmed = text.TrimEnd();
-        return trimmed.Length <= MaxLineChars
-            ? trimmed
-            : string.Create(CultureInfo.InvariantCulture,
-                $"{trimmed.AsSpan(0, MaxLineChars)} ... [{trimmed.Length - MaxLineChars} more characters on this line]");
+        return trimmed.Length <= MaxLineChars ? trimmed : Clip(new StringBuilder(), trimmed).ToString();
     }
 
     /// <summary>
-    ///     <see cref="Clip(string)" /> written straight into the reply, for the tools that clip every
-    ///     line they show: the trimmed line is appended as a span rather than made a string first.
+    ///     Writes a line into the reply, its trailing whitespace dropped and anything past
+    ///     <see cref="MaxLineChars" /> replaced by how much was cut. Appended as a span, for the tools
+    ///     that clip every line they show.
     /// </summary>
-    public static StringBuilder Clip(StringBuilder text, ReadOnlySpan<char> line)
+    /// <param name="text">The reply being built.</param>
+    /// <param name="line">The line as it is in the file.</param>
+    /// <param name="trimStart">
+    ///     Drop the indentation too. It still counts toward the limit and the count, so a line reads
+    ///     the same cut with or without it.
+    /// </param>
+    public static StringBuilder Clip(StringBuilder text, ReadOnlySpan<char> line, bool trimStart = false)
     {
         var trimmed = line.TrimEnd();
-        return trimmed.Length <= MaxLineChars
-            ? text.Append(trimmed)
-            : text.Append(trimmed[..MaxLineChars]).Append(CultureInfo.InvariantCulture,
-                $" ... [{trimmed.Length - MaxLineChars} more characters on this line]");
+        var kept = trimmed.Length <= MaxLineChars ? trimmed : trimmed[..MaxLineChars];
+        if (trimStart) kept = kept.TrimStart();
+        text.Append(kept);
+        if (trimmed.Length <= MaxLineChars) return text;
+
+        // A head that was all indentation leaves nothing for the space before the notice to separate.
+        if (!kept.IsEmpty) text.Append(' ');
+        return text.Append(CultureInfo.InvariantCulture,
+            $"... [{trimmed.Length - MaxLineChars} more characters on this line]");
+    }
+
+    /// <summary>
+    ///     Right-aligns a line number in a column <paramref name="width" /> wide, formatted straight into
+    ///     the reply rather than as a padded string per line.
+    /// </summary>
+    public static StringBuilder LineNumber(StringBuilder text, int number, int width) =>
+        text.Append(' ', Math.Max(0, width - Digits(number))).Append(CultureInfo.InvariantCulture, $"{number}");
+
+    /// <summary>How many digits a line number prints as: the width of its column.</summary>
+    public static int Digits(int number)
+    {
+        int digits = 1;
+        for (; number >= 10; number /= 10) digits++;
+        return digits;
     }
 
     public static string Plural(long n, string one, string? many = null) => n == 1 ? one : many ?? one + "s";
