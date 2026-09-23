@@ -31,9 +31,9 @@ public sealed record GrepRequest(
     public bool HasFileFilters => Filter.Any;
 }
 
-/// <summary><see cref="IsMatch" /> is false for a line returned only as context around a match.</summary>
 /// <summary>
-///     One line of an answer. <see cref="By" /> is filled only when the caller asked for history and the
+///     One line of an answer. <see cref="IsMatch" /> is false for a line returned only as context around
+///     a match. <see cref="By" /> is filled only when the caller asked for history and the
 ///     build attributed the line; it says who last changed it, never who wrote it (CONTEXT.md,
 ///     Attribution).
 /// </summary>
@@ -158,16 +158,18 @@ public sealed partial class GrepSearch(IndexReaders readers)
         CancellationToken cancellationToken)
     {
         var connection = index.Connection;
-        // Match parameters and file-filter parameters are kept apart: the "without filters" recount
-        // below reuses the match alone, and DuckDB rejects a parameter the statement does not reference.
+        // Match parameters and file-filter parameters are kept apart so the "without filters" recount
+        // below carries only what it references. Nothing would reject the extras — DuckDB.NET 1.5.5
+        // skips a named parameter the statement does not use — but a recount that shows its whole
+        // input is easier to read.
         var matchParameters = new List<DuckDBParameter>();
-        var match = new StringBuilder();
+        string match;
         string engine;
 
         if (regex)
         {
             engine = RegexEngine;
-            match.Append("regexp_matches(l.content, $q, $flags)");
+            match = "regexp_matches(l.content, $q, $flags)";
             matchParameters.Add(new DuckDBParameter("q", query));
             matchParameters.Add(new DuckDBParameter("flags", request.CaseSensitive ? "" : "i"));
         }
@@ -177,37 +179,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             bool useTokens = tokens.Any(HasIndexableChars) && await index.HasFullTextAsync(cancellationToken);
             engine = useTokens ? TokenEngine : SubstringEngine;
-
-            if (useTokens)
-            {
-                // The same rule BM25 applied, without reading the BM25 index. The index is built with
-                // stemmer='none', stopwords='none' and ignore='[^a-z0-9_]+' (FtsExtension), so a token
-                // is a maximal run of [a-z0-9_] — which is exactly what \b bounds on lower-cased text.
-                // Conjunctive: every piece of the query must be present, in any order, which is why
-                // this is one test per piece and not one \b…\b around the whole string.
-                // Always case-insensitive, as the lower-cased index was, and the contains() below
-                // restores exactness either way.
-                string[] pieces = IdentifierPieces().Split(query.ToLowerInvariant())
-                    .Where(piece => piece.Length > 0).ToArray();
-                for (int i = 0; i < pieces.Length; i++)
-                {
-                    if (match.Length > 0) match.Append(" AND ");
-                    match.Append(CultureInfo.InvariantCulture, $"regexp_matches(lower(l.content), $w{i})");
-                    // No escaping: a piece is [a-z0-9_] by construction, so nothing in it is a
-                    // metacharacter. A piece that could carry one would be a piece the split kept.
-                    matchParameters.Add(new DuckDBParameter($"w{i}", $@"\b{pieces[i]}\b"));
-                }
-            }
-
-            for (int i = 0; i < tokens.Length; i++)
-            {
-                if (match.Length > 0) match.Append(" AND ");
-                match.Append(request.CaseSensitive
-                    ? $"contains(l.content, $t{i})"
-                    : $"contains(lower(l.content), $t{i})");
-                matchParameters.Add(new DuckDBParameter($"t{i}",
-                    request.CaseSensitive ? tokens[i] : tokens[i].ToLowerInvariant()));
-            }
+            match = TextMatch(tokens, request.CaseSensitive, useTokens, matchParameters);
         }
 
         var fileParameters = new List<DuckDBParameter>();
@@ -320,11 +292,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
                         reader.Flag("is_match"),
                         // Only asked for when the caller wanted history, and null for a line the build
                         // could not attribute — which is every line of a project indexed before there
-                        // was any history to attribute from.
-                        // Null for a line the build could not attribute — which is every line of a
-                        // project indexed before there was any history to attribute from. The
-                        // attribution's four columns come from one LEFT JOIN, so the helper's null
-                        // test on the SHA answers for all four.
+                        // was any history to attribute from. The attribution's four columns come from
+                        // one LEFT JOIN, so the helper's null test on the SHA answers for all four.
                         request.WithHistory ? reader.Attribution() : null));
             }
 
@@ -344,6 +313,48 @@ public sealed partial class GrepSearch(IndexReaders readers)
         {
             return new GrepFile(path, count, lines.Count(l => l.IsMatch), lines);
         }
+    }
+
+    /// <summary>
+    ///     The predicate a text query matches lines with: with <paramref name="useTokens" />, every
+    ///     identifier piece as a whole token, then every whitespace-separated word verified with
+    ///     <c>contains</c>. The tests are ANDed, so each distinct piece and word is tested once however
+    ///     often the query repeats it. Exposed for tests.
+    /// </summary>
+    internal static string TextMatch(string[] words, bool caseSensitive, bool useTokens,
+        List<DuckDBParameter> parameters)
+    {
+        var tests = new List<string>();
+        if (useTokens)
+        {
+            // The same rule BM25 applied, without reading the BM25 index. The index is built with
+            // stemmer='none', stopwords='none' and ignore='[^a-z0-9_]+' (FtsExtension), so a token
+            // is a maximal run of [a-z0-9_] — which is exactly what \b bounds on lower-cased text.
+            // Conjunctive: every piece of the query must be present, in any order, which is why
+            // this is one test per piece and not one \b…\b around the whole string.
+            // Always case-insensitive, as the lower-cased index was, and the contains() below
+            // restores exactness either way.
+            string[] pieces = words.SelectMany(word => IdentifierPieces().Split(word.ToLowerInvariant()))
+                .Where(piece => piece.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
+            for (int i = 0; i < pieces.Length; i++)
+            {
+                tests.Add(string.Create(CultureInfo.InvariantCulture, $"regexp_matches(lower(l.content), $w{i})"));
+                // No escaping: a piece is [a-z0-9_] by construction, so nothing in it is a
+                // metacharacter. A piece that could carry one would be a piece the split kept.
+                parameters.Add(new DuckDBParameter($"w{i}", $@"\b{pieces[i]}\b"));
+            }
+        }
+
+        string content = caseSensitive ? "l.content" : "lower(l.content)";
+        string[] verified = words.Select(word => caseSensitive ? word : word.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal).ToArray();
+        for (int i = 0; i < verified.Length; i++)
+        {
+            tests.Add(string.Create(CultureInfo.InvariantCulture, $"contains({content}, $t{i})"));
+            parameters.Add(new DuckDBParameter($"t{i}", verified[i]));
+        }
+
+        return string.Join(" AND ", tests);
     }
 
     /// <summary>
@@ -390,11 +401,17 @@ public sealed partial class GrepSearch(IndexReaders readers)
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = request.Filter.Sql(fileParameters);
 
+        // The extract alone decides both whether a document matches and how often: it is empty exactly
+        // when regexp_matches is false, empty matches and empty documents included, so testing
+        // regexp_matches first would run the pattern over every matching document twice.
         var counts = new List<(long FileId, string Path, int Count)>();
         using (var command = connection.Query($"""
                                                   {Documents(fileFilter + literalFilter)}
-                                                  SELECT file_id, qualified_path, len(regexp_extract_all(content, $q, 0, $flags)) AS match_count
-                                                  FROM docs WHERE regexp_matches(content, $q, $flags)
+                                                  SELECT file_id, qualified_path, match_count FROM (
+                                                      SELECT file_id, qualified_path,
+                                                             len(regexp_extract_all(content, $q, 0, $flags)) AS match_count
+                                                      FROM docs)
+                                                  WHERE match_count > 0
                                                   ORDER BY match_count DESC, qualified_path
                                                   """, [.. matchParameters, .. fileParameters]))
         using (var reader = await command.ReaderAsync(cancellationToken))
@@ -466,23 +483,26 @@ public sealed partial class GrepSearch(IndexReaders readers)
     ///     Walks content in which every match is wrapped in <see cref="MatchStart" /> and
     ///     <see cref="MatchEnd" />, marks every line a match spans, adds the context window, and returns
     ///     the lines with how many matches they cover. Empty matches are skipped: they span nothing.
+    ///     The walk records only where each line starts; text is cut out, markers removed, for the
+    ///     shown lines alone, because a file on the page can be thousands of lines around a few matches.
     /// </summary>
     private static (List<GrepLine> Lines, int MatchesShown) SpannedLines(string marked, Bounds bounds)
     {
-        var lines = new List<string>();
+        var lineStarts = new List<int> { 0 };
         var matched = new HashSet<int>();
         var shown = new SortedSet<int>();
-        var current = new StringBuilder();
-        int line = 1, matchesSeen = 0, matchStartLine = 0, matchStartColumn = 0;
-        foreach (char c in marked)
-            switch (c)
+        int matchesSeen = 0, matchStartLine = 0, matchStartIndex = 0;
+        for (int index = 0; index < marked.Length; index++)
+            switch (marked[index])
             {
                 case MatchStart:
-                    matchStartLine = line;
-                    matchStartColumn = current.Length;
+                    matchStartLine = lineStarts.Count;
+                    matchStartIndex = index;
                     break;
                 case MatchEnd:
-                    if (matchStartLine == line && current.Length == matchStartColumn) break;
+                    // Nothing between the markers, not even a newline: an empty match.
+                    if (index == matchStartIndex + 1) break;
+                    int line = lineStarts.Count;
                     if (matchesSeen < bounds.MaxLinesPerFile)
                     {
                         for (int i = matchStartLine; i <= line; i++) matched.Add(i);
@@ -493,19 +513,27 @@ public sealed partial class GrepSearch(IndexReaders readers)
                     matchesSeen++;
                     break;
                 case '\n':
-                    lines.Add(current.ToString());
-                    current.Clear();
-                    line++;
-                    break;
-                default:
-                    current.Append(c);
+                    lineStarts.Add(index + 1);
                     break;
             }
 
-        lines.Add(current.ToString());
         return (
-            [.. shown.Where(i => i <= lines.Count).Select(i => new GrepLine(i, lines[i - 1], matched.Contains(i)))],
+            [.. shown.Where(i => i <= lineStarts.Count).Select(i => new GrepLine(i, LineText(i), matched.Contains(i)))],
             Math.Min(matchesSeen, bounds.MaxLinesPerFile));
+
+        string LineText(int line)
+        {
+            int start = lineStarts[line - 1];
+            int end = line < lineStarts.Count ? lineStarts[line] - 1 : marked.Length;
+            var span = marked.AsSpan(start, end - start);
+            if (span.IndexOfAny(MatchStart, MatchEnd) < 0) return new string(span);
+
+            var text = new StringBuilder(span.Length);
+            foreach (char c in span)
+                if (c is not (MatchStart or MatchEnd))
+                    text.Append(c);
+            return text.ToString();
+        }
     }
 
     /// <summary>

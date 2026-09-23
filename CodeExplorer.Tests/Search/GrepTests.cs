@@ -216,6 +216,34 @@ public sealed class GrepTests : IDisposable
         Assert.Contains("1 more match in this file", capped);
     }
 
+    /// <summary>
+    ///     A pattern that can match nothing counts every empty match, as RE2's extract does, yet marks
+    ///     only the lines a real match spans; and a context window stops at the first and last line.
+    /// </summary>
+    [Fact]
+    public async Task Multiline_empty_matches_count_but_mark_nothing_and_context_stops_at_the_file_edges()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string emptyToo = await GrepAsync(client,
+            new Dictionary<string, object?>
+                { ["query"] = "(?:Done)?", ["multiline"] = true, ["path"] = "two/lib/wrapped.ts" });
+        Assert.Contains("two/lib/wrapped.ts  -  84 matches", emptyToo);
+        Assert.Contains("2:   e => e.Status = Done);", emptyToo);
+        Assert.DoesNotContain("1: repo.Update(entity,", emptyToo);
+        Assert.DoesNotContain("3: repo.Update(other", emptyToo);
+        Assert.Contains("83 more matches in this file", emptyToo);
+
+        string spanning = await GrepAsync(client,
+            new Dictionary<string, object?>
+                { ["query"] = "Done\\);\\nrepo", ["multiline"] = true, ["context"] = 2 });
+        Assert.Contains("two/lib/wrapped.ts  -  1 match", spanning);
+        Assert.Contains("1- repo.Update(entity,", spanning);
+        Assert.Contains("2:   e => e.Status = Done);", spanning);
+        Assert.Contains("3: repo.Update(other, e => e.Status = Open);", spanning);
+        Assert.DoesNotContain("4-", spanning);
+    }
+
     [Theory]
     [InlineData(SearchEngine.Fts)]
     [InlineData(SearchEngine.Substring)]
@@ -243,6 +271,40 @@ public sealed class GrepTests : IDisposable
     [InlineData("[abc]x{2}", null)]
     public void Required_literal_is_sound(string pattern, string? expected) =>
         Assert.Equal(expected, GrepSearch.RequiredLiteral(pattern));
+
+    /// <summary>The tests are ANDed, so a repeated word would only make the scan test it twice.</summary>
+    [Theory]
+    [InlineData(true, false, 1, 1)]
+    [InlineData(true, true, 1, 2)]
+    [InlineData(false, false, 0, 1)]
+    [InlineData(false, true, 0, 2)]
+    public void A_repeated_query_word_adds_no_duplicate_predicate(bool useTokens, bool caseSensitive, int pieces,
+        int contains)
+    {
+        var parameters = new List<DuckDB.NET.Data.DuckDBParameter>();
+
+        string sql = GrepSearch.TextMatch(["needle", "Needle", "needle"], caseSensitive, useTokens, parameters);
+
+        Assert.Equal(pieces, CountOf(sql, "regexp_matches("));
+        Assert.Equal(contains, CountOf(sql, "contains("));
+        Assert.Equal(pieces + contains, parameters.Count);
+
+        static int CountOf(string text, string part) => text.Split(part).Length - 1;
+    }
+
+    /// <summary>Dropping the repeats must not change what the query finds, on either engine.</summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task A_repeated_query_word_finds_what_the_word_alone_finds(SearchEngine engine)
+    {
+        await using var client = await StartAsync(engine);
+
+        string once = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "needle" });
+        string repeated = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "needle Needle needle" });
+
+        Assert.Equal(once.Replace("\"needle\"", ""), repeated.Replace("\"needle Needle needle\"", ""));
+    }
 
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation()
