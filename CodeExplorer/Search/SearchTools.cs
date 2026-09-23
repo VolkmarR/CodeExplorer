@@ -179,7 +179,7 @@ internal sealed partial class SearchTools(
         text.Append(CultureInfo.InvariantCulture,
             $"\n{file.QualifiedPath}  -  {file.MatchCount} {ToolReply.Plural(file.MatchCount, "match", "matches")}\n");
 
-        int width = file.Lines.Count == 0 ? 1 : file.Lines[^1].LineNumber.ToString(CultureInfo.InvariantCulture).Length;
+        int width = file.Lines.Count == 0 ? 1 : ToolReply.Digits(file.Lines[^1].LineNumber);
         string pad = new(' ', width);
         int previous = 0;
         foreach (var line in file.Lines)
@@ -189,8 +189,7 @@ internal sealed partial class SearchTools(
             if (request.Context > 0 && previous > 0 && line.LineNumber > previous + 1)
                 text.Append(pad).Append("  ...\n");
             // ':' marks a match and '-' a context line, the way grep does it.
-            text.Append(line.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
-                .Append(line.IsMatch ? ':' : '-').Append(' ');
+            ToolReply.LineNumber(text, line.LineNumber, width).Append(line.IsMatch ? ':' : '-').Append(' ');
             ToolReply.Clip(text, line.Text);
             // The attribution goes after the code and not before it, so the code still starts at a fixed
             // column and a reply with history reads like one without.

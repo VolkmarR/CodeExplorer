@@ -365,7 +365,9 @@ public sealed class ToolReplyTests : IDisposable
         "    indented\r",
         new string('b', 500) + "   ",
         new string('c', 501),
-        new string('d', 1234) + " "
+        new string('d', 1234) + " ",
+        "        " + new string('e', 600),
+        new string(' ', 600) + "f"
     };
 
     /// <summary>Clipping into the reply writes exactly what the string form returns.</summary>
@@ -378,5 +380,29 @@ public sealed class ToolReplyTests : IDisposable
         ToolReply.Clip(text, line).Append('|');
 
         Assert.Equal("> " + ToolReply.Clip(line) + "|", text.ToString());
+    }
+
+    /// <summary>
+    ///     Dropping the indentation reads as trimming the clipped string: the indentation still counts
+    ///     toward the cut, so the count a long indented line reports does not move.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Lines))]
+    public void A_line_clipped_without_its_indentation_reads_as_the_clipped_string_trimmed(string line)
+    {
+        Assert.Equal(ToolReply.Clip(line).TrimStart(),
+            ToolReply.Clip(new StringBuilder(), line, trimStart: true).ToString());
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(7, 3)]
+    [InlineData(10, 2)]
+    [InlineData(99, 4)]
+    [InlineData(12345, 3)]
+    public void A_line_number_is_right_aligned_as_padding_its_string_would(int number, int width)
+    {
+        Assert.Equal(number.ToString(System.Globalization.CultureInfo.InvariantCulture).PadLeft(width),
+            ToolReply.LineNumber(new StringBuilder(), number, width).ToString());
     }
 }
