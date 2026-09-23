@@ -135,6 +135,23 @@ public sealed class DurableStore
     }
 
     /// <summary>
+    ///     Forgets one stored name. Removing a name the store does not hold is not an error: the first
+    ///     store of a project has nothing to remove, and neither has one that follows an interrupted one.
+    /// </summary>
+    public async Task RemoveOneAsync(string name, CancellationToken cancellationToken)
+    {
+        if (_container is null)
+        {
+            string stored = Resolve(name);
+            if (File.Exists(stored)) File.Delete(stored);
+            return;
+        }
+
+        await _container.DeleteBlobIfExistsAsync(name, DeleteSnapshotsOption.IncludeSnapshots,
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
     ///     Forgets everything under a name prefix, for a project an operator deleted. Removing nothing is
     ///     not an error: a project deleted before it was ever indexed has no durable copy to forget, and
     ///     leaving one behind would restore a deleted project's files under a slug someone reused.

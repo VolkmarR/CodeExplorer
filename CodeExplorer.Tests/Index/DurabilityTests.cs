@@ -265,6 +265,57 @@ public sealed class DurabilityTests : IDisposable
         Assert.False(host.Indexes.HasIndex("alpha"));
     }
 
+    /// <summary>
+    ///     A re-store that stopped part-way (#187), which unlike a first store leaves every table name
+    ///     in place: the tables it reached are the new generation and the rest the old. Interrupted at
+    ///     each table in turn, the history ones included — a copy mixed between <c>commits</c> and
+    ///     <c>attribution</c> is the one a refresh could not repair, because the newer commits read as
+    ///     already recorded and nothing is replayed.
+    ///     The interruption is a durable file held open exclusively, so the store's write of that one
+    ///     table fails the way a lost connection would.
+    /// </summary>
+    [Theory]
+    [InlineData("repositories")]
+    [InlineData("files")]
+    [InlineData("lines")]
+    [InlineData("commits")]
+    [InlineData("commit_files")]
+    [InlineData("attribution")]
+    [InlineData("path_lineage")]
+    [InlineData("imports")]
+    [InlineData("project_overview")]
+    public async Task A_re_store_interrupted_at_any_table_reads_as_no_copy_and_one_refresh_repairs_it(string table)
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+
+        await using (File.Open(Path.Combine(host.DurableIndexDirectory("alpha"), table + ".parquet"),
+                         FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            using (var response = await host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            await host.WaitForRefreshesAsync();
+            Assert.Equal(RefreshState.Failed, (await host.RefreshStatusAsync("alpha")).State);
+        }
+
+        // The wake that follows a scale to zero, which is when a mixed copy would have been restored.
+        host.DeleteIndexFile("alpha");
+        Assert.Null(await host.Indexes.OpenAsync("alpha", Ct));
+        Assert.False(host.Indexes.HasIndex("alpha"));
+
+        // An ordinary refresh and nothing else: absent means rebuilt from git, and the store it ends
+        // with writes the whole set again.
+        await host.RefreshAsync("alpha");
+        Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
+        Assert.Equal(10, Directory.EnumerateFiles(host.DurableIndexDirectory("alpha")).Count());
+        host.DeleteIndexFile("alpha");
+        Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
+        // The history the mixed copy would have left stale, restored whole with the rest.
+        Assert.Equal(["1 1 1"], await host.ScalarsAsync("alpha",
+            "SELECT (SELECT count(*) FROM commits) || ' ' || (SELECT count(*) FROM commit_files) || ' ' "
+            + "|| (SELECT count(DISTINCT path) FROM attribution)"));
+    }
+
     [Fact]
     public async Task A_durable_copy_an_older_schema_wrote_is_rebuilt_rather_than_restored()
     {

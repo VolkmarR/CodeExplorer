@@ -62,8 +62,11 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         "project_overview"
     ];
 
-    /// <summary>Every table a store writes.</summary>
-    private static readonly string[] Tables = [IndexInfo, ..ContentTables];
+    /// <summary>
+    ///     Every table a store writes, in the order it writes them: <see cref="IndexInfo" /> last, so a
+    ///     stored one also means the rest of the set was written.
+    /// </summary>
+    private static readonly string[] Tables = [..ContentTables, IndexInfo];
 
     /// <summary>
     ///     Where <c>COPY TO</c> writes and a fetch lands: on the volume ADR-0003 budgets, next to the
@@ -77,6 +80,10 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     Writes a project's durable copy: every table to a local Parquet file, then each file to the
     ///     store under the project's own prefix. The connection is already bound to the project with
     ///     <c>USE</c>, so <c>COPY</c> resolves the tables in it and this never picks a catalog of its own.
+    ///     A re-store overwrites one table at a time, so one that stops part-way would leave every name
+    ///     in place and two generations behind them (#187). Removing <see cref="IndexInfo" /> first and
+    ///     writing it last makes that state a copy without it, which a fetch already reads as none: the
+    ///     next refresh rebuilds from git rather than carrying history forward from a mixed set.
     /// </summary>
     public async Task StoreAsync(DuckDBConnection connection, string slug, CancellationToken cancellationToken)
     {
@@ -84,6 +91,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         string scratch = Scratch(slug);
         try
         {
+            await store.RemoveOneAsync(Name(slug, IndexInfo), cancellationToken);
             foreach (string table in Tables)
             {
                 string local = Path.Combine(scratch, table + ".parquet");
@@ -121,7 +129,8 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         {
             // index_info alone first, and the version read before anything else is fetched: lines is
             // the largest table by far, and after a schema bump every project's first open would
-            // otherwise transfer its whole copy only to throw it away.
+            // otherwise transfer its whole copy only to throw it away. A store writes it last, so its
+            // absence is also how a store that stopped part-way reads (#187).
             if (!await FetchTableAsync(copy, slug, IndexInfo, cancellationToken)) return Absent(copy);
 
             int version = await SchemaVersionAsync(copy, cancellationToken);
