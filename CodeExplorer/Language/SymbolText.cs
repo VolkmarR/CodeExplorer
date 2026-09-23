@@ -49,7 +49,7 @@ public static class SymbolText
     ///     the opposite of what it does against a letter, so it is left off there rather than applied
     ///     blindly.
     ///     One copy, because the two searches that ask the engine for a symbol anchor it here and then
-    ///     re-find it on the line with <see cref="Occurrences" />: two definitions of a word character
+    ///     re-find it on the line with <see cref="IndexOf" />: two definitions of a word character
     ///     would be the two matchers disagreeing that this design exists to prevent.
     /// </summary>
     public static string WholeWordPattern(string symbol)
@@ -59,18 +59,6 @@ public static class SymbolText
         string head = IsWordChar(symbol[0]) ? @"\b" : "";
         string tail = IsWordChar(symbol[^1]) ? @"\b" : "";
         return head + Re2Literal(symbol) + tail;
-    }
-
-    /// <summary>
-    ///     Where <paramref name="symbol" /> sits on this line, on word boundaries, every time it does.
-    ///     Every one is classified and not only the first: <c>return Foo.Create(Foo.Default)</c> is a
-    ///     type use and a read, and reporting it as one of them loses the other.
-    /// </summary>
-    public static IEnumerable<int> Occurrences(string line, string symbol)
-    {
-        if (symbol.Length == 0) yield break;
-        for (int i = IndexOf(line, symbol); i >= 0; i = IndexOf(line, symbol, i + 1))
-            yield return i;
     }
 
     /// <summary>

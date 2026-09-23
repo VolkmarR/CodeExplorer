@@ -131,14 +131,14 @@ public static class Languages
     private static readonly string[] SqlModifiers =
         ["create", "alter", "or replace", "declare", "procedure", "function", "view", "table", "trigger", "type"];
 
+    /// <summary>What opens a routine body in the SQL family, where the C family writes a bracket.</summary>
+    private static readonly string[] SqlBodyOpeners = ["as", "is"];
+
     /// <summary>
     ///     What moves an Oracle file from a package spec to a package body. Shared by SQL and PL/SQL
     ///     because a script holding both is written with the same two headers whatever it is named:
     ///     the extension says which dialect to read a file as and never which half of one it is.
     /// </summary>
-    /// <summary>What opens a routine body in the SQL family, where the C family writes a bracket.</summary>
-    private static readonly string[] SqlBodyOpeners = ["as", "is"];
-
     private static readonly SectionMarker[] PackageSections =
     [
         new SectionMarker("create or replace package body", DeclarationRole.Implementation),

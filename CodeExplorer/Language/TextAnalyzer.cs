@@ -14,22 +14,19 @@ namespace CodeExplorer;
 ///     profile is the only thing that will ever read it.
 ///     .NET <see cref="Regex" /> appears here and only here, and only over a line DuckDB already
 ///     picked out, which is the division CODING_STANDARDS draws: the candidate set is chosen by the
-///     engine, and this says what each candidate is. The patterns are built per profile rather than
-///     declared with <c>[GeneratedRegex]</c>, because their alternations come from the profile's own
-///     keyword lists; one analyser is built per language at startup and the cost is paid once.
+///     engine, and this says what each candidate is. The declaration, assignment and generated-path
+///     patterns are built per profile rather than declared with <c>[GeneratedRegex]</c>, because their
+///     alternations come from the profile's own keyword lists; one analyser is built per language at
+///     startup and the cost is paid once. The shapes no profile changes are source-generated below.
 /// </summary>
-public sealed class TextAnalyzer : ILanguageAnalyzer
+public sealed partial class TextAnalyzer : ILanguageAnalyzer
 {
     /// <summary>
-    ///     Everything that may legally sit between the start of a declaration and its name. Shared by
-    ///     every profile: it describes the shape of a declaration head, not any language's punctuation.
-    /// </summary>
-    private const string DeclarationPrefixPattern = @"^[\s\w<>,\[\]\?\.]*$";
-
-    /// <summary>
-    ///     An RE2- and .NET-legal pattern that matches nothing, for a profile that declares no
-    ///     modifiers or no type keywords. An empty alternation would match the empty string — every
-    ///     line — which is the opposite of what "this language declares nothing I can read" means.
+    ///     An RE2-legal pattern that matches nothing, for a profile that declares no modifiers or no
+    ///     type keywords. An empty alternation would match the empty string — every line — which is
+    ///     the opposite of what "this language declares nothing I can read" means. It is never built
+    ///     as a .NET regex: <see cref="PatternOrNull" /> reads it as "no pattern" and the candidate
+    ///     predicate leaves it out.
     /// </summary>
     private const string MatchesNothing = @"[^\s\S]";
 
@@ -60,16 +57,16 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     /// </summary>
     private const int MaxTypeArgumentDepth = 3;
 
-    private readonly Regex _assignment;
-    private readonly Regex _declarationPrefix;
+    // Each null where the profile gives the shape nothing to match, rather than a compiled pattern
+    // that matches nothing and is still run on every candidate line.
+    private readonly Regex? _assignment;
     private readonly Regex? _generated;
     private readonly StringComparison _keywordComparison;
-    private readonly Regex _keywordDeclaration;
-    private readonly Regex _memberDeclaration;
+    private readonly Regex? _keywordDeclaration;
+    private readonly Regex? _memberDeclaration;
     private readonly LanguageProfile _profile;
     private readonly Regex? _precedingTypeDeclaration;
-    private readonly Regex _typeDeclaration;
-    private readonly Regex _typedDeclarationTail;
+    private readonly Regex? _typeDeclaration;
 
     // The profile's lists as arrays. <see cref="Scan" /> walks them once per character of every line
     // examined, and an IReadOnlyList<string> there is an interface dispatch per opener per character —
@@ -288,14 +285,10 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             ? MatchesNothing
             : $@"^\s*(\w+)\s*=\s*(?:{typeKeywords})\b";
 
-        _memberDeclaration = new Regex(flag + memberDeclarationPattern, PatternOptions);
-        _keywordDeclaration = new Regex(flag + keywordPattern, PatternOptions);
-        _typeDeclaration = new Regex(flag + typePattern, PatternOptions);
-        // Null rather than a pattern that matches nothing: this is asked of every line of every file
-        // a reference search reads, and the languages that write this shape are the minority.
-        _precedingTypeDeclaration = precedingTypePattern == MatchesNothing
-            ? null
-            : new Regex(flag + precedingTypePattern, PatternOptions);
+        _memberDeclaration = PatternOrNull(flag, memberDeclarationPattern);
+        _keywordDeclaration = PatternOrNull(flag, keywordPattern);
+        _typeDeclaration = PatternOrNull(flag, typePattern);
+        _precedingTypeDeclaration = PatternOrNull(flag, precedingTypePattern);
         // Only the shapes this language actually writes. A language that declares nothing this can
         // read asks the engine for no lines at all, rather than for the lines a pattern that matches
         // nothing would return.
@@ -304,40 +297,63 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
             ? CandidateLines.None
             : CandidateLines.Matching($"{flag}{string.Join("|", shapes.Select(p => $"(?:{p})"))}");
 
-        _declarationPrefix = new Regex(DeclarationPrefixPattern, PatternOptions);
-        _assignment = new Regex(AssignmentPattern(profile.AssignmentOperators), PatternOptions);
-        // "Symbol x", "Symbol? x", "Symbol[] x", "Symbol<T> x" — a type followed by the thing it types.
-        _typedDeclarationTail = new Regex(@"^(\??(\[\])?|<[^<>]*>)\s+\w", PatternOptions);
+        _assignment = PatternOrNull("", AssignmentPattern(profile.AssignmentOperators));
+        // Not compiled: nothing in production asks it, and a test asking a handful of paths does not
+        // earn the cost of emitting one.
         _generated = profile.GeneratedPathPatterns.Count == 0
             ? null
             : new Regex(
                 "^(?:" + string.Join("|", profile.GeneratedPathPatterns.Select(GlobToPattern)) + ")$",
                 // A path is compared without regard to case, the way a file system does.
-                PatternOptions | RegexOptions.IgnoreCase);
+                RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     }
 
     /// <summary>
-    ///     How every pattern here is built. <see cref="RegexOptions.Compiled" /> because these run
-    ///     against every line of every file a build ingests and every candidate line a reference or
-    ///     definition search reads, which is the one place in this system where a regex is hot.
-    ///     Measured on this machine, over the ten analysers (#149): building all of them went from
+    ///     How every per-profile pattern here but the generated-path one is built.
+    ///     <see cref="RegexOptions.Compiled" /> because
+    ///     these run against every line of every file a build ingests and every candidate line a
+    ///     reference or definition search reads, which is the one place in this system where a regex is
+    ///     hot. Measured on this machine, over the ten analysers (#149): building all of them went from
     ///     25 ms to 29 ms, and a scan of 120,000 lines from 244 ms to 110 ms. Four milliseconds once,
     ///     for a bit over twice the speed on every line after — and the once is the first touch of
     ///     <see cref="Languages.Default" />, which is a lazy static, so a replica waking up pays it on
-    ///     the first request that reads a line rather than at startup.
-    ///     The pattern strings are built per profile and the analysers are process-wide singletons, so
-    ///     there is nothing here a source generator could do instead.
+    ///     the first request that reads a line rather than at startup. Leaving uncompiled the patterns
+    ///     that cannot match, and source-generating the shared ones (#177), took that first touch from
+    ///     40 ms to 26 ms and the 120,000-line scan from 110 ms to 92 ms.
+    ///     These pattern strings are built per profile and the analysers are process-wide singletons,
+    ///     so a source generator cannot build them; the shapes that are the same for every profile are
+    ///     the <c>[GeneratedRegex]</c> methods below.
     /// </summary>
     private const RegexOptions PatternOptions = RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
+    /// <summary>
+    ///     The pattern built and compiled, or null where the profile gave it nothing to match. A shape
+    ///     this language does not write costs neither the compile nor a run per candidate line.
+    /// </summary>
+    private static Regex? PatternOrNull(string flag, string pattern) =>
+        pattern == MatchesNothing ? null : new Regex(flag + pattern, PatternOptions);
+
+    /// <summary>
+    ///     Everything that may legally sit between the start of a declaration and its name. Shared by
+    ///     every profile: it describes the shape of a declaration head, not any language's punctuation.
+    /// </summary>
+    [GeneratedRegex(@"^[\s\w<>,\[\]\?\.]*$", RegexOptions.CultureInvariant)]
+    private static partial Regex DeclarationPrefix();
+
+    /// <summary>"Symbol x", "Symbol? x", "Symbol[] x", "Symbol&lt;T&gt; x" — a type followed by the thing it types.</summary>
+    [GeneratedRegex(@"^(?:\??(?:\[\])?|<[^<>]*>)\s+\w", RegexOptions.CultureInvariant)]
+    private static partial Regex TypedDeclarationTail();
+
     /// <summary>Call parentheses, with an optional generic argument list in front of them.</summary>
-    private static readonly Regex Invocation = new(@"^\s*(<[^<>()]*>)?\s*\(", PatternOptions);
+    [GeneratedRegex(@"^\s*(?:<[^<>()]*>)?\s*\(", RegexOptions.CultureInvariant)]
+    private static partial Regex Invocation();
 
     /// <summary>
     ///     A declaration head is followed by a parameter list, a generic list, a property body or an
     ///     initialiser — never by an operator or the end of an expression.
     /// </summary>
-    private static readonly Regex DeclarationTail = new(@"^\s*([\(<{;=]|=>)", PatternOptions);
+    [GeneratedRegex(@"^\s*(?:[\(<{;=]|=>)", RegexOptions.CultureInvariant)]
+    private static partial Regex DeclarationTail();
 
     public string? Language => _profile.Name;
 
@@ -764,12 +780,12 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         bool opensScope = true;
         // The C-family shape first: where a language writes both, it is the more specific of the two
         // and the keyword shape would stop at the return type.
-        if (_memberDeclaration.Match(line) is { Success: true } m)
+        if (_memberDeclaration?.Match(line) is { Success: true } m)
         {
             member = m.Groups[1].Value;
             opensScope = OpensScope(line, m.Groups[1].Index);
         }
-        else if (_keywordDeclaration.Match(line) is { Success: true } k)
+        else if (_keywordDeclaration?.Match(line) is { Success: true } k)
         {
             member = k.Groups[2].Value;
             opensScope = OpensScope(line, k.Groups[2].Index);
@@ -820,7 +836,7 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     /// </summary>
     private string? TypeOn(string line)
     {
-        if (_typeDeclaration.Match(line) is { Success: true } named) return named.Groups[1].Value;
+        if (_typeDeclaration?.Match(line) is { Success: true } named) return named.Groups[1].Value;
         return _precedingTypeDeclaration?.Match(line) is { Success: true } preceding
             ? preceding.Groups[1].Value
             : null;
@@ -908,17 +924,33 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         ArgumentNullException.ThrowIfNull(line);
         ArgumentNullException.ThrowIfNull(symbol);
 
-        // What the line is, asked once. Whether it is an import and what type it declares do not
-        // change between one appearance of the symbol and the next, and the type regex alone cost
-        // milliseconds per appearance on a long line when it was asked per appearance.
-        bool import = IsImportLine(line);
-        string? typeDeclared = TypeOn(line);
+        var placed = new List<Answer<ReferenceKind>>();
+        if (symbol.Length == 0) return placed;
         Span<Frame> frames = stackalloc Frame[MaxNesting];
         var cursor = new LineCursor(this, position, line, frames);
 
-        var placed = new List<Answer<ReferenceKind>>();
-        foreach (int at in SymbolText.Occurrences(line, symbol))
-            placed.Add(Place(line, at, symbol.Length, cursor.StateAt(at), import, typeDeclared));
+        // What the line is, asked once and only once an appearance is known to be code: every other
+        // state is placed without it. Whether it is an import and what type it declares do not change
+        // between one appearance of the symbol and the next, and the type regex alone cost
+        // milliseconds per appearance on a long line when it was asked per appearance.
+        bool lineClassified = false;
+        bool import = false;
+        string? typeDeclared = null;
+        // Every appearance and not only the first: `return Foo.Create(Foo.Default)` is a type use and
+        // a read, and reporting it as one of them loses the other.
+        for (int at = SymbolText.IndexOf(line, symbol); at >= 0; at = SymbolText.IndexOf(line, symbol, at + 1))
+        {
+            var state = cursor.StateAt(at);
+            if (state == Lexical.Code && !lineClassified)
+            {
+                lineClassified = true;
+                import = IsImportLine(line);
+                typeDeclared = TypeOn(line);
+            }
+
+            placed.Add(Place(line, at, symbol.Length, state, import, typeDeclared));
+        }
+
         return placed;
     }
 
@@ -946,13 +978,13 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         var head = prefix.TrimEnd();
 
         bool afterReceiver = EndsWithAny(head, _memberAccess);
-        bool invoked = Invocation.IsMatch(suffix);
+        bool invoked = Invocation().IsMatch(suffix);
 
         if (!afterReceiver && IsDeclaration(prefix, suffix, line.AsSpan(index, length), typeDeclared))
             return Placed(ReferenceKind.Definition);
         if (invoked && EndsWithKeyword(head, _instantiationKeywords)) return Placed(ReferenceKind.Instantiation);
         if (invoked) return Placed(ReferenceKind.Call);
-        if (_assignment.IsMatch(suffix)) return Placed(ReferenceKind.Write);
+        if (_assignment?.IsMatch(suffix) == true) return Placed(ReferenceKind.Write);
         // "Foo.Bar()" — Foo itself is a reference to the type, not a member access on something else.
         if (!afterReceiver && StartsWithAny(suffix, _memberAccess)) return Placed(ReferenceKind.TypeUse);
         if (afterReceiver) return Placed(ReferenceKind.MemberAccess);
@@ -1451,11 +1483,11 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
         // three are ANDed, and this one is anchored and reads a few characters, where the two below
         // each walk a prefix that on a long line is most of the file; ordering the cheap gate first
         // turns most appearances away before either of them runs.
-        if (!DeclarationTail.IsMatch(suffix)) return false;
+        if (!DeclarationTail().IsMatch(suffix)) return false;
 
         // The prefix must look like a declaration head — modifiers and a return type and nothing
         // else. This is what keeps "return Foo(" and "x => Foo(" out.
-        if (!_declarationPrefix.IsMatch(prefix)) return false;
+        if (!DeclarationPrefix().IsMatch(prefix)) return false;
 
         // The same comparison the patterns above were built with. Asking ordinally where the language
         // shouts its keywords answered "no declaration here" for every `CREATE PROCEDURE` in a project
@@ -1469,5 +1501,5 @@ public sealed class TextAnalyzer : ILanguageAnalyzer
     private bool LooksLikeType(ReadOnlySpan<char> head, ReadOnlySpan<char> suffix) =>
         EndsWithKeyword(head, _instantiationKeywords)
         || EndsWithAny(head, _typePrefixes)
-        || _typedDeclarationTail.IsMatch(suffix);
+        || TypedDeclarationTail().IsMatch(suffix);
 }
