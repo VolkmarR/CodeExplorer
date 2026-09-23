@@ -5,8 +5,8 @@ namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     Writes the query plan of a read to a directory, for working out where a slow one spends its
-///     time. Off unless <c>CODEEXPLORER_EXPLAIN_DIR</c> names a directory, and the check is one string
-///     comparison on a static, so a query pays nothing for this existing.
+///     time. Off unless <c>CODEEXPLORER_EXPLAIN_DIR</c> names a directory, and the check is one read of
+///     a static array's length, so a query pays nothing for this existing.
 ///     It explains the statement the reader actually built rather than one retyped beside it: a plan
 ///     read off a hand-copied query is a plan for a different query, which is the way this kind of
 ///     investigation usually goes wrong.
@@ -18,9 +18,17 @@ namespace CodeExplorer.Reading;
 /// </summary>
 internal static class QueryPlan
 {
-    private static volatile string? _directory = Environment.GetEnvironmentVariable("CODEEXPLORER_EXPLAIN_DIR");
+    /// <summary>
+    ///     Every directory a plan is written to right now: the environment variable's for the life of
+    ///     the process, and one per <see cref="Recording" /> while it is held. Replaced whole under
+    ///     <see cref="_gate" /> and read without it, so the check on every query stays one read.
+    /// </summary>
+    private static volatile string[] _directories =
+        Environment.GetEnvironmentVariable("CODEEXPLORER_EXPLAIN_DIR") is { } fromEnvironment ? [fromEnvironment] : [];
 
-    public static bool Enabled => _directory is not null;
+    private static readonly Lock _gate = new();
+
+    public static bool Enabled => _directories.Length > 0;
 
     /// <summary>
     ///     The same switch, held on for the length of one test and pointed at
@@ -31,17 +39,27 @@ internal static class QueryPlan
     ///     Process-wide while it is held, like the variable, so a dump written during it may belong to
     ///     any read the process was making. A test therefore identifies its own dumps by the parameters
     ///     written into them rather than by counting the files.
+    ///     Recordings overlap, because test classes run in parallel, so each adds its directory and
+    ///     removes only its own. A single slot that each one saved and restored let the first to finish
+    ///     switch recording off under the second, whose own dump was then never written.
     /// </summary>
     internal static IDisposable Recording(string directory)
     {
-        string? previous = _directory;
-        _directory = directory;
-        return new Restore(previous);
+        lock (_gate) _directories = [.. _directories, directory];
+        return new Restore(directory);
     }
 
-    private sealed class Restore(string? previous) : IDisposable
+    private sealed class Restore(string directory) : IDisposable
     {
-        public void Dispose() => _directory = previous;
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                var remaining = _directories.ToList();
+                remaining.Remove(directory);
+                _directories = [.. remaining];
+            }
+        }
     }
 
     /// <summary>
@@ -73,7 +91,11 @@ internal static class QueryPlan
     private static async Task DumpAsync(DuckDBConnection connection, string label, string sql,
         IReadOnlyList<DuckDBParameter> parameters, CancellationToken cancellationToken)
     {
-        if (_directory is not { } directory) return;
+        // One snapshot for the whole dump, so a recording that ends half-way cannot split it.
+        string[] directories = _directories;
+        if (directories.Length == 0) return;
+        // DuckDB writes a profile to one path, so it goes to the first and is copied to the rest.
+        string directory = directories[0];
 
         string stamp = string.Create(CultureInfo.InvariantCulture,
             $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Safe(label)}");
@@ -116,15 +138,25 @@ internal static class QueryPlan
             file.Append(CultureInfo.InvariantCulture, $"-- ${parameter.ParameterName} = {parameter.Value}\n");
         file.Append('\n').Append(sql).Append("\n\n").Append(text);
 
-        try
+        string profile = Path.Combine(directory, stamp + ".json");
+        foreach (string target in directories)
         {
-            await File.WriteAllTextAsync(Path.Combine(directory, stamp + ".sql.txt"), file.ToString(),
-                cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // Nothing to do about it and nothing worth failing a search over.
-            Console.Error.WriteLine($"query plan not written: {ex.Message}");
+            try
+            {
+                if (target != directory)
+                {
+                    System.IO.Directory.CreateDirectory(target);
+                    if (File.Exists(profile)) File.Copy(profile, Path.Combine(target, stamp + ".json"), true);
+                }
+
+                await File.WriteAllTextAsync(Path.Combine(target, stamp + ".sql.txt"), file.ToString(),
+                    cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Nothing to do about it and nothing worth failing a search over.
+                Console.Error.WriteLine($"query plan not written: {ex.Message}");
+            }
         }
     }
 
