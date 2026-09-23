@@ -39,6 +39,25 @@ public sealed class FileHistoryTests(FileHistoryFixture fixture) : IClassFixture
     }
 
     /// <summary>
+    ///     The server's ceiling on one blame is a count of lines and not a last line. Read as a last
+    ///     line, every range past it came back as "has no lines", which an agent takes as the file
+    ///     ending there — and a 25 MiB file runs to several hundred thousand lines.
+    /// </summary>
+    [Fact]
+    public async Task Blame_answers_a_range_past_the_first_hundred_thousand_lines()
+    {
+        await HistoryFixtures.OnlyRepositoryProjectAsync(_host, "long",
+            new Dictionary<string, string> { ["long.txt"] = string.Concat(Enumerable.Repeat("x\n", 100_010)) },
+            true);
+
+        await using var client = await _host.ConnectAsync("long");
+        string reply = await TestHost.CallAsync(client, "blame",
+            new Dictionary<string, object?> { ["path"] = "long.txt", ["startLine"] = 100_002, ["endLine"] = 100_004 });
+
+        Assert.Contains("\n100002-100004 ", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     A miss must not read like a real answer: a path that names no file is a sentence saying so,
     ///     never an empty blame that an agent would take to mean "nobody has ever touched this".
     /// </summary>
