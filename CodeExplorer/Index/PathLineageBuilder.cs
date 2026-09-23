@@ -1,6 +1,7 @@
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     Fills <c>path_lineage</c>: what every path of every repository was called before, one row per
@@ -13,7 +14,7 @@ namespace CodeExplorer;
 ///     the same rows gives the same chain however often it is asked for, so it is walked once, here,
 ///     and a read is one ordered select.
 ///     The rule this encodes is unchanged and is the one the read side used to carry: an earlier
-///     prefix is the scope's <i>previous path</i> when <b>more</b> than <see cref="Share" /> of the
+///     prefix is the scope's <i>previous path</i> when <b>more</b> than <see cref="_share" /> of the
 ///     paths the scope has ever recorded came from it. What the comments below explain is how that
 ///     rule is evaluated for every path at once rather than for one path per query.
 /// </summary>
@@ -26,7 +27,7 @@ internal static class PathLineageBuilder
     ///     one that bounds the length of an honestly long chain. Both are settled here rather than at
     ///     read time, so that a reader never has to reason about either.
     /// </summary>
-    private const int MaxHops = 8;
+    private const int _maxHops = 8;
 
     /// <summary>
     ///     What makes an earlier prefix the scope's <i>previous path</i> rather than somewhere two files
@@ -42,7 +43,7 @@ internal static class PathLineageBuilder
     ///     A string and not a <see cref="double" />, because it is interpolated into SQL and a culture
     ///     that spells the point as a comma would write a syntax error rather than a wrong number.
     /// </summary>
-    private const string Share = "0.5";
+    private const string _share = "0.5";
 
     /// <summary>
     ///     Walks every chain and writes it. Runs after <c>commit_files</c> is complete, because that is
@@ -157,7 +158,7 @@ internal static class PathLineageBuilder
                    AND NOT starts_with(ca.previous, ca.scope || '/')
                    AND NOT starts_with(ca.scope, ca.previous || '/')
                  GROUP BY ca.repo_slug, ca.scope, ca.previous, r.paths
-                 HAVING count(DISTINCT ca.path) > r.paths * {Share})
+                 HAVING count(DISTINCT ca.path) > r.paths * {_share})
              WHERE pick = 1
              """, cancellationToken);
 
@@ -165,7 +166,7 @@ internal static class PathLineageBuilder
     ///     The chains, hop by hop: the previous path of the scope, then of that path, so
     ///     <c>src/Model</c> ← <c>model</c> ← <c>Model</c> comes back as a chain rather than one step.
     ///     The recursive walk carries the paths it has already stood on, so a rename ring stops at the
-    ///     first repeat instead of circling, and <see cref="MaxHops" /> stops an honestly long one.
+    ///     first repeat instead of circling, and <see cref="_maxHops" /> stops an honestly long one.
     /// </summary>
     private static void Chains(DuckDBConnection connection, CancellationToken cancellationToken) =>
         connection.Execute(
@@ -179,7 +180,7 @@ internal static class PathLineageBuilder
                  SELECT w.repo_slug, w.root, w.hop + 1, h.previous, list_append(w.seen, h.previous)
                  FROM walk w JOIN lineage_hops h
                      ON h.repo_slug = w.repo_slug AND h.scope = w.member
-                 WHERE w.hop < {MaxHops} AND NOT list_contains(w.seen, h.previous))
+                 WHERE w.hop < {_maxHops} AND NOT list_contains(w.seen, h.previous))
              SELECT repo_slug, root, hop, member FROM walk
              """, cancellationToken);
 

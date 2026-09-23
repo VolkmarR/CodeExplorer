@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json.Serialization;
+using CodeExplorer.Control;
+using CodeExplorer.Git;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Refresh;
 
 /// <summary>
 ///     Where a project's refresh stands. Serialised by name rather than by ordinal, so the web UI
@@ -84,7 +88,7 @@ public sealed class RefreshService(
     ///     the 8 GiB ceiling ADR-0003 measured, which is a first build of a large repository and still
     ///     leaves room for the other projects.
     /// </summary>
-    private const long DefaultMinimumFreeBytes = 512L * 1024 * 1024;
+    private const long _defaultMinimumFreeBytes = 512L * 1024 * 1024;
 
     /// <summary>
     ///     What a fetch into an existing clone is assumed to add, as a fraction of what that clone
@@ -94,10 +98,10 @@ public sealed class RefreshService(
     ///     refresh. A project whose clones are missing entirely gets the floor instead, which is the
     ///     one case where this system genuinely cannot know the size before downloading it (ADR-0007).
     /// </summary>
-    private const int CloneGrowthDivisor = 4;
+    private const int _cloneGrowthDivisor = 4;
 
     private readonly long _minimumFreeBytes =
-        configuration.GetValue("Refresh:MinimumFreeBytes", DefaultMinimumFreeBytes);
+        configuration.GetValue("Refresh:MinimumFreeBytes", _defaultMinimumFreeBytes);
 
     private readonly ConcurrentDictionary<string, RefreshStatus> _statuses = new(StringComparer.Ordinal);
     private readonly Lock _sync = new();
@@ -228,7 +232,7 @@ public sealed class RefreshService(
         // The clones are part of what a refresh needs room for since ADR-0007 made them full: they are
         // fetched into before anything is built, so a check that sized only the shadow index would pass
         // and then fill the disk during the transfer, which is the failure this gate exists to prevent.
-        var room = index with { Required = index.Required + clones.Footprint(slug) / CloneGrowthDivisor };
+        var room = index with { Required = index.Required + clones.Footprint(slug) / _cloneGrowthDivisor };
         return room.Enough
             ? null
             : new RefreshRefusal(

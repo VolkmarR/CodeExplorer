@@ -1,4 +1,11 @@
-using CodeExplorer;
+using CodeExplorer.Control;
+using CodeExplorer.Git;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Operator;
+using CodeExplorer.Reading;
+using CodeExplorer.Refresh;
+using CodeExplorer.Search;
 
 // The image build runs this to bake the DuckDB fts extension into the image (#14, ADR-0004), and it
 // exits without starting a server. A switch on the app rather than a tool of its own, because the
@@ -132,5 +139,8 @@ await app.RunAsync();
 // Spelled out because the install switch above returns a code, which makes every exit an int.
 return 0;
 
-/// <summary>Marker so the tests can host the app through <c>WebApplicationFactory</c>.</summary>
-public partial class Program;
+namespace CodeExplorer
+{
+    /// <summary>Marker so the tests can host the app through <c>WebApplicationFactory</c>.</summary>
+    public partial class Program;
+}

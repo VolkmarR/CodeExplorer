@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Claims;
+using CodeExplorer.Control;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -9,7 +10,7 @@ using Microsoft.Identity.Web;
 using ModelContextProtocol.AspNetCore.Authentication;
 using ModelContextProtocol.Authentication;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     What the server knows about the Entra application it belongs to, which is one question — is
@@ -74,7 +75,7 @@ public static class Authentication
     public const string ScopesSetting = $"{Section}:Scopes";
 
     /// <summary>The public cloud, which is where a tenant is unless someone says otherwise.</summary>
-    private const string DefaultInstance = "https://login.microsoftonline.com/";
+    private const string _defaultInstance = "https://login.microsoftonline.com/";
 
     /// <summary>
     ///     The scheme every request is authenticated under: not a handler of its own but a selector
@@ -100,10 +101,10 @@ public static class Authentication
     ///     redirect and the sign-in endpoint's own parameter are one spelling. A mismatch here is
     ///     invisible: the sign-in still works and simply lands on the home page every time.
     /// </summary>
-    private const string ReturnUrlParameter = "returnUrl";
+    private const string _returnUrlParameter = "returnUrl";
 
     /// <summary>Where RFC 9728 documents live, and the prefix the SDK's handler answers under.</summary>
-    private const string MetadataPrefix = "/.well-known/oauth-protected-resource";
+    private const string _metadataPrefix = "/.well-known/oauth-protected-resource";
 
     /// <summary>
     ///     Reads the tenant, or reports that there is none. A client id with no tenant is the one
@@ -122,8 +123,8 @@ public static class Authentication
                             + "a token against. Give it the directory id, or remove both to run unauthenticated.");
 
         var instance = Setting.Url(configuration, InstanceSetting,
-                           $"Give it a cloud such as {DefaultInstance}, or remove it to use that one.")
-                       ?? new Uri(DefaultInstance);
+                           $"Give it a cloud such as {_defaultInstance}, or remove it to use that one.")
+                       ?? new Uri(_defaultInstance);
 
         // Composed rather than concatenated, and the trailing slash forced first: `new Uri(base,
         // relative)` replaces the last segment of a base that has none, so an instance written
@@ -232,7 +233,7 @@ public static class Authentication
             http.Response.StatusCode = StatusCodes.Status404NotFound;
             await http.Response.WriteAsJsonAsync(
                 new { error = $"No protected resource at '{http.Request.Path}'. A project's is at "
-                              + $"{MetadataPrefix}/projects/{{slug}}/mcp." },
+                              + $"{_metadataPrefix}/projects/{{slug}}/mcp." },
                 http.RequestAborted);
             context.HandleResponse();
             return;
@@ -259,7 +260,7 @@ public static class Authentication
     /// </summary>
     private static string? ProjectSlug(PathString path)
     {
-        if (!path.StartsWithSegments(MetadataPrefix, out var resource)) return null;
+        if (!path.StartsWithSegments(_metadataPrefix, out var resource)) return null;
 
         // Leading empty entry included: a remainder always begins with the separator, so the expected
         // shape is four segments and an extra empty one is the doubled slash being refused.
@@ -282,7 +283,7 @@ public static class Authentication
     {
         options.LoginPath = SignInPath;
         options.LogoutPath = SignOutPath;
-        options.ReturnUrlParameter = ReturnUrlParameter;
+        options.ReturnUrlParameter = _returnUrlParameter;
         options.Events.OnRedirectToLogin = StatusCodeUnderApi(StatusCodes.Status401Unauthorized,
             $"Not signed in. Sign in at {SignInPath}.");
         options.Events.OnRedirectToAccessDenied = StatusCodeUnderApi(StatusCodes.Status403Forbidden,

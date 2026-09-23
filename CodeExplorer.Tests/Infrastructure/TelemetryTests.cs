@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Reflection;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Search;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -45,8 +48,8 @@ public sealed class TelemetryTests
     }
 
     [Theory]
-    [InlineData(SearchEngine.Substring, GrepSearch.SubstringEngine, "tele-search-substring")]
-    [InlineData(SearchEngine.Fts, GrepSearch.TokenEngine, "tele-search-fts")]
+    [InlineData(SearchEngine.Substring, Search.GrepSearch.SubstringEngine, "tele-search-substring")]
+    [InlineData(SearchEngine.Fts, Search.GrepSearch.TokenEngine, "tele-search-fts")]
     public async Task A_search_records_its_duration_engine_and_result_counts(
         SearchEngine engine, string reported, string slug)
     {
@@ -86,7 +89,7 @@ public sealed class TelemetryTests
         Assert.Equal(
             new[] { Telemetry.OutcomeTag, Telemetry.ProjectTag, Telemetry.EngineTag },
             fromTool.Tags.Keys.Order(StringComparer.Ordinal));
-        Assert.Equal(GrepSearch.SubstringEngine, fromTool.Tags[Telemetry.EngineTag]);
+        Assert.Equal(Search.GrepSearch.SubstringEngine, fromTool.Tags[Telemetry.EngineTag]);
         Assert.Equal(3d, Assert.Single(probe.For(Telemetry.SearchFiles)).Value);
     }
 
@@ -208,7 +211,7 @@ public sealed class TelemetryTests
     ///     quietly open the way round.
     /// </summary>
     [Theory]
-    [InlineData(typeof(GrepSearch), nameof(GrepSearch.SearchAsync))]
+    [InlineData(typeof(Search.GrepSearch), nameof(Search.GrepSearch.SearchAsync))]
     [InlineData(typeof(ReferenceSearch), nameof(ReferenceSearch.FindAsync))]
     [InlineData(typeof(DefinitionSearch), nameof(DefinitionSearch.FindAsync))]
     [InlineData(typeof(FileDeclarations), nameof(FileDeclarations.ForFileAsync))]
@@ -268,7 +271,7 @@ public sealed class TelemetryTests
 
         // An agent that abandons a slow search is the real case; an already-cancelled token is the
         // same path, and it is the only way to make a search throw without a broken index.
-        var search = host.Services.GetRequiredService<GrepSearch>();
+        var search = host.Services.GetRequiredService<Search.GrepSearch>();
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(

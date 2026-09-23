@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using CodeExplorer.Infrastructure;
 using LibGit2Sharp;
 using LibGit2Sharp.Handlers;
 using Microsoft.AspNetCore.DataProtection;
@@ -7,7 +8,7 @@ using ModelContextProtocol;
 using GitReference = LibGit2Sharp.Reference;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Git;
 
 /// <summary>
 ///     Keeps the local copy of every repository (CONTEXT.md): a full bare clone under
@@ -29,7 +30,7 @@ public sealed class GitClones(
     ///     Refusal text for a repository declaring <c>filter=lfs</c>. libgit2 has no LFS support and would
     ///     serve pointer files as though they were source, which an agent cannot tell from the real thing.
     /// </summary>
-    public const string LfsRefusal =
+    private const string _lfsRefusal =
         "This repository uses Git LFS (a .gitattributes file declares filter=lfs). CodeExplorer cannot read LFS "
         + "content and would show pointer files as if they were source, so it refuses the repository rather "
         + "than answer wrongly. Ask the operator to point the project at a repository without LFS.";
@@ -90,7 +91,7 @@ public sealed class GitClones(
             if (await Task.Run(() => LocalCopy.DeclaresLfs(clone), cancellationToken))
             {
                 clone.Dispose();
-                return new CloneOpen.UsesLfs($"Repository '{repository.Slug}': {LfsRefusal}");
+                return new CloneOpen.UsesLfs($"Repository '{repository.Slug}': {_lfsRefusal}");
             }
 
             return new CloneOpen.Opened(new LocalCopy(clone));

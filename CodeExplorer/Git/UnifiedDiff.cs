@@ -1,4 +1,4 @@
-namespace CodeExplorer;
+namespace CodeExplorer.Git;
 
 /// <summary>
 ///     One edit a commit made to a file, as the position it applies at in the file before the commit

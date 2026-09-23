@@ -1,6 +1,6 @@
 using System.Data.Common;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     Reads a column by name instead of by position. Every reader in this codebase built a record from

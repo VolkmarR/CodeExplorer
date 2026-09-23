@@ -1,4 +1,6 @@
-namespace CodeExplorer;
+using CodeExplorer.Infrastructure;
+
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     A row of <c>files</c>. <see cref="SkipReason" /> is set when the file is committed but has no lines in the

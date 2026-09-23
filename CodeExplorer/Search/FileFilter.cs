@@ -1,7 +1,8 @@
 using System.Text;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     Which files an index search is allowed to look at, and the SQL that says so. Every search in

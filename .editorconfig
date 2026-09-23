@@ -50,6 +50,9 @@ dotnet_naming_symbols.private_fields.applicable_kinds = field
 dotnet_naming_symbols.private_fields.applicable_accessibilities = private
 dotnet_naming_style.underscore_prefix.required_prefix = _
 dotnet_naming_style.underscore_prefix.capitalization = camel_case
+# An application, not a library consumed from VB: namespaces follow folders, and "Operator" is a
+# domain term (CONTEXT.md). Type and member names are still checked.
+dotnet_code_quality.CA1716.analyzed_symbol_kinds = NamedType, Method, Property, Event, Parameter
 
 [CodeExplorer.Tests/**.cs]
 # Test names read as sentences; underscores are the convention there

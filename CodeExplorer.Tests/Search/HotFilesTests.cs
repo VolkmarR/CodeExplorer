@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using CodeExplorer.Search;
 using ModelContextProtocol.Client;
 using Xunit;
 

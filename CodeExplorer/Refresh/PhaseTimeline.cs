@@ -1,6 +1,7 @@
 using System.Diagnostics;
+using CodeExplorer.Index;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Refresh;
 
 /// <summary>
 ///     What one phase of a refresh cost, as the status reports it once that phase has ended.
@@ -38,7 +39,7 @@ internal sealed class PhaseTimeline
     ///     few of them a reader is shown is the UI's judgement and not this one; what is stored is the
     ///     measurement.
     /// </summary>
-    private const int SecondsPrecision = 3;
+    private const int _secondsPrecision = 3;
 
     private readonly List<PhaseCost> _ended = [];
 
@@ -82,7 +83,7 @@ internal sealed class PhaseTimeline
         if (_running is null) return;
 
         _ended.Add(new PhaseCost(_running.Step, _running.Phase,
-            Math.Round(Stopwatch.GetElapsedTime(_startedAt).TotalSeconds, SecondsPrecision)));
+            Math.Round(Stopwatch.GetElapsedTime(_startedAt).TotalSeconds, _secondsPrecision)));
         _running = null;
     }
 }

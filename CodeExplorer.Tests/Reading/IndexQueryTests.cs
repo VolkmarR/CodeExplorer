@@ -1,3 +1,4 @@
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 using Xunit;
 

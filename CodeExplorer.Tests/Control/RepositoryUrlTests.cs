@@ -1,3 +1,4 @@
+using CodeExplorer.Control;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -22,5 +23,5 @@ public sealed class RepositoryUrlTests
     [InlineData("ftp://host/repo", RepositoryUrlKind.Invalid)]
     [InlineData("", RepositoryUrlKind.Invalid)]
     public void Repository_urls_are_classified_and_secrets_in_them_refused(string url, RepositoryUrlKind expected) =>
-        Assert.Equal(expected, RepositoryUrl.Classify(url));
+        Assert.Equal(expected, Control.RepositoryUrl.Classify(url));
 }

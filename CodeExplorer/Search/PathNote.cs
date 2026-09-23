@@ -1,7 +1,8 @@
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     What a path-scoped reply's closing note is written from: the chain the scope's query found, and
@@ -68,7 +69,7 @@ internal static class PathNote
     ///     theirs and not the note's, because <c>co_changed</c> is the one read for which it is false
     ///     (#143).
     /// </summary>
-    private const string Literal =
+    private const string _literal =
         "the count above is this path's alone, because scoping is by the path each commit recorded "
         + "and renames are signalled here, not followed. ";
 
@@ -81,7 +82,7 @@ internal static class PathNote
     ///     exact path and says it in the branch where it bites. Two of five, and which two is a
     ///     decision per read rather than a sentence some replies drifted out of.
     /// </summary>
-    private const string ByRecordedPath =
+    private const string _byRecordedPath =
         "The scope is matched by the path each commit recorded, so it begins where a file was "
         + "last renamed; a directory that was moved records nothing under its new name.";
 
@@ -102,7 +103,7 @@ internal static class PathNote
         // The gone sentence leads, because it is a fact about this call and the caveat below it is a
         // fact about every path scope.
         if (scope.GoneFrom is { } gone) note.Append(NotAtHead(gone));
-        if (SaysRecordedPath(tool)) Space(note).Append(ByRecordedPath);
+        if (SaysRecordedPath(tool)) Space(note).Append(_byRecordedPath);
         // Where this index can say what the previous name was, the general caveat is followed by the
         // particular fact, which is the one worth acting on (#131).
         if (Chain(scope.Lineage, tool) is { Length: > 0 } chain) Space(note).Append(chain);
@@ -182,7 +183,7 @@ internal static class PathNote
         PathNoteFor.GitLog => Reads("git_log", previous),
         PathNoteFor.Authors => Reads("authors", previous),
         PathNoteFor.FileHistory => Reads("file_history", previous),
-        PathNoteFor.HotFiles => Literal + $"Call hot_files with directory=\"{previous.Spelled}\" to rank it.",
+        PathNoteFor.HotFiles => _literal + $"Call hot_files with directory=\"{previous.Spelled}\" to rank it.",
         // No longer a redirect (#143). It sent the caller to git_log and file_history while the earlier
         // path was unpairable here; now the pairing spans the chain, so sending anyone elsewhere would
         // be telling them to fetch what they already have. What it says instead is that this answer is
@@ -214,5 +215,5 @@ internal static class PathNote
     };
 
     private static string Reads(string tool, PreviousPath previous) =>
-        Literal + $"Call {tool} with path=\"{previous.Spelled}\" to read it.";
+        _literal + $"Call {tool} with path=\"{previous.Spelled}\" to read it.";
 }

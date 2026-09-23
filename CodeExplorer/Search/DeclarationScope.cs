@@ -1,4 +1,6 @@
-namespace CodeExplorer;
+using CodeExplorer.Language;
+
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     One line that could be a declaration, as the index handed it over: which line it is, how far it

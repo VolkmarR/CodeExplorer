@@ -1,3 +1,4 @@
+using CodeExplorer.Index;
 using ModelContextProtocol.Client;
 using Xunit;
 

@@ -1,4 +1,4 @@
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     Reading a configured URL, which three settings now need and which each of them used to do its

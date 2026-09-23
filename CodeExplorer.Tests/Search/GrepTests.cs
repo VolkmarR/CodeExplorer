@@ -1,3 +1,4 @@
+using CodeExplorer.Index;
 using ModelContextProtocol.Client;
 using Xunit;
 
@@ -32,8 +33,8 @@ public sealed class GrepTests : IDisposable
     public void Dispose() => _host?.Dispose();
 
     [Theory]
-    [InlineData(SearchEngine.Fts, GrepSearch.TokenEngine)]
-    [InlineData(SearchEngine.Substring, GrepSearch.SubstringEngine)]
+    [InlineData(SearchEngine.Fts, Search.GrepSearch.TokenEngine)]
+    [InlineData(SearchEngine.Substring, Search.GrepSearch.SubstringEngine)]
     public async Task Text_query_matches_in_both_repositories_and_names_the_engine(SearchEngine engine, string reported)
     {
         await using var client = await StartAsync(engine);
@@ -60,7 +61,7 @@ public sealed class GrepTests : IDisposable
         string text = await GrepAsync(client,
             new Dictionary<string, object?>
                 { ["query"] = "Need(le|les)\\(", ["regex"] = true, ["caseSensitive"] = true });
-        Assert.Contains($"({GrepSearch.RegexEngine} engine)", text);
+        Assert.Contains($"({Search.GrepSearch.RegexEngine} engine)", text);
         Assert.Contains("one/src/Orders.cs", text);
         Assert.DoesNotContain("two/lib/index.ts", text);
 
@@ -187,7 +188,7 @@ public sealed class GrepTests : IDisposable
         string text = await GrepAsync(client,
             new Dictionary<string, object?> { ["query"] = "Update\\([^)]*Status\\s*=", ["multiline"] = true });
 
-        Assert.Contains($"({GrepSearch.MultilineEngine} engine)", text);
+        Assert.Contains($"({Search.GrepSearch.MultilineEngine} engine)", text);
         Assert.Contains("two/lib/wrapped.ts  -  2 matches", text);
         Assert.Contains("1: repo.Update(entity,", text);
         Assert.Contains("2:   e => e.Status = Done);", text);
@@ -270,7 +271,7 @@ public sealed class GrepTests : IDisposable
     [InlineData("\\d+", null)]
     [InlineData("[abc]x{2}", null)]
     public void Required_literal_is_sound(string pattern, string? expected) =>
-        Assert.Equal(expected, GrepSearch.RequiredLiteral(pattern));
+        Assert.Equal(expected, Search.GrepSearch.RequiredLiteral(pattern));
 
     /// <summary>The tests are ANDed, so a repeated word would only make the scan test it twice.</summary>
     [Theory]
@@ -283,7 +284,7 @@ public sealed class GrepTests : IDisposable
     {
         var parameters = new List<DuckDB.NET.Data.DuckDBParameter>();
 
-        string sql = GrepSearch.TextMatch(["needle", "Needle", "needle"], caseSensitive, useTokens, parameters);
+        string sql = Search.GrepSearch.TextMatch(["needle", "Needle", "needle"], caseSensitive, useTokens, parameters);
 
         Assert.Equal(pieces, CountOf(sql, "regexp_matches("));
         Assert.Equal(contains, CountOf(sql, "contains("));
@@ -331,7 +332,7 @@ public sealed class GrepTests : IDisposable
         await using var client = await StartAsync(SearchEngine.Fts);
 
         string whole = await GrepAsync(client, new Dictionary<string, object?> { ["query"] = "Status" });
-        Assert.Contains($"({GrepSearch.TokenEngine} engine)", whole);
+        Assert.Contains($"({Search.GrepSearch.TokenEngine} engine)", whole);
         // `Status();` and `e.Status` are the token; `myStatus` is not, and is the case a substring
         // scan would answer differently.
         Assert.Contains("lib/anchors.ts", whole);

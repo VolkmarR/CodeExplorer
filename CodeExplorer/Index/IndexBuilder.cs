@@ -1,6 +1,10 @@
+using CodeExplorer.Git;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     What a build produced. <paramref name="Skipped" /> names every repository left out and why, so
@@ -27,9 +31,9 @@ public sealed class IndexBuilder(
     ///     the reason, so a tree listing and a search can tell the agent about it. A project of large
     ///     hand-written sources raises the setting rather than losing them.
     /// </summary>
-    private const long DefaultMaxFileBytes = 25 * 1024 * 1024;
+    private const long _defaultMaxFileBytes = 25 * 1024 * 1024;
 
-    private readonly long _maxFileBytes = configuration.GetValue("Index:MaxFileBytes", DefaultMaxFileBytes);
+    private readonly long _maxFileBytes = configuration.GetValue("Index:MaxFileBytes", _defaultMaxFileBytes);
 
     /// <summary>
     ///     Fills a shadow index from the open clones and finishes the build. The caller owns the shadow

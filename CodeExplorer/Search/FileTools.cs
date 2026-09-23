@@ -2,9 +2,12 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     The index-backed MCP tools that are not searches (ADR-0005, <c>Search/</c>): reading a file,
@@ -24,17 +27,17 @@ internal sealed partial class FileTools(
     ///     A whole large class in one read. Higher would let a single default read spend the reply
     ///     budget on a generated file; the byte cap still bites first on such a file and says where to continue.
     /// </summary>
-    private const int MaxLinesPerRead = 2000;
+    private const int _maxLinesPerRead = 2000;
 
-    private const int DefaultLinesPerRead = 400;
+    private const int _defaultLinesPerRead = 400;
 
-    private const int DefaultGlobFiles = 500;
+    private const int _defaultGlobFiles = 500;
 
     /// <summary>
     ///     Enough to show a whole mid-sized tree in one call while keeping a runaway `depth` on a large
     ///     monorepo from returning megabytes; the agent is told how to narrow down.
     /// </summary>
-    private const int MaxTreeEntries = 2000;
+    private const int _maxTreeEntries = 2000;
 
     /// <summary>
     ///     How far the name column of a declaration listing is padded out. It is what the short names
@@ -42,7 +45,7 @@ internal sealed partial class FileTools(
     ///     of one is worse than a row that overhangs. A generated file's three-hundred-character name
     ///     therefore pushes its own signature right, and nobody else's.
     /// </summary>
-    private const int MaxLabelWidth = 40;
+    private const int _maxLabelWidth = 40;
 
     /// <summary>
     ///     The project this call is bound to, as every tool class in this server reads it: one member
@@ -70,7 +73,7 @@ internal sealed partial class FileTools(
         [Description("1-based line to start at for entries without their own range. Default 1.")]
         int startLine = 1,
         [Description("Lines to return per entry without its own range, 1-2000. Default 400.")]
-        int maxLines = DefaultLinesPerRead,
+        int maxLines = _defaultLinesPerRead,
         [Description("""
                      Add a line per file naming the commits it was first and last changed by. Cheap — one line per file, not per line of code — and the quickest way to find out who to ask about a file. Use blame for the same question about a single line.
                      """)]
@@ -78,7 +81,7 @@ internal sealed partial class FileTools(
         CancellationToken cancellationToken = default)
     {
         startLine = Math.Max(1, startLine);
-        maxLines = Math.Clamp(maxLines, 1, MaxLinesPerRead);
+        maxLines = Math.Clamp(maxLines, 1, _maxLinesPerRead);
         // An entry the parser refuses is that entry's answer and not the call's: returning the first
         // refusal dropped every other entry, so an agent that mistyped one of five ranges lost the four
         // reads it had asked for and could not see which entry was the bad one. A refusal is rendered
@@ -91,11 +94,11 @@ internal sealed partial class FileTools(
         // Every entry refused: the refusals are the whole reply, and asking the index for no windows
         // would answer "you asked for nothing" over the top of them. Having asked for nothing at all is
         // a different answer and still the query module's to give, so it goes through below.
-        if (targets.Count > 0 && windows.Count == 0) return ToolReply.Cap(Format(new ReadResult([])), ReadAdvice);
+        if (targets.Count > 0 && windows.Count == 0) return ToolReply.Cap(Format(new ReadResult([])), _readAdvice);
 
         return ToolReply.Render<ReadResult>(
             await files.ReadAsync(Bound.Slug, new ReadRequest(windows, withHistory, true), cancellationToken),
-            Format, ReadAdvice);
+            Format, _readAdvice);
 
         string Format(ReadResult result)
         {
@@ -127,7 +130,7 @@ internal sealed partial class FileTools(
     }
 
     /// <summary>How a caller gets the rest of a read that hit the reply ceiling.</summary>
-    private const string ReadAdvice = "Read fewer paths at once, or pass a narrower line range.";
+    private const string _readAdvice = "Read fewer paths at once, or pass a narrower line range.";
 
     private static void Append(StringBuilder text, FileRead read, bool explicitRange, int allowance)
     {
@@ -222,7 +225,7 @@ internal sealed partial class FileTools(
         [Description("Repository slug to scope the glob to. Default: every repository in the project.")]
         string? repo = null,
         [Description("Maximum files to return, 1-2000. Default 500.")]
-        int limit = DefaultGlobFiles,
+        int limit = _defaultGlobFiles,
         CancellationToken cancellationToken = default)
     {
         string slug = Bound.Slug;
@@ -345,7 +348,7 @@ internal sealed partial class FileTools(
             // Entries are printed relative to what was listed, as `tree` does; at the repository level the
             // qualified path already starts with the slug and nothing is stripped.
             int skip = listed.Length == 0 ? 0 : listed.Length + 1;
-            foreach (var entry in listing.Entries.Take(MaxTreeEntries))
+            foreach (var entry in listing.Entries.Take(_maxTreeEntries))
             {
                 text.Append(entry.QualifiedPath, skip, entry.QualifiedPath.Length - skip);
                 if (entry.Files is not null) text.Append('/');
@@ -354,9 +357,9 @@ internal sealed partial class FileTools(
                 text.Append('\n');
             }
 
-            if (listing.Entries.Count > MaxTreeEntries)
+            if (listing.Entries.Count > _maxTreeEntries)
                 text.Append(CultureInfo.InvariantCulture,
-                    $"... {listing.Entries.Count - MaxTreeEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
+                    $"... {listing.Entries.Count - _maxTreeEntries} more entries omitted. List a subdirectory or use a smaller depth.\n");
             return text.ToString();
         }
     }
@@ -445,7 +448,7 @@ internal sealed partial class FileTools(
     ///     page makes beside its Declarations panel (<c>declarations.ts</c>), said here too because an
     ///     agent reads the reply and not the panel, and a list without it reads like a parser's.
     /// </summary>
-    private const string TextualCaveat =
+    private const string _textualCaveat =
         "Read from the shape of each line, not from a compiler. A form no profile knows is one this "
         + "did not find rather than one that is not there. Strong evidence, not proof.";
 
@@ -457,7 +460,7 @@ internal sealed partial class FileTools(
     /// </summary>
     private static string How(IReadOnlyList<FileDeclaration> declarations)
     {
-        if (declarations.All(d => d.Evidence == Evidence.Text)) return TextualCaveat;
+        if (declarations.All(d => d.Evidence == Evidence.Text)) return _textualCaveat;
         return declarations.All(d => d.Evidence == Evidence.Parsed)
             ? "Parsed by a real parser for this language, so this is what the file declares and not what its lines look like."
             : "Parsed where the language has a parser here and read from the shape of the line elsewhere; "
@@ -493,7 +496,7 @@ internal sealed partial class FileTools(
                             $"{result.QualifiedPath} ({result.LanguageName}) declares nothing its language writes as a type or a routine. Its lines were scanned and none of them is a declaration.\n"))
                     // Nothing was found, so there is no evidence to derive the claim from; what a scan
                     // of line shapes can say is what it would have said had it found something.
-                    .Append('\n').Append(TextualCaveat).Append('\n').ToString();
+                    .Append('\n').Append(_textualCaveat).Append('\n').ToString();
 
         int listed = result.Declarations.Count;
         int next = result.Offset + listed;
@@ -513,7 +516,7 @@ internal sealed partial class FileTools(
         // Labelled once. The column width and the rows ask the same question of the same list, and the
         // label is a small allocation per declaration in a list that can be five hundred long.
         string[] labels = result.Declarations.Select(Label).ToArray();
-        int width = Math.Min(MaxLabelWidth, labels.Max(l => l.Length));
+        int width = Math.Min(_maxLabelWidth, labels.Max(l => l.Length));
         for (int i = 0; i < labels.Length; i++)
         {
             var declaration = result.Declarations[i];

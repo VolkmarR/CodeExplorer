@@ -1,6 +1,9 @@
+using CodeExplorer.Git;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>What a history pass added, for the log line and the refresh summary.</summary>
 public sealed record HistorySummary(int Commits, long AttributedFiles);

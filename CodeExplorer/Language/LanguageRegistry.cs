@@ -1,6 +1,6 @@
 using System.Collections.Frozen;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Language;
 
 /// <summary>
 ///     Which analyser answers for a file, resolved from its extension. One of these holds the whole

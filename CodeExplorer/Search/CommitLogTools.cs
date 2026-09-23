@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     The two tools that list commits: <c>git_log</c> and <c>authors</c>. They share a scope, a
@@ -38,7 +40,7 @@ internal sealed partial class HistoryTools
             "Text in the commit's subject line, e.g. \"BugFix 558185\", \"PR 39371\" or \"release\". Matched case-insensitively as text, not as a pattern, and against the subject only. Default: every commit.")]
         string? message = null,
         [Description("Commits to return, 1-200. Default 30.")]
-        int limit = DefaultCommits,
+        int limit = _defaultCommits,
         [Description("1-based page of results, newest first.")]
         int page = 1,
         [Description(
@@ -160,7 +162,7 @@ internal sealed partial class HistoryTools
         [Description("Repository slug to scope to. Default: every repository in the project.")]
         string? repo = null,
         [Description("Authors to return, 1-200. Default 30.")]
-        int limit = DefaultAuthors,
+        int limit = _defaultAuthors,
         [Description(
             "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. A path HEAD no longer holds still scopes, because history recorded it. Default: the whole project.")]
         string? path = null,

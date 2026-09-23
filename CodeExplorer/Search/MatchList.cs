@@ -1,6 +1,8 @@
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>Everything a list_matches call asks for. Bounds are enforced by <see cref="MatchList" />.</summary>
 /// <param name="Query">An RE2 pattern. Always a pattern: there is nothing to deduplicate about a literal.</param>
@@ -137,28 +139,28 @@ public sealed class MatchList(IndexReaders readers)
             // unnest flattens the per-line array, so a line matching three times contributes three
             // rows, the way `grep -o` emits one line per match. The group index is inlined because
             // regexp_extract_all takes it as a literal; it is bounded above, so it is a digit.
-            using (var command = connection.Query($"""
-                                                      WITH extracted AS (
-                                                          SELECT l.file_id,
-                                                                 unnest(regexp_extract_all(l.content, $q, {request.Group}, $flags)) AS value
-                                                          FROM lines l JOIN files f USING (file_id)
-                                                          WHERE regexp_matches(l.content, $q, $flags){fileFilter}),
-                                                      grouped AS (
-                                                          SELECT value, count(*) AS n, count(DISTINCT file_id) AS files
-                                                          FROM extracted WHERE value <> '' GROUP BY value),
-                                                      totals AS (
-                                                          SELECT count(*) AS total_distinct, coalesce(sum(n), 0) AS total_matches,
-                                                                 -- The same WHERE the grouping uses: a file whose capture
-                                                                 -- group came back empty every time contributed no value
-                                                                 -- and must not be counted as a file one came from.
-                                                                 (SELECT count(DISTINCT file_id) FROM extracted WHERE value <> '') AS total_files
-                                                          FROM grouped)
-                                                      SELECT g.value, g.n, g.files, t.total_distinct, t.total_matches, t.total_files
-                                                      FROM grouped g CROSS JOIN totals t
-                                                      ORDER BY g.n DESC, g.value
-                                                      LIMIT {limit}
-                                                      """, [.. matchParameters, .. fileParameters]))
-            using (var reader = await command.ReaderAsync(cancellationToken))
+            await using (var command = connection.Query($"""
+                                                         WITH extracted AS (
+                                                             SELECT l.file_id,
+                                                                    unnest(regexp_extract_all(l.content, $q, {request.Group}, $flags)) AS value
+                                                             FROM lines l JOIN files f USING (file_id)
+                                                             WHERE regexp_matches(l.content, $q, $flags){fileFilter}),
+                                                         grouped AS (
+                                                             SELECT value, count(*) AS n, count(DISTINCT file_id) AS files
+                                                             FROM extracted WHERE value <> '' GROUP BY value),
+                                                         totals AS (
+                                                             SELECT count(*) AS total_distinct, coalesce(sum(n), 0) AS total_matches,
+                                                                    -- The same WHERE the grouping uses: a file whose capture
+                                                                    -- group came back empty every time contributed no value
+                                                                    -- and must not be counted as a file one came from.
+                                                                    (SELECT count(DISTINCT file_id) FROM extracted WHERE value <> '') AS total_files
+                                                             FROM grouped)
+                                                         SELECT g.value, g.n, g.files, t.total_distinct, t.total_matches, t.total_files
+                                                         FROM grouped g CROSS JOIN totals t
+                                                         ORDER BY g.n DESC, g.value
+                                                         LIMIT {limit}
+                                                         """, [.. matchParameters, .. fileParameters]))
+            await using (var reader = await command.ReaderAsync(cancellationToken))
             {
                 while (await reader.ReadAsync(cancellationToken))
                 {

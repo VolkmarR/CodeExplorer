@@ -1,7 +1,8 @@
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Reading;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     The reply shaping every index-backed tool shares: the size ceiling, the line clip and the

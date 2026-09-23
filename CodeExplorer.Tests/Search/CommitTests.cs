@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
+using CodeExplorer.Search;
 using Xunit;
 
 namespace CodeExplorer.Tests;

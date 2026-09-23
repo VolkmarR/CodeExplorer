@@ -1,6 +1,7 @@
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Index;
 
 /// <summary>
 ///     Where DuckDB keeps the <c>fts</c> extension, and how it gets there before a replica needs it.
@@ -88,7 +89,7 @@ public static class FtsExtension
     /// </summary>
     internal static async Task CreateIndexAsync(DuckDBConnection connection, CancellationToken cancellationToken)
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = """
                               PRAGMA create_fts_index('lines', 'line_id', 'content',
                                   stemmer = 'none', stopwords = 'none', ignore = '[^a-z0-9_]+',

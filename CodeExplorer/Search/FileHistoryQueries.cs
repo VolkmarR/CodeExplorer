@@ -1,6 +1,8 @@
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     One path a commit touched. <see cref="Path" /> is the path inside its repository, as the commit
@@ -145,7 +147,7 @@ public sealed partial class HistoryQueries
     /// </summary>
     public Task<Outcome> FileHistoryAsync(string slug, FileHistoryRequest request,
         CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null, async (index, token) =>
+        Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, null, async (index, token) =>
         {
             var (file, recorded, unresolved) = await OnePathAsync(index, request.Path, token);
             if (unresolved is not null) return unresolved;
@@ -159,7 +161,7 @@ public sealed partial class HistoryQueries
             bool hasHistory = await HasHistoryAsync(index, token);
             var commits = hasHistory
                 ? await PathCommitsAsync(index, scope.RepositorySlug, scope.PathInRepository,
-                    Math.Clamp(request.Limit, 1, MaxCommits), token)
+                    Math.Clamp(request.Limit, 1, _maxCommits), token)
                 : [];
             return new FileHistoryAnswer(scope, hasHistory, commits);
         }, cancellationToken), (FileHistoryAnswer answer) => new Telemetry.Measured(answer.Commits.Count, 0));
@@ -172,12 +174,12 @@ public sealed partial class HistoryQueries
     ///     is keyed to the newest recorded commit, so there is nothing here to attribute.
     /// </summary>
     public Task<Outcome> BlameAsync(string slug, BlameRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null,
+        Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, null,
             async (index, token) =>
             {
                 var (file, recorded, unresolved) = await OnePathAsync(index, request.Path, token);
                 if (unresolved is not null) return unresolved;
-                if (recorded is { } gone) return GoneFromHead(gone.Spelled, "blame", BlameCannot);
+                if (recorded is { } gone) return GoneFromHead(gone.Spelled, "blame", _blameCannot);
 
                 bool hasHistory = await HasHistoryAsync(index, token);
                 int first = Math.Max(1, request.StartLine);
@@ -186,7 +188,7 @@ public sealed partial class HistoryQueries
                 int? last = request.EndLine is null or < 1 ? null : request.EndLine;
                 // The ceiling counts lines from the first one asked for: taken as a last line, it made
                 // every range past it an empty answer.
-                int end = (int)Math.Min(last ?? int.MaxValue, (long)first + MaxLinesPerFile - 1);
+                int end = (int)Math.Min(last ?? int.MaxValue, (long)first + _maxLinesPerFile - 1);
                 IReadOnlyList<AttributedLines> runs = file!.SkipReason is null
                     ? await RunsAsync(index, file.FileId, first, end, token)
                     : [];
@@ -203,7 +205,7 @@ public sealed partial class HistoryQueries
     ///     — and three of the four steps above would be making it falsely.
     /// </summary>
     public Task<Outcome> ChurnAsync(string slug, ChurnRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverDirectoryAsync(slug, request.Directory,
+        Telemetry.Search(slug, _engine, () => readers.OverDirectoryAsync(slug, request.Directory,
             async (index, directory, token) =>
             {
                 bool hasHistory = await HasHistoryAsync(index, token);
@@ -215,8 +217,8 @@ public sealed partial class HistoryQueries
                 // Read whether or not there is a ranking, and before the answer branches: a reader shown
                 // nothing is the one most likely to conclude that nothing changed.
                 var coverage = await index.HistoryCoverageAsync(repositorySlug, token);
-                int? depth = request.Depth is { } requested ? Math.Clamp(requested, 1, MaxRollupDepth) : null;
-                int limit = Math.Clamp(request.Limit, 1, MaxRankedFiles);
+                int? depth = request.Depth is { } requested ? Math.Clamp(requested, 1, _maxRollupDepth) : null;
+                int limit = Math.Clamp(request.Limit, 1, _maxRankedFiles);
                 var paths = await index.PathsAsync(token);
                 var filters = request.Filters;
                 IReadOnlyList<ChurnedFile> ranked = window is null
@@ -238,7 +240,7 @@ public sealed partial class HistoryQueries
                 IReadOnlyList<ChurnedExtension> extensions = window is null
                     ? []
                     : await IndexQueries.ChurnedExtensionsAsync(index.Connection, paths, window, repositorySlug,
-                        directoryInRepository, request.Exclude, MaxRankedExtensions, token);
+                        directoryInRepository, request.Exclude, _maxRankedExtensions, token);
 
                 // A ranking of a scope that does not exist is the emptiest kind of empty answer, and a
                 // path prefixed with the project's slug is the commonest way to ask for one (#111). The
@@ -266,7 +268,7 @@ public sealed partial class HistoryQueries
     ///     should not hold that back.
     /// </summary>
     public Task<Outcome> CommitAsync(string slug, CommitRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null,
+        Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, null,
             async (index, token) => await OverShaAsync(index, slug, request.Sha, async (sha, inner) =>
             {
                 // Read back rather than carried over: the resolution and this read are two statements,
@@ -286,7 +288,7 @@ public sealed partial class HistoryQueries
     /// </summary>
     public Task<Outcome> CommitFilesAsync(string slug, CommitFilesRequest request,
         CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null,
+        Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, null,
             async (index, token) => await OverShaAsync(index, slug, request.Sha, async (sha, inner) =>
             {
                 var files = await PathsOfAsync(index, sha, inner);
@@ -306,14 +308,14 @@ public sealed partial class HistoryQueries
     ///     the list is there to be compared against what the caller has and not to be complete: a
     ///     prefix that fits more than four is one the caller has to lengthen whatever the rest are.
     /// </summary>
-    private const int MaxNamedShas = 4;
+    private const int _maxNamedShas = 4;
 
     /// <summary>
     ///     What git itself requires of an abbreviated SHA, and for the same reason: below four
     ///     characters a prefix that happens to fit one commit today fits two after the next refresh,
     ///     and the answer it gave was never about the commit the caller meant.
     /// </summary>
-    private const int MinShaPrefix = 4;
+    private const int _minShaPrefix = 4;
 
     /// <summary>
     ///     Runs an answer against the one commit a caller meant, from as much of the SHA as they had.
@@ -336,15 +338,15 @@ public sealed partial class HistoryQueries
         // Lower-cased because git writes SHAs in hex lower case and a pasted one may not be, and
         // trimmed because a SHA copied out of a reply brings its spacing with it.
         string prefix = given.Trim().ToLowerInvariant();
-        if (prefix.Length < MinShaPrefix)
+        if (prefix.Length < _minShaPrefix)
             return new Problem(
                 (prefix.Length == 0
                     ? $"No commit SHA was given, so no commit of project '{slug}' can be named. "
-                    : $"'{given}' is too short to name a commit of project '{slug}': give at least {MinShaPrefix} characters of the SHA. ")
+                    : $"'{given}' is too short to name a commit of project '{slug}': give at least {_minShaPrefix} characters of the SHA. ")
                 + "git_log, file_history and blame each print the first eight, which is enough.",
                 ProblemKind.Invalid);
 
-        var matches = await ShasAsync(index, prefix, MaxNamedShas, cancellationToken);
+        var matches = await ShasAsync(index, prefix, _maxNamedShas, cancellationToken);
         if (matches.Count == 0) return new Problem(NoSuchCommit(given, slug), ProblemKind.Missing);
         if (matches.Count == 1) return await answer(matches[0], cancellationToken);
 
@@ -353,7 +355,7 @@ public sealed partial class HistoryQueries
         return new Problem(
             $"'{given}' starts the SHA of more than one commit of project '{slug}': "
             + $"{string.Join(", ", matches.Select(sha => sha[..12]))}"
-            + (matches.Count == MaxNamedShas ? ", and possibly others" : "")
+            + (matches.Count == _maxNamedShas ? ", and possibly others" : "")
             + ". Give more of the SHA.", ProblemKind.Invalid);
     }
 
@@ -375,13 +377,13 @@ public sealed partial class HistoryQueries
     private static async Task<IReadOnlyList<string>> ShasAsync(IndexReader index, string prefix, int ceiling,
         CancellationToken cancellationToken)
     {
-        using var command = index.Connection.Query($"""
-                                                    SELECT DISTINCT sha FROM commits
-                                                    WHERE starts_with(sha, $p)
-                                                    ORDER BY sha
-                                                    LIMIT {ceiling}
-                                                    """, [new DuckDBParameter("p", prefix)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = index.Connection.Query($"""
+                                                          SELECT DISTINCT sha FROM commits
+                                                          WHERE starts_with(sha, $p)
+                                                          ORDER BY sha
+                                                          LIMIT {ceiling}
+                                                          """, [new DuckDBParameter("p", prefix)]);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var shas = new List<string>();
         while (await reader.ReadAsync(cancellationToken)) shas.Add(reader.Text("sha"));
         return shas;
@@ -401,21 +403,21 @@ public sealed partial class HistoryQueries
         // their position in that commit's lines, so that difference is the run. The window function is
         // computed in a subquery because it is evaluated after grouping and cannot appear in GROUP BY.
         // Lines with no commit fall in one NULL partition, which islands correctly for the same reason.
-        using var command = index.Connection.Query("""
-                                                   SELECT min(line_number) AS start_line,
-                                                          max(line_number) AS end_line,
-                                                          sha, author_name, authored_at, subject
-                                                   FROM (SELECT l.line_number, c.sha, c.author_name, c.authored_at,
-                                                                c.subject,
-                                                                l.line_number - row_number() OVER (
-                                                                    PARTITION BY c.sha ORDER BY l.line_number) AS run
-                                                         FROM lines l LEFT JOIN commits c USING (commit_id)
-                                                         WHERE l.file_id = $f AND l.line_number BETWEEN $a AND $b)
-                                                   GROUP BY sha, author_name, authored_at, subject, run
-                                                   ORDER BY start_line
-                                                   """,
+        await using var command = index.Connection.Query("""
+                                                         SELECT min(line_number) AS start_line,
+                                                                max(line_number) AS end_line,
+                                                                sha, author_name, authored_at, subject
+                                                         FROM (SELECT l.line_number, c.sha, c.author_name, c.authored_at,
+                                                                      c.subject,
+                                                                      l.line_number - row_number() OVER (
+                                                                          PARTITION BY c.sha ORDER BY l.line_number) AS run
+                                                               FROM lines l LEFT JOIN commits c USING (commit_id)
+                                                               WHERE l.file_id = $f AND l.line_number BETWEEN $a AND $b)
+                                                         GROUP BY sha, author_name, authored_at, subject, run
+                                                         ORDER BY start_line
+                                                         """,
             [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var runs = new List<AttributedLines>();
         while (await reader.ReadAsync(cancellationToken))
             runs.Add(new AttributedLines(reader.Int32("start_line"), reader.Int32("end_line"),
@@ -438,17 +440,17 @@ public sealed partial class HistoryQueries
         CancellationToken cancellationToken)
     {
         var paths = await index.PathsAsync(cancellationToken);
-        using var command = index.Connection.Query("""
-                                                   SELECT cf.path, cf.change_kind, cf.added, cf.deleted,
-                                                          c.repo_slug, f.qualified_path
-                                                   FROM commits c JOIN commit_files cf USING (commit_id)
-                                                   LEFT JOIN repositories r ON r.slug = c.repo_slug
-                                                   LEFT JOIN files f ON f.repo_id = r.repo_id AND f.path = cf.path
-                                                   WHERE c.commit_id = (SELECT min(commit_id) FROM commits
-                                                                        WHERE sha = $sha)
-                                                   ORDER BY cf.path
-                                                   """, [new DuckDBParameter("sha", sha)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = index.Connection.Query("""
+                                                         SELECT cf.path, cf.change_kind, cf.added, cf.deleted,
+                                                                c.repo_slug, f.qualified_path
+                                                         FROM commits c JOIN commit_files cf USING (commit_id)
+                                                         LEFT JOIN repositories r ON r.slug = c.repo_slug
+                                                         LEFT JOIN files f ON f.repo_id = r.repo_id AND f.path = cf.path
+                                                         WHERE c.commit_id = (SELECT min(commit_id) FROM commits
+                                                                              WHERE sha = $sha)
+                                                         ORDER BY cf.path
+                                                         """, [new DuckDBParameter("sha", sha)]);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var files = new List<CommitFile>();
         while (await reader.ReadAsync(cancellationToken))
             files.Add(new CommitFile(reader.Text("path"), reader.Text("change_kind"), reader.Int32("added"),

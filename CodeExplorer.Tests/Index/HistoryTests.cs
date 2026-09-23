@@ -1,4 +1,6 @@
 using System.Net;
+using CodeExplorer.Index;
+using CodeExplorer.Refresh;
 using LibGit2Sharp;
 using Xunit;
 

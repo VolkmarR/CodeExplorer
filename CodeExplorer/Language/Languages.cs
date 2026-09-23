@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
+using CodeExplorer.Reading;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Language;
 
 /// <summary>
 ///     Every language this build knows, and everything it knows about them. The registration below is
@@ -37,7 +38,7 @@ public static class Languages
     ///     what a repository holds without an extension, and a Makefile among them is not worth a
     ///     caveat on every reply.
     /// </summary>
-    private static readonly FrozenSet<string> NotCode = new[]
+    private static readonly FrozenSet<string> _notCode = new[]
     {
         "", "md", "markdown", "mdx", "txt", "rst", "adoc", "asciidoc", "json", "jsonc", "yml", "yaml",
         "toml", "ini", "cfg", "conf", "config", "properties", "env", "csv", "tsv", "xml", "resx",
@@ -54,7 +55,7 @@ public static class Languages
     public static bool MightHoldCode(string extension)
     {
         ArgumentNullException.ThrowIfNull(extension);
-        return !NotCode.Contains(extension.TrimStart('.'));
+        return !_notCode.Contains(extension.TrimStart('.'));
     }
 
     /// <summary>
@@ -64,7 +65,7 @@ public static class Languages
     ///     a language does not write is a word that never appears at the head of its lines, which
     ///     costs it nothing, where a per-language copy would drift.
     /// </summary>
-    private static readonly string[] CFamilyModifiers =
+    private static readonly string[] _cFamilyModifiers =
     [
         "public", "private", "protected", "internal", "static", "async", "override", "virtual",
         "abstract", "sealed", "partial", "extern", "new", "readonly", "const", "export", "declare",
@@ -77,7 +78,7 @@ public static class Languages
     ///     makes that line modifier-word-word-<c>;</c> — a field, read literally. Shared with the
     ///     modifier list it guards, so the two cannot come apart.
     /// </summary>
-    private static readonly string[] CFamilyNonTypes = ["default"];
+    private static readonly string[] _cFamilyNonTypes = ["default"];
 
     /// <summary>
     ///     Which of those also open a scope, which is the narrower of the two questions one list used
@@ -93,8 +94,8 @@ public static class Languages
     ///     Derived from the list above rather than written out beside it, so a modifier added there
     ///     opens a scope unless it is named here and the two cannot come apart.
     /// </summary>
-    private static readonly string[] CFamilyScopeModifiers =
-        [.. CFamilyModifiers.Except(["const", "readonly", "val", "let", "event"])];
+    private static readonly string[] _cFamilyScopeModifiers =
+        [.. _cFamilyModifiers.Except(["const", "readonly", "val", "let", "event"])];
 
     /// <summary>
     ///     What opens a scope in X#: the routine and member words, and every visibility and inheritance
@@ -102,7 +103,7 @@ public static class Languages
     ///     questions came apart (#83), unchanged — the name list is this plus the three words that
     ///     introduce a name and hold no lines, which the profile explains.
     /// </summary>
-    private static readonly string[] XSharpScopeModifiers =
+    private static readonly string[] _xSharpScopeModifiers =
     [
         "public", "private", "protected", "internal", "export", "hidden", "static", "virtual",
         "override", "abstract", "sealed", "partial", "const",
@@ -115,7 +116,7 @@ public static class Languages
     ///     something that holds lines; a <c>var</c> or <c>const</c> entry names a variable or a
     ///     constant and heads nothing.
     /// </summary>
-    private static readonly string[] DelphiScopeModifiers =
+    private static readonly string[] _delphiScopeModifiers =
     [
         "procedure", "function", "constructor", "destructor", "property",
         "type", "class", "published", "private", "protected", "public", "strict", "override",
@@ -128,18 +129,18 @@ public static class Languages
     ///     any <c>WHERE</c> clause read as a declaration, and a false declaration is worse than an
     ///     unplaced reference because DECLARATIONS is the section an agent trusts most.
     /// </summary>
-    private static readonly string[] SqlModifiers =
+    private static readonly string[] _sqlModifiers =
         ["create", "alter", "or replace", "declare", "procedure", "function", "view", "table", "trigger", "type"];
 
     /// <summary>What opens a routine body in the SQL family, where the C family writes a bracket.</summary>
-    private static readonly string[] SqlBodyOpeners = ["as", "is"];
+    private static readonly string[] _sqlBodyOpeners = ["as", "is"];
 
     /// <summary>
     ///     What moves an Oracle file from a package spec to a package body. Shared by SQL and PL/SQL
     ///     because a script holding both is written with the same two headers whatever it is named:
     ///     the extension says which dialect to read a file as and never which half of one it is.
     /// </summary>
-    private static readonly SectionMarker[] PackageSections =
+    private static readonly SectionMarker[] _packageSections =
     [
         new SectionMarker("create or replace package body", DeclarationRole.Implementation),
         new SectionMarker("create package body", DeclarationRole.Implementation),
@@ -147,25 +148,25 @@ public static class Languages
         new SectionMarker("create package", DeclarationRole.Declaration)
     ];
 
-    private static readonly StringDelimiter CBlockComment = new("/*", "*/", StringEscape.None);
-    private static readonly StringDelimiter DoubleQuoted = new("\"", "\"", StringEscape.Backslash);
-    private static readonly StringDelimiter SingleQuotedEscaped = new("'", "'", StringEscape.Backslash);
+    private static readonly StringDelimiter _cBlockComment = new("/*", "*/", StringEscape.None);
+    private static readonly StringDelimiter _doubleQuoted = new("\"", "\"", StringEscape.Backslash);
+    private static readonly StringDelimiter _singleQuotedEscaped = new("'", "'", StringEscape.Backslash);
 
     /// <summary>The xBase and SQL family's quote, where doubling it stands for the character itself.</summary>
-    private static readonly StringDelimiter SingleQuoted = new("'", "'", StringEscape.Doubled);
+    private static readonly StringDelimiter _singleQuoted = new("'", "'", StringEscape.Doubled);
 
     /// <summary>Quotes that escape nothing: the first closer ends the literal, whatever precedes it.</summary>
-    private static readonly StringDelimiter RawDouble = new("\"", "\"", StringEscape.None);
+    private static readonly StringDelimiter _rawDouble = new("\"", "\"", StringEscape.None);
 
-    private static readonly StringDelimiter RawSingle = new("'", "'", StringEscape.None);
+    private static readonly StringDelimiter _rawSingle = new("'", "'", StringEscape.None);
 
     /// <summary>
     ///     The holes of live code in an interpolated literal. One for C# and another for the template
     ///     literal, because the languages spell the opener differently; both close and nest on the brace.
     /// </summary>
-    private static readonly Hole CSharpHole = new("{", "}", "{");
+    private static readonly Hole _cSharpHole = new("{", "}", "{");
 
-    private static readonly Hole TemplateHole = new("${", "}", "{");
+    private static readonly Hole _templateHole = new("${", "}", "{");
 
     /// <summary>
     ///     The C# literals that carry on past the end of a line, which is what makes them #53's: a
@@ -175,19 +176,19 @@ public static class Languages
     ///     the worse of the two errors.
     ///     Written longest opener first for a reader; the analyser orders them itself.
     /// </summary>
-    private static readonly StringDelimiter[] CSharpLiterals =
+    private static readonly StringDelimiter[] _cSharpLiterals =
     [
         new StringDelimiter("$\"\"\"", "\"\"\"", StringEscape.None)
-            { SpansLines = true, Hole = CSharpHole },
+            { SpansLines = true, Hole = _cSharpHole },
         new StringDelimiter("\"\"\"", "\"\"\"", StringEscape.None) { SpansLines = true },
         new StringDelimiter("$@\"", "\"", StringEscape.Doubled)
-            { SpansLines = true, Hole = CSharpHole },
+            { SpansLines = true, Hole = _cSharpHole },
         new StringDelimiter("@$\"", "\"", StringEscape.Doubled)
-            { SpansLines = true, Hole = CSharpHole },
+            { SpansLines = true, Hole = _cSharpHole },
         new StringDelimiter("@\"", "\"", StringEscape.Doubled) { SpansLines = true },
         new StringDelimiter("$\"", "\"", StringEscape.Backslash)
-            { Hole = CSharpHole },
-        DoubleQuoted
+            { Hole = _cSharpHole },
+        _doubleQuoted
     ];
 
     /// <summary>
@@ -195,12 +196,12 @@ public static class Languages
     ///     because it spans lines and holds <c>${…}</c> holes that are code, and a delimiter that knew
     ///     neither reported every call made inside one as a string mention.
     /// </summary>
-    private static readonly StringDelimiter Template =
+    private static readonly StringDelimiter _template =
         new("`", "`", StringEscape.Backslash)
-            { SpansLines = true, Hole = TemplateHole };
+            { SpansLines = true, Hole = _templateHole };
 
     /// <summary>The C family builds an object with a word in front of the type.</summary>
-    private static readonly string[] New = ["new"];
+    private static readonly string[] _new = ["new"];
 
     /// <summary>
     ///     How TypeScript and JavaScript name a module, which is the same three forms in both and so
@@ -211,7 +212,7 @@ public static class Languages
     ///     of it: <c>import { a, b } from "./c"</c> depends on <c>./c</c>, and <c>a</c> and <c>b</c>
     ///     are what it takes out of it.
     /// </summary>
-    private static readonly ImportForm[] EcmaImports =
+    private static readonly ImportForm[] _ecmaImports =
     [
         new ImportForm("import ", ImportShape.Path),
         new ImportForm("import(", ImportShape.Path) { Anywhere = true, Closer = ")" },
@@ -225,7 +226,7 @@ public static class Languages
     ///     answered a markup <c>&lt;script src="a"&gt;</c> with <c>a.html</c> and <c>a/index.html</c>,
     ///     which is this rule read into a language that does not have it.
     /// </summary>
-    private static readonly ImportPathRules EcmaPaths =
+    private static readonly ImportPathRules _ecmaPaths =
         new(["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "json"], "index");
 
     /// <summary>
@@ -234,13 +235,13 @@ public static class Languages
     ///     this seam than before it, and the way to be sure is for the fallback to be the old rules
     ///     unchanged.
     /// </summary>
-    private static readonly LanguageProfile FallbackProfile = new(null, [])
+    private static readonly LanguageProfile _fallbackProfile = new(null, [])
     {
         LineComments = ["//"],
         LineStartComments = ["*", "--", "#"],
         DirectivePrefixes = ["#include"],
-        BlockComments = [CBlockComment],
-        Strings = [DoubleQuoted],
+        BlockComments = [_cBlockComment],
+        Strings = [_doubleQuoted],
         AssignmentOperators = ["="],
         MemberAccessOperators = ["."],
         TypePrefixOperators = [":", "<", ","],
@@ -258,13 +259,13 @@ public static class Languages
             new ImportForm("package ", ImportShape.Module) { Declares = true },
             new ImportForm("require(", ImportShape.Path) { Anywhere = true, Closer = ")" }
         ],
-        InstantiationKeywords = New,
+        InstantiationKeywords = _new,
         // No scope list, and deliberately: a profile that names one list behaves as it did before
         // there were two (#83), and this one is today's behaviour exactly by contract — including the
         // rules that are wrong somewhere (ADR-0008). An extension nobody declared does not become the
         // place a C-family judgement is applied on its behalf.
-        DeclarationModifiers = CFamilyModifiers,
-        NonTypeKeywords = CFamilyNonTypes,
+        DeclarationModifiers = _cFamilyModifiers,
+        NonTypeKeywords = _cFamilyNonTypes,
         DeclarationKeywords = ["class", "interface", "struct", "record", "enum"]
     };
 
@@ -272,7 +273,7 @@ public static class Languages
     ///     The languages, each claiming its extensions. Lowercase and without the dot, which is how
     ///     <c>files.extension</c> is stored.
     /// </summary>
-    private static readonly LanguageProfile[] Registered =
+    private static readonly LanguageProfile[] _registered =
     [
         // The dialect this repository's operators mostly read. `.vh` and `.xh` are its headers, which
         // are X# source and are counted as such rather than as a category of their own.
@@ -283,9 +284,9 @@ public static class Languages
         {
             LineComments = ["//", "&&"],
             LineStartComments = ["*"],
-            BlockComments = [CBlockComment],
+            BlockComments = [_cBlockComment],
             // The VO dialect has no backslash escape: a path in a literal is a path, not an escape.
-            Strings = [RawDouble, RawSingle],
+            Strings = [_rawDouble, _rawSingle],
             AssignmentOperators = [":="],
             MemberAccessOperators = [":", "."],
             TypePrefixOperators = ["<", ","],
@@ -308,8 +309,8 @@ public static class Languages
             // `find_definition` finds them and
             // `DeclarationScope` cannot reach for them, so a reference below a `local cLabel := …` is
             // still labelled with the method it sits in — by the scope list rather than by omission.
-            DeclarationModifiers = [.. XSharpScopeModifiers, "define", "local", "instance"],
-            ScopeModifiers = XSharpScopeModifiers,
+            DeclarationModifiers = [.. _xSharpScopeModifiers, "define", "local", "instance"],
+            ScopeModifiers = _xSharpScopeModifiers,
             DeclarationKeywords = ["class", "interface", "struct", "structure", "vostruct", "union", "enum"],
             DeclarationNamesFollowKeyword = true,
             DeclarationBodyOpeners = ["as"],
@@ -320,8 +321,8 @@ public static class Languages
         {
             LineComments = ["//"],
             LineStartComments = ["*"],
-            BlockComments = [CBlockComment],
-            Strings = CSharpLiterals,
+            BlockComments = [_cBlockComment],
+            Strings = _cSharpLiterals,
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", "<", ","],
@@ -336,10 +337,10 @@ public static class Languages
                 new ImportForm("global using ", ImportShape.Module),
                 new ImportForm("namespace ", ImportShape.Module) { Declares = true }
             ],
-            InstantiationKeywords = New,
-            DeclarationModifiers = CFamilyModifiers,
-            ScopeModifiers = CFamilyScopeModifiers,
-            NonTypeKeywords = CFamilyNonTypes,
+            InstantiationKeywords = _new,
+            DeclarationModifiers = _cFamilyModifiers,
+            ScopeModifiers = _cFamilyScopeModifiers,
+            NonTypeKeywords = _cFamilyNonTypes,
             DeclarationKeywords = ["class", "interface", "struct", "record", "enum"],
             GeneratedPathPatterns = ["*.g.cs", "*.designer.cs", "*.generated.cs"]
         },
@@ -347,45 +348,45 @@ public static class Languages
         {
             LineComments = ["//"],
             LineStartComments = ["*"],
-            BlockComments = [CBlockComment],
+            BlockComments = [_cBlockComment],
             // `--` is a decrement here, not a comment: treating it as one hid the rest of every line
             // a trimmed `--i` started.
-            Strings = [Template, DoubleQuoted, SingleQuotedEscaped],
+            Strings = [_template, _doubleQuoted, _singleQuotedEscaped],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", "<", ","],
-            ImportForms = EcmaImports,
-            ImportPaths = EcmaPaths,
-            InstantiationKeywords = New,
-            DeclarationModifiers = CFamilyModifiers,
-            ScopeModifiers = CFamilyScopeModifiers,
-            NonTypeKeywords = CFamilyNonTypes,
+            ImportForms = _ecmaImports,
+            ImportPaths = _ecmaPaths,
+            InstantiationKeywords = _new,
+            DeclarationModifiers = _cFamilyModifiers,
+            ScopeModifiers = _cFamilyScopeModifiers,
+            NonTypeKeywords = _cFamilyNonTypes,
             DeclarationKeywords = ["class", "interface", "enum", "type"]
         },
         new LanguageProfile("JavaScript", ["js", "jsx", "mjs", "cjs"])
         {
             LineComments = ["//"],
             LineStartComments = ["*"],
-            BlockComments = [CBlockComment],
-            Strings = [Template, DoubleQuoted, SingleQuotedEscaped],
+            BlockComments = [_cBlockComment],
+            Strings = [_template, _doubleQuoted, _singleQuotedEscaped],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = ["<", ","],
-            ImportForms = EcmaImports,
-            ImportPaths = EcmaPaths,
-            InstantiationKeywords = New,
-            DeclarationModifiers = CFamilyModifiers,
-            ScopeModifiers = CFamilyScopeModifiers,
-            NonTypeKeywords = CFamilyNonTypes,
+            ImportForms = _ecmaImports,
+            ImportPaths = _ecmaPaths,
+            InstantiationKeywords = _new,
+            DeclarationModifiers = _cFamilyModifiers,
+            ScopeModifiers = _cFamilyScopeModifiers,
+            NonTypeKeywords = _cFamilyNonTypes,
             DeclarationKeywords = ["class"]
         },
         new LanguageProfile("Delphi", ["pas", "dpr", "dpk", "dfm"])
         {
             LineComments = ["//"],
             // `{ }` and `(* *)` are comments, but `{$IFDEF}` is a compiler directive and not one.
-            BlockComments = [new StringDelimiter("{", "}", StringEscape.None), new StringDelimiter("(*", "*)", StringEscape.None), CBlockComment],
+            BlockComments = [new StringDelimiter("{", "}", StringEscape.None), new StringDelimiter("(*", "*)", StringEscape.None), _cBlockComment],
             DirectivePrefixes = ["{$", "(*$"],
-            Strings = [SingleQuoted],
+            Strings = [_singleQuoted],
             AssignmentOperators = [":="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", ","],
@@ -406,8 +407,8 @@ public static class Languages
             // lines under a bare `var` — the block form, where the keyword heads the section and the
             // names follow it — is still not read, because no modifier stands on those lines; the
             // one-line form is what this admits.
-            DeclarationModifiers = [.. DelphiScopeModifiers, "var", "const"],
-            ScopeModifiers = DelphiScopeModifiers,
+            DeclarationModifiers = [.. _delphiScopeModifiers, "var", "const"],
+            ScopeModifiers = _delphiScopeModifiers,
             DeclarationKeywords = ["class", "record", "interface", "object"],
             DeclarationNamesFollowKeyword = true,
             // `TCustomer = class(TBase)` is how a Delphi type is declared; `class TCustomer` is not
@@ -431,7 +432,7 @@ public static class Languages
             // reason SQL's literal is not: an unclosed quote in markup is far likelier to be a typo,
             // a stray apostrophe or a tag this does not parse than a genuine multi-line value, and a
             // literal read as spanning takes every line below it with it.
-            Strings = [RawDouble, RawSingle],
+            Strings = [_rawDouble, _rawSingle],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             // The tag is the opener and the attribute is what is read out of it. A bare `src=` or
@@ -447,8 +448,8 @@ public static class Languages
         new LanguageProfile("CSS", ["css"])
         {
             // `/* */` is the only comment form CSS has; `//` is not one, whatever a preprocessor does.
-            BlockComments = [CBlockComment],
-            Strings = [DoubleQuoted, SingleQuotedEscaped],
+            BlockComments = [_cBlockComment],
+            Strings = [_doubleQuoted, _singleQuotedEscaped],
             // A declaration here is `property: value`, which is the nearest thing CSS has to a write.
             AssignmentOperators = [":"],
             // `@import "a.css"`, `@import url("a.css")` and `url(a.png)` are three spellings of one
@@ -469,48 +470,48 @@ public static class Languages
         new LanguageProfile("SQL", ["sql"])
         {
             LineComments = ["--"],
-            BlockComments = [CBlockComment],
+            BlockComments = [_cBlockComment],
             // A SQL literal may legally hold a newline, and it is not marked as spanning one anyway.
             // A literal that spans is read as open until its closing quote, so one odd quote — in a
             // dialect this does not know, in a string this misreads — would turn the rest of the file
             // into a string. The multi-line literal is rare in this code and the cost of getting it
             // wrong is every line below it.
-            Strings = [SingleQuoted],
+            Strings = [_singleQuoted],
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
-            DeclarationModifiers = SqlModifiers,
+            DeclarationModifiers = _sqlModifiers,
             DeclarationNamesFollowKeyword = true,
             // A routine here opens its body with a word where the C family opens one with a bracket.
-            DeclarationBodyOpeners = SqlBodyOpeners,
+            DeclarationBodyOpeners = _sqlBodyOpeners,
             CaseInsensitiveKeywords = true,
             // A `.sql` script may hold an Oracle package spec, a body, or both, and the headers are
             // the only thing that says which. Without the split declared here, the half of this
             // dialect that is written into `.sql` files answers that it has no halves.
-            SectionMarkers = PackageSections
+            SectionMarkers = _packageSections
         },
         new LanguageProfile("PL/SQL", ["pks", "pkb", "plsql", "prc", "fnc", "trg"])
         {
             LineComments = ["--"],
-            BlockComments = [CBlockComment],
-            Strings = [SingleQuoted],
+            BlockComments = [_cBlockComment],
+            Strings = [_singleQuoted],
             AssignmentOperators = [":="],
             MemberAccessOperators = ["."],
-            DeclarationModifiers = [.. SqlModifiers, "package", "body", "cursor", "exception"],
+            DeclarationModifiers = [.. _sqlModifiers, "package", "body", "cursor", "exception"],
             DeclarationNamesFollowKeyword = true,
-            DeclarationBodyOpeners = SqlBodyOpeners,
+            DeclarationBodyOpeners = _sqlBodyOpeners,
             CaseInsensitiveKeywords = true,
             // A package spec announces its routines and the body writes them, usually in two files,
             // which is why the marker is the header line and not the extension: neither file knows
             // about the other.
-            SectionMarkers = PackageSections
+            SectionMarkers = _packageSections
         }
     ];
 
-    private static ILanguageAnalyzer Fallback { get; } = new TextAnalyzer(FallbackProfile);
+    private static ILanguageAnalyzer Fallback { get; } = new TextAnalyzer(_fallbackProfile);
 
     /// <summary>The set every caller resolves against unless it was handed another.</summary>
     public static LanguageRegistry Default { get; } =
-        new([.. Registered.Select(profile => (ILanguageAnalyzer)new TextAnalyzer(profile))], Fallback);
+        new([.. _registered.Select(profile => (ILanguageAnalyzer)new TextAnalyzer(profile))], Fallback);
 
     /// <summary>
     ///     The language this extension means, or null when no profile covers it. The extension is

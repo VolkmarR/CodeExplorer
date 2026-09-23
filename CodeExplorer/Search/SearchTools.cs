@@ -1,9 +1,10 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>The MCP tools that answer from a project's index (ADR-0005, <c>Search/</c>).</summary>
 [McpServerToolType]

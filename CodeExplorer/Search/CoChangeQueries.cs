@@ -1,6 +1,8 @@
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     One file that kept changing alongside another: how many of the anchor's commits also touched
@@ -74,12 +76,12 @@ public sealed partial class HistoryQueries
     /// </summary>
     public Task<Outcome> CoChangedAsync(string slug, CoChangeRequest request,
         CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, Engine, () => readers.OverIndexAsync(slug, null,
+        Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, null,
             async (index, token) =>
             {
                 var (found, historical, unresolved) = await OnePathAsync(index, request.Path, token);
                 if (unresolved is not null) return unresolved;
-                if (historical is { } gone) return GoneFromHead(gone.Spelled, "co_changed", CoChangedCannot);
+                if (historical is { } gone) return GoneFromHead(gone.Spelled, "co_changed", _coChangedCannot);
                 var file = found!;
 
                 bool hasHistory = await HasHistoryAsync(index, token);
@@ -94,7 +96,7 @@ public sealed partial class HistoryQueries
                 var coupling = window is null
                     ? new CoChanges(0, 0, [])
                     : await PairAsync(index, window, file.RepositorySlug, anchored, _maxCommitPaths,
-                        Math.Clamp(request.Limit, 1, MaxRankedFiles), token);
+                        Math.Clamp(request.Limit, 1, _maxRankedFiles), token);
                 // One extra read, and only on the branch that cannot answer without it: a window that
                 // reached nothing has to say whether the path has any history at all.
                 // Over the same chain the pairing ran on, not the current path alone: every other number
@@ -120,13 +122,13 @@ public sealed partial class HistoryQueries
         var parameters = new List<DuckDBParameter> { new("r", repositorySlug) };
         var names = BindPaths(parameters, paths);
 
-        using var command = index.Connection.Query($"""
-                                                    SELECT count(DISTINCT cf.commit_id) AS commits,
-                                                           max(c.authored_at) AS newest
-                                                    FROM commit_files cf JOIN commits c USING (commit_id)
-                                                    WHERE c.repo_slug = $r AND cf.path IN ({string.Join(", ", names)})
-                                                    """, parameters);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = index.Connection.Query($"""
+                                                          SELECT count(DISTINCT cf.commit_id) AS commits,
+                                                                 max(c.authored_at) AS newest
+                                                          FROM commit_files cf JOIN commits c USING (commit_id)
+                                                          WHERE c.repo_slug = $r AND cf.path IN ({string.Join(", ", names)})
+                                                          """, parameters);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return new RecordedPath(0, null);
         int commits = (int)reader.Int64("commits");
         return new RecordedPath(commits,
@@ -181,79 +183,79 @@ public sealed partial class HistoryQueries
         };
         string anchored = string.Join(", ", BindPaths(parameters, anchorPaths));
 
-        using var command = index.Connection.Query($"""
-                                                    -- The anchor's own commits first, and everything after
-                                                    -- reads only those. Narrowing here rather than later is
-                                                    -- what keeps the work proportional to one file's history
-                                                    -- instead of to the whole window's.
-                                                    WITH anchor AS (
-                                                        SELECT cf.commit_id,
-                                                               -- Whether this commit is the one that moved
-                                                               -- the anchor. A rename is one row, carrying
-                                                               -- the new path, so only the commit that did
-                                                               -- the moving matches.
-                                                               bool_or(cf.change_kind = 'renamed') AS moved
-                                                        FROM commit_files cf
-                                                        JOIN commits c USING (commit_id)
-                                                        WHERE c.repo_slug = $r
-                                                          AND epoch(c.authored_at) BETWEEN $since AND $until
-                                                          AND cf.path IN ({anchored})
-                                                        GROUP BY cf.commit_id),
-                                                    -- Every path those commits touched. The window and the
-                                                    -- repository are not repeated: a commit_id from anchor
-                                                    -- already satisfies both. MATERIALIZED because two CTEs
-                                                    -- below read this one, and inlined it would be a second
-                                                    -- scan of commit_files to produce the same rows.
-                                                    -- `moved` is carried through rather than joined again
-                                                    -- below: anchor groups over commit_files, and reading
-                                                    -- it twice would run that scan twice for one answer.
-                                                    touched AS MATERIALIZED (
-                                                        SELECT cf.commit_id, cf.path, cf.change_kind,
-                                                               anchor.moved
-                                                        FROM commit_files cf JOIN anchor USING (commit_id)),
-                                                    sized AS (
-                                                        SELECT commit_id,
-                                                               count(*) <= $c AS paired
-                                                        FROM touched GROUP BY commit_id),
-                                                    -- One row per commit that touched the anchor, so this
-                                                    -- counts commits and not paths.
-                                                    counts AS (
-                                                        SELECT count(*)::INTEGER AS commits,
-                                                               count(*) FILTER (WHERE paired)::INTEGER AS paired
-                                                        FROM sized),
-                                                    ranked AS (
-                                                        SELECT t.path, count(*)::INTEGER AS shared
-                                                        FROM touched t JOIN sized s USING (commit_id)
-                                                        -- The whole chain and not just the current path:
-                                                        -- an anchor's own earlier name is not a file it
-                                                        -- co-changed with.
-                                                        WHERE s.paired AND t.path NOT IN ({anchored})
-                                                          -- In the commit that moved the anchor, a path
-                                                          -- that moved with it says only "these moved
-                                                          -- together"; one that was edited in the same
-                                                          -- commit is real coupling and stays.
-                                                          AND NOT (t.moved AND t.change_kind = 'renamed')
-                                                        GROUP BY t.path
-                                                        -- Spelled out rather than ordered by the alias, for
-                                                        -- the reason IndexQueries spells its ORDER BY out.
-                                                        ORDER BY count(*) DESC, t.path
-                                                        -- Inlined and not parameterised: it is an int the
-                                                        -- module has already clamped to a range, so there is
-                                                        -- nothing to escape, and the churn ranking inlines
-                                                        -- its own the same way.
-                                                        LIMIT {limit})
-                                                    -- LEFT JOIN ON TRUE so the counts survive an empty
-                                                    -- ranking: a file that moves alone still has to say how
-                                                    -- many commits it was looked at over. The cross join
-                                                    -- does not carry ranked's order, so the outer ORDER BY
-                                                    -- is what makes the ranking a ranking.
-                                                    SELECT counts.commits, counts.paired, ranked.path,
-                                                           ranked.shared,
-                                                           {IndexQueries.AtHeadExists("$r")} AS at_head
-                                                    FROM counts LEFT JOIN ranked ON TRUE
-                                                    ORDER BY ranked.shared DESC, ranked.path
-                                                    """, parameters);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = index.Connection.Query($"""
+                                                          -- The anchor's own commits first, and everything after
+                                                          -- reads only those. Narrowing here rather than later is
+                                                          -- what keeps the work proportional to one file's history
+                                                          -- instead of to the whole window's.
+                                                          WITH anchor AS (
+                                                              SELECT cf.commit_id,
+                                                                     -- Whether this commit is the one that moved
+                                                                     -- the anchor. A rename is one row, carrying
+                                                                     -- the new path, so only the commit that did
+                                                                     -- the moving matches.
+                                                                     bool_or(cf.change_kind = 'renamed') AS moved
+                                                              FROM commit_files cf
+                                                              JOIN commits c USING (commit_id)
+                                                              WHERE c.repo_slug = $r
+                                                                AND epoch(c.authored_at) BETWEEN $since AND $until
+                                                                AND cf.path IN ({anchored})
+                                                              GROUP BY cf.commit_id),
+                                                          -- Every path those commits touched. The window and the
+                                                          -- repository are not repeated: a commit_id from anchor
+                                                          -- already satisfies both. MATERIALIZED because two CTEs
+                                                          -- below read this one, and inlined it would be a second
+                                                          -- scan of commit_files to produce the same rows.
+                                                          -- `moved` is carried through rather than joined again
+                                                          -- below: anchor groups over commit_files, and reading
+                                                          -- it twice would run that scan twice for one answer.
+                                                          touched AS MATERIALIZED (
+                                                              SELECT cf.commit_id, cf.path, cf.change_kind,
+                                                                     anchor.moved
+                                                              FROM commit_files cf JOIN anchor USING (commit_id)),
+                                                          sized AS (
+                                                              SELECT commit_id,
+                                                                     count(*) <= $c AS paired
+                                                              FROM touched GROUP BY commit_id),
+                                                          -- One row per commit that touched the anchor, so this
+                                                          -- counts commits and not paths.
+                                                          counts AS (
+                                                              SELECT count(*)::INTEGER AS commits,
+                                                                     count(*) FILTER (WHERE paired)::INTEGER AS paired
+                                                              FROM sized),
+                                                          ranked AS (
+                                                              SELECT t.path, count(*)::INTEGER AS shared
+                                                              FROM touched t JOIN sized s USING (commit_id)
+                                                              -- The whole chain and not just the current path:
+                                                              -- an anchor's own earlier name is not a file it
+                                                              -- co-changed with.
+                                                              WHERE s.paired AND t.path NOT IN ({anchored})
+                                                                -- In the commit that moved the anchor, a path
+                                                                -- that moved with it says only "these moved
+                                                                -- together"; one that was edited in the same
+                                                                -- commit is real coupling and stays.
+                                                                AND NOT (t.moved AND t.change_kind = 'renamed')
+                                                              GROUP BY t.path
+                                                              -- Spelled out rather than ordered by the alias, for
+                                                              -- the reason IndexQueries spells its ORDER BY out.
+                                                              ORDER BY count(*) DESC, t.path
+                                                              -- Inlined and not parameterised: it is an int the
+                                                              -- module has already clamped to a range, so there is
+                                                              -- nothing to escape, and the churn ranking inlines
+                                                              -- its own the same way.
+                                                              LIMIT {limit})
+                                                          -- LEFT JOIN ON TRUE so the counts survive an empty
+                                                          -- ranking: a file that moves alone still has to say how
+                                                          -- many commits it was looked at over. The cross join
+                                                          -- does not carry ranked's order, so the outer ORDER BY
+                                                          -- is what makes the ranking a ranking.
+                                                          SELECT counts.commits, counts.paired, ranked.path,
+                                                                 ranked.shared,
+                                                                 {IndexQueries.AtHeadExists("$r")} AS at_head
+                                                          FROM counts LEFT JOIN ranked ON TRUE
+                                                          ORDER BY ranked.shared DESC, ranked.path
+                                                          """, parameters);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var paths = await index.PathsAsync(cancellationToken);
         var files = new List<CoChangedFile>();
         int commits = 0, paired = 0;

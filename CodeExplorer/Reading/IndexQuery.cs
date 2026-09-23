@@ -1,9 +1,10 @@
 using System.Data.Common;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using CodeExplorer.Index;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     What every service does to a connection it was handed: build a command with its parameters
@@ -80,7 +81,7 @@ internal static class IndexQuery
     public static async Task ExecuteAsync(this DuckDBConnection connection, string sql,
         CancellationToken cancellationToken)
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -116,7 +117,7 @@ internal static class IndexQuery
         IEnumerable<DuckDBParameter> parameters, CancellationToken cancellationToken,
         [CallerFilePath] string file = "", [CallerMemberName] string member = "")
     {
-        using var command = connection.Query(sql, parameters);
+        await using var command = connection.Query(sql, parameters);
         return Convert.ToInt64(await command.ScalarAsync(cancellationToken, file, member),
             CultureInfo.InvariantCulture);
     }
@@ -132,7 +133,7 @@ internal static class IndexQuery
         IEnumerable<DuckDBParameter> parameters, CancellationToken cancellationToken,
         [CallerFilePath] string file = "", [CallerMemberName] string member = "")
     {
-        using var command = connection.Query($"SELECT EXISTS ({sql})", parameters);
+        await using var command = connection.Query($"SELECT EXISTS ({sql})", parameters);
         return await command.ScalarAsync(cancellationToken, file, member) is true;
     }
 }

@@ -1,4 +1,6 @@
-namespace CodeExplorer;
+using CodeExplorer.Infrastructure;
+
+namespace CodeExplorer.Refresh;
 
 /// <summary>
 ///     The two endpoints a refresh is driven by, and the warm-up beside them (ADR-0005). The first two

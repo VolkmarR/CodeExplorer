@@ -1,7 +1,9 @@
 using System.Globalization;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     Where each line a search cares about stands in its own file: inside a block comment or a
@@ -65,7 +67,7 @@ internal static class FilePositions
         ArgumentNullException.ThrowIfNull(analyzer);
         ArgumentNullException.ThrowIfNull(visit);
 
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var position = analyzer.Start;
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -123,13 +125,13 @@ internal static class FilePositions
         // another file's is on line 4000.
         string bounds = string.Join(", ", files.Select(file => string.Create(CultureInfo.InvariantCulture,
             $"({file.Key}, {file.Value.Through})")));
-        using var command = connection.Query($"""
-                                                 SELECT l.file_id, l.line_number, l.content
-                                                 FROM lines l JOIN (VALUES {bounds}) AS b(file_id, through)
-                                                   ON l.file_id = b.file_id AND l.line_number <= b.through
-                                                 ORDER BY l.file_id, l.line_number
-                                                 """, []);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = connection.Query($"""
+                                                    SELECT l.file_id, l.line_number, l.content
+                                                    FROM lines l JOIN (VALUES {bounds}) AS b(file_id, through)
+                                                      ON l.file_id = b.file_id AND l.line_number <= b.through
+                                                    ORDER BY l.file_id, l.line_number
+                                                    """, []);
+        await using var reader = await command.ReaderAsync(cancellationToken);
 
         long walking = -1;
         // Seeded from any file so the walk's state is definitely assigned; the first row replaces it,

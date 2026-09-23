@@ -1,4 +1,4 @@
-namespace CodeExplorer;
+namespace CodeExplorer.Language;
 
 /// <summary>How a string literal protects its own closing delimiter.</summary>
 public enum StringEscape

@@ -1,9 +1,11 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using ModelContextProtocol.Server;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Control;
 
 /// <summary>
 ///     The MCP tools about the project itself (ADR-0005, <c>Control/</c>): which one this endpoint

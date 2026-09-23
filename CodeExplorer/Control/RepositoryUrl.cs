@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Control;
 
 /// <summary>Where a repository URL points, which decides both whether it is accepted and how it is cloned.</summary>
 public enum RepositoryUrlKind

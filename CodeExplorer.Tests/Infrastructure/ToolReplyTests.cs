@@ -1,4 +1,7 @@
 using System.Text;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using Xunit;

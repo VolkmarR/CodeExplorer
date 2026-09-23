@@ -1,4 +1,7 @@
 using System.Text.Json;
+using CodeExplorer.Index;
+using CodeExplorer.Reading;
+using CodeExplorer.Search;
 using ModelContextProtocol.Client;
 using Xunit;
 

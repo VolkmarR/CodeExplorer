@@ -1,4 +1,6 @@
-namespace CodeExplorer;
+using CodeExplorer.Language;
+
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     How the <c>imports</c> table spells the two things an edge is not a string: which shape of name

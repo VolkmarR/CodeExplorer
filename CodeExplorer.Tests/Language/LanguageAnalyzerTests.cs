@@ -1,3 +1,4 @@
+using CodeExplorer.Language;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -260,7 +261,7 @@ public sealed class LanguageAnalyzerTests
         Assert.True(two.Declares(two.Start, "func Advance(n)").Value?.OpensScope);
         return;
 
-        static TextAnalyzer Analyzer(string[] modifiers, string[] scopes) =>
+        static Language.TextAnalyzer Analyzer(string[] modifiers, string[] scopes) =>
             new(new LanguageProfile("Toy", ["toy"])
             {
                 DeclarationModifiers = modifiers, ScopeModifiers = scopes,
@@ -415,7 +416,7 @@ public sealed class LanguageAnalyzerTests
             AssignmentOperators = ["<-"],
             MemberAccessOperators = ["->"]
         };
-        var registry = Languages.Default.With(new TextAnalyzer(invented));
+        var registry = Languages.Default.With(new Language.TextAnalyzer(invented));
 
         var analyzer = registry.For("wib");
         Assert.Equal("Wibble", analyzer.Language);
@@ -453,7 +454,7 @@ public sealed class LanguageAnalyzerTests
         // Recovering the order from the map rather than keeping it let the loser take `cs` back.
         var registry = Languages.Default.With(new StubAnalyzer());
         for (int i = 0; i < 6; i++)
-            registry = registry.With(new TextAnalyzer(new LanguageProfile($"Filler{i}", [$"f{i}"])));
+            registry = registry.With(new Language.TextAnalyzer(new LanguageProfile($"Filler{i}", [$"f{i}"])));
 
         Assert.Equal("C# (parsed)", registry.For("cs").Language);
         Assert.Equal("C#", registry.For("csx").Language);

@@ -1,7 +1,7 @@
 using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.DataProtection;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Infrastructure;
 
 /// <summary>
 ///     Where the Data Protection key ring is kept, which is what decides whether anything protected
@@ -58,7 +58,7 @@ public static class KeyRing
     ///     a machine that starts persisting to a container is a machine whose locally stored
     ///     credentials have to be set again, which README says and which only a developer meets.
     /// </summary>
-    private const string ApplicationName = "CodeExplorer";
+    private const string _applicationName = "CodeExplorer";
 
     /// <summary>
     ///     Reads the two settings the key ring has. Absent is the answer on both: no container is the
@@ -82,7 +82,7 @@ public static class KeyRing
 
         if (settings.Container is { } container)
         {
-            protection.SetApplicationName(ApplicationName)
+            protection.SetApplicationName(_applicationName)
                 .PersistKeysToAzureBlobStorage(
                     new BlobContainerClient(container, DurableStore.Credential).GetBlobClient(BlobName));
             if (settings.KeyVaultKey is { } key)

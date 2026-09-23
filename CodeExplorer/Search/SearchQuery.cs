@@ -1,6 +1,7 @@
+using CodeExplorer.Language;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     The three things a search over the index settles before or after it queries: whether the name
@@ -74,12 +75,12 @@ internal static class SearchQuery
         {
             null => null,
             // Nothing to narrow by: a clause of `AND true` would say the same and read as a mistake.
-            EveryLineTest => "",
+            _everyLineTest => "",
             var test => $" AND {test}"
         };
 
     /// <summary>The test for an analyser that needs every line looked at, which narrows nothing.</summary>
-    private const string EveryLineTest = "true";
+    private const string _everyLineTest = "true";
 
     /// <summary>
     ///     The same question as <see cref="Narrowing" /> asked as a boolean expression rather than as a
@@ -98,7 +99,7 @@ internal static class SearchQuery
             case CandidateLines.NoLine:
                 return null;
             case CandidateLines.EveryLine:
-                return EveryLineTest;
+                return _everyLineTest;
             case CandidateLines.Re2Pattern pattern:
                 parameters.Add(new DuckDBParameter(name, pattern.Pattern));
                 return $"regexp_matches(content, ${name}, '')";

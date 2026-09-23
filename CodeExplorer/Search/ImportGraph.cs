@@ -1,6 +1,9 @@
+using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     One name a file imports: as it was written, and what it turned out to be.
@@ -77,16 +80,16 @@ public sealed class ImportGraph(IndexReaders readers)
             var (name, profiled) = Languages.Name(extension);
 
             var edges = new List<ImportedFrom>();
-            using var command = index.Connection.Query($"""
-                                                        SELECT i.name, i.shape, i.line_number, i.unresolved,
-                                                               i.evidence, t.qualified_path AS target_path
-                                                        FROM imports i
-                                                        LEFT JOIN files t ON t.file_id = i.target_file
-                                                        WHERE i.file_id = $f
-                                                        ORDER BY i.line_number, i.import_id
-                                                        LIMIT {MaxEdges + 1}
-                                                        """, [new DuckDBParameter("f", file.FileId)]);
-            using var reader = await command.ReaderAsync(token);
+            await using var command = index.Connection.Query($"""
+                                                              SELECT i.name, i.shape, i.line_number, i.unresolved,
+                                                                     i.evidence, t.qualified_path AS target_path
+                                                              FROM imports i
+                                                              LEFT JOIN files t ON t.file_id = i.target_file
+                                                              WHERE i.file_id = $f
+                                                              ORDER BY i.line_number, i.import_id
+                                                              LIMIT {MaxEdges + 1}
+                                                              """, [new DuckDBParameter("f", file.FileId)]);
+            await using var reader = await command.ReaderAsync(token);
             while (await reader.ReadAsync(token))
                 edges.Add(new ImportedFrom(reader.Text("name"), ImportColumns.Shape(reader.Text("shape")),
                     reader.Int32("line_number"), reader.TextOrNull("target_path"),

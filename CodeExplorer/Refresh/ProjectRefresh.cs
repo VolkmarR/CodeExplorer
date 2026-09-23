@@ -1,7 +1,11 @@
+using CodeExplorer.Control;
+using CodeExplorer.Git;
+using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using ModelContextProtocol;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Refresh;
 
 /// <summary>
 ///     One refresh of one project (CONTEXT.md): bring every local copy up to date, read them into a
@@ -17,7 +21,7 @@ public sealed class ProjectRefresh(
     ProjectIndexes indexes,
     ILogger<ProjectRefresh> logger)
 {
-    private const int TotalSteps = RefreshProgress.TotalStepCount;
+    private const int _totalSteps = RefreshProgress.TotalStepCount;
 
     /// <param name="project">The project to refresh, as the control database holds it.</param>
     /// <param name="report">
@@ -45,14 +49,14 @@ public sealed class ProjectRefresh(
             IndexSummary summary;
             try
             {
-                report(new RefreshProgress(RefreshProgress.IngestStep, TotalSteps, RefreshProgress.IngestPhase));
+                report(new RefreshProgress(RefreshProgress.IngestStep, _totalSteps, RefreshProgress.IngestPhase));
                 // Scoped so the shadow connection is closed before the swap: the file cannot be moved
                 // over the live one while the instance still holds it open.
                 using (var shadow = await indexes.CreateShadowAsync(project.Slug, cancellationToken))
                 {
                     summary = await builder.FillAsync(shadow, opened, project.SingleRepository, report,
                         cancellationToken);
-                    report(new RefreshProgress(RefreshProgress.StoreStep, TotalSteps, RefreshProgress.StorePhase));
+                    report(new RefreshProgress(RefreshProgress.StoreStep, _totalSteps, RefreshProgress.StorePhase));
                     // Exported from the shadow rather than from the live index after the swap, which is
                     // what the tables about to be swapped in are. Doing it here means the export needs
                     // no second attach of the live catalog — one that would quietly re-bind a connection
@@ -66,7 +70,7 @@ public sealed class ProjectRefresh(
                 // reported, outside the step-3 window #91 is about, so its half-second is billed to
                 // the store rather than to nothing.
 
-                report(new RefreshProgress(RefreshProgress.SwapStep, TotalSteps, RefreshProgress.SwapPhase));
+                report(new RefreshProgress(RefreshProgress.SwapStep, _totalSteps, RefreshProgress.SwapPhase));
                 await indexes.SwapShadowAsync(project.Slug, cancellationToken);
             }
             catch
@@ -104,7 +108,7 @@ public sealed class ProjectRefresh(
         {
             // Reported before the fetch, and counted as done after: an operator watching wants to know
             // which repository is being transferred now, not which one finished last.
-            report(new RefreshProgress(RefreshProgress.FetchStep, TotalSteps, $"Fetching '{repository.Slug}'", fetched++,
+            report(new RefreshProgress(RefreshProgress.FetchStep, _totalSteps, $"Fetching '{repository.Slug}'", fetched++,
                 repositories.Count));
             try
             {

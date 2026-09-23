@@ -1,7 +1,7 @@
 using System.Text.Json;
 using ModelContextProtocol;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     How much of a project one language accounts for. <see cref="Mapped" /> is false when no language
@@ -98,9 +98,9 @@ public sealed record IndexOverview(
     ///     Indented off, not for the bytes but because the column is read by machines only; the sections
     ///     are what a human reads, and they are rendered.
     /// </summary>
-    private static readonly JsonSerializerOptions Format = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions _format = new(JsonSerializerDefaults.Web);
 
-    public string ToDocument() => JsonSerializer.Serialize(this, Format);
+    public string ToDocument() => JsonSerializer.Serialize(this, _format);
 
     /// <summary>
     ///     Back from the stored column. A document this build cannot read is a build mismatch the schema
@@ -113,7 +113,7 @@ public sealed record IndexOverview(
     {
         try
         {
-            return JsonSerializer.Deserialize<IndexOverview>(document, Format) ?? throw new JsonException();
+            return JsonSerializer.Deserialize<IndexOverview>(document, _format) ?? throw new JsonException();
         }
         catch (JsonException exception)
         {

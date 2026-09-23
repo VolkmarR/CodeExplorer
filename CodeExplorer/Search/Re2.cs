@@ -1,6 +1,6 @@
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Search;
 
 /// <summary>
 ///     What every tool that hands a caller's pattern to DuckDB has to say about RE2 (ADR-0004): which
@@ -15,7 +15,7 @@ internal static class Re2
     ///     RE2 rejects these; each is a .NET or PCRE habit an agent brings along. Recognised up front so
     ///     the explanation names the construct rather than quoting an engine error.
     /// </summary>
-    private static readonly (string Needle, string Name)[] UnsupportedSyntax =
+    private static readonly (string Needle, string Name)[] _unsupportedSyntax =
     [
         ("(?<=", "lookbehind (?<=...)"),
         ("(?<!", "negative lookbehind (?<!...)"),
@@ -26,7 +26,7 @@ internal static class Re2
     /// <summary>Why this pattern cannot be run at all, or null when RE2 may have a go at it.</summary>
     public static string? Unsupported(string pattern)
     {
-        foreach ((string needle, string name) in UnsupportedSyntax)
+        foreach ((string needle, string name) in _unsupportedSyntax)
             if (pattern.Contains(needle, StringComparison.Ordinal))
                 return $"The pattern uses {name}, which RE2 does not support. "
                        + "Match the wider text instead and read the hit, or grep for the inner part with context.";

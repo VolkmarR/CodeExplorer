@@ -1,6 +1,6 @@
 using DuckDB.NET.Data;
 
-namespace CodeExplorer;
+namespace CodeExplorer.Reading;
 
 /// <summary>
 ///     What an index lists rather than what it locates: the stored overview, the lines of a file, a
@@ -23,8 +23,8 @@ public sealed partial class IndexReader
     /// </summary>
     public async Task<IndexOverview> OverviewAsync(CancellationToken cancellationToken)
     {
-        using var command = Connection.Query("SELECT document FROM project_overview LIMIT 1", []);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = Connection.Query("SELECT document FROM project_overview LIMIT 1", []);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
             throw IndexOverview.Unreadable($"the index of project '{ProjectSlug}' holds no overview row");
 
@@ -38,13 +38,13 @@ public sealed partial class IndexReader
     public async Task<IReadOnlyList<string>> LinesAsync(long fileId, int first, int last,
         CancellationToken cancellationToken)
     {
-        using var command = Connection.Query("""
-                                             SELECT content FROM lines
-                                             WHERE file_id = $f AND line_number BETWEEN $a AND $b
-                                             ORDER BY line_number
-                                             """,
+        await using var command = Connection.Query("""
+                                                   SELECT content FROM lines
+                                                   WHERE file_id = $f AND line_number BETWEEN $a AND $b
+                                                   ORDER BY line_number
+                                                   """,
             [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var result = new List<string>();
         while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("content"));
         return result;
@@ -72,14 +72,14 @@ public sealed partial class IndexReader
 
         var files = new List<IndexedFile>();
         int total = 0;
-        using (var command = Connection.Query($"""
-                                               {FileColumns}, count(*) OVER () AS total
-                                               {FileSource}
-                                               WHERE lower(f.qualified_path) GLOB $g{scope}
-                                               ORDER BY f.qualified_path
-                                               LIMIT {limit} OFFSET {skip}
-                                               """, parameters))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = Connection.Query($"""
+                                                     {_fileColumns}, count(*) OVER () AS total
+                                                     {_fileSource}
+                                                     WHERE lower(f.qualified_path) GLOB $g{scope}
+                                                     ORDER BY f.qualified_path
+                                                     LIMIT {limit} OFFSET {skip}
+                                                     """, parameters))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -94,7 +94,7 @@ public sealed partial class IndexReader
         if (files.Count == 0 && skip > 0)
             total = (int)await Connection.CountAsync($"""
                                                       SELECT count(*)
-                                                      {FileSource}
+                                                      {_fileSource}
                                                       WHERE lower(f.qualified_path) GLOB $g{scope}
                                                       """, parameters, cancellationToken);
 
@@ -187,26 +187,26 @@ public sealed partial class IndexReader
         // caller's text, so it is inlined; k is filtered rather than bounded per row because a
         // correlated range() measured three times slower, and an absurd depth costs nothing here —
         // every extra k is filtered out before the grouping (23 ms at depth 1000, 17 ms at depth 3).
-        using (var command = Connection.Query($"""
-                                               WITH below AS (
-                                                   SELECT str_split(substr(f.directory, length($p) + 1), '/') AS segments,
-                                                          f.line_count, f.size_bytes
-                                                   FROM files f JOIN repositories r USING (repo_id)
-                                                   -- starts_with and not LIKE: the prefix is a
-                                                   -- directory NAME, and `_` is a LIKE wildcard, so
-                                                   -- `src/my_module/` would take in `src/myXmodule/`
-                                                   -- and count a sibling's files as this one's (#122).
-                                                   WHERE r.slug = $r AND starts_with(f.directory, $p) AND f.directory <> $d)
-                                               SELECT array_to_string(list_slice(segments, 1, k), '/') AS directory,
-                                                      CAST(count(*) AS BIGINT) AS files,
-                                                      CAST(sum(line_count) AS BIGINT) AS lines,
-                                                      CAST(sum(size_bytes) AS BIGINT) AS bytes
-                                               FROM below, range(1, {depth} + 1) AS t(k)
-                                               WHERE len(segments) >= k
-                                               GROUP BY directory
-                                               ORDER BY directory
-                                               """, scope))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = Connection.Query($"""
+                                                     WITH below AS (
+                                                         SELECT str_split(substr(f.directory, length($p) + 1), '/') AS segments,
+                                                                f.line_count, f.size_bytes
+                                                         FROM files f JOIN repositories r USING (repo_id)
+                                                         -- starts_with and not LIKE: the prefix is a
+                                                         -- directory NAME, and `_` is a LIKE wildcard, so
+                                                         -- `src/my_module/` would take in `src/myXmodule/`
+                                                         -- and count a sibling's files as this one's (#122).
+                                                         WHERE r.slug = $r AND starts_with(f.directory, $p) AND f.directory <> $d)
+                                                     SELECT array_to_string(list_slice(segments, 1, k), '/') AS directory,
+                                                            CAST(count(*) AS BIGINT) AS files,
+                                                            CAST(sum(line_count) AS BIGINT) AS lines,
+                                                            CAST(sum(size_bytes) AS BIGINT) AS bytes
+                                                     FROM below, range(1, {depth} + 1) AS t(k)
+                                                     WHERE len(segments) >= k
+                                                     GROUP BY directory
+                                                     ORDER BY directory
+                                                     """, scope))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -232,14 +232,14 @@ public sealed partial class IndexReader
                       AND len(str_split(substr(f.directory, length($p) + 1), '/')) <= {depth - 1})
               """
             : "";
-        using (var command = Connection.Query($"""
-                                               SELECT substr(f.directory, length($p) + 1) AS below,
-                                                      f.name, f.qualified_path, f.line_count, f.size_bytes, f.skip_reason
-                                               FROM files f JOIN repositories r USING (repo_id)
-                                               WHERE r.slug = $r AND (f.directory = $d{deeper})
-                                               ORDER BY f.directory, f.name
-                                               """, scope))
-        using (var reader = await command.ReaderAsync(cancellationToken))
+        await using (var command = Connection.Query($"""
+                                                     SELECT substr(f.directory, length($p) + 1) AS below,
+                                                            f.name, f.qualified_path, f.line_count, f.size_bytes, f.skip_reason
+                                                     FROM files f JOIN repositories r USING (repo_id)
+                                                     WHERE r.slug = $r AND (f.directory = $d{deeper})
+                                                     ORDER BY f.directory, f.name
+                                                     """, scope))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
                 Under(files, reader.Text("below")).Add(new TreeItem(reader.Text("name"),
@@ -284,15 +284,15 @@ public sealed partial class IndexReader
     /// </summary>
     private async Task<IReadOnlyList<TreeItem>> RepositoryLevelAsync(CancellationToken cancellationToken)
     {
-        using var command = Connection.Query("""
-                                             SELECT r.slug,
-                                                    CAST(r.file_count AS BIGINT) AS files,
-                                                    CAST(r.line_count AS BIGINT) AS lines,
-                                                    CAST(r.byte_count AS BIGINT) AS bytes
-                                             FROM repositories r
-                                             ORDER BY r.slug
-                                             """, []);
-        using var reader = await command.ReaderAsync(cancellationToken);
+        await using var command = Connection.Query("""
+                                                   SELECT r.slug,
+                                                          CAST(r.file_count AS BIGINT) AS files,
+                                                          CAST(r.line_count AS BIGINT) AS lines,
+                                                          CAST(r.byte_count AS BIGINT) AS bytes
+                                                   FROM repositories r
+                                                   ORDER BY r.slug
+                                                   """, []);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var entries = new List<TreeItem>();
         while (await reader.ReadAsync(cancellationToken))
         {
