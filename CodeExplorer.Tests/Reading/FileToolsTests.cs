@@ -741,6 +741,46 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
         Assert.Equal(summed, root);
     }
 
+    /// <summary>
+    ///     Several windows into one file locate it and read its history once (#180). The tool invites
+    ///     three windows into one 800-line file, and each was locating the file — a scan of `files` with
+    ///     <c>lower()</c> — and reading its commits again. A miss is remembered too, suggestions and all.
+    ///     Counted on the statements the reader ran, through the query-plan switch, because the reply is
+    ///     identical either way; that half is asserted against the entries read one at a time.
+    /// </summary>
+    [Fact]
+    public async Task Several_windows_into_one_file_locate_it_and_read_its_history_once()
+    {
+        await using var client = await StartAsync();
+        string[] entries =
+            ["one/src/Orders.cs:1-2", "one/Orders.cs", "one/src/Orders.cs:3-4", "one/Orders.cs:2", "one/src/Orders.cs:5"];
+
+        var singles = new List<string>();
+        foreach (string entry in entries) singles.Add(await HistoryReadAsync(client, entry));
+
+        string plans = _host.ScratchFile("read-plans");
+        string reply;
+        using (QueryPlan.Recording(plans))
+            reply = await HistoryReadAsync(client, entries);
+
+        Assert.Equal(string.Join("\n", singles), reply);
+        Assert.Contains("Did you mean one/src/Orders.cs", reply, StringComparison.Ordinal);
+
+        string fileId = Assert.Single(await _host.ScalarsAsync(FileToolsFixture.Alpha,
+            "SELECT file_id::VARCHAR FROM files WHERE qualified_path = 'one/src/Orders.cs'"));
+        Assert.Equal(1, TimesRun("IndexReader-FindFileAsync", "$p = one/src/Orders.cs"));
+        Assert.Equal(1, TimesRun("IndexReader-FindFileAsync", "$p = one/Orders.cs"));
+        Assert.Equal(1, TimesRun("IndexReader-FilesNamedAsync", "$n = Orders.cs"));
+        Assert.Equal(1, TimesRun("IndexReader-FileCommitsAsync", $"$f = {fileId}"));
+
+        int TimesRun(string label, string parameter) =>
+            Directory.EnumerateFiles(plans, $"*{label}.sql.txt")
+                .Count(file => File.ReadAllText(file).Split('\n').Contains($"-- {parameter}"));
+    }
+
+    private static Task<string> HistoryReadAsync(McpClient client, params string[] paths) =>
+        CallAsync(client, "read_file", new Dictionary<string, object?> { ["paths"] = paths, ["withHistory"] = true });
+
     private Task<McpClient> StartAsync() => _host.ConnectAsync(FileToolsFixture.Alpha);
 
     private static Task<string> ReadAsync(McpClient client, params string[] paths) =>
