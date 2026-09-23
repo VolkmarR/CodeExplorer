@@ -159,9 +159,8 @@ public sealed partial class HistoryQueries
             bool hasHistory = await HasHistoryAsync(index, token);
             int limit = Math.Clamp(request.Limit, 1, MaxAuthors);
             string? scope = index.Repository?.Slug;
-            var authors = hasHistory ? await AuthorsAsync(index, scope, null, path, limit, token) : [];
-            long total = hasHistory ? await AuthorCountAsync(index, scope, path, token) : 0;
-            return new AuthorsAnswer(hasHistory, index.Repository, total, limit, authors, path);
+            var tally = hasHistory ? await AuthorsAsync(index, scope, null, path, limit, token) : AuthorTally.None;
+            return new AuthorsAnswer(hasHistory, index.Repository, tally.Addresses, limit, tally.Authors, path);
         }, cancellationToken), (AuthorsAnswer answer) => new Telemetry.Measured(answer.Authors.Count, 0));
 
     /// <summary>
@@ -239,8 +238,11 @@ public sealed partial class HistoryQueries
     ///     <paramref name="author" /> narrows it to the addresses a filter matched, which is the same
     ///     read with the same grouping — so what a filtered log says it matched cannot disagree with
     ///     what the authors listing says is there.
+    ///     The totals ride on every row as window aggregates, which DuckDB evaluates over all the groups
+    ///     before the limit cuts them, so they are the untruncated counts from the same scan (#179). A
+    ///     scope with no commits returns no row to carry them, and its totals are zero.
     /// </summary>
-    private static async Task<IReadOnlyList<RecordedAuthor>> AuthorsAsync(IndexReader index, string? repositorySlug,
+    private static async Task<AuthorTally> AuthorsAsync(IndexReader index, string? repositorySlug,
         string? author, PathScope? path, int limit, CancellationToken cancellationToken)
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, null,
@@ -252,7 +254,13 @@ public sealed partial class HistoryQueries
                                                            -- epoch() because seconds as a double do not
                                                            -- depend on whether ICU is loaded to decide
                                                            -- the session time zone.
-                                                           epoch(max(authored_at)) AS last_commit
+                                                           epoch(max(authored_at)) AS last_commit,
+                                                           -- Over the groups, before LIMIT: one row per
+                                                           -- address, so this counts addresses. The sum
+                                                           -- is cast because DuckDB widens it to HUGEINT,
+                                                           -- which the driver hands back as a BigInteger.
+                                                           count(*) OVER () AS addresses,
+                                                           (sum(count(*)) OVER ())::BIGINT AS matched_commits
                                                     FROM commits {scope}
                                                     GROUP BY author_email
                                                     ORDER BY commits DESC, author_email
@@ -260,11 +268,25 @@ public sealed partial class HistoryQueries
                                                     """, parameters);
         using var reader = await command.ReaderAsync(cancellationToken);
         var authors = new List<RecordedAuthor>();
+        long addresses = 0, commits = 0;
         while (await reader.ReadAsync(cancellationToken))
+        {
             authors.Add(new RecordedAuthor(reader.Text("author_name"), reader.Text("author_email"),
                 reader.Int64("commits"),
                 DateTimeOffset.FromUnixTimeSeconds((long)reader.Double("last_commit"))));
-        return authors;
+            (addresses, commits) = (reader.Int64("addresses"), reader.Int64("matched_commits"));
+        }
+
+        return new AuthorTally(authors, addresses, commits);
+    }
+
+    /// <summary>
+    ///     The authors a grouped read listed, and how many addresses and commits there are in all —
+    ///     which the listing may be cut short of.
+    /// </summary>
+    private sealed record AuthorTally(IReadOnlyList<RecordedAuthor> Authors, long Addresses, long Commits)
+    {
+        public static readonly AuthorTally None = new([], 0, 0);
     }
 
     /// <summary>How many authors are recorded in scope, which is what a filter matching none is read against.</summary>
@@ -280,35 +302,18 @@ public sealed partial class HistoryQueries
 
     /// <summary>
     ///     Who an <c>author</c> filter matched, and how many commits they have in scope.
-    ///     The two totals are counted rather than summed over the rows: the rows are capped like any
-    ///     listing, and a broad substring past the cap would otherwise report the sum of the first two
-    ///     hundred addresses as though it were the whole match — a number too low, with nothing saying
-    ///     so, which is the reply this change exists to stop.
+    ///     The two totals are counted over every matched group rather than summed over the rows: the
+    ///     rows are capped like any listing, and a broad substring past the cap would otherwise report
+    ///     the sum of the first two hundred addresses as though it were the whole match — a number too
+    ///     low, with nothing saying so, which is the reply this change exists to stop. Only a filter
+    ///     that matched nobody reads again, for the authors it is measured against.
     /// </summary>
     private static async Task<AuthorFilter> MatchedAsync(IndexReader index, string? repositorySlug, string author,
         PathScope? path, CancellationToken cancellationToken)
     {
-        var (addresses, commits) = await MatchCountsAsync(index, repositorySlug, author, path, cancellationToken);
-        var matched = addresses == 0
-            ? []
-            : await AuthorsAsync(index, repositorySlug, author, path, MaxAuthors, cancellationToken);
-        return new AuthorFilter(author, commits, addresses, matched,
-            addresses > 0 ? 0 : await AuthorCountAsync(index, repositorySlug, path, cancellationToken));
-    }
-
-    /// <summary>How many addresses a filter matched and how many commits they have between them.</summary>
-    private static async Task<(long Addresses, long Commits)> MatchCountsAsync(IndexReader index,
-        string? repositorySlug, string author, PathScope? path, CancellationToken cancellationToken)
-    {
-        var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, null,
-            path?.RepositorySlug, path?.PathInRepository);
-        using var command = index.Connection.Query(
-            $"SELECT count(DISTINCT author_email) AS addresses, count(*) AS commits FROM commits {scope}", parameters);
-        using var reader = await command.ReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken)) return (0, 0);
-
-        return (reader.Int64("addresses"),
-            reader.Int64("commits"));
+        var matched = await AuthorsAsync(index, repositorySlug, author, path, MaxAuthors, cancellationToken);
+        return new AuthorFilter(author, matched.Commits, matched.Addresses, matched.Authors,
+            matched.Addresses > 0 ? 0 : await AuthorCountAsync(index, repositorySlug, path, cancellationToken));
     }
 
     /// <summary>How many commits are recorded in scope, so a page can say how many there are.</summary>

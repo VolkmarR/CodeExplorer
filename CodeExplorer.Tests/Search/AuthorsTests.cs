@@ -91,6 +91,68 @@ public sealed class AuthorsTests(AuthorsFixture fixture) : IClassFixture<Authors
         Assert.Equal(ToolReply.NoHistory, await TestHost.CallAsync(client, "authors", scoped));
         Assert.Equal(ToolReply.NoHistory, await TestHost.CallAsync(client, "git_log", scoped));
     }
+
+    /// <summary>
+    ///     The totals ride in the scan that lists the rows (#179): the authors listing and an address
+    ///     filter each read <c>commits</c> once for who is there, not a second time to count them. The
+    ///     authors call is cut below the addresses it has, so a total taken from the listed rows rather
+    ///     than from every group would read too low and fail the header asserted beside the plan.
+    /// </summary>
+    [Fact]
+    public async Task Authors_and_an_address_filter_count_in_the_scan_that_lists_them()
+    {
+        string source = _host.CreateEmptyGitRepository("tallied-one");
+        _host.CommitToGitRepositoryAs("tallied-one", new Dictionary<string, string> { ["a.txt"] = "a\n" },
+            "Add a", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs("tallied-one", new Dictionary<string, string> { ["b.txt"] = "b\n" },
+            "Add b", "Grace", "grace@example.invalid", 1);
+        _host.CommitToGitRepositoryAs("tallied-one", new Dictionary<string, string> { ["b.txt"] = "b2\n" },
+            "Change b", "Grace", "grace@example.invalid", 2);
+        await _host.CreateProjectAsync("tallied");
+        await _host.AddRepositoryAsync("tallied", "tallied", source);
+        await _host.RefreshAsync("tallied");
+        await using var client = await _host.ConnectAsync("tallied");
+
+        string authorsPlans = _host.ScratchFile("authors-plans");
+        string authors;
+        using (QueryPlan.Recording(authorsPlans))
+            authors = await TestHost.CallAsync(client, "authors",
+                new Dictionary<string, object?> { ["repo"] = "tallied", ["limit"] = 1 });
+        string logPlans = _host.ScratchFile("log-plans");
+        string log;
+        using (QueryPlan.Recording(logPlans))
+            log = await TestHost.CallAsync(client, "git_log",
+                new Dictionary<string, object?> { ["repo"] = "tallied", ["author"] = "example", ["limit"] = 1 });
+
+        Assert.StartsWith("2 authors in repository 'tallied'", authors, StringComparison.Ordinal);
+        Assert.Contains("'example' matched 2 addresses, 3 commits in all:", log, StringComparison.Ordinal);
+        Assert.Equal(["AuthorsAsync"], ReadsOfCommits(authorsPlans));
+        // The page of commits is read where it is turned into rows, so it is filed under that method.
+        Assert.Equal(["AuthorsAsync", "ChangesAsync"], ReadsOfCommits(logPlans));
+
+        // A filter matching nobody has no row to carry a total, and reads the authors it is measured
+        // against — the one case the separate count is kept for.
+        string missPlans = _host.ScratchFile("miss-plans");
+        string miss;
+        using (QueryPlan.Recording(missPlans))
+            miss = await TestHost.CallAsync(client, "git_log",
+                new Dictionary<string, object?> { ["repo"] = "tallied", ["author"] = "nobody" });
+        Assert.Contains("2 addresses recorded", miss, StringComparison.Ordinal);
+        Assert.Equal(["AuthorsAsync", "AuthorCountAsync"], ReadsOfCommits(missPlans));
+    }
+
+    /// <summary>
+    ///     The commit-log reads of the scoped repository a recording caught, by method, in the order
+    ///     they ran. Filtered by the scope's parameter because the switch is process-wide and another
+    ///     test's reads may land in the same directory.
+    /// </summary>
+    private static List<string> ReadsOfCommits(string plans) =>
+        Directory.EnumerateFiles(plans, "*CommitLogQueries-*.sql.txt")
+            .Where(dump => File.ReadAllText(dump).Contains("$r = tallied", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .Select(dump => Path.GetFileName(dump).Split("CommitLogQueries-")[1].Replace(".sql.txt", "",
+                StringComparison.Ordinal))
+            .ToList();
 }
 
 /// <inheritdoc cref="HistoryFixture" />
