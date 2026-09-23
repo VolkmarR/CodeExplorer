@@ -101,7 +101,8 @@ public sealed class ProjectOverview(ControlDatabase control, IndexReaders reader
         var configured = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         // One project's page restores that one project, which is the whole of what lazy attach asks:
         // a deliberate visit to a project pays for it, and the list above does not pay for all of them.
-        var (status, indexed) = await ReadIndexAsync(project.Slug, true, cancellationToken);
+        var (status, indexedRepositories) = await ReadIndexAsync(project.Slug, true, cancellationToken);
+        var indexed = indexedRepositories.ToDictionary(r => r.Slug);
         // Driven by the configured repositories, not the indexed ones: a repository removed since the
         // last build is gone from the page immediately, even though its files are still searchable.
         var repositories = configured
@@ -160,7 +161,7 @@ public sealed class ProjectOverview(ControlDatabase control, IndexReaders reader
     ///     project's own page, false for a read that walks every project (#9).
     /// </param>
     /// <param name="cancellationToken">Threaded through the restore and the queries.</param>
-    private async Task<(ProjectIndexStatus Status, Dictionary<string, IndexedRepository> Indexed)> ReadIndexAsync(
+    private async Task<(ProjectIndexStatus Status, IReadOnlyList<IndexedRepository> Repositories)> ReadIndexAsync(
         string slug, bool restore, CancellationToken cancellationToken)
     {
         // Null is no index, and also a file left behind by an interrupted build: it reads as not built,
@@ -169,6 +170,6 @@ public sealed class ProjectOverview(ControlDatabase control, IndexReaders reader
         return status is null
             ? (ProjectIndexStatus.None, [])
             : (new ProjectIndexStatus(status.BuiltAt, status.FtsIndexed, status.Files, status.Lines),
-                status.Repositories.ToDictionary(r => r.Slug));
+                status.Repositories);
     }
 }

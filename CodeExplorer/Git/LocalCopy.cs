@@ -177,6 +177,21 @@ public sealed class LocalCopy : IDisposable
     private static readonly CompareOptions NoContext = new() { ContextLines = 0 };
 
     /// <summary>
+    ///     The stored name of a change, the enum name lower-cased. The kinds a tree diff produces are
+    ///     spelled out so that no path allocates one; anything else keeps the general expression.
+    /// </summary>
+    internal static string KindName(ChangeKind kind) => kind switch
+    {
+        ChangeKind.Added => "added",
+        ChangeKind.Deleted => "deleted",
+        ChangeKind.Modified => "modified",
+        ChangeKind.Renamed => "renamed",
+        ChangeKind.Copied => "copied",
+        ChangeKind.TypeChanged => "typechanged",
+        _ => kind.ToString().ToLowerInvariant()
+    };
+
+    /// <summary>
     ///     One commit with the paths it touched, diffed against its first parent — or against nothing
     ///     for the root commit, which adds every file it holds.
     ///     A <c>Patch</c> and not a <c>TreeChanges</c>: the line counts and the edits are the point, and
@@ -193,7 +208,7 @@ public sealed class LocalCopy : IDisposable
         var parent = commit.Parents.FirstOrDefault();
         var files = new List<ChangedPath>();
         foreach (var change in _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null, NoContext))
-            files.Add(new ChangedPath(change.Path, change.OldPath, change.Status.ToString().ToLowerInvariant(),
+            files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
                 change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
                 change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
 

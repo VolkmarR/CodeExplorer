@@ -177,7 +177,7 @@ public sealed class GitClones(
     private void Clone(ProjectRepository repository, string path, CancellationToken cancellationToken)
     {
         // A folder that exists but is not a valid repository is a clone that failed half-way; start over.
-        if (Directory.Exists(path)) DeleteClone(path);
+        Delete(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         var options = new CloneOptions { IsBare = true };
@@ -193,7 +193,7 @@ public sealed class GitClones(
         }
         catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
         {
-            if (Directory.Exists(path)) DeleteClone(path);
+            Delete(path);
             cancellationToken.ThrowIfCancellationRequested();
             // The URL carries no password (RepositoryUrl refuses one), and the token only ever reached
             // libgit2 through CredentialsProvider, so neither the URL nor libgit2's message can hold it.
@@ -358,13 +358,5 @@ public sealed class GitClones(
 
         // GitHub and Azure DevOps both accept a token as the password with any user name.
         return (_, _, _) => new UsernamePasswordCredentials { Username = "token", Password = token };
-    }
-
-    /// <summary>libgit2 writes pack files read-only, which a recursive delete refuses until cleared.</summary>
-    private static void DeleteClone(string path)
-    {
-        foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories))
-            file.Attributes = FileAttributes.Normal;
-        Directory.Delete(path, true);
     }
 }

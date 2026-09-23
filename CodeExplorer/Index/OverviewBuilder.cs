@@ -46,10 +46,10 @@ public sealed class OverviewBuilder
     private const int AuthorsShown = 10;
 
     /// <summary>
-    ///     Fills the overview row of a shadow index. Nothing is reported to the refresh status: every
-    ///     statement below is one aggregate over tables already on this connection, so the step is
-    ///     shorter than the interval the status is polled at and a sixth step would only ever be seen
-    ///     as a flicker.
+    ///     Fills the overview row of a shadow index. The build reports this as
+    ///     <see cref="RefreshProgress.OverviewStep" /> before calling it; nothing in here reports
+    ///     further, because every statement below is one aggregate over tables already on this
+    ///     connection and has no count worth polling.
     /// </summary>
     /// <param name="shadow">The shadow being built, its connection already bound to it.</param>
     /// <param name="singleRepository">How this project names its files (ADR-0006), for the paths in the row.</param>

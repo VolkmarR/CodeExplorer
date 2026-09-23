@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Text;
+
 namespace CodeExplorer;
 
 /// <summary>
@@ -16,18 +19,28 @@ public static class SymbolText
     ///     which also escapes whitespace and <c>#</c> in ways RE2 rejects — and a literal here may be
     ///     a phrase with a space in it, which would fail inside DuckDB rather than at the call site.
     /// </summary>
-    private const string Metacharacters = @"\.+*?()|[]{}^$";
+    private static readonly SearchValues<char> Metacharacters = SearchValues.Create(@"\.+*?()|[]{}^$");
 
     /// <summary>
     ///     This text as an RE2 pattern matching it literally. One copy, because both halves of a
     ///     reference search hand a pattern built this way to the same <c>regexp_matches</c>: the
     ///     symbol the caller asked for, and the declaration shapes a language declares.
+    ///     An identifier usually has nothing to escape, and then it is its own pattern.
     /// </summary>
     public static string Re2Literal(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return string.Concat(text.Select(c =>
-            Metacharacters.Contains(c, StringComparison.Ordinal) ? $"\\{c}" : c.ToString()));
+        int first = text.AsSpan().IndexOfAny(Metacharacters);
+        if (first < 0) return text;
+
+        var pattern = new StringBuilder(text.Length + 8).Append(text, 0, first);
+        foreach (char c in text.AsSpan(first))
+        {
+            if (Metacharacters.Contains(c)) pattern.Append('\\');
+            pattern.Append(c);
+        }
+
+        return pattern.ToString();
     }
 
     /// <summary>
