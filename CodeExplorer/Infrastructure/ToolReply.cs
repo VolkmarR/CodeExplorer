@@ -38,19 +38,21 @@ internal static class ToolReply
     /// <param name="answer">What this tool makes of its result.</param>
     /// <param name="advice">How the caller gets the rest, said only if the cap bites.</param>
     public static string Render<T>(Outcome outcome, Func<T, string> answer, string advice) where T : Outcome =>
-        Render(outcome, answer, _ => advice);
+        outcome is Problem problem ? problem.Explanation : Cap(answer((T)outcome), advice);
 
     /// <summary>
     ///     The same where the advice names something the answer knows — the page a caller has reached,
     ///     the limit it asked for. A separate overload rather than a lambda at every call site: four
-    ///     tools in five have nothing to say that the result could tell them.
+    ///     tools in five have nothing to say that the result could tell them. The advice is built only
+    ///     when the cap bites, because every other reply would build it to throw it away.
     /// </summary>
     public static string Render<T>(Outcome outcome, Func<T, string> answer, Func<T, string> advice)
         where T : Outcome
     {
         if (outcome is Problem problem) return problem.Explanation;
         var result = (T)outcome;
-        return Cap(answer(result), advice(result));
+        string text = answer(result);
+        return text.Length <= MaxOutputChars ? text : Cap(text, advice(result));
     }
 
     /// <summary>
@@ -120,9 +122,11 @@ internal static class ToolReply
 
         int cut = text.LastIndexOf('\n', MaxOutputChars);
         if (cut < MaxOutputChars / 2) cut = MaxOutputChars;
-        return text[..cut] + string.Create(CultureInfo.InvariantCulture,
-                   $"\n\n... results truncated at {MaxOutputChars / 1024} KB ({text.Length - cut:N0} more characters). ") +
-               advice + "\n";
+        // Joined from spans so the kept 40 KB is copied once, into the reply, and not first into a slice.
+        return string.Concat(text.AsSpan(0, cut),
+            string.Create(CultureInfo.InvariantCulture,
+                $"\n\n... results truncated at {MaxOutputChars / 1024} KB ({text.Length - cut:N0} more characters). "),
+            advice, "\n");
     }
 
     public static string Clip(string text)
@@ -131,7 +135,20 @@ internal static class ToolReply
         return trimmed.Length <= MaxLineChars
             ? trimmed
             : string.Create(CultureInfo.InvariantCulture,
-                $"{trimmed[..MaxLineChars]} ... [{trimmed.Length - MaxLineChars} more characters on this line]");
+                $"{trimmed.AsSpan(0, MaxLineChars)} ... [{trimmed.Length - MaxLineChars} more characters on this line]");
+    }
+
+    /// <summary>
+    ///     <see cref="Clip(string)" /> written straight into the reply, for the tools that clip every
+    ///     line they show: the trimmed line is appended as a span rather than made a string first.
+    /// </summary>
+    public static StringBuilder Clip(StringBuilder text, ReadOnlySpan<char> line)
+    {
+        var trimmed = line.TrimEnd();
+        return trimmed.Length <= MaxLineChars
+            ? text.Append(trimmed)
+            : text.Append(trimmed[..MaxLineChars]).Append(CultureInfo.InvariantCulture,
+                $" ... [{trimmed.Length - MaxLineChars} more characters on this line]");
     }
 
     public static string Plural(long n, string one, string? many = null) => n == 1 ? one : many ?? one + "s";

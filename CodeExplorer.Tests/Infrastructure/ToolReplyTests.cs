@@ -1,3 +1,4 @@
+using System.Text;
 using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using Xunit;
@@ -324,5 +325,58 @@ public sealed class ToolReplyTests : IDisposable
 
         Assert.Contains("cannot be read", thrown.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("has no", thrown.Message, StringComparison.Ordinal);
+    }
+
+    private sealed record Answer(string Text) : Outcome;
+
+    /// <summary>
+    ///     The capped reply to the character: cut at the last line break inside the ceiling, then the
+    ///     notice and the advice. 500 lines of 101 characters put that break at 40,904.
+    /// </summary>
+    [Fact]
+    public void A_capped_reply_is_cut_at_a_line_and_ends_with_the_notice_and_the_advice()
+    {
+        string text = string.Concat(Enumerable.Repeat(new string('a', 100) + "\n", 500));
+
+        string reply = ToolReply.Cap(text, "Narrow it.");
+
+        Assert.Equal(text[..40904] + "\n\n... results truncated at 40 KB (9,596 more characters). Narrow it.\n", reply);
+        string under = text[..100];
+        Assert.Same(under, ToolReply.Cap(under, "unused"));
+    }
+
+    /// <summary>
+    ///     Advice that names something the result knows is only built when the cap bites: every other
+    ///     reply would build it to throw it away.
+    /// </summary>
+    [Fact]
+    public void Advice_drawn_from_the_result_is_not_built_for_a_reply_under_the_cap()
+    {
+        string reply = ToolReply.Render<Answer>(new Answer("short"), answer => answer.Text,
+            (Func<Answer, string>)(_ => throw new InvalidOperationException("advice built")));
+
+        Assert.Equal("short", reply);
+    }
+
+    public static TheoryData<string> Lines => new()
+    {
+        "int x = 1;",
+        "int x = 1;   \t",
+        "    indented\r",
+        new string('b', 500) + "   ",
+        new string('c', 501),
+        new string('d', 1234) + " "
+    };
+
+    /// <summary>Clipping into the reply writes exactly what the string form returns.</summary>
+    [Theory]
+    [MemberData(nameof(Lines))]
+    public void A_line_clipped_into_the_reply_reads_as_the_clipped_string(string line)
+    {
+        var text = new StringBuilder("> ");
+
+        ToolReply.Clip(text, line).Append('|');
+
+        Assert.Equal("> " + ToolReply.Clip(line) + "|", text.ToString());
     }
 }

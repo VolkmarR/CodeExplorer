@@ -183,11 +183,14 @@ public static class Authentication
     ///     that a request with neither is treated as the browser — which is the one that can be sent
     ///     somewhere to fix it.
     /// </summary>
-    private static string Choose(HttpContext context) =>
-        context.Request.Headers.Authorization.Any(value =>
-            value?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
-            ? JwtBearerDefaults.AuthenticationScheme
-            : CookieAuthenticationDefaults.AuthenticationScheme;
+    private static string Choose(HttpContext context)
+    {
+        // A loop over StringValues' own enumerator: LINQ would box it on every request.
+        foreach (string? value in context.Request.Headers.Authorization)
+            if (value?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
+                return JwtBearerDefaults.AuthenticationScheme;
+        return CookieAuthenticationDefaults.AuthenticationScheme;
+    }
 
     /// <summary>
     ///     The protected-resource document, and the one thing the SDK cannot know. Left with no

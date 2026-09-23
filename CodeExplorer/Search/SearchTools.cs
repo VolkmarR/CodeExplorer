@@ -190,7 +190,8 @@ internal sealed partial class SearchTools(
                 text.Append(pad).Append("  ...\n");
             // ':' marks a match and '-' a context line, the way grep does it.
             text.Append(line.LineNumber.ToString(CultureInfo.InvariantCulture).PadLeft(width))
-                .Append(line.IsMatch ? ':' : '-').Append(' ').Append(ToolReply.Clip(line.Text));
+                .Append(line.IsMatch ? ':' : '-').Append(' ');
+            ToolReply.Clip(text, line.Text);
             // The attribution goes after the code and not before it, so the code still starts at a fixed
             // column and a reply with history reads like one without.
             if (line.By is { } by)

@@ -125,9 +125,8 @@ internal static class ToolArguments
         if (Called(request) is not { } called) return null;
         (string tool, var schema) = called;
 
-        var declared = Properties(schema).Select(p => p.Name).ToList();
-        var unknown = Unknown(request, declared);
-        if (unknown.Count == 0) return null;
+        if (Stray(request.Params?.Arguments, schema) is not { } unknown) return null;
+        var declared = Properties(schema).ConvertAll(p => p.Name);
 
         // "Ignored" is the whole claim, and a clause spelling out that nothing below was narrowed by
         // it restates it.
@@ -154,8 +153,10 @@ internal static class ToolArguments
         if (!matched.ProtocolTool.InputSchema.TryGetProperty("required", out var required)) return false;
 
         var supplied = request.Params?.Arguments;
-        return required.EnumerateArray()
-            .Any(name => name.GetString() is { } required_ && supplied?.ContainsKey(required_) != true);
+        foreach (var name in required.EnumerateArray())
+            if (name.GetString() is { } parameter && supplied?.ContainsKey(parameter) != true)
+                return true;
+        return false;
     }
 
     /// <summary>
@@ -183,7 +184,7 @@ internal static class ToolArguments
         if (missing.Count == 0 && mistyped.Count == 0) return null;
 
         // Below the bail, because an unknown name is named in the reply and never causes one.
-        var unknown = Unknown(request, declared.Select(p => p.Name).ToList());
+        var unknown = Stray(request.Params?.Arguments, schema) ?? [];
 
         var text = new StringBuilder();
         text.Append(Opening(tool, unknown, missing, mistyped)).Append("\n\n");
@@ -311,10 +312,22 @@ internal static class ToolArguments
     ///     The names a call carried that its tool does not declare. Read in one place because both
     ///     replies name them and the two disagreeing about what counts as stray would be one of them
     ///     offering a spelling the other had just refused.
+    ///     Null rather than an empty list for a call that carried nothing stray, and asked of the
+    ///     schema directly rather than of a list of its names, because this runs on every call that
+    ///     succeeds and nearly all of them are clean: that answer costs no list at all. The lookup is
+    ///     ordinal, as the binder's is.
     /// </summary>
-    private static List<string> Unknown(RequestContext<CallToolRequestParams> request, List<string> declared) =>
-        (request.Params?.Arguments?.Keys ?? [])
-        .Where(name => !declared.Contains(name, StringComparer.Ordinal)).ToList();
+    internal static List<string>? Stray(IDictionary<string, JsonElement>? arguments, JsonElement schema)
+    {
+        if (arguments is null || arguments.Count == 0) return null;
+
+        bool declares = schema.TryGetProperty("properties", out var properties);
+        List<string>? stray = null;
+        foreach (string name in arguments.Keys)
+            if (!declares || !properties.TryGetProperty(name, out _))
+                (stray ??= []).Add(name);
+        return stray;
+    }
 
     /// <summary>A list of things the sentence is about together — "`repo`, `limit` and `page`".</summary>
     private static string And(List<string> names) => Joined(names, "and");
