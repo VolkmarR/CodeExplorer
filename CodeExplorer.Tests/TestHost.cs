@@ -212,17 +212,57 @@ public sealed class TestHost : IDisposable
     /// <summary>
     ///     Removes a directory git has written into. libgit2 marks pack files read-only and
     ///     <c>Directory.Delete</c> refuses a read-only file, so the attributes are cleared first rather
-    ///     than left to fail on the first pack. It does not defeat a file another process still holds
-    ///     open, or one mapped into this one — a caller with such a tree catches the failure itself.
+    ///     than left to fail on the first pack.
+    ///     A refused delete is tried again for a moment, because a file DuckDB has just removed can
+    ///     linger: closing a database's last connection deletes its <c>.wal</c>, and while another
+    ///     process — a virus scanner, the search indexer — still has the freshly written file open, it
+    ///     is listed but refuses deletion with "access denied". Measured on this machine it is gone
+    ///     61 ms later, and before this retry it failed whichever test's cleanup met it, so a
+    ///     different test each run. The same file can also vanish between being listed and having
+    ///     its attributes cleared, which needs nothing more than skipping it. It does not defeat a file
+    ///     mapped into this process, which no wait releases: a caller with such a tree passes
+    ///     <paramref name="retry" /> false and catches the failure itself.
     /// </summary>
-    public static void DeleteTree(string path)
+    public static void DeleteTree(string path, bool retry = true)
     {
         if (!Directory.Exists(path)) return;
 
         foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories))
-            file.Attributes = FileAttributes.Normal;
-        Directory.Delete(path, true);
+        {
+            try
+            {
+                file.Attributes = FileAttributes.Normal;
+            }
+            catch (Exception gone) when (gone is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // Deleted since it was listed: nothing left to clear.
+            }
+        }
+
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, true);
+                return;
+            }
+            catch (Exception refused) when (retry && attempt < DeleteAttempts
+                                             && refused is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(DeleteRetryMilliseconds);
+                // The attempt that threw may have removed everything but the directory's own entry.
+                if (!Directory.Exists(path)) return;
+            }
+        }
     }
+
+    /// <summary>
+    ///     Half a second in all, several times the 61 ms a lingering WAL was measured to need, and short
+    ///     enough that a file that will never go fails the cleanup promptly instead of stalling it.
+    /// </summary>
+    private const int DeleteAttempts = 10;
+
+    private const int DeleteRetryMilliseconds = 50;
 
     /// <summary>Builds a non-bare repository with one commit holding the given files and returns its path.</summary>
     public string CreateGitRepository(string name, Dictionary<string, string> files) =>

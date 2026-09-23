@@ -28,7 +28,9 @@ public sealed class FtsExtensionTests : IDisposable
         _host?.Dispose();
         try
         {
-            TestHost.DeleteTree(_root);
+            // No retry: the one file that refuses here stays mapped until the run ends, so waiting for
+            // it would only add half a second to every test in this class.
+            TestHost.DeleteTree(_root, retry: false);
         }
         catch (UnauthorizedAccessException)
         {
