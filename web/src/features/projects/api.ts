@@ -146,6 +146,27 @@ export interface OverviewExcluded {
 }
 
 /**
+ * One file of the Hotspots card (#211): its commits in the window times its lines at HEAD. Only a
+ * file at HEAD has one, so every row links to a file that is there.
+ */
+export interface Hotspot {
+  qualifiedPath: string
+  commits: number
+  lines: number
+  score: number
+}
+
+/**
+ * The Hotspots card. The page's alone: the stored overview and `project_overview` have no hotspots.
+ * `excluded` counts the files at HEAD the window touched that the excluded paths left out, and is null
+ * where nothing was excluded.
+ */
+export interface OverviewHotspots {
+  files: Hotspot[]
+  excluded: number | null
+}
+
+/**
  * Either `overview` or `unavailable` is set. `unavailable` is the server's own prose saying why there
  * is nothing to show — a project never built, one whose first build is still running, a repository
  * the project does not have — so the page says what an agent asking the same question is told,
@@ -159,6 +180,8 @@ export interface ProjectOverviewDetail {
   unavailable: string | null
   excludedPatterns: number
   excluded: OverviewExcluded | null
+  /** Set with `overview`. */
+  hotspots: OverviewHotspots | null
 }
 
 /** The overview page's setting, read and written whole. */

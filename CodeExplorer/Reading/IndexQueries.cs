@@ -344,8 +344,10 @@ internal static class IndexQueries
     ///     <c>commit_files cf</c> joined to <c>commits c</c>. Written once because the file ranking and
     ///     the directory rollup answer the same question at two grains, and a scope that meant
     ///     something different in one of them would have the rollup disagree with the files under it.
+    ///     The overview's hotspots count over it too (#211), so that a file's commits there are the
+    ///     commits Most changed shows for it.
     /// </summary>
-    private static (List<string> Conditions, List<DuckDBParameter> Parameters) ChurnScope(ProjectPaths paths,
+    internal static (List<string> Conditions, List<DuckDBParameter> Parameters) ChurnScope(ProjectPaths paths,
         HistoryWindow window, string? repositorySlug, string? directoryInRepository, ChurnFilters filters)
     {
         // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason

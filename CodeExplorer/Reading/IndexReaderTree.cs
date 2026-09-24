@@ -37,12 +37,17 @@ public sealed partial class IndexReader
     ///     page's own view of this index (#216), which never reads the stored row. The sections are the
     ///     build's statements, so with nothing filtered the answer is the stored one; a few hundred
     ///     milliseconds on the largest index here, which an operator opening a page can afford and an
-    ///     agent's first call should not be made to.
+    ///     agent's first call should not be made to. The hotspots ride along (#211): the page draws them
+    ///     and the stored row does not hold them.
     /// </summary>
-    public async Task<(IndexOverview Overview, OverviewExcluded? Excluded)> LiveOverviewAsync(int days,
-        ExcludedPaths excluded, CancellationToken cancellationToken) =>
-        await OverviewQueries.ComputeAsync(Connection, await PathsAsync(cancellationToken),
-            new OverviewScope(days, Repository?.Slug, excluded), cancellationToken);
+    public async Task<(IndexOverview Overview, OverviewExcluded? Excluded, OverviewHotspots Hotspots)>
+        LiveOverviewAsync(int days, ExcludedPaths excluded, CancellationToken cancellationToken)
+    {
+        var paths = await PathsAsync(cancellationToken);
+        var scope = new OverviewScope(days, Repository?.Slug, excluded);
+        var (overview, left) = await OverviewQueries.ComputeAsync(Connection, paths, scope, cancellationToken);
+        return (overview, left, await OverviewQueries.HotspotsAsync(Connection, paths, scope, cancellationToken));
+    }
 
     /// <summary>
     ///     Lines <paramref name="first" /> to <paramref name="last" /> inclusive, in order; fewer when the file ends

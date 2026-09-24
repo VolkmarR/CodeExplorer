@@ -146,6 +146,16 @@ forty — wrong in the direction that decides which module looks like it is movi
 A directory scope whose history a rename split says so; see _Previous Path_.
 _Avoid_: Hotness, activity, volatility, code age
 
+**Hotspot**:
+A file at HEAD that is both large and busy: its commits in a window times its lines at HEAD. Like
+_Churn_ it counts commits and not lines changed, so a sweep across every file adds one to each and
+moves none of them up. It shows where large files keep changing, which is where a reader's time goes,
+and never what is unstable or badly written: a big file edited often because it is the one everyone
+extends scores as high as one edited often because it keeps breaking. A file no longer at HEAD, or
+one the index skipped, has no lines and is never a hotspot. Only the overview page ranks them; the
+stored _Overview_ does not hold them.
+_Avoid_: Risk, defect-prone, complexity
+
 **Co-Change**:
 Two files having been committed together, counted over a window. It is the coupling the code does
 not show — a constant and the three places that read it, a stored procedure and the class that calls
