@@ -58,7 +58,10 @@ function SelectContent({
   sideOffset = 4,
   align = 'center',
   alignOffset = 0,
-  alignItemWithTrigger = true,
+  // Off, unlike shadcn's default: aligned with the trigger, the list is placed so the checked item
+  // covers the field, and a short list of options opened over the very value it replaces reads as
+  // a glitch rather than a menu. Below the field, like every other popup here.
+  alignItemWithTrigger = false,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<
