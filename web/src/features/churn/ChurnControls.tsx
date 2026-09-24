@@ -69,9 +69,7 @@ export function ChurnControls({
         </Label>
         <Select
           value={search.depth === undefined ? FILES : String(search.depth)}
-          onValueChange={(next) =>
-            onChange({ depth: next === FILES ? undefined : Number(next) })
-          }
+          onValueChange={(next) => onChange({ depth: next === FILES ? undefined : Number(next) })}
         >
           <SelectTrigger id="churn-rows" className="w-44">
             <SelectValue>
