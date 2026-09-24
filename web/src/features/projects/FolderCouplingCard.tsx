@@ -4,16 +4,15 @@ import type {
   RepositoryCoupling,
 } from '@/features/projects/api'
 import { featuredRepository, pairShare, sharedCommits } from '@/features/projects/folderCoupling'
-import { formatCount } from '@/lib/format'
+import { formatCount, formatPercent } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-/** Strongest pairs listed under the heatmap. */
-const STRONGEST_PAIRS_SHOWN = 3
+/** Pairs listed per repository: the strongest under the heatmap, and for each repository it does not draw. */
+const PAIRS_SHOWN = 3
 
-/** Pairs listed for each repository the heatmap does not draw. */
-const OTHER_PAIRS_SHOWN = 3
+const title = <CardTitle>Folders that change together</CardTitle>
 
 /**
  * The pairs of top-level folders, within one repository, that the same commits keep touching (#213):
@@ -34,18 +33,27 @@ export function FolderCouplingCard({
 }) {
   const featured = featuredRepository(coupling, repository)
   const others = coupling.repositories.filter((r) => r !== featured)
+  if (!churn.since) {
+    return (
+      <Card>
+        <CardHeader>{title}</CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-baseline justify-between">
-        <CardTitle>Folders that change together</CardTitle>
+        {title}
         {featured && (
           <span className="text-xs text-muted-foreground">{featured.repositorySlug}</span>
         )}
       </CardHeader>
       <CardContent>
-        {!churn.since ? (
-          <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
-        ) : !featured || featured.pairs.length === 0 ? (
+        {!featured || featured.pairs.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No commit in the window touched two top-level folders of one repository.
           </p>
@@ -57,7 +65,7 @@ export function FolderCouplingCard({
             </p>
             <Heatmap repository={featured} />
             <ol className="mt-3 divide-y rounded-lg border bg-card font-mono text-xs">
-              {featured.pairs.slice(0, STRONGEST_PAIRS_SHOWN).map((pair) => (
+              {featured.pairs.slice(0, PAIRS_SHOWN).map((pair) => (
                 <li
                   key={`${pair.first}\u0000${pair.second}`}
                   className="flex items-center gap-3 px-4 py-2"
@@ -72,14 +80,14 @@ export function FolderCouplingCard({
                     className="w-10 text-right tabular-nums"
                     title="Share of the quieter folder's commits"
                   >
-                    {Math.round(pairShare(featured, pair) * 100)}%
+                    {formatPercent(pairShare(featured, pair))}
                   </span>
                 </li>
               ))}
             </ol>
           </>
         )}
-        {churn.since && others.length > 0 && (
+        {others.length > 0 && (
           <div className="pt-3 text-xs">
             {others.map((other) => (
               <p key={other.repositorySlug} className="py-0.5">
@@ -89,7 +97,7 @@ export function FolderCouplingCard({
                   {other.pairs.length === 0
                     ? 'no pairs'
                     : other.pairs
-                        .slice(0, OTHER_PAIRS_SHOWN)
+                        .slice(0, PAIRS_SHOWN)
                         .map((p) => `${p.first} + ${p.second} (${formatCount(p.commits)})`)
                         .join(', ')}
                 </span>
@@ -97,12 +105,10 @@ export function FolderCouplingCard({
             ))}
           </div>
         )}
-        {churn.since && (
-          <p className="pt-3 text-xs text-muted-foreground">
-            Commits touching more than {formatCount(coupling.maxCommitPaths)} paths are left out
-            (History:MaxCommitPaths): {formatCount(coupling.ceilingExcluded)} in this window.
-          </p>
-        )}
+        <p className="pt-3 text-xs text-muted-foreground">
+          Commits touching more than {formatCount(coupling.maxCommitPaths)} paths are left out
+          (History:MaxCommitPaths): {formatCount(coupling.ceilingExcluded)} in this window.
+        </p>
       </CardContent>
     </Card>
   )
