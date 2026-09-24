@@ -45,17 +45,39 @@ public sealed record RepositoryDetail(
 public sealed record RepositoryCommit(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
 
 /// <summary>
-///     What the project page draws beside its repositories: the same overview an agent is given, from
-///     the same row, so an operator looking at a project sees what an agent sees.
-///     Exactly one of the two is set. <see cref="Unavailable" /> is the reader's own prose saying why
-///     there is nothing to show — a project never built, or one whose first build is still running —
-///     and it is carried rather than collapsed to null so that the page says what an agent asking the
-///     same question is told, instead of showing an operator a blank where there is an explanation.
+///     What the overview page draws: the index's overview computed live over the page's filters and
+///     without the project's excluded paths (#216). It is not the row <c>project_overview</c> answers
+///     from, and may show different numbers than an agent is told once a filter or an exclusion
+///     applies; with neither, the sections are computed by the same statements and agree.
+///     Either <see cref="Overview" /> or <see cref="Unavailable" /> is set. <see cref="Unavailable" /> is
+///     the reader's own prose saying why there is nothing to show — a project never built, one whose
+///     first build is still running, a repository filter naming none of its repositories — and it is
+///     carried rather than collapsed to null so that the page says what an agent asking the same
+///     question is told, instead of showing an operator a blank where there is an explanation.
 ///     It is its own response rather than a field on <see cref="ProjectDetail" /> because it is the
 ///     page's heaviest read and the only one that grows with the project, so the header and the
 ///     repository table are not held behind it.
 /// </summary>
-public sealed record ProjectOverviewDetail(IndexOverview? Overview, string? Unavailable);
+/// <param name="Overview">The sections, over the page's scope.</param>
+/// <param name="Unavailable">Why there are none.</param>
+/// <param name="ExcludedPatterns">How many patterns the project's setting holds, applied or not.</param>
+/// <param name="Excluded">
+///     How many files the patterns kept out of each kind of section; null where nothing was kept out
+///     because the setting is empty or the page asked to see the excluded paths.
+/// </param>
+public sealed record ProjectOverviewDetail(
+    IndexOverview? Overview,
+    string? Unavailable,
+    int ExcludedPatterns = 0,
+    OverviewExcluded? Excluded = null);
+
+/// <summary>
+///     The overview page's filters, read off its URL. <see cref="Days" /> is clamped the way every
+///     window is (<see cref="HistoryWindow.Ending" />); a blank <see cref="Repository" /> is the whole
+///     project; <see cref="ShowExcluded" /> lifts the project's excluded paths for this view only.
+/// </summary>
+public sealed record OverviewFilter(int Days = HistoryWindow.DefaultDays, string? Repository = null,
+    bool ShowExcluded = false);
 
 /// <summary>A project as its own page shows it.</summary>
 public sealed record ProjectDetail(
@@ -123,15 +145,27 @@ public sealed class ProjectOverview(ControlDatabase control, IndexReaders reader
     }
 
     /// <summary>
-    ///     The overview stored with one project's index (#51). A project with no index is not a failure
-    ///     here — every project passes through that state — so the reader's refusal is carried through
-    ///     as prose rather than raised, which is the same answer <c>project_overview</c> gives an agent.
+    ///     One project's overview as its page shows it: computed live from the index over the page's
+    ///     filters, leaving out the paths the project's setting names (#216). Live rather than the
+    ///     stored row so that a changed setting applies on the next load without a rebuild, and so that
+    ///     the page can be filtered at all. A project with no index is not a failure here — every
+    ///     project passes through that state — so the reader's refusal is carried through as prose
+    ///     rather than raised, which is the same answer <c>project_overview</c> gives an agent.
+    ///     The setting is read from the control database and handed to the reader, which is why this
+    ///     composition lives here rather than in <c>Reading/</c>: an index is read from the index alone.
     /// </summary>
-    public async Task<ProjectOverviewDetail> OverviewAsync(Project project, CancellationToken cancellationToken)
+    public async Task<ProjectOverviewDetail> OverviewAsync(Project project, OverviewFilter filter,
+        CancellationToken cancellationToken)
     {
-        return await readers.OverIndexAsync(project.Slug, null,
-            async (index, token) => new ProjectOverviewDetail(await index.OverviewAsync(token), null),
-            problem => new ProjectOverviewDetail(null, problem.Explanation), cancellationToken);
+        var patterns = await control.ExcludedPathsAsync(project.Slug, cancellationToken);
+        var excluded = filter.ShowExcluded ? ExcludedPaths.None : new ExcludedPaths(patterns);
+        return await readers.OverIndexAsync(project.Slug, filter.Repository,
+            async (index, token) =>
+            {
+                var (overview, left) = await index.LiveOverviewAsync(filter.Days, excluded, token);
+                return new ProjectOverviewDetail(overview, null, patterns.Count, left);
+            },
+            problem => new ProjectOverviewDetail(null, problem.Explanation, patterns.Count), cancellationToken);
     }
 
     /// <summary>

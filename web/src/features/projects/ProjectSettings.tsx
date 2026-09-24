@@ -3,13 +3,15 @@ import { useNavigate, useParams } from '@tanstack/react-router'
 import { removeProject } from '@/features/projects/api'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorPanel } from '@/components/ErrorPanel'
+import { ExcludedPathsForm } from '@/features/projects/ExcludedPathsForm'
 import { ProjectCard } from '@/features/projects/ProjectCard'
 import { RepositoryTable } from '@/features/projects/RepositoryTable'
 import { projectQuery, projectsQuery } from '@/features/projects/queries'
 import { toast } from '@/components/ui/toast'
 
 /**
- * How the project is configured: which repositories it is built from, and how to unmake it.
+ * How the project is configured: which repositories it is built from, what its overview leaves
+ * out, and how to unmake it.
  *
  * Its own route rather than a tab on the overview. The two were one page told apart by a search
  * param, and the cost was spread over the whole frame: the sidebar could not light an item from the
@@ -41,6 +43,7 @@ export function ProjectSettings() {
       <>
         {remove.error ? <ErrorPanel error={remove.error} /> : null}
         <RepositoryTable project={project} />
+        <ExcludedPathsForm project={slug} />
 
         <section
           aria-labelledby="danger-title"

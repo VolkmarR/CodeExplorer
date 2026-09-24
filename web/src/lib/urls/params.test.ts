@@ -12,6 +12,12 @@ import {
 import { validateCommitSearch } from '@/lib/urls/commitParams'
 import { validateFileSearch } from '@/lib/urls/fileParams'
 import { validateHistorySearch } from '@/lib/urls/historyParams'
+import {
+  DEFAULT_OVERVIEW_DAYS,
+  OVERVIEW_WINDOWS,
+  overviewSearch,
+  validateOverviewSearch,
+} from '@/lib/urls/overviewParams'
 import { validateSearch } from '@/lib/urls/searchParams'
 
 /**
@@ -358,4 +364,47 @@ test('a window is named once, so the select and the heading cannot disagree', ()
   // A hand-written window that is neither: named in the unit it was asked in.
   expect(describeWindow(45)).toBe('Last 45 days')
   expect(describeWindow(1)).toBe('Last 1 days')
+})
+
+test('overview: the coercion table', () => {
+  const cases: [Record<string, unknown>, ReturnType<typeof validateOverviewSearch>][] = [
+    [{}, {}],
+    [{ days: '30' }, { days: 30 }],
+    // The default window is the bare URL, so the two are one view and one cache entry.
+    [{ days: String(DEFAULT_OVERVIEW_DAYS) }, {}],
+    [{ days: '0' }, {}],
+    [{ days: 'soon' }, {}],
+    [{ repository: 'two' }, { repository: 'two' }],
+    [{ repository: '' }, {}],
+    // True or absent: `false` in a link asks for the default, which is the setting applied.
+    [{ showExcluded: 'true' }, { showExcluded: true }],
+    [{ showExcluded: true }, { showExcluded: true }],
+    [{ showExcluded: 'false' }, {}],
+  ]
+  for (const [input, expected] of cases) {
+    // toEqual and not toStrictEqual: an absent field comes back as `undefined`, which is absence.
+    expect(validateOverviewSearch(input)).toEqual(expected)
+  }
+})
+
+test('overview: a hand-edited URL with a bad window and an empty repository opens the default view', () => {
+  const opened = validateOverviewSearch(fromUrl('days=-4&repository=&showExcluded=yes'))
+  expect(opened).toEqual({})
+})
+
+test('overview: changing one control keeps every other, and the defaults clear their fields', () => {
+  const current = { days: 30, repository: 'two' }
+  expect(overviewSearch(current, { showExcluded: true })).toEqual({
+    days: 30,
+    repository: 'two',
+    showExcluded: true,
+  })
+  expect(overviewSearch(current, { days: DEFAULT_OVERVIEW_DAYS, repository: '' })).toEqual({
+    days: undefined,
+    repository: undefined,
+    showExcluded: undefined,
+  })
+  for (const days of OVERVIEW_WINDOWS.filter((d) => d !== DEFAULT_OVERVIEW_DAYS)) {
+    expect(validateOverviewSearch(fromUrl(`days=${days}`)).days).toBe(days)
+  }
 })

@@ -11,6 +11,13 @@ internal sealed record CreateProjectRequest(string Slug, string? Name, bool Sing
 
 internal sealed record AddRepositoryRequest(string Slug, string Url, string? Credential);
 
+/// <summary>
+///     A project's excluded paths, both ways: the whole list is read and the whole list is written, so
+///     a save is one list the operator can see in the form and never a patch against one they cannot.
+///     A PUT answers with the list as stored, normalised, so the form shows what was kept.
+/// </summary>
+internal sealed record ExcludedPathsBody(IReadOnlyList<string>? Patterns);
+
 /// <summary>What the API says about a repository. The credential itself is deliberately absent.</summary>
 internal sealed record RepositoryResponse(string Slug, string Url, bool HasCredential);
 
@@ -65,5 +72,17 @@ internal static class ControlEndpoints
             async (Project project, ControlDatabase control, CancellationToken ct) =>
                 (await control.ListRepositoriesAsync(project.Slug, ct))
                 .Select(r => new RepositoryResponse(r.Slug, r.Url, r.HasCredential)));
+
+        // The overview page's setting (#216). Nothing is rebuilt: the page reads it on its next load.
+        project.MapGet("/excluded-paths", async (Project project, ControlDatabase control, CancellationToken ct) =>
+            new ExcludedPathsBody(await control.ExcludedPathsAsync(project.Slug, ct)));
+
+        project.MapPut("/excluded-paths",
+            async (Project project, ExcludedPathsBody request, ControlDatabase control, CancellationToken ct) =>
+                await control.SetExcludedPathsAsync(project.Slug, request.Patterns, ct) switch
+                {
+                    ({ } saved, _) => Results.Ok(new ExcludedPathsBody(saved)),
+                    (_, var problem) => Results.BadRequest(new { error = problem })
+                });
     }
 }

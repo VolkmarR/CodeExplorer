@@ -12,8 +12,9 @@ import { formatCount } from '@/lib/format'
  * change, and this says where work happened, not where the logic did (CONTEXT.md, Churn).
  *
  * It takes the files rather than the whole `Churn`, so the project page's overview — which carries
- * the same ranking from the stored row — shows it in the same shape. One ranking with two renderings
- * would let the churn page and the project page disagree about a file nobody changed twice.
+ * the same ranking, computed without the project's excluded paths — shows it in the same shape. One
+ * ranking with two renderings would let the churn page and the project page disagree about a file
+ * nobody changed twice.
  *
  * A row is a file or a directory, and `drillInto` is which (#161): given, each row is a directory and
  * the link narrows the ranking to it rather than opening it. A `Link` and not a click handler,
