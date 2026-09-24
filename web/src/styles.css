@@ -3,6 +3,10 @@
    one on the internet. Variable builds: one file per family covers every weight used here. */
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/jetbrains-mono';
+/* The enter and exit animations the shadcn components name (`animate-in`, `fade-in-0`,
+   `slide-in-from-top-2`, …). Without it those classes generate no CSS and every popup appears and
+   vanishes without a transition; `shadcn/no-unknown-classes` is what found them missing. */
+@import 'tw-animate-css';
 
 /* The one stylesheet the project has: Tailwind's entry and the theme tokens shadcn components read.
    Everything else is a utility class on the element that needs it (CODING_STANDARDS, TypeScript). */
@@ -139,6 +143,16 @@
   }
   to {
     translate: 300% 0;
+  }
+}
+
+/* sidebar.tsx hides the scrollbar of its content column with this. Tailwind has no such utility,
+   and scrolling still works by wheel, touch and keyboard. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
   }
 }
 
