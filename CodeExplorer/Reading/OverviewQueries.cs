@@ -255,15 +255,19 @@ internal static class OverviewQueries
         parameters.Add(new DuckDBParameter("mc", maxCommitPaths));
         // A file at the repository root is in no top-level folder, so it pairs with nothing.
         var kept = new List<string> { "s.paired", "contains(w.path, '/')" };
+        // The qualified path is carried only where an exclusion reads it.
+        string committed = "";
         if (scope.Excluded.Matching("w.committed", "x", parameters) is { } excluded)
+        {
             kept.Add($"NOT {excluded}");
+            committed = $", {IndexQueries.CommittedPath(paths)} AS committed";
+        }
 
         // in_window is MATERIALIZED because sized and folders both read it, and inlined it would be a
         // second scan of commit_files for the same rows.
         await using var command = connection.Query($"""
                                                     WITH in_window AS MATERIALIZED (
-                                                        SELECT c.commit_id, c.repo_slug, cf.path,
-                                                               {IndexQueries.CommittedPath(paths)} AS committed
+                                                        SELECT c.commit_id, c.repo_slug, cf.path{committed}
                                                         FROM commit_files cf JOIN commits c USING (commit_id)
                                                         WHERE {string.Join(" AND ", inWindow)}),
                                                     sized AS (
@@ -279,13 +283,13 @@ internal static class OverviewQueries
                                                                row_number() OVER (PARTITION BY repo_slug
                                                                    ORDER BY count(*) DESC, folder) AS rank
                                                         FROM folders GROUP BY repo_slug, folder),
+                                                    top AS (
+                                                        SELECT * FROM per_folder WHERE rank <= {_coupledFoldersShown}),
                                                     shown AS (
-                                                        SELECT f.* FROM folders f
-                                                        JOIN per_folder p USING (repo_slug, folder)
-                                                        WHERE p.rank <= {_coupledFoldersShown})
+                                                        SELECT f.* FROM folders f SEMI JOIN top USING (repo_slug, folder))
                                                     SELECT 'folder' AS kind, repo_slug, folder AS first,
                                                            NULL AS second, commits
-                                                    FROM per_folder WHERE rank <= {_coupledFoldersShown}
+                                                    FROM top
                                                     UNION ALL
                                                     SELECT 'repository', repo_slug, NULL, NULL,
                                                            count(DISTINCT commit_id)::INTEGER
@@ -325,12 +329,14 @@ internal static class OverviewQueries
             }
         }
 
+        var folders = folderRows.ToLookup(f => f.Slug, f => f.Folder, StringComparer.Ordinal);
+        var pairs = pairRows.ToLookup(p => p.Slug, p => p.Pair, StringComparer.Ordinal);
         var coupling = repositories
             .OrderByDescending(r => r.Value).ThenBy(r => r.Key, StringComparer.Ordinal)
             .Select(r => new RepositoryCoupling(r.Key, r.Value,
-                folderRows.Where(f => f.Slug == r.Key).Select(f => f.Folder)
+                folders[r.Key]
                     .OrderByDescending(f => f.Commits).ThenBy(f => f.Folder, StringComparer.Ordinal).ToList(),
-                pairRows.Where(p => p.Slug == r.Key).Select(p => p.Pair)
+                pairs[r.Key]
                     .OrderByDescending(p => p.Commits).ThenBy(p => p.First, StringComparer.Ordinal)
                     .ThenBy(p => p.Second, StringComparer.Ordinal).ToList()))
             .ToList();

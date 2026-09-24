@@ -8,6 +8,11 @@ export function formatCount(count: number): string {
   return count.toLocaleString()
 }
 
+/** A share from 0 to 1 as a whole percentage. */
+export function formatPercent(share: number): string {
+  return `${Math.round(share * 100)}%`
+}
+
 /** Absolute rather than relative: an operator asking when a project was last built wants the date. */
 export function formatTime(value: string | null): string {
   if (!value) return 'never'

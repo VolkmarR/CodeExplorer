@@ -2,7 +2,7 @@ import type { OverviewAuthorsPerFile, OverviewChurn } from '@/features/projects/
 import { AUTHOR_SEGMENTS, AuthorSplit } from '@/features/projects/AuthorSplit'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { FilePathLink } from '@/components/FilePathLink'
-import { formatCount } from '@/lib/format'
+import { formatCount, formatPercent } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -64,7 +64,7 @@ export function AuthorsPerFileCard({
                       className="w-10 shrink-0 text-right tabular-nums"
                       title={`${formatCount(file.commits)} commits`}
                     >
-                      {Math.round(file.first * 100)}%
+                      {formatPercent(file.first)}
                     </span>
                     <FilePathLink
                       project={project}
