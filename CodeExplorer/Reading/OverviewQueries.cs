@@ -93,7 +93,7 @@ internal static class OverviewQueries
         var window = await IndexQueries.WindowAsync(connection, scope.Days, scope.RepositorySlug, cancellationToken);
         var filters = new ChurnFilters(Excluded: scope.Excluded);
         var churn = window is null
-            ? OverviewChurn.None(Math.Clamp(scope.Days, 1, HistoryWindow.MaxDays))
+            ? OverviewChurn.None(HistoryWindow.Clamp(scope.Days))
             : new OverviewChurn(window.Days, window.Since, window.Until,
                 await IndexQueries.RankAsync(connection, paths, window, scope.RepositorySlug, null, filters,
                     _churnFilesShown, cancellationToken));
@@ -129,8 +129,24 @@ internal static class OverviewQueries
         return conditions;
     }
 
+    /// <summary>
+    ///     The same for <c>commits c</c>: the repository alone, because each history section applies the
+    ///     exclusions its own way — a path at a time, or a commit at a time.
+    /// </summary>
+    private static List<string> CommitScope(OverviewScope scope, List<DuckDBParameter> parameters)
+    {
+        var conditions = new List<string>(2);
+        if (scope.RepositorySlug is not null)
+        {
+            conditions.Add("c.repo_slug = $r");
+            parameters.Add(new DuckDBParameter("r", scope.RepositorySlug));
+        }
+
+        return conditions;
+    }
+
     /// <summary>A WHERE clause from conditions ANDed, or nothing where there are none.</summary>
-    private static string Where(List<string> conditions) =>
+    internal static string Where(List<string> conditions) =>
         conditions.Count == 0 ? "" : $"WHERE {string.Join(" AND ", conditions)}";
 
     /// <summary>
@@ -262,13 +278,7 @@ internal static class OverviewQueries
         ProjectPaths paths, OverviewScope scope, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
-        var conditions = new List<string>(2);
-        if (scope.RepositorySlug is not null)
-        {
-            conditions.Add("c.repo_slug = $r");
-            parameters.Add(new DuckDBParameter("r", scope.RepositorySlug));
-        }
-
+        var conditions = CommitScope(scope, parameters);
         if (scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters) is { } excluded)
             // A commit counts while it touched one file the page still shows. One that recorded no
             // files at all is kept too: there is nothing in it to exclude, and dropping it would count
@@ -322,13 +332,7 @@ internal static class OverviewQueries
         OverviewScope scope, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
-        var conditions = new List<string>(2);
-        if (scope.RepositorySlug is not null)
-        {
-            conditions.Add("c.repo_slug = $r");
-            parameters.Add(new DuckDBParameter("r", scope.RepositorySlug));
-        }
-
+        var conditions = CommitScope(scope, parameters);
         conditions.Add(scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters)!);
         return (int)await connection.CountAsync($"""
                                                  SELECT count(*) FROM (

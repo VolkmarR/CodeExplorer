@@ -65,17 +65,28 @@ export function validateChurnSearch(search: Record<string, unknown>): ChurnParam
 }
 
 /** A search param that is a string or is not there. The empty string is not there, like everywhere. */
-function text(value: unknown): string | undefined {
+export function text(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-/** How a window is named in the UI. Spelled here so the select and the heading cannot disagree. */
+/**
+ * How a window is named in the UI. Spelled here so the select and the heading cannot disagree — the
+ * churn page's and the overview's selects alike. One month is named in days, not "1 months".
+ */
 export function describeWindow(days: number): string {
   if (days >= 3650) return 'All history'
   if (days === 365) return 'Last year'
-  if (days % 30 === 0) return `Last ${days / 30} months`
+  if (days % 30 === 0 && days > 30) return `Last ${days / 30} months`
   if (days % 7 === 0) return `Last ${days / 7} weeks`
   return `Last ${days} days`
+}
+
+/**
+ * The windows a select offers, plus whatever the URL carries, so a hand-written `days` shows as
+ * itself rather than as a blank select.
+ */
+export function windowsWith(offered: readonly number[], days: number): readonly number[] {
+  return offered.includes(days) ? offered : [...offered, days].toSorted((a, b) => a - b)
 }
 
 /**

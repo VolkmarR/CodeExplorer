@@ -40,9 +40,15 @@ public sealed record HistoryWindow(DateTimeOffset Since, DateTimeOffset Until, i
     /// <summary>The window reaching <paramref name="days" /> back from the newest recorded commit.</summary>
     public static HistoryWindow Ending(DateTimeOffset newest, int days)
     {
-        int span = Math.Clamp(days, 1, MaxDays);
+        int span = Clamp(days);
         return new HistoryWindow(newest.AddDays(-span), newest, span);
     }
+
+    /// <summary>
+    ///     A requested number of days as a window is taken over, for the one answer that names a window
+    ///     with no commit to anchor it: the overview of a project with no history.
+    /// </summary>
+    public static int Clamp(int days) => Math.Clamp(days, 1, MaxDays);
 
     /// <summary>
     ///     The window in one phrase, for a reply that has to say what it covered. The anchor is named
