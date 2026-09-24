@@ -160,49 +160,27 @@ public sealed class OverviewBuilder
                                                    ORDER BY r.repo_id, folder NULLS LAST
                                                    """, []);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var roots = new List<OverviewRoot>();
-        string? slug = null;
-        var folders = new List<OverviewFolder>();
-        (int Files, long Lines, long Bytes) rootFiles = default;
-        int others = 0;
-
-        void Close()
-        {
-            if (slug is not null)
-                roots.Add(new OverviewRoot(paths.Format(slug, ""), folders, rootFiles.Files, rootFiles.Lines,
-                    rootFiles.Bytes));
-        }
-
+        // Read whole before grouping: one row per top-level folder plus one per repository is a few
+        // hundred rows at most, and grouping a list reads more plainly than tracking a repository change
+        // across the reader loop. A root-file row's path is the repository's root.
+        var rows = new List<(string Slug, bool IsRoot, OverviewFolder Entry)>();
         while (await reader.ReadAsync(cancellationToken))
         {
-            string repository = reader.Text("repo_slug");
-            if (repository != slug)
-            {
-                Close();
-                (slug, folders, rootFiles) = (repository, [], default);
-            }
-
-            if (reader.TextOrNull("folder") is not { } folder)
-            {
-                rootFiles = (reader.Int32("files"), reader.Int64("lines"), reader.Int64("bytes"));
-                continue;
-            }
-
-            // Capped per repository and not across the project: one repository of a thousand folders
-            // would otherwise spend the whole cap and drop every later repository's top level entirely,
-            // which is the one thing this section exists to show.
-            if (folders.Count == _foldersShown)
-            {
-                others++;
-                continue;
-            }
-
-            folders.Add(new OverviewFolder(paths.Format(repository, folder), reader.Int32("files"),
-                reader.Int64("lines"), reader.Int64("bytes")));
+            string slug = reader.Text("repo_slug");
+            string? folder = reader.TextOrNull("folder");
+            rows.Add((slug, folder is null, new OverviewFolder(paths.Format(slug, folder ?? ""),
+                reader.Int32("files"), reader.Int64("lines"), reader.Int64("bytes"))));
         }
 
-        Close();
-        return (roots, others);
+        // Capped per repository and not across the project: one repository of a thousand folders would
+        // otherwise spend the whole cap and drop every later repository's top level entirely, which is
+        // the one thing this section exists to show.
+        var roots = rows.GroupBy(row => row.Slug, StringComparer.Ordinal)
+            .Select(repository => new OverviewRoot(paths.Format(repository.Key, ""),
+                repository.Where(row => !row.IsRoot).Select(row => row.Entry).Take(_foldersShown).ToList(),
+                repository.Where(row => row.IsRoot).Select(row => row.Entry).FirstOrDefault()))
+            .ToList();
+        return (roots, rows.Count(row => !row.IsRoot) - roots.Sum(root => root.Folders.Count));
     }
 
     /// <summary>

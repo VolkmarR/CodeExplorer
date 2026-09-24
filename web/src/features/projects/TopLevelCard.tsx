@@ -22,22 +22,18 @@ export function TopLevelCard({ project, overview }: { project: string; overview:
             <TopLevelRow
               key={folder.qualifiedPath}
               project={project}
-              path={folder.qualifiedPath}
+              entry={folder}
               label={`${folder.qualifiedPath}/`}
-              files={folder.files}
-              bytes={folder.sizeBytes}
             />
           )),
-          root.rootFiles > 0 ? (
+          root.rootFiles ? (
             <TopLevelRow
               key={`${root.qualifiedPath}:root`}
               project={project}
-              path={root.qualifiedPath}
+              entry={root.rootFiles}
               label={
                 root.qualifiedPath === '' ? 'at the root' : `at the root of ${root.qualifiedPath}`
               }
-              files={root.rootFiles}
-              bytes={root.rootBytes}
               muted
             />
           ) : null,

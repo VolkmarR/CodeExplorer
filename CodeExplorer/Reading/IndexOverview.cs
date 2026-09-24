@@ -32,15 +32,14 @@ public sealed record OverviewFolder(
 ///     where a path names no repository (ADR-0006).
 /// </param>
 /// <param name="Folders">The folders at the root, each with everything beneath it.</param>
-/// <param name="RootFiles">How many files sit directly at the root; zero for a repository with none.</param>
-/// <param name="RootLines">The lines of those files.</param>
-/// <param name="RootBytes">The bytes of those files.</param>
+/// <param name="RootFiles">
+///     The files directly at the root, counted as one entry whose path is the root itself; null for a
+///     repository with none.
+/// </param>
 public sealed record OverviewRoot(
     string QualifiedPath,
     IReadOnlyList<OverviewFolder> Folders,
-    int RootFiles,
-    long RootLines,
-    long RootBytes);
+    OverviewFolder? RootFiles);
 
 /// <summary>
 ///     One of the largest indexed files in the project, by bytes: the point is what a read costs. A

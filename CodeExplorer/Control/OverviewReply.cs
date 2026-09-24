@@ -79,11 +79,10 @@ internal static class OverviewReply
         text.Append("\nTop level\n");
         foreach (var root in overview.Tree)
         {
-            foreach (var folder in root.Folders)
-                TreeRow(text, folder.Files, folder.Lines, folder.SizeBytes, folder.QualifiedPath + "/");
+            foreach (var folder in root.Folders) TreeRow(text, folder, folder.QualifiedPath + "/");
             // A repository with no root files says nothing: "0 files at the root" is a row about nothing.
-            if (root.RootFiles > 0)
-                TreeRow(text, root.RootFiles, root.RootLines, root.RootBytes,
+            if (root.RootFiles is { } files)
+                TreeRow(text, files,
                     root.QualifiedPath.Length == 0 ? "at the root" : $"at the root of {root.QualifiedPath}");
         }
 
@@ -96,9 +95,9 @@ internal static class OverviewReply
     ///     One row of the top level. A root-file count is drawn in a folder's columns, so the counts of
     ///     the two line up and the label is what tells them apart.
     /// </summary>
-    private static void TreeRow(StringBuilder text, int files, long lines, long bytes, string label) =>
+    private static void TreeRow(StringBuilder text, OverviewFolder entry, string label) =>
         text.Append(CultureInfo.InvariantCulture,
-            $"  {files,6:N0} {ToolReply.Plural(files, "file"),-6}{lines,9:N0} {ToolReply.Plural(lines, "line"),-6}{ToolReply.Bytes(bytes),10}  {label}\n");
+            $"  {entry.Files,6:N0} {ToolReply.Plural(entry.Files, "file"),-6}{entry.Lines,9:N0} {ToolReply.Plural(entry.Lines, "line"),-6}{ToolReply.Bytes(entry.SizeBytes),10}  {label}\n");
 
     private static void AppendLargestFiles(StringBuilder text, IndexOverview overview)
     {
