@@ -63,7 +63,7 @@ export function NewRepositoryForm({
               value={slug}
               onChange={(event) => setSlug(event.target.value)}
               placeholder="platform"
-              className="font-mono"
+              font="mono"
               required
             />
             <p className="text-xs text-muted-foreground">
@@ -79,7 +79,7 @@ export function NewRepositoryForm({
             value={url}
             onChange={(event) => setUrl(event.target.value)}
             placeholder="https://github.com/acme/platform.git"
-            className="font-mono"
+            font="mono"
             required
           />
         </div>

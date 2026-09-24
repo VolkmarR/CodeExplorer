@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import type { IndexOverview, LanguageShare } from '@/features/projects/api'
 import { formatCount } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
@@ -38,18 +39,17 @@ function LanguageBar({ language, total }: { language: LanguageShare; total: numb
           {language.name}
           {/* An extension standing for itself is a weaker claim than a language name, and has to
               read as one: "X#" is a fact about the file, ".vh" is only what it is called. */}
-          {language.mapped ? null : (
-            <Badge variant="outline" className="text-muted-foreground">
-              extension
-            </Badge>
-          )}
+          {language.mapped ? null : <Badge variant="muted">extension</Badge>}
         </span>
         <span className="shrink-0 tabular-nums text-muted-foreground">
           {formatCount(language.files)} files &middot; {formatCount(language.lines)} lines
         </span>
       </div>
       <div className="h-1.5 rounded-full bg-muted">
-        <div className="h-1.5 rounded-full bg-primary" style={{ width: `${share}%` }} />
+        <div
+          className="h-1.5 w-(--share) rounded-full bg-primary"
+          style={{ '--share': `${share}%` } as CSSProperties}
+        />
       </div>
     </div>
   )

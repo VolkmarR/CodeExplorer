@@ -8,11 +8,7 @@ import { Badge } from '@/components/ui/badge'
  */
 export function IndexStatus({ status }: { status: ProjectIndexStatus }) {
   if (!status.builtAt) {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        not built
-      </Badge>
-    )
+    return <Badge variant="muted">not built</Badge>
   }
 
   return (

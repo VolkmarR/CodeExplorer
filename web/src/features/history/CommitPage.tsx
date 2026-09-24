@@ -30,8 +30,8 @@ export function CommitPage() {
       hint={commit.subject}
       badges={
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline" className="font-mono">
-            {commit.repositorySlug}
+          <Badge variant="outline">
+            <span className="font-mono">{commit.repositorySlug}</span>
           </Badge>
           <span className="text-xs text-muted-foreground">
             {commit.authorName} <span title={commit.authorEmail}>&lt;{commit.authorEmail}&gt;</span>{' '}

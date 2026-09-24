@@ -47,13 +47,50 @@ export default defineConfig({
     plugins: ['import', 'jsx-a11y', 'node', 'oxc', 'promise', 'react', 'typescript', 'unicorn'],
     // React Doctor's rules, for the security, correctness and accessibility checks the native
     // plugins have no equivalent of. See lint.rules.ts for which of its 906 rules are on and why.
-    jsPlugins: [{ name: 'react-doctor', specifier: 'oxlint-plugin-react-doctor' }],
+    // @shadcn/lint holds the design-system rules: which Tailwind classes each shadcn component may
+    // take. It finds the components and the theme through components.json. Registered only; no rule
+    // of it is on yet.
+    jsPlugins: [
+      { name: 'react-doctor', specifier: 'oxlint-plugin-react-doctor' },
+      { name: 'shadcn', specifier: '@shadcn/lint' },
+    ],
     // Every category that finds real defects is an error. `pedantic` is off on purpose: on a React
     // codebase it is mostly max-lines-per-function and max-dependencies on components that are long
     // because JSX is long, and `style` overlaps with what oxfmt already decides.
     categories: { correctness: 'error', perf: 'error', suspicious: 'error' },
     rules: {
       ...reactDoctorRules,
+      // The design system, checked. A page may place a shadcn component (layout classes are its own
+      // business) but not re-dress it: its spacing, typography and shape belong to the component and
+      // change there, as a variant, rather than drifting one call site at a time.
+      //
+      // Containers are the exception. A card, a table cell, a label or a breadcrumb has no look of
+      // its own to protect beyond its frame: what it holds sets the type and the colour, as a muted
+      // count in a cell or a mono path in a card does. The widgets (Button, Badge, Input, Select, …)
+      // keep the strict default and change through a variant.
+      'shadcn/no-restyle': [
+        'error',
+        {
+          allow: ['layout'],
+          contracts: [
+            {
+              pattern: '^(Card\\w*|Table\\w*|Label|Sidebar\\w*|Breadcrumb\\w*|ProgressValue)$',
+              allow: ['layout', 'spacing', 'typography', 'color', 'motion'],
+            },
+          ],
+        },
+      ],
+      // Colours and scale values come from the theme in styles.css, so a change to one reaches
+      // every place that means the same thing.
+      'shadcn/no-raw-colors': 'error',
+      'shadcn/no-arbitrary-values': 'error',
+      // Runtime values travel as CSS custom properties that a class reads, so every style is still
+      // a class and the linter above can see it.
+      'shadcn/no-inline-styles': 'error',
+      'shadcn/require-static-classes': 'error',
+      // A class Tailwind does not know generates no CSS and fails silently. This is how the missing
+      // tw-animate-css was found.
+      'shadcn/no-unknown-classes': 'error',
       // `jsx: 'react-jsx'` makes the compiler import the factory itself. The rule predates the
       // automatic runtime and would otherwise fire on every element in the app.
       'react/react-in-jsx-scope': 'off',
@@ -68,6 +105,16 @@ export default defineConfig({
     // allowed to change. The app frame lives in `src/app/` precisely because it does depend on
     // features, and is deliberately outside this list.
     overrides: [
+      // components/ui is the shadcn source the components come from, where they are built out of
+      // each other and out of arbitrary values the rules are right to refuse anywhere else. These
+      // two rules police the call sites, not the design system's own definition.
+      {
+        files: ['src/components/ui/**'],
+        rules: {
+          'shadcn/no-restyle': 'off',
+          'shadcn/no-arbitrary-values': 'off',
+        },
+      },
       {
         files: ['src/components/**', 'src/lib/**'],
         rules: {

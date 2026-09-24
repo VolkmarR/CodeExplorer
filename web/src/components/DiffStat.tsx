@@ -9,8 +9,8 @@ import { formatCount } from '@/lib/format'
 export function DiffStat({ added, deleted }: { added: number; deleted: number }) {
   return (
     <>
-      <span className="text-emerald-600 dark:text-emerald-400">+{formatCount(added)}</span>{' '}
-      <span className="text-rose-600 dark:text-rose-400">&minus;{formatCount(deleted)}</span>
+      <span className="text-success">+{formatCount(added)}</span>{' '}
+      <span className="text-destructive">&minus;{formatCount(deleted)}</span>
     </>
   )
 }

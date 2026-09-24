@@ -138,7 +138,7 @@ export function TopBar({
           this is hidden from readers rather than made a second progress announcement. */}
       {loading ? (
         <div aria-hidden="true" className="absolute inset-x-0 -bottom-px h-0.5 overflow-hidden">
-          <div className="h-full w-1/3 bg-primary motion-safe:animate-[slide_1s_ease-in-out_infinite]" />
+          <div className="h-full w-1/3 bg-primary motion-safe:animate-slide" />
         </div>
       ) : null}
     </header>

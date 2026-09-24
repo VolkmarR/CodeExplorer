@@ -11,6 +11,7 @@ import { ErrorPanel } from '@/components/ErrorPanel'
 import { PageCard } from '@/components/PageCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Toggle } from '@/components/ui/toggle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { toast } from '@/components/ui/toast'
 import { languageFor } from '@/highlight/highlighter'
@@ -93,29 +94,17 @@ export function FilePage() {
             />
             <TooltipContent>Copy the qualified path</TooltipContent>
           </Tooltip>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-pressed={wrap}
-            className="aria-pressed:bg-muted aria-pressed:text-foreground"
-            onClick={() => setWrap(!wrap)}
-          >
+          <Toggle size="sm" pressed={wrap} onPressedChange={setWrap}>
             <WrapText />
             Wrap
-          </Button>
+          </Toggle>
           {/* Offered only where it can answer: a file whose repository has no history in the index
               would show an empty gutter, and a button that does nothing is worse than none. */}
           {hasHistory && file.skipReason === null ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-pressed={blaming}
-              className="aria-pressed:bg-muted aria-pressed:text-foreground"
-              onClick={() => setBlaming(!blaming)}
-            >
+            <Toggle size="sm" pressed={blaming} onPressedChange={setBlaming}>
               <History />
               Blame
-            </Button>
+            </Toggle>
           ) : null}
         </>
       }
