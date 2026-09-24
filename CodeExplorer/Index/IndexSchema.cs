@@ -13,7 +13,7 @@ public sealed partial class ProjectIndexes
     ///     Bumped when the tables below change shape, so a durable copy from an older build is rebuilt
     ///     from git instead of restored into a schema it no longer fits (#9).
     /// </summary>
-    public const int SchemaVersion = 9;
+    public const int SchemaVersion = 10;
 
     /// <summary>
     ///     Paths inside <c>files</c> stay repository-relative and <c>repo_id</c> scopes them; the

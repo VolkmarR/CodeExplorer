@@ -11,21 +11,42 @@ namespace CodeExplorer.Reading;
 public sealed record LanguageShare(string Name, bool Mapped, int Files, long Lines, int Skipped);
 
 /// <summary>
-///     One entry at the top level of a repository. <see cref="Files" /> counts everything beneath a
-///     directory rather than its immediate children, the way a tree listing does, so the number is what
-///     the area is worth reading and not how it happens to be nested.
+///     One folder at the top level of a repository. <see cref="Files" /> counts everything beneath it
+///     rather than its immediate children, the way a tree listing does, so the number is what the area
+///     is worth reading and not how it happens to be nested.
 /// </summary>
-public sealed record OverviewEntry(
+public sealed record OverviewFolder(
     string QualifiedPath,
-    bool IsDirectory,
     int Files,
     long Lines,
     long SizeBytes);
 
 /// <summary>
-///     One of the largest files in the project, by bytes rather than by lines: the point is what a
-///     read costs, and a file the build skipped for its size has no lines at all — which makes it
-///     exactly the file a caller most needs warning about.
+///     The top level of one repository: its folders, each listed, and its root files counted instead.
+///     A root file is a folder of one, and a root of build scripts, licences and solution files listed
+///     row by row was half of a real overview (#215) while saying less than one line does. They are
+///     counted rather than dropped, so the section still adds up to the repository.
+/// </summary>
+/// <param name="QualifiedPath">
+///     The repository's root as a qualified path: its slug, or empty in a single-repository project,
+///     where a path names no repository (ADR-0006).
+/// </param>
+/// <param name="Folders">The folders at the root, each with everything beneath it.</param>
+/// <param name="RootFiles">How many files sit directly at the root; zero for a repository with none.</param>
+/// <param name="RootLines">The lines of those files.</param>
+/// <param name="RootBytes">The bytes of those files.</param>
+public sealed record OverviewRoot(
+    string QualifiedPath,
+    IReadOnlyList<OverviewFolder> Folders,
+    int RootFiles,
+    long RootLines,
+    long RootBytes);
+
+/// <summary>
+///     One of the largest indexed files in the project, by bytes: the point is what a read costs. A
+///     file the build skipped has no lines to read at all, so it is kept out (#215) — Languages already
+///     counts it as not indexed, and ranking it here only put 0-line DLLs above the files a read would
+///     actually swamp on.
 /// </summary>
 public sealed record OverviewFile(string QualifiedPath, int LineCount, long SizeBytes);
 
@@ -74,16 +95,16 @@ public sealed record OverviewAuthor(string Name, string Email, int Commits, Date
 /// </summary>
 /// <param name="Languages">Counts by language, largest first, with unmapped extensions standing for themselves.</param>
 /// <param name="OtherLanguages">How many further languages or extensions the list above leaves out.</param>
-/// <param name="Tree">The top level of every repository, with what lies beneath each entry.</param>
-/// <param name="OtherEntries">How many further top-level entries the tree above leaves out.</param>
+/// <param name="Tree">The top level of every repository, in the order the build numbered them.</param>
+/// <param name="OtherFolders">How many further top-level folders the tree above leaves out.</param>
 /// <param name="LargestFiles">The files most likely to swamp a read, so a caller knows before opening one.</param>
 /// <param name="Churn">Where work has been happening, over the window the build ranked.</param>
 /// <param name="Authors">Who has touched the project most, over the whole imported history.</param>
 public sealed record IndexOverview(
     IReadOnlyList<LanguageShare> Languages,
     int OtherLanguages,
-    IReadOnlyList<OverviewEntry> Tree,
-    int OtherEntries,
+    IReadOnlyList<OverviewRoot> Tree,
+    int OtherFolders,
     IReadOnlyList<OverviewFile> LargestFiles,
     OverviewChurn Churn,
     IReadOnlyList<OverviewAuthor> Authors)

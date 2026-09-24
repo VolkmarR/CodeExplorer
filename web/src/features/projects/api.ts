@@ -70,15 +70,28 @@ export interface LanguageShare {
   skipped: number
 }
 
-/** One entry at the top level of a repository. `files` counts everything beneath a directory. */
-export interface OverviewEntry {
+/** One folder at the top level of a repository. `files` counts everything beneath it. */
+export interface OverviewFolder {
   qualifiedPath: string
-  isDirectory: boolean
   files: number
   lines: number
   sizeBytes: number
 }
 
+/**
+ * The top level of one repository: its folders listed, its root files counted instead of listed.
+ * `qualifiedPath` is the repository's root, empty in a single-repository project; `rootFiles` is zero
+ * for a repository with nothing at its root.
+ */
+export interface OverviewRoot {
+  qualifiedPath: string
+  folders: OverviewFolder[]
+  rootFiles: number
+  rootLines: number
+  rootBytes: number
+}
+
+/** One of the largest indexed files; a file the build skipped is never ranked here. */
 export interface OverviewFile {
   qualifiedPath: string
   lineCount: number
@@ -114,8 +127,8 @@ export interface OverviewAuthor {
 export interface IndexOverview {
   languages: LanguageShare[]
   otherLanguages: number
-  tree: OverviewEntry[]
-  otherEntries: number
+  tree: OverviewRoot[]
+  otherFolders: number
   largestFiles: OverviewFile[]
   churn: OverviewChurn
   authors: OverviewAuthor[]

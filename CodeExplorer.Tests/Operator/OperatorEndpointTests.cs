@@ -191,9 +191,11 @@ public sealed class OperatorEndpointTests : IDisposable
         Assert.Contains(detail.Overview.Languages, l => l is { Name: "C#", Mapped: true, Files: 1 });
         Assert.Contains(detail.Overview.Languages, l => l is { Name: "X#", Mapped: true, Files: 1 });
         Assert.Contains(detail.Overview.Languages, l => l is { Name: ".md", Mapped: false });
-        // A directory and a file at the root, which is what the top level has to be able to show.
-        Assert.Contains(detail.Overview.Tree, e => e is { QualifiedPath: "one/src", IsDirectory: true });
-        Assert.Contains(detail.Overview.Tree, e => e is { QualifiedPath: "one/README.md", IsDirectory: false });
+        // A folder listed and a file at the root counted, which is what the top level has to show.
+        var root = Assert.Single(detail.Overview.Tree);
+        Assert.Equal("one", root.QualifiedPath);
+        Assert.Contains(root.Folders, e => e is { QualifiedPath: "one/src", Files: 2 });
+        Assert.Equal(1, root.RootFiles);
         Assert.NotEmpty(detail.Overview.LargestFiles);
         Assert.NotNull(detail.Overview.Churn.Until);
         Assert.NotEmpty(detail.Overview.Authors);
