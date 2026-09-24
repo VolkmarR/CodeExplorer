@@ -203,10 +203,14 @@ export interface ProjectOverviewDetail {
   unavailable: string | null
   excludedPatterns: number
   excluded: OverviewExcluded | null
-  /** Set with `overview`. */
-  hotspots: OverviewHotspots | null
-  /** Set with `overview`. */
-  authorsPerFile: OverviewAuthorsPerFile | null
+  /** The cards only this page draws. Set with `overview`. */
+  cards: OverviewCards | null
+}
+
+/** The cards only the overview page draws: the stored overview and `project_overview` have none of them. */
+export interface OverviewCards {
+  hotspots: OverviewHotspots
+  authorsPerFile: OverviewAuthorsPerFile
 }
 
 /** The overview page's setting, read and written whole. */

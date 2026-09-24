@@ -76,15 +76,19 @@ export function ProjectOverview({ project }: { project: string }) {
           overview={data.overview}
           excluded={excluded?.committedFiles}
         />
-        {data.hotspots && (
-          <HotspotsCard project={project} churn={data.overview.churn} hotspots={data.hotspots} />
-        )}
-        {data.authorsPerFile && (
-          <AuthorsPerFileCard
-            project={project}
-            churn={data.overview.churn}
-            authors={data.authorsPerFile}
-          />
+        {data.cards && (
+          <>
+            <HotspotsCard
+              project={project}
+              churn={data.overview.churn}
+              hotspots={data.cards.hotspots}
+            />
+            <AuthorsPerFileCard
+              project={project}
+              churn={data.overview.churn}
+              authors={data.cards.authorsPerFile}
+            />
+          </>
         )}
       </div>
     </>

@@ -65,22 +65,17 @@ public sealed record RepositoryCommit(string Sha, string AuthorName, DateTimeOff
 ///     How many files the patterns kept out of each kind of section; null where nothing was kept out
 ///     because the setting is empty or the page asked to see the excluded paths.
 /// </param>
-/// <param name="Hotspots">
-///     The Hotspots card (#211), set with <see cref="Overview" />. Beside the overview rather than in
-///     it, because <see cref="IndexOverview" /> is also the stored row and the <c>project_overview</c>
-///     reply, and neither has hotspots.
-/// </param>
-/// <param name="AuthorsPerFile">
-///     The Most authors per file card (#212), set with <see cref="Overview" /> and beside it for the
-///     same reason as <paramref name="Hotspots" />.
+/// <param name="Cards">
+///     The cards only the page draws — Hotspots (#211), Most authors per file (#212) — set with
+///     <see cref="Overview" />. Beside the overview rather than in it, because <see cref="IndexOverview" />
+///     is also the stored row and the <c>project_overview</c> reply, and neither has them.
 /// </param>
 public sealed record ProjectOverviewDetail(
     IndexOverview? Overview,
     string? Unavailable,
     int ExcludedPatterns = 0,
     OverviewExcluded? Excluded = null,
-    OverviewHotspots? Hotspots = null,
-    OverviewAuthorsPerFile? AuthorsPerFile = null);
+    OverviewCards? Cards = null);
 
 /// <summary>
 ///     The overview page's filters, read off its URL. <see cref="Days" /> is clamped the way every
@@ -172,9 +167,8 @@ public sealed class ProjectOverview(ControlDatabase control, IndexReaders reader
         return await readers.OverIndexAsync(project.Slug, filter.Repository,
             async (index, token) =>
             {
-                var (overview, left, hotspots, authors) =
-                    await index.LiveOverviewAsync(filter.Days, excluded, token);
-                return new ProjectOverviewDetail(overview, null, patterns.Count, left, hotspots, authors);
+                var (overview, left, cards) = await index.LiveOverviewAsync(filter.Days, excluded, token);
+                return new ProjectOverviewDetail(overview, null, patterns.Count, left, cards);
             },
             problem => new ProjectOverviewDetail(null, problem.Explanation, patterns.Count), cancellationToken);
     }
