@@ -17,13 +17,7 @@ import { churnSearch, type ChurnParameters } from '@/lib/urls/churnParams'
  * Nothing at all until a directory is chosen: at the project root the trail would be one link to the
  * page already open, which is a control that does nothing sitting above every unscoped ranking.
  */
-export function ChurnScopeTrail({
-  project,
-  search,
-}: {
-  project: string
-  search: ChurnParameters
-}) {
+export function ChurnScopeTrail({ project, search }: { project: string; search: ChurnParameters }) {
   if (search.directory === undefined) return null
 
   const segments = search.directory.split('/')

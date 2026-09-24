@@ -27,4 +27,3 @@ export function importsNote(file: FileImports): string | null {
   }
   return file.capped ? `Only the first ${file.imports.length} are listed; the file has more.` : null
 }
-
