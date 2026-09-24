@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { queryOptions } from '@tanstack/react-query'
 import {
+  fetchExcludedPathSuggestions,
   fetchExcludedPaths,
   fetchProject,
   fetchProjectOverview,
@@ -42,6 +43,17 @@ export function excludedPathsQuery(slug: string) {
   return queryOptions({
     queryFn: () => fetchExcludedPaths(slug),
     queryKey: [...projectKey(slug), 'excluded-paths'],
+  })
+}
+
+/**
+ * Patterns proposed for that setting from the index (#217). The form runs it from its Suggest button,
+ * never on load, since it reads the whole index to answer.
+ */
+export function excludedPathSuggestionsQuery(slug: string) {
+  return queryOptions({
+    queryFn: () => fetchExcludedPathSuggestions(slug),
+    queryKey: [...projectKey(slug), 'excluded-paths', 'suggestions'],
   })
 }
 

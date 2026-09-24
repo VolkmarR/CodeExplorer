@@ -271,6 +271,20 @@ export interface ExcludedPathsBody {
   patterns: string[]
 }
 
+/** One pattern the Suggest button proposes (#217): the rule behind it, why, and the files at HEAD it matches. */
+export interface ExcludedPathSuggestion {
+  pattern: string
+  rule: 'GitAttributes' | 'WellKnownName' | 'History'
+  reason: string
+  files: number
+}
+
+/** The proposals, or the sentence saying why a project with no index has none. */
+export interface ExcludedPathSuggestionsDetail {
+  suggestions: ExcludedPathSuggestion[]
+  unavailable: string | null
+}
+
 export function fetchProjects() {
   return http.get('projects').json<ProjectSummary[]>()
 }
@@ -291,6 +305,13 @@ export function fetchProjectOverview(slug: string, parameters: OverviewParameter
 
 export function fetchExcludedPaths(slug: string) {
   return http.get(`projects/${slug}/excluded-paths`).json<ExcludedPathsBody>()
+}
+
+/** Proposals only: nothing is stored until the form's own save. */
+export function fetchExcludedPathSuggestions(slug: string) {
+  return http
+    .get(`projects/${slug}/excluded-paths/suggestions`)
+    .json<ExcludedPathSuggestionsDetail>()
 }
 
 /** Answers the list as the server stored it: trimmed, with blanks and repeats dropped. */

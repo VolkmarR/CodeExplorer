@@ -53,6 +53,15 @@ public sealed partial class IndexReader
     }
 
     /// <summary>
+    ///     Patterns proposed for the overview page's excluded paths from this index (#217), none of them
+    ///     in <paramref name="existing" /> or covering only files it already leaves out.
+    /// </summary>
+    public async Task<IReadOnlyList<ExcludedPathSuggestion>> SuggestExcludedPathsAsync(
+        IReadOnlyList<string> existing, CancellationToken cancellationToken) =>
+        await ExcludedPathSuggestions.SuggestAsync(Connection, await PathsAsync(cancellationToken), existing,
+            cancellationToken);
+
+    /// <summary>
     ///     Lines <paramref name="first" /> to <paramref name="last" /> inclusive, in order; fewer when the file ends
     ///     first.
     /// </summary>

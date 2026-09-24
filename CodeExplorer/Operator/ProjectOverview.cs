@@ -85,6 +85,12 @@ public sealed record ProjectOverviewDetail(
 /// </summary>
 public sealed record OverviewFilter(int Days, string? Repository, bool ShowExcluded);
 
+/// <summary>
+///     What the settings page's Suggest button reads (#217): the proposals, or, where the project has
+///     no index to propose from, the reader's sentence saying why and no proposals.
+/// </summary>
+public sealed record ExcludedPathSuggestionsDetail(IReadOnlyList<ExcludedPathSuggestion> Suggestions, string? Unavailable);
+
 /// <summary>A project as its own page shows it.</summary>
 public sealed record ProjectDetail(
     string Slug,
@@ -180,6 +186,21 @@ public sealed class ProjectOverview(
                 return new ProjectOverviewDetail(overview, null, patterns.Count, left, cards);
             },
             problem => new ProjectOverviewDetail(null, problem.Explanation, patterns.Count), cancellationToken);
+    }
+
+    /// <summary>
+    ///     Patterns proposed for the project's excluded paths from its index (#217), leaving out what the
+    ///     setting already holds. Composed here for the reason <see cref="OverviewAsync" /> is: the
+    ///     setting is the control database's and the proposals are the index's. Nothing is stored.
+    /// </summary>
+    public async Task<ExcludedPathSuggestionsDetail> SuggestExcludedPathsAsync(Project project,
+        CancellationToken cancellationToken)
+    {
+        var patterns = await control.ExcludedPathsAsync(project.Slug, cancellationToken);
+        return await readers.OverIndexAsync(project.Slug, null,
+            async (index, token) =>
+                new ExcludedPathSuggestionsDetail(await index.SuggestExcludedPathsAsync(patterns, token), null),
+            problem => new ExcludedPathSuggestionsDetail([], problem.Explanation), cancellationToken);
     }
 
     /// <summary>
