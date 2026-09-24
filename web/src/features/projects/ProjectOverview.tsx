@@ -1,6 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { AuthorsCard } from '@/features/projects/AuthorsCard'
+import { HotspotsCard } from '@/features/projects/HotspotsCard'
 import { LanguageShares } from '@/features/projects/LanguageShares'
 import { MostChangedCard } from '@/features/projects/MostChangedCard'
 import { OverviewControls } from '@/features/projects/OverviewControls'
@@ -10,7 +11,7 @@ import { overviewSearch, type OverviewParameters } from '@/lib/urls/overviewPara
 
 /**
  * The project as a whole: what it is written in, how it is laid out, what is biggest in it, where
- * work has been happening and who has been doing it.
+ * work has been happening, who has been doing it, and which large files keep changing.
  *
  * Computed live from the index for this page (#216), over the filter bar's window and repository and
  * without the paths the project's settings exclude — so it is not the stored row `project_overview`
@@ -73,6 +74,9 @@ export function ProjectOverview({ project }: { project: string }) {
           overview={data.overview}
           excluded={excluded?.committedFiles}
         />
+        {data.hotspots && (
+          <HotspotsCard project={project} overview={data.overview} hotspots={data.hotspots} />
+        )}
       </div>
     </>
   )

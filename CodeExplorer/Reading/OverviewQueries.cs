@@ -32,6 +32,27 @@ public sealed record OverviewScope(int Days, string? RepositorySlug, ExcludedPat
 public sealed record OverviewExcluded(int Files, int ChangedFiles, int CommittedFiles);
 
 /// <summary>
+///     One file of the overview page's Hotspots card (#211): large and busy at once. Only a file at HEAD
+///     has one, since its lines are read there, so it carries no <c>AtHead</c> the way a churned file does.
+/// </summary>
+/// <param name="QualifiedPath">The file, spelled the way the project spells it (ADR-0006).</param>
+/// <param name="Commits">Commits in the window that touched it, counted as Most changed counts them.</param>
+/// <param name="Lines">Its lines at HEAD.</param>
+/// <param name="Score"><paramref name="Commits" /> times <paramref name="Lines" />, what the card ranks by.</param>
+public sealed record Hotspot(string QualifiedPath, int Commits, int Lines, long Score);
+
+/// <summary>
+///     The Hotspots card: the page's alone, never in the stored row, so <c>project_overview</c> answers
+///     as it did before it (#211).
+/// </summary>
+/// <param name="Files">The top of the ranking; empty where the scope holds no history.</param>
+/// <param name="Excluded">
+///     Files at HEAD that the window's commits touched and the exclusions left out; null where the scope
+///     excludes nothing.
+/// </param>
+public sealed record OverviewHotspots(IReadOnlyList<Hotspot> Files, int? Excluded);
+
+/// <summary>
 ///     The sections of an overview, as statements over a bare connection: the build runs them once over
 ///     <see cref="OverviewScope.Stored" /> and stores the result, and the overview page runs them per
 ///     view over its own scope (#216). One copy of the SQL for both, so that the page and the stored
@@ -66,6 +87,12 @@ internal static class OverviewQueries
 
     /// <summary>A screenful of a ranking read from the top down, the same judgement <c>hot_files</c> makes.</summary>
     private const int _churnFilesShown = 10;
+
+    /// <summary>
+    ///     Hotspots ranked. The card numbers each one on its scatter plot, and past ten the numbers stop
+    ///     being findable there; the list is read from the top down like Most changed's.
+    /// </summary>
+    private const int _hotspotsShown = 10;
 
     /// <summary>
     ///     Authors named. Past ten it stops being "who knows this code" and becomes a contributor list,
@@ -108,6 +135,87 @@ internal static class OverviewQueries
                 : await IndexQueries.HiddenAsync(connection, paths, window, scope.RepositorySlug, null, filters,
                     cancellationToken),
             await ExcludedCommittedAsync(connection, paths, scope, cancellationToken)));
+    }
+
+    /// <summary>
+    ///     The files at HEAD that are both large and busy (#211): commits in the scope's window times
+    ///     lines at HEAD, highest first. Commits and not lines changed, as churn counts them, so a sweep
+    ///     that touches every file adds one to each and lifts none of them. A tie goes to the file with
+    ///     more lines changed and then to the path, the order Most changed breaks its ties in.
+    ///     Not a section of <see cref="ComputeAsync" />: the stored row has no hotspots, and the build
+    ///     should not pay for a card only the page draws. The window is looked up again rather than
+    ///     handed over, which costs one <c>max</c> over <c>commits</c>.
+    /// </summary>
+    public static async Task<OverviewHotspots> HotspotsAsync(DuckDBConnection connection, ProjectPaths paths,
+        OverviewScope scope, CancellationToken cancellationToken)
+    {
+        var window = await IndexQueries.WindowAsync(connection, scope.Days, scope.RepositorySlug, cancellationToken);
+        if (window is null) return new OverviewHotspots([], scope.Excluded.Any ? 0 : null);
+
+        var (touched, parameters) = HotspotScope(paths, window, scope, false);
+        await using var command = connection.Query($"""
+                                                    {touched}
+                                                    SELECT h.qualified_path, t.commits, h.line_count,
+                                                           t.commits::BIGINT * h.line_count AS score
+                                                    FROM touched t JOIN at_head h USING (repo_slug, path)
+                                                    -- Spelled out for the reason RankAsync gives.
+                                                    ORDER BY t.commits::BIGINT * h.line_count DESC, t.changed DESC,
+                                                             h.qualified_path
+                                                    LIMIT {_hotspotsShown}
+                                                    """, parameters);
+        await using var reader = await command.ReaderAsync(cancellationToken);
+        var files = new List<Hotspot>();
+        while (await reader.ReadAsync(cancellationToken))
+            files.Add(new Hotspot(reader.Text("qualified_path"), reader.Int32("commits"), reader.Int32("line_count"),
+                reader.Int64("score")));
+        if (!scope.Excluded.Any) return new OverviewHotspots(files, null);
+
+        var (excluded, excludedParameters) = HotspotScope(paths, window, scope, true);
+        return new OverviewHotspots(files, (int)await connection.CountAsync($"""
+                 {excluded}
+                 SELECT count(*) FROM touched JOIN at_head USING (repo_slug, path)
+                 """, excludedParameters, cancellationToken));
+    }
+
+    /// <summary>
+    ///     The two CTEs the hotspot ranking and its excluded count join: <c>touched</c>, each path the
+    ///     window's commits touched with its commits and lines changed, and <c>at_head</c>, the indexed
+    ///     files at HEAD in the scope — without the excluded paths, or where
+    ///     <paramref name="excludedOnly" /> is set, only them.
+    ///     Grouped before the join: the window reduces to one row per path, and joining files onto those
+    ///     is a hash join over the files at HEAD rather than one per commit row. A skipped file is left
+    ///     out of <c>at_head</c>, since a binary or an oversized file has no lines to multiply.
+    /// </summary>
+    private static (string Sql, List<DuckDBParameter> Parameters) HotspotScope(ProjectPaths paths,
+        HistoryWindow window, OverviewScope scope, bool excludedOnly)
+    {
+        var (inWindow, parameters) =
+            IndexQueries.ChurnScope(paths, window, scope.RepositorySlug, null, ChurnFilters.None);
+        var atHead = new List<string> { "f.skip_reason IS NULL" };
+        // Bound again under its own name rather than leaning on the one the churn scope chose.
+        if (scope.RepositorySlug is not null)
+        {
+            atHead.Add("r.slug = $hr");
+            parameters.Add(new DuckDBParameter("hr", scope.RepositorySlug));
+        }
+        if (scope.Excluded.Matching("f.qualified_path", "x", parameters) is { } matching)
+            atHead.Add(excludedOnly ? matching : $"NOT {matching}");
+
+        return ($"""
+                 WITH touched AS (
+                     SELECT c.repo_slug, cf.path,
+                            count(*)::INTEGER AS commits,
+                            -- Cast for the reason RankAsync casts.
+                            sum(cf.added)::BIGINT + sum(cf.deleted)::BIGINT AS changed
+                     FROM commit_files cf
+                     JOIN commits c USING (commit_id)
+                     WHERE {string.Join(" AND ", inWindow)}
+                     GROUP BY c.repo_slug, cf.path),
+                 at_head AS (
+                     SELECT r.slug AS repo_slug, f.path, f.qualified_path, f.line_count
+                     FROM files f JOIN repositories r USING (repo_id)
+                     {Where(atHead)})
+                 """, parameters);
     }
 
     /// <summary>
