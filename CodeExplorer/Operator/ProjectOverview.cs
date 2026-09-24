@@ -76,8 +76,7 @@ public sealed record ProjectOverviewDetail(
 ///     window is (<see cref="HistoryWindow.Ending" />); a blank <see cref="Repository" /> is the whole
 ///     project; <see cref="ShowExcluded" /> lifts the project's excluded paths for this view only.
 /// </summary>
-public sealed record OverviewFilter(int Days = HistoryWindow.DefaultDays, string? Repository = null,
-    bool ShowExcluded = false);
+public sealed record OverviewFilter(int Days, string? Repository, bool ShowExcluded);
 
 /// <summary>A project as its own page shows it.</summary>
 public sealed record ProjectDetail(

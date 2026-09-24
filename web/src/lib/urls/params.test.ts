@@ -359,7 +359,8 @@ test('a window is named once, so the select and the heading cannot disagree', ()
   // A year is named before the month rule can call it twelve months, and anything longer than the
   // longest offered window is all of it.
   expect(describeWindow(7300)).toBe('All history')
-  expect(describeWindow(30)).toBe('Last 1 months')
+  // One month is named in days, the overview's shortest window.
+  expect(describeWindow(30)).toBe('Last 30 days')
   expect(describeWindow(7)).toBe('Last 1 weeks')
   // A hand-written window that is neither: named in the unit it was asked in.
   expect(describeWindow(45)).toBe('Last 45 days')

@@ -64,32 +64,6 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
     }
 
     /// <summary>
-    ///     The pattern as the GLOB it is matched as, against the qualified path with a <c>/</c> in
-    ///     front. A leading <c>/</c> is added unless the pattern already begins with one or with a
-    ///     <c>*</c>: that anchors <c>docs/*</c> at the root, and leaves <c>**/x</c> free to match the
-    ///     root's own <c>/x</c>. A leading <c>?</c> is anchored like any other character, or it would
-    ///     spend itself on the <c>/</c> put in front and match one character short.
-    /// </summary>
-    internal static string AsGlob(string pattern)
-    {
-        string lowered = pattern.ToLowerInvariant();
-        string anchored = lowered.StartsWith('/') || lowered.StartsWith('*')
-            ? lowered
-            : "/" + lowered;
-        // A run of stars means what one does, because one already crosses `/`; collapsed so that the
-        // regex it becomes has one `.*` where a GLOB had two (GLOB backtracked on each, and `**/` in
-        // every pattern made each one quadratic in the path's length before the match was RE2).
-        var collapsed = new StringBuilder(anchored.Length);
-        foreach (char c in anchored)
-            if (c != '*' || collapsed.Length == 0 || collapsed[^1] != '*')
-                collapsed.Append(c);
-        // And `*/*` at the front means what `*` does, because the path it is matched against always
-        // begins with `/`: that is the whole of `**/*.rc`, the commonest pattern there is.
-        string glob = collapsed.ToString();
-        return glob.StartsWith("*/*", StringComparison.Ordinal) ? glob[2..] : glob;
-    }
-
-    /// <summary>
     ///     A condition true where <paramref name="path" /> matches any pattern, or null where there
     ///     are none. The callers negate it to leave the paths out and use it as it is to count them.
     ///     One case-insensitive RE2 match of every pattern at once, translated from the globs, rather
@@ -115,29 +89,39 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
     ///     a save compiles first so that a pattern RE2 refuses is refused there, as a sentence, rather
     ///     than failing every overview read after it (CODING_STANDARDS, Errors).
     /// </summary>
-    public string Expression => $"^(?:{string.Join("|", Patterns.Select(pattern => AsRegex(AsGlob(pattern))))})$";
+    public string Expression => $"^(?:{string.Join("|", Patterns.Select(AsRegex))})$";
 
     /// <summary>
-    ///     A GLOB as the RE2 expression that matches exactly what it does: <c>*</c> any run of
-    ///     characters and <c>?</c> any one, both crossing <c>/</c> as GLOB's do, a bracket a class with
-    ///     <c>!</c> negating it, and everything else literal. One widening: a <c>/*/</c> — what
-    ///     <c>/**/</c> collapsed to — also matches no folder at all, so <c>src/**/*.cs</c> reaches
-    ///     <c>src/A.cs</c> the way a leading <c>**/</c> reaches the root. As GLOB it could only have
-    ///     matched <c>//</c> there, which no path holds, so nothing it matched before is lost.
+    ///     One pattern as the RE2 expression matched against the qualified path with a <c>/</c> in
+    ///     front. <c>*</c> is any run of characters and <c>?</c> any one, both crossing <c>/</c> as
+    ///     GLOB's do, and a run of stars means what one does; a bracket is a class with <c>!</c>
+    ///     negating it, and everything else is literal.
+    ///     The <c>/</c> in front is what anchors: a pattern that does not begin with one or with a
+    ///     <c>*</c> is given one, so <c>docs/*</c> is the root's <c>docs</c>, while <c>**/x</c> is left
+    ///     free to match the root's own <c>/x</c>. A leading <c>?</c> is anchored like any other
+    ///     character, or it would spend itself on that <c>/</c> and match one character short.
+    ///     One widening: a <c>/**/</c> between two segments also matches no folder at all, so
+    ///     <c>src/**/*.cs</c> reaches <c>src/A.cs</c> the way a leading <c>**/</c> reaches the root. As
+    ///     GLOB it could only have matched <c>//</c> there, which no path holds.
     /// </summary>
-    internal static string AsRegex(string glob)
+    internal static string AsRegex(string pattern)
     {
+        string glob = pattern.StartsWith('/') || pattern.StartsWith('*') ? pattern : "/" + pattern;
         var regex = new StringBuilder(glob.Length * 2);
         for (int i = 0; i < glob.Length; i++)
         {
             char c = glob[i];
-            if (c == '/' && string.CompareOrdinal(glob, i, "/*/", 0, 3) == 0)
+            if (c == '/' && StarsAfter(glob, i + 1) is var stars and > 0 && i + 1 + stars < glob.Length
+                && glob[i + 1 + stars] == '/')
             {
                 regex.Append("/(?:.*/)?");
-                i += 2;
+                i += stars + 1;
             }
             else if (c == '*')
+            {
                 regex.Append(".*");
+                i += StarsAfter(glob, i + 1);
+            }
             else if (c == '?')
                 regex.Append('.');
             else if (c == '[' && ClassEnd(glob, i) is var end and > 0)
@@ -153,6 +137,14 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
         }
 
         return regex.ToString();
+    }
+
+    /// <summary>How many stars run from <paramref name="start" />, so a run is read as the one it means.</summary>
+    private static int StarsAfter(string glob, int start)
+    {
+        int end = start;
+        while (end < glob.Length && glob[end] == '*') end++;
+        return end - start;
     }
 
     /// <summary>

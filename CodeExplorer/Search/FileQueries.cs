@@ -223,7 +223,7 @@ public sealed class FileQueries(IndexReaders readers)
         Telemetry.Search(slug, _engine,
             () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
                 new ExtensionListing(index.Repository,
-                    (await IndexQueries.ExtensionCountsAsync(index.Connection, index.Repository?.Slug, null, token))
+                    (await IndexQueries.ExtensionCountsAsync(index.Connection, index.Repository?.Slug, ExcludedPaths.None, token))
                     .OrderByDescending(e => e.Files)
                     .ThenBy(e => e.Extension, StringComparer.Ordinal)
                     .ToList()), cancellationToken),

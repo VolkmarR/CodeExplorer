@@ -25,10 +25,10 @@ internal static class IndexQueries
     /// </summary>
     /// <param name="connection">Bound to the index being counted: a live project, or a shadow being built.</param>
     /// <param name="repositorySlug">One repository, or null for every one in the project.</param>
-    /// <param name="excluded">The overview page's excluded paths (#216), or null to count every file.</param>
+    /// <param name="excluded">The overview page's excluded paths (#216), or <see cref="ExcludedPaths.None" />.</param>
     /// <param name="cancellationToken">Threaded through to the command.</param>
     public static async Task<IReadOnlyList<ExtensionCount>> ExtensionCountsAsync(DuckDBConnection connection,
-        string? repositorySlug, ExcludedPaths? excluded, CancellationToken cancellationToken)
+        string? repositorySlug, ExcludedPaths excluded, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
         // The join is paid for only when there is a repository to scope to: every other caller counts
@@ -42,9 +42,9 @@ internal static class IndexQueries
             parameters.Add(new DuckDBParameter("r", repositorySlug));
         }
 
-        if (excluded?.Matching("f.qualified_path", "x", parameters) is { } matching)
+        if (excluded.Matching("f.qualified_path", "x", parameters) is { } matching)
             conditions.Add($"NOT {matching}");
-        if (conditions.Count > 0) scope += $" WHERE {string.Join(" AND ", conditions)}";
+        scope += $" {OverviewQueries.Where(conditions)}";
 
         await using var command = connection.Query($"""
                                                     SELECT f.extension,

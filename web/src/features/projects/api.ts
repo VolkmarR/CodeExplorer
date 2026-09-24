@@ -1,6 +1,6 @@
 import type { ChurnFile } from '@/features/churn/api'
 import type { CommitRef } from '@/features/history/api'
-import { http } from '@/lib/http'
+import { http, scoped } from '@/lib/http'
 import type { OverviewParameters } from '@/lib/urls/overviewParams'
 
 /**
@@ -178,10 +178,9 @@ export function fetchProject(slug: string) {
 export function fetchProjectOverview(slug: string, parameters: OverviewParameters) {
   const search: Record<string, string> = {}
   if (parameters.days !== undefined) search.days = String(parameters.days)
-  if (parameters.repository) search.repository = parameters.repository
   if (parameters.showExcluded) search.showExcluded = 'true'
   return http
-    .get(`projects/${slug}/overview`, { searchParams: search })
+    .get(`projects/${slug}/overview`, { searchParams: scoped(search, parameters.repository) })
     .json<ProjectOverviewDetail>()
 }
 

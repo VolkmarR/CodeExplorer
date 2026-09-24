@@ -1,5 +1,6 @@
 import type { RepositoryDetail } from '@/features/projects/api'
 import { RepositorySelect } from '@/features/projects/RepositorySelect'
+import { describeWindow, windowsWith } from '@/lib/urls/churnParams'
 import {
   DEFAULT_OVERVIEW_DAYS,
   OVERVIEW_WINDOWS,
@@ -43,12 +44,12 @@ export function OverviewControls({
         </Label>
         <Select value={String(days)} onValueChange={(next) => onChange({ days: Number(next) })}>
           <SelectTrigger id="overview-window" className="w-36">
-            <SelectValue>{describeDays(days)}</SelectValue>
+            <SelectValue>{describeWindow(days)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {windowsWith(days).map((offered) => (
+            {windowsWith(OVERVIEW_WINDOWS, days).map((offered) => (
               <SelectItem key={offered} value={String(offered)}>
-                {describeDays(offered)}
+                {describeWindow(offered)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -83,23 +84,4 @@ export function OverviewControls({
       ) : null}
     </div>
   )
-}
-
-/**
- * A window as the select names it. Not the churn page's `describeWindow`, which names a month as
- * "Last 1 months": these three are few enough to name outright, and a hand-written `days` in the URL
- * falls back to its number.
- */
-function describeDays(days: number): string {
-  if (days === 30) return 'Last 30 days'
-  if (days === 90) return 'Last 3 months'
-  if (days === 365) return 'Last year'
-  return `Last ${days} days`
-}
-
-/** The offered windows, plus whatever the URL carries, so a hand-written `days` shows as itself. */
-function windowsWith(days: number): readonly number[] {
-  return OVERVIEW_WINDOWS.includes(days as (typeof OVERVIEW_WINDOWS)[number])
-    ? OVERVIEW_WINDOWS
-    : [...OVERVIEW_WINDOWS, days].toSorted((a, b) => a - b)
 }

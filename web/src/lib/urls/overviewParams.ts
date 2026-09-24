@@ -1,3 +1,5 @@
+import { DEFAULT_CHURN_DAYS, text } from '@/lib/urls/churnParams'
+
 /**
  * What the overview page needs from the URL: the window its most-changed ranking is counted over,
  * which repository if not all of them, and whether the project's excluded paths are shown anyway.
@@ -22,23 +24,23 @@ export interface OverviewParameters {
  */
 export const OVERVIEW_WINDOWS = [30, 90, 365] as const
 
-/** The server's own default, the one the stored overview is taken over. */
-export const DEFAULT_OVERVIEW_DAYS = 90
+/** The server's own default, the one the stored overview is taken over: the churn page's too. */
+export const DEFAULT_OVERVIEW_DAYS = DEFAULT_CHURN_DAYS
 
-/** A hand-edited or truncated URL still opens the default view rather than throwing. */
+/**
+ * A hand-edited or truncated URL still opens the default view rather than throwing. Parsed here and
+ * put in its canonical form by `overviewSearch`, so `?days=90` and the bare URL are one view and one
+ * cache entry.
+ */
 export function validateOverviewSearch(search: Record<string, unknown>): OverviewParameters {
   const days = Number(search.days)
-  return {
+  return overviewSearch({
     // Any positive number, as the churn page takes: the server clamps it, and 45 days is a question.
-    // The default is absent, so `?days=90` and the bare URL are one view and one cache entry.
-    days: Number.isInteger(days) && days > 0 && days !== DEFAULT_OVERVIEW_DAYS ? days : undefined,
-    repository:
-      typeof search.repository === 'string' && search.repository !== ''
-        ? search.repository
-        : undefined,
+    days: Number.isInteger(days) && days > 0 ? days : undefined,
+    repository: text(search.repository),
     // True or absent, never false: a link that says `showExcluded=false` asks for the default.
-    showExcluded: search.showExcluded === true || search.showExcluded === 'true' ? true : undefined,
-  }
+    showExcluded: search.showExcluded === true || search.showExcluded === 'true',
+  })
 }
 
 /**
@@ -53,7 +55,7 @@ export function overviewSearch(
   const next = { ...current, ...change }
   return {
     days: next.days === DEFAULT_OVERVIEW_DAYS ? undefined : next.days,
-    repository: next.repository === '' ? undefined : next.repository,
+    repository: text(next.repository),
     showExcluded: next.showExcluded ? true : undefined,
   }
 }

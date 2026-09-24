@@ -2,6 +2,7 @@ import {
   CHURN_WINDOWS,
   DEFAULT_CHURN_DEPTH,
   describeWindow,
+  windowsWith,
   type ChurnParameters,
 } from '@/lib/urls/churnParams'
 import type { RepositoryDetail } from '@/features/projects/api'
@@ -52,7 +53,7 @@ export function ChurnControls({
             <SelectValue>{describeWindow(search.days)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {windowsWith(search.days).map((days) => (
+            {windowsWith(CHURN_WINDOWS, search.days).map((days) => (
               <SelectItem key={days} value={String(days)}>
                 {describeWindow(days)}
               </SelectItem>
@@ -112,13 +113,6 @@ export function ChurnControls({
  * back up to one — a different ranking than the reader asked for.
  */
 const FILES = 'files'
-
-/** The offered windows, plus whatever the URL carries, so a hand-written `days` shows as itself. */
-function windowsWith(days: number): readonly number[] {
-  return CHURN_WINDOWS.includes(days as (typeof CHURN_WINDOWS)[number])
-    ? CHURN_WINDOWS
-    : [...CHURN_WINDOWS, days].toSorted((a, b) => a - b)
-}
 
 /** How a rollup level is named, so the select and the card's hint cannot disagree about a depth. */
 export function describeDepth(depth: number): string {
