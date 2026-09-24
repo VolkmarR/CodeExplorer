@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using CodeExplorer.Index;
+using CodeExplorer.Operator;
 using CodeExplorer.Reading;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
@@ -511,6 +512,39 @@ public sealed class TestHost : IDisposable
         foreach ((string slug, var files) in repositories)
             await AddRepositoryAsync(project, slug, CreateGitRepository(slug, files));
         return await RefreshAsync(project);
+    }
+
+    /// <summary>
+    ///     A project indexed end to end with no repositories, so the index is real and only the history
+    ///     is missing — a state a refresh cannot reach, because a project without repositories is not
+    ///     built.
+    /// </summary>
+    public async Task HistorylessProjectAsync(string project)
+    {
+        await CreateProjectAsync(project);
+        var shadow = await Indexes.CreateShadowAsync(project, Ct);
+        await Services.GetRequiredService<OverviewBuilder>().FillAsync(shadow, false, Ct);
+        await shadow.CompleteAsync(false, _ => { }, Ct);
+        // Before the swap: the file cannot be moved while the shadow's connection holds it open.
+        shadow.Dispose();
+        await Indexes.SwapShadowAsync(project, Ct);
+    }
+
+    /// <summary>Replaces a project's excluded-paths setting (#216), asserting the server took it.</summary>
+    public async Task SetExcludedPathsAsync(string project, string[] patterns)
+    {
+        using var http = CreateClient();
+        using var response = await http.PutAsJsonAsync($"/api/projects/{project}/excluded-paths", new { patterns }, Ct);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    /// <summary>The overview page's read, as the browser receives it, with the page's filters in <paramref name="query" />.</summary>
+    public async Task<ProjectOverviewDetail> OverviewDetailAsync(string project, string query = "")
+    {
+        using var http = CreateClient();
+        var detail = await http.GetFromJsonAsync<ProjectOverviewDetail>($"/api/projects/{project}/overview{query}", Ct);
+        Assert.NotNull(detail);
+        return detail;
     }
 
     /// <summary>

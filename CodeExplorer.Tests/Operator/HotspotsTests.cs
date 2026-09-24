@@ -1,9 +1,5 @@
-using System.Net;
-using System.Net.Http.Json;
 using CodeExplorer.Index;
-using CodeExplorer.Operator;
 using CodeExplorer.Reading;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -16,8 +12,6 @@ namespace CodeExplorer.Tests;
 public sealed class HotspotsTests : IDisposable
 {
     private readonly TestHost _host = new(SearchEngine.Substring);
-
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     public void Dispose() => _host.Dispose();
 
@@ -35,7 +29,7 @@ public sealed class HotspotsTests : IDisposable
         _host.CommitToGitRepositoryAs("one",
             new Dictionary<string, string>
             {
-                ["Both.cs"] = Lines(20, "b"), ["A_tie.cs"] = Lines(4) + "changed\n",["Gone.cs"] = Lines(30, "g"),
+                ["Both.cs"] = Lines(20, "b"), ["A_tie.cs"] = Lines(4) + "changed\n", ["Gone.cs"] = Lines(30, "g"),
                 ["logo.bin"] = "\0\0" + Lines(50, "l")
             }, "Second", "Ada", "ada@example.invalid", 1);
         _host.CommitToGitRepositoryAs("one",
@@ -78,13 +72,10 @@ public sealed class HotspotsTests : IDisposable
         {
             ["one"] = new() { ["A.cs"] = Lines(10) }
         });
-        using var http = _host.CreateClient();
 
-        var detail = await http.GetFromJsonAsync<ProjectOverviewDetail>("/api/projects/alpha/overview?repository=nope",
-            Ct);
+        var detail = await _host.OverviewDetailAsync("alpha", "?repository=nope");
 
         // Set with the overview and never without it, which is what the page's card is drawn on.
-        Assert.NotNull(detail);
         Assert.NotNull(detail.Unavailable);
         Assert.Null(detail.Hotspots);
     }
@@ -96,7 +87,7 @@ public sealed class HotspotsTests : IDisposable
         {
             ["one"] = new() { ["A.cs"] = Lines(10), ["Strings.verified.txt"] = Lines(500) }
         });
-        await SetExcludedAsync("alpha", ["**/*.verified.txt"]);
+        await _host.SetExcludedPathsAsync("alpha", ["**/*.verified.txt"]);
 
         var hidden = await HotspotsAsync("alpha");
         var shown = await HotspotsAsync("alpha", "?showExcluded=true");
@@ -127,13 +118,8 @@ public sealed class HotspotsTests : IDisposable
     [Fact]
     public async Task A_project_with_no_history_has_no_hotspots()
     {
-        await _host.CreateProjectAsync("beta");
-        var shadow = await _host.Indexes.CreateShadowAsync("beta", Ct);
-        await _host.Services.GetRequiredService<OverviewBuilder>().FillAsync(shadow, false, Ct);
-        await shadow.CompleteAsync(false, _ => { }, Ct);
-        shadow.Dispose();
-        await _host.Indexes.SwapShadowAsync("beta", Ct);
-        await SetExcludedAsync("beta", ["**/*.rc"]);
+        await _host.HistorylessProjectAsync("beta");
+        await _host.SetExcludedPathsAsync("beta", ["**/*.rc"]);
 
         var hotspots = await HotspotsAsync("beta");
 
@@ -145,18 +131,6 @@ public sealed class HotspotsTests : IDisposable
     private static string Lines(int count, string prefix = "") =>
         string.Concat(Enumerable.Range(1, count).Select(i => $"{prefix}line {i}\n"));
 
-    private async Task SetExcludedAsync(string slug, string[] patterns)
-    {
-        using var http = _host.CreateClient();
-        using var response = await http.PutAsJsonAsync($"/api/projects/{slug}/excluded-paths", new { patterns }, Ct);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    private async Task<OverviewHotspots> HotspotsAsync(string slug, string query = "")
-    {
-        using var http = _host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectOverviewDetail>($"/api/projects/{slug}/overview{query}", Ct);
-        Assert.NotNull(detail);
-        return Assert.IsType<OverviewHotspots>(detail.Hotspots);
-    }
+    private async Task<OverviewHotspots> HotspotsAsync(string slug, string query = "") =>
+        Assert.IsType<OverviewHotspots>((await _host.OverviewDetailAsync(slug, query)).Hotspots);
 }

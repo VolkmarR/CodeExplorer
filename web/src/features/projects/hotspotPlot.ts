@@ -28,18 +28,15 @@ export interface HotspotPlot {
  * reads as a value and not as an artefact of the data.
  */
 export function plotHotspots(files: Hotspot[]): HotspotPlot {
-  // An empty file is drawn at the left edge: it has no logarithm, and it is as small as a file gets.
-  const decades = files.map((file) => Math.log10(Math.max(file.lines, 1)))
-  const low = Math.floor(Math.min(...decades))
+  const low = Math.floor(Math.min(...files.map(decade)))
   // At least one decade, so files that all fall in one still spread across the plot.
-  const high = Math.max(Math.ceil(Math.max(...decades)), low + 1)
+  const high = Math.max(Math.ceil(Math.max(...files.map(decade))), low + 1)
   const top = roundUp(Math.max(...files.map((file) => file.commits)))
-  const across = (decade: number) => Math.max(0, (decade - low) / (high - low))
 
   return {
     points: files.map((file, i) => ({
       rank: i + 1,
-      x: across(decades[i] ?? low),
+      x: (decade(file) - low) / (high - low),
       y: file.commits / top,
     })),
     xTicks: Array.from({ length: high - low + 1 }, (_, i) => ({
@@ -53,9 +50,18 @@ export function plotHotspots(files: Hotspot[]): HotspotPlot {
   }
 }
 
+/**
+ * A file's lines as a power of ten. An empty file counts as one line and is drawn at the left edge:
+ * it has no logarithm, and it is as small as a file gets.
+ */
+function decade(file: Hotspot): number {
+  return Math.log10(Math.max(file.lines, 1))
+}
+
 /** The smallest of 1, 2 and 5 times a power of ten that is at least `value`. */
 function roundUp(value: number): number {
   if (value <= 1) return 1
   const power = 10 ** Math.floor(Math.log10(value))
-  return [1, 2, 5, 10].map((m) => m * power).find((candidate) => candidate >= value) ?? 10 * power
+  // Ten times the power always reaches the value, so it is the last candidate rather than a fourth.
+  return ([1, 2, 5].find((m) => m * power >= value) ?? 10) * power
 }

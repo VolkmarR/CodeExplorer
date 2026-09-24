@@ -75,7 +75,7 @@ export function ProjectOverview({ project }: { project: string }) {
           excluded={excluded?.committedFiles}
         />
         {data.hotspots && (
-          <HotspotsCard project={project} overview={data.overview} hotspots={data.hotspots} />
+          <HotspotsCard project={project} churn={data.overview.churn} hotspots={data.hotspots} />
         )}
       </div>
     </>

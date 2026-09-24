@@ -143,13 +143,19 @@ internal static class OverviewQueries
     ///     that touches every file adds one to each and lifts none of them. A tie goes to the file with
     ///     more lines changed and then to the path, the order Most changed breaks its ties in.
     ///     Not a section of <see cref="ComputeAsync" />: the stored row has no hotspots, and the build
-    ///     should not pay for a card only the page draws. The window is looked up again rather than
-    ///     handed over, which costs one <c>max</c> over <c>commits</c>.
+    ///     should not pay for a card only the page draws.
     /// </summary>
+    /// <param name="connection">Bound to the live index.</param>
+    /// <param name="paths">How this project names its files (ADR-0006).</param>
+    /// <param name="scope">The page's repository and excluded paths.</param>
+    /// <param name="cancellationToken">Threaded through both statements.</param>
+    /// <param name="window">
+    ///     The churn section's window, handed over rather than looked up again, so that the two cards
+    ///     cannot disagree about whether there is history; null where there is none.
+    /// </param>
     public static async Task<OverviewHotspots> HotspotsAsync(DuckDBConnection connection, ProjectPaths paths,
-        OverviewScope scope, CancellationToken cancellationToken)
+        OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
     {
-        var window = await IndexQueries.WindowAsync(connection, scope.Days, scope.RepositorySlug, cancellationToken);
         if (window is null) return new OverviewHotspots([], scope.Excluded.Any ? 0 : null);
 
         var (touched, parameters) = HotspotScope(paths, window, scope, false);
@@ -192,12 +198,16 @@ internal static class OverviewQueries
         var (inWindow, parameters) =
             IndexQueries.ChurnScope(paths, window, scope.RepositorySlug, null, ChurnFilters.None);
         var atHead = new List<string> { "f.skip_reason IS NULL" };
-        // Bound again under its own name rather than leaning on the one the churn scope chose.
+        // The join on repo_slug would narrow at_head to the repository anyway, but only after at_head has
+        // matched every file in the project against the excluded paths: dropping this condition took the
+        // one-repository ranking on Radix from 11 ms to 36 ms. Bound under its own name rather than
+        // leaning on the one the churn scope chose.
         if (scope.RepositorySlug is not null)
         {
             atHead.Add("r.slug = $hr");
             parameters.Add(new DuckDBParameter("hr", scope.RepositorySlug));
         }
+
         if (scope.Excluded.Matching("f.qualified_path", "x", parameters) is { } matching)
             atHead.Add(excludedOnly ? matching : $"NOT {matching}");
 

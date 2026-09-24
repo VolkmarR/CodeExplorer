@@ -1,7 +1,7 @@
-import type { CSSProperties } from 'react'
 import type { IndexOverview, LanguageShare } from '@/features/projects/api'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { formatCount } from '@/lib/format'
+import { ShareBar } from '@/components/ShareBar'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -56,12 +56,7 @@ function LanguageBar({ language, total }: { language: LanguageShare; total: numb
           {formatCount(language.files)} files &middot; {formatCount(language.lines)} lines
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-muted">
-        <div
-          className="h-1.5 w-(--share) rounded-full bg-primary"
-          style={{ '--share': `${share}%` } as CSSProperties}
-        />
-      </div>
+      <ShareBar share={share} />
     </div>
   )
 }
