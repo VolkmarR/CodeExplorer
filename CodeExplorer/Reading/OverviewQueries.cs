@@ -85,7 +85,28 @@ public sealed record OverviewAuthorsPerFile(IReadOnlyList<AuthoredFile> Files, i
 public sealed record OverviewCards(
     OverviewHotspots Hotspots,
     OverviewAuthorsPerFile AuthorsPerFile,
-    OverviewFolderCoupling FolderCoupling);
+    OverviewFolderCoupling FolderCoupling,
+    OverviewFileChanges FileChanges);
+
+/// <summary>One calendar month of the Files added and deleted card, in UTC.</summary>
+/// <param name="Year">The year.</param>
+/// <param name="Month">The month, 1 to 12.</param>
+/// <param name="Added">Files the month's commits added.</param>
+/// <param name="Deleted">Files they deleted.</param>
+/// <param name="Renamed">
+///     Files git detected as moved, counted apart from both: a move neither grows nor shrinks the code.
+/// </param>
+public sealed record MonthChanges(int Year, int Month, int Added, int Deleted, int Renamed);
+
+/// <summary>
+///     The Files added and deleted card (#214): the page's alone like <see cref="OverviewHotspots" />.
+/// </summary>
+/// <param name="Months">
+///     Oldest first, ending at the month of the newest commit in the scope, a month without commits an
+///     explicit zero; empty where the scope holds no history. The true counts: capping an outlier is the
+///     card's to do.
+/// </param>
+public sealed record OverviewFileChanges(IReadOnlyList<MonthChanges> Months);
 
 /// <summary>A top-level folder of one repository and the commits in the window that touched it.</summary>
 /// <param name="Folder">The folder's name, its first path segment in the repository.</param>
@@ -180,6 +201,12 @@ internal static class OverviewQueries
     private const int _coupledFoldersShown = 12;
 
     /// <summary>
+    ///     Months on the Files added and deleted card: two years, long enough to tell a trend from one
+    ///     busy quarter, short enough that a bar per month stays readable on a card.
+    /// </summary>
+    private const int _fileChangeMonths = 24;
+
+    /// <summary>
     ///     Every section over one scope, and how many files the scope's exclusions kept out of them —
     ///     null where it excludes nothing, so a call that leaves nothing out pays for no count.
     ///     The churn section's window is anchored to the newest commit in the scope and not to the
@@ -227,7 +254,75 @@ internal static class OverviewQueries
         OverviewScope scope, HistoryWindow? window, int maxCommitPaths, CancellationToken cancellationToken) =>
         new(await HotspotsAsync(connection, paths, scope, window, cancellationToken),
             await AuthorsPerFileAsync(connection, scope, cancellationToken),
-            await FolderCouplingAsync(connection, paths, scope, window, maxCommitPaths, cancellationToken));
+            await FolderCouplingAsync(connection, paths, scope, window, maxCommitPaths, cancellationToken),
+            await FileChangesAsync(connection, paths, scope, window, cancellationToken));
+
+    /// <summary>
+    ///     Files added, deleted and renamed per calendar month over the <see cref="_fileChangeMonths" />
+    ///     months ending at the newest commit in the scope (#214), whatever the page's window: whether a
+    ///     codebase grows is a longer question than what moves now. The months are cut in C# as UTC epoch
+    ///     seconds and compared the way the window is (<see cref="IndexQueries.ChurnScope" />), so a
+    ///     commit near midnight lands in one month whatever the session's time zone. A move that also
+    ///     changed more than half of a file is outside git's rename detection and counts here as a delete and an add.
+    /// </summary>
+    /// <param name="connection">Bound to the live index.</param>
+    /// <param name="paths">How this project names its files (ADR-0006), for the excluded paths.</param>
+    /// <param name="scope">The page's repository and excluded paths; its window does not reach this card.</param>
+    /// <param name="window">
+    ///     The churn section's window, read only for its anchor, the newest commit in the scope; null where
+    ///     there is no history.
+    /// </param>
+    /// <param name="cancellationToken">Threaded through the statement.</param>
+    public static async Task<OverviewFileChanges> FileChangesAsync(DuckDBConnection connection,
+        ProjectPaths paths, OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
+    {
+        if (window is null) return new OverviewFileChanges([]);
+
+        var newest = window.Until.ToUniversalTime();
+        var last = new DateTimeOffset(newest.Year, newest.Month, 1, 0, 0, 0, TimeSpan.Zero);
+        var starts = Enumerable.Range(0, _fileChangeMonths + 1)
+            .Select(i => last.AddMonths(i - _fileChangeMonths + 1)).ToList();
+        // Inlined rather than bound: 24 integers this method computed, never input, and a VALUES list
+        // of parameters would be 48 of them for no gain.
+        string monthRows = string.Join(", ", Enumerable.Range(0, _fileChangeMonths)
+            .Select(i => $"({i}, {starts[i].ToUnixTimeSeconds()}, {starts[i + 1].ToUnixTimeSeconds()})"));
+
+        var parameters = new List<DuckDBParameter>
+        {
+            new("since", starts[0].ToUnixTimeSeconds()), new("until", starts[^1].ToUnixTimeSeconds())
+        };
+        var conditions = CommitScope(scope, parameters);
+        conditions.Add("epoch(c.authored_at) >= $since AND epoch(c.authored_at) < $until");
+        conditions.Add("cf.change_kind IN ('added', 'deleted', 'renamed')");
+        if (scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters) is { } excluded)
+            conditions.Add($"NOT {excluded}");
+
+        await using var command = connection.Query($"""
+                                                    WITH months(month, since, until) AS (VALUES {monthRows}),
+                                                    changes AS (
+                                                        SELECT epoch(c.authored_at) AS at, cf.change_kind
+                                                        FROM commit_files cf JOIN commits c USING (commit_id)
+                                                        {Where(conditions)})
+                                                    SELECT m.month,
+                                                           count(*) FILTER (WHERE change_kind = 'added')::INTEGER AS added,
+                                                           count(*) FILTER (WHERE change_kind = 'deleted')::INTEGER AS deleted,
+                                                           count(*) FILTER (WHERE change_kind = 'renamed')::INTEGER AS renamed
+                                                    FROM months m
+                                                    LEFT JOIN changes ch ON ch.at >= m.since AND ch.at < m.until
+                                                    GROUP BY m.month
+                                                    ORDER BY m.month
+                                                    """, parameters);
+        await using var reader = await command.ReaderAsync(cancellationToken);
+        var result = new List<MonthChanges>(_fileChangeMonths);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var start = starts[reader.Int32("month")];
+            result.Add(new MonthChanges(start.Year, start.Month, reader.Int32("added"), reader.Int32("deleted"),
+                reader.Int32("renamed")));
+        }
+
+        return new OverviewFileChanges(result);
+    }
 
     /// <summary>
     ///     The pairs of top-level folders, within one repository, that the window's commits keep touching

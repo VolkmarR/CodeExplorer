@@ -66,7 +66,8 @@ public sealed record RepositoryCommit(string Sha, string AuthorName, DateTimeOff
 ///     because the setting is empty or the page asked to see the excluded paths.
 /// </param>
 /// <param name="Cards">
-///     The cards only the page draws — Hotspots (#211), Most authors per file (#212), Folders that change together (#213) — set with
+///     The cards only the page draws — Hotspots (#211), Most authors per file (#212), Folders that change together (#213),
+///     Files added and deleted (#214) — set with
 ///     <see cref="Overview" />. Beside the overview rather than in it, because <see cref="IndexOverview" />
 ///     is also the stored row and the <c>project_overview</c> reply, and neither has them.
 /// </param>

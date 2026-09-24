@@ -212,6 +212,26 @@ export interface OverviewCards {
   hotspots: OverviewHotspots
   authorsPerFile: OverviewAuthorsPerFile
   folderCoupling: OverviewFolderCoupling
+  fileChanges: OverviewFileChanges
+}
+
+/** One calendar month (UTC) of the Files added and deleted card. */
+export interface MonthChanges {
+  year: number
+  /** 1 to 12. */
+  month: number
+  added: number
+  deleted: number
+  /** Files git detected as moved, counted apart from adds and deletes. */
+  renamed: number
+}
+
+/**
+ * The Files added and deleted card (#214): 24 months oldest first, ending at the month of the newest
+ * commit, with the true counts; empty where there is no history.
+ */
+export interface OverviewFileChanges {
+  months: MonthChanges[]
 }
 
 /** A top-level folder of one repository and the commits in the window that touched it. */
