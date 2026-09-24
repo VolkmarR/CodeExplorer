@@ -18,6 +18,9 @@ public sealed class OverviewTests : IDisposable
 {
     private readonly TestHost _host = new(SearchEngine.Substring);
 
+    /// <summary>The local clone path <see cref="BuildAsync" /> last registered, which no reply may print.</summary>
+    private string? _source;
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     public void Dispose() => _host.Dispose();
@@ -59,13 +62,17 @@ public sealed class OverviewTests : IDisposable
         Assert.DoesNotContain(".prg  ", reply, StringComparison.Ordinal);
         Assert.DoesNotContain(".vh ", reply, StringComparison.Ordinal);
         Assert.Contains("C#", reply, StringComparison.Ordinal);
-        // An extension nobody mapped is a weaker claim than a language name, and reads as one.
-        Assert.Contains(".md", reply, StringComparison.Ordinal);
-        Assert.Contains("(extension; no language profile covers it)", reply, StringComparison.Ordinal);
+        // An extension nobody mapped is a weaker claim than a language name, and reads as one: marked on
+        // its row, and explained once in the heading rather than on every row that carries the marker.
+        Assert.Contains("Languages (* an extension no language profile covers)\n", reply, StringComparison.Ordinal);
+        Assert.StartsWith(".md *", Line(reply, ".md").TrimStart(), StringComparison.Ordinal);
+        Assert.StartsWith(".txt *", Line(reply, ".txt").TrimStart(), StringComparison.Ordinal);
+        Assert.Equal(2, reply.Split("no language profile").Length);
+        Assert.DoesNotContain("X# *", reply, StringComparison.Ordinal);
 
         // The counts fold too, rather than the first extension's winning: three X# files, four lines.
-        Assert.Contains("X#", ExtensionLine(reply, "X#"), StringComparison.Ordinal);
-        Assert.Contains("3 files", ExtensionLine(reply, "X#"), StringComparison.Ordinal);
+        Assert.Contains("X#", Line(reply, "X#"), StringComparison.Ordinal);
+        Assert.Contains("3 files", Line(reply, "X#"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -98,11 +105,11 @@ public sealed class OverviewTests : IDisposable
     }
 
     [Fact]
-    public async Task Every_repositorys_top_level_is_in_the_tree_of_a_multi_repository_project()
+    public async Task Every_repositorys_top_level_is_in_the_tree_with_its_root_files_folded_into_one_line()
     {
         await _host.IndexedProjectAsync("gamma", new Dictionary<string, Dictionary<string, string>>
         {
-            ["one"] = new() { ["src/A.cs"] = "class A;\n", ["README.md"] = "one\n" },
+            ["one"] = new() { ["src/A.cs"] = "class A;\n", ["README.md"] = "one\n", ["build.cmd"] = "echo\nbuild\n" },
             ["two"] = new() { ["lib/B.cs"] = "class B;\n" }
         });
 
@@ -112,8 +119,62 @@ public sealed class OverviewTests : IDisposable
         // The cap is counted per repository, so a repository listed second cannot be squeezed out of
         // the section by how many entries the first one has at its root.
         Assert.Contains("one/src/", reply, StringComparison.Ordinal);
-        Assert.Contains("one/README.md", reply, StringComparison.Ordinal);
         Assert.Contains("two/lib/", reply, StringComparison.Ordinal);
+        // Root files are one line per repository, placed with that repository's folders, and a
+        // repository with none says nothing rather than "0 files at the root".
+        Assert.DoesNotContain("one/README.md", Section(reply, "Top level", "Largest files"), StringComparison.Ordinal);
+        string root = Line(reply, "2 files");
+        Assert.Contains("3 lines", root, StringComparison.Ordinal);
+        Assert.EndsWith("  at the root of one", root, StringComparison.Ordinal);
+        Assert.DoesNotContain("at the root of two", reply, StringComparison.Ordinal);
+        Assert.True(reply.IndexOf("one/src/", StringComparison.Ordinal) < reply.IndexOf(root, StringComparison.Ordinal)
+                    && reply.IndexOf(root, StringComparison.Ordinal) < reply.IndexOf("two/lib/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_single_repository_project_folds_its_root_files_without_naming_the_repository()
+    {
+        await _host.IndexedProjectAsync("delta", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new() { ["src/A.cs"] = "class A;\n", ["README.md"] = "one\n", ["LICENSE"] = "mit\n" }
+        }, singleRepository: true);
+
+        await using var client = await _host.ConnectAsync("delta");
+        string reply = await TestHost.CallAsync(client, "project_overview", []);
+
+        Assert.Contains("  src/\n", reply, StringComparison.Ordinal);
+        Assert.EndsWith("  at the root", Line(reply, "2 files"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Largest_files_ranks_only_indexed_files()
+    {
+        // The binary is by far the largest file, and the one the section used to lead with at 0 lines.
+        await _host.IndexedProjectAsync("epsilon", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new() { ["assets/logo.bin"] = "\0\0" + new string('x', 5000), ["src/A.cs"] = "class A;\n" }
+        });
+
+        await using var client = await _host.ConnectAsync("epsilon");
+        string reply = await TestHost.CallAsync(client, "project_overview", []);
+
+        string largest = Section(reply, "Largest files", "Most changed");
+        Assert.Contains("one/src/A.cs", largest, StringComparison.Ordinal);
+        Assert.DoesNotContain("logo.bin", largest, StringComparison.Ordinal);
+        // Languages still counts it, which is where a skipped file is reported.
+        Assert.Contains("1 not indexed", reply, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_repositories_section_names_no_local_clone_path()
+    {
+        await using var client = await BuildAsync("alpha");
+
+        string reply = await TestHost.CallAsync(client, "project_overview", []);
+
+        string row = Line(reply, "one  at ");
+        Assert.EndsWith("lines", row, StringComparison.Ordinal);
+        Assert.DoesNotContain(_source!, reply, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -150,8 +211,15 @@ public sealed class OverviewTests : IDisposable
         Assert.Contains(top, hot.Replace("\r", "", StringComparison.Ordinal), StringComparison.Ordinal);
     }
 
-    /// <summary>The line of the reply that reports one language, for an assertion about its counts.</summary>
-    private static string ExtensionLine(string reply, string name) =>
+    /// <summary>The reply from one section's heading to the next's, for an assertion about that section alone.</summary>
+    private static string Section(string reply, string heading, string next)
+    {
+        int start = reply.IndexOf("\n" + heading, StringComparison.Ordinal);
+        return reply[start..reply.IndexOf("\n" + next, start + 1, StringComparison.Ordinal)];
+    }
+
+    /// <summary>The first line of the reply that starts with a given text, for an assertion about the rest of it.</summary>
+    private static string Line(string reply, string name) =>
         reply.Split('\n').First(line => line.TrimStart().StartsWith(name, StringComparison.Ordinal));
 
     /// <summary>
@@ -163,11 +231,12 @@ public sealed class OverviewTests : IDisposable
     private async Task<McpClient> BuildAsync(string project)
     {
         const int tenDays = 10 * 24 * 60;
-        string source = _host.CreateEmptyGitRepository(project + "-one");
+        string source = _source = _host.CreateEmptyGitRepository(project + "-one");
         _host.CommitToGitRepositoryAs(project + "-one",
             new Dictionary<string, string>
             {
                 ["README.md"] = "the project\n",
+                ["notes.txt"] = "notes\n",
                 ["src/Hot.prg"] = "a\nb\n",
                 ["src/Cold.prg"] = "cold\n",
                 ["src/Defines.vh"] = "define\n",

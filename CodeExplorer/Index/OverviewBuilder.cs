@@ -25,12 +25,13 @@ public sealed class OverviewBuilder
     private const int _languagesShown = 20;
 
     /// <summary>
-    ///     Top-level entries kept per repository. A repository root is a screenful in every codebase
+    ///     Top-level folders kept per repository. A repository root is a screenful in every codebase
     ///     anyone would want an overview of; the cap is there so that a generated tree of thousands of
-    ///     root files cannot make this row the largest thing in the index, and what it drops is counted
-    ///     rather than hidden.
+    ///     root folders cannot make this row the largest thing in the index, and what it drops is counted
+    ///     rather than hidden. Root files need no cap: they are one count per repository however many
+    ///     there are.
     /// </summary>
-    private const int _treeEntriesShown = 100;
+    private const int _foldersShown = 100;
 
     /// <summary>
     ///     Enough to warn a caller off the files that would swamp a read, and not a size ranking of the
@@ -68,10 +69,10 @@ public sealed class OverviewBuilder
             shadow.Slug);
 
         var (languages, others) = await LanguagesAsync(connection, cancellationToken);
-        var (tree, otherEntries) = await TreeAsync(connection, paths, cancellationToken);
+        var (tree, otherFolders) = await TreeAsync(connection, paths, cancellationToken);
         var overview = new IndexOverview(
             languages, others,
-            tree, otherEntries,
+            tree, otherFolders,
             await LargestFilesAsync(connection, cancellationToken),
             await ChurnAsync(connection, paths, cancellationToken),
             await AuthorsAsync(connection, cancellationToken));
@@ -129,11 +130,12 @@ public sealed class OverviewBuilder
     }
 
     /// <summary>
-    ///     The top level of every repository: the directories and files a qualified path can begin with,
-    ///     each carrying everything beneath it. One statement for the whole project rather than one per
-    ///     repository, because an overview is drawn once and the grouping is the same at every root.
+    ///     The top level of every repository: the folders a qualified path can begin with, each carrying
+    ///     everything beneath it, and the files directly at the root as one count. One statement for the
+    ///     whole project rather than one per repository, because an overview is drawn once and the
+    ///     grouping is the same at every root.
     /// </summary>
-    private static async Task<(IReadOnlyList<OverviewEntry> Shown, int Others)> TreeAsync(
+    private static async Task<(IReadOnlyList<OverviewRoot> Shown, int Others)> TreeAsync(
         DuckDBConnection connection, ProjectPaths paths, CancellationToken cancellationToken)
     {
         // Grouped before the join, not after: the aggregate reduces every file in the project to a few
@@ -142,49 +144,71 @@ public sealed class OverviewBuilder
         await using var command = connection.Query("""
                                                    WITH tops AS (
                                                        SELECT repo_id,
-                                                              split_part(path, '/', 1) AS segment,
-                                                              -- A file directly at the root is its own first
-                                                              -- segment; anything else is a directory, and
-                                                              -- git cannot hold both names at one level.
-                                                              bool_and(path = split_part(path, '/', 1)) AS is_file,
+                                                              -- A file directly at the root has no folder, so
+                                                              -- every root file of a repository lands in its
+                                                              -- one NULL group: the count the section shows in
+                                                              -- place of a row per file.
+                                                              CASE WHEN contains(path, '/')
+                                                                   THEN split_part(path, '/', 1) END AS folder,
                                                               count(*)::INTEGER AS files,
                                                               sum(line_count)::BIGINT AS lines,
                                                               sum(size_bytes)::BIGINT AS bytes
                                                        FROM files
-                                                       GROUP BY repo_id, segment)
+                                                       GROUP BY repo_id, folder)
                                                    SELECT r.slug AS repo_slug, tops.*
                                                    FROM tops JOIN repositories r USING (repo_id)
-                                                   ORDER BY r.repo_id, is_file, segment
+                                                   ORDER BY r.repo_id, folder NULLS LAST
                                                    """, []);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var entries = new List<OverviewEntry>();
-        // Counted per repository and not across the project: one repository of a thousand root files
-        // would otherwise spend the whole cap and drop every later repository's top level entirely,
-        // which is the one thing this section exists to show.
-        var kept = new Dictionary<string, int>(StringComparer.Ordinal);
+        var roots = new List<OverviewRoot>();
+        string? slug = null;
+        var folders = new List<OverviewFolder>();
+        (int Files, long Lines, long Bytes) rootFiles = default;
         int others = 0;
+
+        void Close()
+        {
+            if (slug is not null)
+                roots.Add(new OverviewRoot(paths.Format(slug, ""), folders, rootFiles.Files, rootFiles.Lines,
+                    rootFiles.Bytes));
+        }
+
         while (await reader.ReadAsync(cancellationToken))
         {
-            string slug = reader.Text("repo_slug");
-            int taken = kept.GetValueOrDefault(slug);
-            if (taken == _treeEntriesShown)
+            string repository = reader.Text("repo_slug");
+            if (repository != slug)
+            {
+                Close();
+                (slug, folders, rootFiles) = (repository, [], default);
+            }
+
+            if (reader.TextOrNull("folder") is not { } folder)
+            {
+                rootFiles = (reader.Int32("files"), reader.Int64("lines"), reader.Int64("bytes"));
+                continue;
+            }
+
+            // Capped per repository and not across the project: one repository of a thousand folders
+            // would otherwise spend the whole cap and drop every later repository's top level entirely,
+            // which is the one thing this section exists to show.
+            if (folders.Count == _foldersShown)
             {
                 others++;
                 continue;
             }
 
-            kept[slug] = taken + 1;
-            entries.Add(new OverviewEntry(paths.Format(slug, reader.Text("segment")), !reader.Flag("is_file"),
-                reader.Int32("files"), reader.Int64("lines"), reader.Int64("bytes")));
+            folders.Add(new OverviewFolder(paths.Format(repository, folder), reader.Int32("files"),
+                reader.Int64("lines"), reader.Int64("bytes")));
         }
 
-        return (entries, others);
+        Close();
+        return (roots, others);
     }
 
     /// <summary>
-    ///     The largest files by bytes rather than by lines, because the point is what a read costs and a
-    ///     file the build skipped for its size has no lines at all — those are exactly the ones a caller
-    ///     most needs warning about.
+    ///     The largest indexed files by bytes rather than by lines, because the point is what a read
+    ///     costs. A skipped file is left out: it has no lines to read, Languages counts it as not
+    ///     indexed, and ranking it here spent the section on binaries nobody can open (#215).
     /// </summary>
     private static async Task<IReadOnlyList<OverviewFile>> LargestFilesAsync(DuckDBConnection connection,
         CancellationToken cancellationToken)
@@ -194,6 +218,7 @@ public sealed class OverviewBuilder
         await using var command = connection.Query($"""
                                                     SELECT qualified_path, line_count, size_bytes
                                                     FROM files
+                                                    WHERE skip_reason IS NULL
                                                     ORDER BY size_bytes DESC, qualified_path
                                                     LIMIT {_largestFilesShown}
                                                     """, []);

@@ -24,11 +24,13 @@ internal static class OverviewReply
             $"Project '{project.Slug}' ({project.Name}): {repositories.Count} {ToolReply.Plural(repositories.Count, "repository", "repositories")}, "
             + $"{repositories.Sum(r => r.FileCount):N0} files, {repositories.Sum(r => r.LineCount):N0} lines.\n");
 
+        // No URL: what the server cloned from is often a path on its own disk, which an agent cannot
+        // open and should not quote. The slug is how every tool names the repository.
         text.Append("\nRepositories\n");
         foreach (var repository in repositories)
             text.Append(CultureInfo.InvariantCulture,
                 $"  {repository.Slug}  at {repository.HeadCommit[..Math.Min(12, repository.HeadCommit.Length)]}  "
-                + $"{repository.FileCount:N0} {ToolReply.Plural(repository.FileCount, "file")}, {repository.LineCount:N0} {ToolReply.Plural(repository.LineCount, "line")}  {repository.Url}\n");
+                + $"{repository.FileCount:N0} {ToolReply.Plural(repository.FileCount, "file")}, {repository.LineCount:N0} {ToolReply.Plural(repository.LineCount, "line")}\n");
 
         AppendLanguages(text, overview);
         AppendTree(text, overview);
@@ -40,7 +42,12 @@ internal static class OverviewReply
 
     private static void AppendLanguages(StringBuilder text, IndexOverview overview)
     {
-        text.Append("\nLanguages\n");
+        // An agent reading ".vh" beside "C#" has to be able to tell that the first is an extension
+        // nobody mapped and not a language this server recognised. The row carries a marker and the
+        // heading says once what it means, rather than the same sentence on every unmapped row.
+        text.Append(overview.Languages.Any(language => !language.Mapped)
+            ? "\nLanguages (* an extension no language profile covers)\n"
+            : "\nLanguages\n");
         if (overview.Languages.Count == 0)
         {
             text.Append("  No files are indexed for this project.\n");
@@ -49,12 +56,9 @@ internal static class OverviewReply
 
         foreach (var language in overview.Languages)
         {
+            string name = language.Mapped ? language.Name : language.Name + " *";
             text.Append(CultureInfo.InvariantCulture,
-                $"  {language.Name,-14}{language.Files,7:N0} {ToolReply.Plural(language.Files, "file"),-6}{language.Lines,9:N0} {ToolReply.Plural(language.Lines, "line"),-6}");
-            // Said on the row rather than in a footnote: an agent reading ".vh" beside "C#" has to be
-            // able to tell that the first is an extension nobody mapped and not a language this
-            // server recognised.
-            if (!language.Mapped) text.Append("  (extension; no language profile covers it)");
+                $"  {name,-14}{language.Files,7:N0} {ToolReply.Plural(language.Files, "file"),-6}{language.Lines,9:N0} {ToolReply.Plural(language.Lines, "line"),-6}");
             if (language.Skipped > 0)
                 text.Append(CultureInfo.InvariantCulture,
                     $"  ({language.Skipped:N0} not indexed: binary or oversized)");
@@ -73,13 +77,28 @@ internal static class OverviewReply
         // Counts first and the path last, the way every other section here reads: a path is the one
         // field with no bound on its length, so anything after it is a column that does not line up.
         text.Append("\nTop level\n");
-        foreach (var entry in overview.Tree)
+        foreach (var root in overview.Tree)
+        {
+            foreach (var folder in root.Folders)
+                TreeRow(text, folder.Files, folder.Lines, folder.SizeBytes, folder.QualifiedPath + "/");
+            // A repository with no root files says nothing: "0 files at the root" is a row about nothing.
+            if (root.RootFiles > 0)
+                TreeRow(text, root.RootFiles, root.RootLines, root.RootBytes,
+                    root.QualifiedPath.Length == 0 ? "at the root" : $"at the root of {root.QualifiedPath}");
+        }
+
+        if (overview.OtherFolders > 0)
             text.Append(CultureInfo.InvariantCulture,
-                $"  {entry.Files,6:N0} {ToolReply.Plural(entry.Files, "file"),-6}{entry.Lines,9:N0} {ToolReply.Plural(entry.Lines, "line"),-6}{ToolReply.Bytes(entry.SizeBytes),10}  {entry.QualifiedPath}{(entry.IsDirectory ? "/" : "")}\n");
-        if (overview.OtherEntries > 0)
-            text.Append(CultureInfo.InvariantCulture,
-                $"  and {overview.OtherEntries} further top-level {ToolReply.Plural(overview.OtherEntries, "entry", "entries")}; list_tree shows them all.\n");
+                $"  and {overview.OtherFolders} further top-level {ToolReply.Plural(overview.OtherFolders, "folder")}; list_tree shows them all.\n");
     }
+
+    /// <summary>
+    ///     One row of the top level. A root-file count is drawn in a folder's columns, so the counts of
+    ///     the two line up and the label is what tells them apart.
+    /// </summary>
+    private static void TreeRow(StringBuilder text, int files, long lines, long bytes, string label) =>
+        text.Append(CultureInfo.InvariantCulture,
+            $"  {files,6:N0} {ToolReply.Plural(files, "file"),-6}{lines,9:N0} {ToolReply.Plural(lines, "line"),-6}{ToolReply.Bytes(bytes),10}  {label}\n");
 
     private static void AppendLargestFiles(StringBuilder text, IndexOverview overview)
     {
