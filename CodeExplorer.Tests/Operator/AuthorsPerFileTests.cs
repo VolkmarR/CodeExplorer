@@ -116,5 +116,5 @@ public sealed class AuthorsPerFileTests : IDisposable
     }
 
     private async Task<OverviewAuthorsPerFile> AuthorsPerFileAsync(string slug, string query = "") =>
-        Assert.IsType<OverviewAuthorsPerFile>((await _host.OverviewDetailAsync(slug, query)).AuthorsPerFile);
+        Assert.IsType<OverviewAuthorsPerFile>((await _host.OverviewDetailAsync(slug, query)).Cards?.AuthorsPerFile);
 }

@@ -77,7 +77,7 @@ public sealed class HotspotsTests : IDisposable
 
         // Set with the overview and never without it, which is what the page's card is drawn on.
         Assert.NotNull(detail.Unavailable);
-        Assert.Null(detail.Hotspots);
+        Assert.Null(detail.Cards);
     }
 
     [Fact]
@@ -132,5 +132,5 @@ public sealed class HotspotsTests : IDisposable
         string.Concat(Enumerable.Range(1, count).Select(i => $"{prefix}line {i}\n"));
 
     private async Task<OverviewHotspots> HotspotsAsync(string slug, string query = "") =>
-        Assert.IsType<OverviewHotspots>((await _host.OverviewDetailAsync(slug, query)).Hotspots);
+        Assert.IsType<OverviewHotspots>((await _host.OverviewDetailAsync(slug, query)).Cards?.Hotspots);
 }
