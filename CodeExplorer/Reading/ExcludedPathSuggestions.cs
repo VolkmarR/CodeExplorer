@@ -37,20 +37,28 @@ internal static class ExcludedPathSuggestions
 
     /// <summary>
     ///     The most lines, added plus deleted, any one of those commits may change. A version bump
-    ///     replaces a line or two (Radix's <c>AssemblyInfo.prg</c>: 41 commits, +61/−61); four allows
+    ///     replaces a line or two; four allows
     ///     a file carrying two version numbers and still refuses any commit that edits code.
     /// </summary>
     public const int MaxLinesPerCommit = 4;
 
     /// <summary>
-    ///     Names generated or locked by a tool on every run, which no one reads in a dashboard. Each is
-    ///     offered only where the index holds a file matching it.
+    ///     Names generated, locked or kept by a tool, which no one reads in a dashboard, grouped by the
+    ///     ecosystem that writes them. Each is offered only where the index holds a file matching it.
     /// </summary>
     private static readonly string[] _wellKnown =
     [
+        // .NET
         "**/*.Designer.cs", "**/Connected Services/**/Reference.cs", "**/AssemblyInfo.*", "**/*.verified.txt",
-        "**/*.received.txt", "**/*.min.js", "**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock",
-        "**/packages.lock.json"
+        "**/*.received.txt", "**/packages.lock.json",
+        // Delphi: compiled units, IDE state and the IDE's own backup copies of every saved file.
+        "**/*.dcu", "**/*.identcache", "**/*.dproj.local", "**/*.dsk", "**/__history/**", "**/__recovery/**",
+        // React and the web: minified and mapped bundles, test snapshots, generated route trees, lock files.
+        "**/*.min.js", "**/*.min.css", "**/*.map", "**/__snapshots__/**", "**/*.snap", "**/*.gen.ts",
+        "**/package-lock.json", "**/npm-shrinkwrap.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock",
+        // React Native: the iOS and Android projects' generated and locked files.
+        "**/Podfile.lock", "**/Pods/**", "**/*.pbxproj", "**/Gemfile.lock", "**/gradlew", "**/gradlew.bat",
+        "**/gradle/wrapper/**"
     ];
 
     /// <summary>The attributes linguist reads as "not written here", in the words the reason uses.</summary>

@@ -64,16 +64,19 @@ public sealed class ExcludedPathSuggestionsTests : IDisposable
             ["one"] = new()
             {
                 ["Form1.Designer.cs"] = "d\n", ["Tests/A.verified.txt"] = "v\n", ["Tests/B.verified.txt"] = "w\n",
-                ["web/package-lock.json"] = "{}\n", ["Properties/AssemblyInfo.cs"] = "i\n", ["Main.cs"] = "m\n"
+                ["web/package-lock.json"] = "{}\n", ["Properties/AssemblyInfo.cs"] = "i\n", ["Main.cs"] = "m\n",
+                ["delphi/__history/Unit1.pas.~1~"] = "u\n", ["web/src/routeTree.gen.ts"] = "r\n",
+                ["app/ios/Podfile.lock"] = "p\n"
             }
         });
 
         var suggestions = await SuggestAsync("alpha");
 
+        // One of each ecosystem's names: .NET, Delphi, React, React Native.
         Assert.Equal(
             [
                 ("**/*.Designer.cs", 1), ("**/AssemblyInfo.*", 1), ("**/*.verified.txt", 2),
-                ("**/package-lock.json", 1)
+                ("**/__history/**", 1), ("**/*.gen.ts", 1), ("**/package-lock.json", 1), ("**/Podfile.lock", 1)
             ],
             suggestions.Where(s => s.Rule == SuggestionRule.WellKnownName).Select(s => (s.Pattern, s.Files)));
     }
