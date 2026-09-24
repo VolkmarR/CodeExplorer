@@ -51,8 +51,9 @@ internal static class ExcludedPathSuggestions
         // .NET
         "**/*.Designer.cs", "**/Connected Services/**/Reference.cs", "**/AssemblyInfo.*", "**/*.verified.txt",
         "**/*.received.txt", "**/packages.lock.json",
-        // X#: the Windows Forms designer's code and the VO form editor's generated source.
-        "**/*.designer.prg", "**/*_vo.prg",
+        // X#: the Windows Forms designer's code, and the resource scripts, templates and setup files
+        // that come alongside the sources.
+        "**/*.designer.prg", "**/*.rc", "**/*.tpl", "**/*.inf",
         // Delphi: compiled units, IDE state and the IDE's own backup copies of every saved file.
         "**/*.dcu", "**/*.identcache", "**/*.dproj.local", "**/*.dsk", "**/__history/**", "**/__recovery/**",
         // React and the web: minified and mapped bundles, test snapshots, generated route trees, lock files.
