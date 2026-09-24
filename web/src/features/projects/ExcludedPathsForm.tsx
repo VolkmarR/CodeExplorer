@@ -1,6 +1,12 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
-import { saveExcludedPaths } from '@/features/projects/api'
-import { excludedPathsQuery, invalidateProject } from '@/features/projects/queries'
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { type ExcludedPathSuggestion, saveExcludedPaths } from '@/features/projects/api'
+import { withPattern } from '@/features/projects/excludedPaths'
+import {
+  excludedPathSuggestionsQuery,
+  excludedPathsQuery,
+  invalidateProject,
+} from '@/features/projects/queries'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { useDraft } from '@/hooks/useDraft'
 import { Button } from '@/components/ui/button'
@@ -39,6 +45,16 @@ export function ExcludedPathsForm({ project }: { project: string }) {
     },
   })
 
+  // Proposals are never saved: Add copies one into the draft, and the Save below stays the only write
+  // (#217). The read is started by the button, not the page; `settled` holds the ones added or dropped since.
+  const suggest = useQuery({ ...excludedPathSuggestionsQuery(project), enabled: false })
+  const [settled, setSettled] = useState<ReadonlySet<string>>(new Set())
+  const suggestions = suggest.data?.suggestions.filter((s) => !settled.has(s.pattern))
+  const settle = (patterns: string[], keep: boolean) => {
+    if (keep) setDraft(patterns.reduce(withPattern, draft))
+    setSettled(new Set([...settled, ...patterns]))
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -70,12 +86,105 @@ export function ExcludedPathsForm({ project }: { project: string }) {
             folder at all. The overview leaves these out of every section and says how many files it
             left out; agents and searches still see them.
           </p>
+          {suggest.data?.unavailable ? (
+            <p className="text-sm text-muted-foreground">{suggest.data.unavailable}</p>
+          ) : suggestions ? (
+            <SuggestionList
+              suggestions={suggestions}
+              onSettle={(pattern, keep) => settle([pattern], keep)}
+              onAddAll={() =>
+                settle(
+                  suggestions.map((s) => s.pattern),
+                  true,
+                )
+              }
+            />
+          ) : null}
           {save.error ? <ErrorPanel error={save.error} /> : null}
-          <Button type="submit" disabled={save.isPending}>
-            {save.isPending ? 'Saving…' : 'Save'}
-          </Button>
+          {suggest.error ? <ErrorPanel error={suggest.error} /> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={save.isPending}>
+              {save.isPending ? 'Saving…' : 'Save'}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={suggest.isFetching}
+              onClick={() => {
+                setSettled(new Set())
+                void suggest.refetch()
+              }}
+            >
+              {suggest.isFetching ? 'Suggesting…' : 'Suggest from repositories'}
+            </Button>
+          </div>
         </form>
       </CardContent>
     </Card>
+  )
+}
+
+const RULE_LABELS: Record<ExcludedPathSuggestion['rule'], string> = {
+  GitAttributes: '.gitattributes',
+  WellKnownName: 'Well-known name',
+  History: 'History',
+}
+
+/**
+ * The proposals awaiting a decision. Each says its rule, why and how many files at HEAD it matches,
+ * which is what the operator judges it by; Add puts it in the draft and Drop forgets it.
+ */
+function SuggestionList({
+  suggestions,
+  onSettle,
+  onAddAll,
+}: {
+  suggestions: ExcludedPathSuggestion[]
+  onSettle: (pattern: string, keep: boolean) => void
+  onAddAll: () => void
+}) {
+  if (suggestions.length === 0)
+    return <p className="text-sm text-muted-foreground">Nothing more to suggest.</p>
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-medium">Suggestions: Add puts one in the list above, unsaved</p>
+        <Button type="button" variant="ghost" size="xs" onClick={onAddAll}>
+          Add all
+        </Button>
+      </div>
+      <ul className="divide-y">
+        {suggestions.map((s) => (
+          <li key={s.pattern} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+            <div className="min-w-0 flex-1">
+              <code className="text-sm break-all">{s.pattern}</code>
+              <p className="text-xs text-muted-foreground">
+                {RULE_LABELS[s.rule]} · {s.reason} · {s.files} {s.files === 1 ? 'file' : 'files'} at
+                HEAD
+              </p>
+            </div>
+            <div className="flex gap-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => onSettle(s.pattern, true)}
+              >
+                Add
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => onSettle(s.pattern, false)}
+              >
+                Drop
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }

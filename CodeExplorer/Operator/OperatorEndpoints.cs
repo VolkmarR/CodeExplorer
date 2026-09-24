@@ -27,6 +27,10 @@ internal static class OperatorEndpoints
             overview.OverviewAsync(project,
                 new OverviewFilter(days ?? HistoryWindow.DefaultDays, repository, showExcluded ?? false), ct));
 
+        // Proposals only (#217): the settings form adds the kept ones to its draft and a save is the PUT.
+        project.MapGet("/excluded-paths/suggestions", (Project project, ProjectOverview overview,
+            CancellationToken ct) => overview.SuggestExcludedPathsAsync(project, ct));
+
         project.MapDelete("", (Project project, ProjectOverview overview, CancellationToken ct) =>
             NoContentAfter(overview.DeleteAsync(project, ct)));
 
