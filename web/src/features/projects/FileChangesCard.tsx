@@ -2,14 +2,11 @@ import type { CSSProperties } from 'react'
 import type { MonthChanges, OverviewFileChanges } from '@/features/projects/api'
 import { barScale, fileChangeTotals } from '@/features/projects/fileChanges'
 import { NO_HISTORY } from '@/features/projects/noHistory'
-import { formatCount } from '@/lib/format'
+import { formatCount, formatMonth } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 const title = <CardTitle>Files added and deleted</CardTitle>
-
-/** Month names for the axis and the tooltips; the months are UTC calendar months. */
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /**
  * Whether the codebase is growing or being consolidated (#214): per month, the files added drawn
@@ -63,7 +60,7 @@ export function FileChangesCard({ changes }: { changes: OverviewFileChanges }) {
 
 /** One month's column: the added bar grows up from the line, the deleted bar down from it. */
 function Month({ month, scale }: { month: MonthChanges; scale: number }) {
-  const label = `${MONTHS[month.month - 1]} ${month.year}: +${formatCount(month.added)} added, −${formatCount(month.deleted)} deleted, ${formatCount(month.renamed)} renamed`
+  const label = `${formatMonth(month.year, month.month)}:+${formatCount(month.added)} added, −${formatCount(month.deleted)} deleted, ${formatCount(month.renamed)} renamed`
   return (
     <li className="flex min-w-0 flex-1 flex-col" title={label}>
       <span className="sr-only">{label}</span>
@@ -77,37 +74,46 @@ function Month({ month, scale }: { month: MonthChanges; scale: number }) {
   )
 }
 
+/** How each half of a column is drawn: the added half grows up from the line, the deleted half down. */
+const ABOVE = {
+  bar: 'rounded-t-xs bg-primary',
+  broken: 'mt-4 grow',
+  column: 'justify-end',
+  cut: 'top-1',
+  tip: 'top-0',
+}
+const BELOW = {
+  bar: 'rounded-b-xs bg-destructive',
+  broken: 'mb-4 grow',
+  column: '',
+  cut: 'bottom-1',
+  tip: 'bottom-0',
+}
+
 /**
  * Half a column. A count over the scale fills it and draws a gap across the bar near its end, the
  * usual mark for a broken axis, with the real count at the tip.
  */
 function Bar({ count, scale, up }: { count: number; scale: number; up: boolean }) {
   const broken = count > scale
+  const side = up ? ABOVE : BELOW
   return (
-    <div className={cn('relative flex h-16', up ? 'flex-col justify-end' : 'flex-col')}>
+    <div className={cn('relative flex h-16 flex-col', side.column)}>
       {broken && (
         <span
           className={cn(
             'absolute inset-x-0 z-10 text-center text-xs leading-none tabular-nums',
-            up ? 'top-0' : 'bottom-0',
+            side.tip,
           )}
         >
           {formatCount(count)}
         </span>
       )}
       <div
-        className={cn(
-          'relative',
-          up ? 'rounded-t-xs bg-primary' : 'rounded-b-xs bg-destructive',
-          broken ? (up ? 'mt-4 grow' : 'mb-4 grow') : 'h-(--share)',
-        )}
+        className={cn('relative', side.bar, broken ? side.broken : 'h-(--share)')}
         style={{ '--share': `${(100 * count) / scale}%` } as CSSProperties}
       >
-        {broken && (
-          <span
-            className={cn('absolute inset-x-0 h-0.5 -skew-y-12 bg-card', up ? 'top-1' : 'bottom-1')}
-          />
-        )}
+        {broken && <span className={cn('absolute inset-x-0 h-0.5 -skew-y-12 bg-card', side.cut)} />}
       </div>
     </div>
   )

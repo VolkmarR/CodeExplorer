@@ -227,7 +227,7 @@ export interface MonthChanges {
 }
 
 /**
- * The Files added and deleted card (#214): 24 months oldest first, ending at the month of the newest
+ * The Files added and deleted card (#214): the months oldest first, ending at the month of the newest
  * commit, with the true counts; empty where there is no history.
  */
 export interface OverviewFileChanges {

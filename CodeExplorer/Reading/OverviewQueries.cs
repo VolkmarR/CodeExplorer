@@ -255,7 +255,7 @@ internal static class OverviewQueries
         new(await HotspotsAsync(connection, paths, scope, window, cancellationToken),
             await AuthorsPerFileAsync(connection, scope, cancellationToken),
             await FolderCouplingAsync(connection, paths, scope, window, maxCommitPaths, cancellationToken),
-            await FileChangesAsync(connection, paths, scope, window, cancellationToken));
+            await FileChangesAsync(connection, paths, scope, window?.Until, cancellationToken));
 
     /// <summary>
     ///     Files added, deleted and renamed per calendar month over the <see cref="_fileChangeMonths" />
@@ -268,58 +268,58 @@ internal static class OverviewQueries
     /// <param name="connection">Bound to the live index.</param>
     /// <param name="paths">How this project names its files (ADR-0006), for the excluded paths.</param>
     /// <param name="scope">The page's repository and excluded paths; its window does not reach this card.</param>
-    /// <param name="window">
-    ///     The churn section's window, read only for its anchor, the newest commit in the scope; null where
-    ///     there is no history.
+    /// <param name="newest">
+    ///     The newest commit in the scope, the anchor of the churn section's window and of nothing else
+    ///     of it; null where there is no history.
     /// </param>
     /// <param name="cancellationToken">Threaded through the statement.</param>
     public static async Task<OverviewFileChanges> FileChangesAsync(DuckDBConnection connection,
-        ProjectPaths paths, OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
+        ProjectPaths paths, OverviewScope scope, DateTimeOffset? newest, CancellationToken cancellationToken)
     {
-        if (window is null) return new OverviewFileChanges([]);
+        if (newest is not { } anchor) return new OverviewFileChanges([]);
 
-        var newest = window.Until.ToUniversalTime();
-        var last = new DateTimeOffset(newest.Year, newest.Month, 1, 0, 0, 0, TimeSpan.Zero);
+        anchor = anchor.ToUniversalTime();
+        var last = new DateTimeOffset(anchor.Year, anchor.Month, 1, 0, 0, 0, TimeSpan.Zero);
         var starts = Enumerable.Range(0, _fileChangeMonths + 1)
             .Select(i => last.AddMonths(i - _fileChangeMonths + 1)).ToList();
-        // Inlined rather than bound: 24 integers this method computed, never input, and a VALUES list
-        // of parameters would be 48 of them for no gain.
+        // Inlined rather than bound: integers this method computed, never input, and a VALUES list of
+        // parameters would be four per month for no gain.
         string monthRows = string.Join(", ", Enumerable.Range(0, _fileChangeMonths)
-            .Select(i => $"({i}, {starts[i].ToUnixTimeSeconds()}, {starts[i + 1].ToUnixTimeSeconds()})"));
+            .Select(i => $"({starts[i].Year}, {starts[i].Month}, {starts[i].ToUnixTimeSeconds()}, " +
+                         $"{starts[i + 1].ToUnixTimeSeconds()})"));
 
         var parameters = new List<DuckDBParameter>
         {
             new("since", starts[0].ToUnixTimeSeconds()), new("until", starts[^1].ToUnixTimeSeconds())
         };
         var conditions = CommitScope(scope, parameters);
+        // The join onto months would cut the span by itself; filtered here as well so that the join
+        // sees only the span's rows and not the whole history.
         conditions.Add("epoch(c.authored_at) >= $since AND epoch(c.authored_at) < $until");
         conditions.Add("cf.change_kind IN ('added', 'deleted', 'renamed')");
         if (scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters) is { } excluded)
             conditions.Add($"NOT {excluded}");
 
         await using var command = connection.Query($"""
-                                                    WITH months(month, since, until) AS (VALUES {monthRows}),
+                                                    WITH months(year, month, since, until) AS (VALUES {monthRows}),
                                                     changes AS (
                                                         SELECT epoch(c.authored_at) AS at, cf.change_kind
                                                         FROM commit_files cf JOIN commits c USING (commit_id)
                                                         {Where(conditions)})
-                                                    SELECT m.month,
+                                                    SELECT m.year, m.month,
                                                            count(*) FILTER (WHERE change_kind = 'added')::INTEGER AS added,
                                                            count(*) FILTER (WHERE change_kind = 'deleted')::INTEGER AS deleted,
                                                            count(*) FILTER (WHERE change_kind = 'renamed')::INTEGER AS renamed
                                                     FROM months m
                                                     LEFT JOIN changes ch ON ch.at >= m.since AND ch.at < m.until
-                                                    GROUP BY m.month
-                                                    ORDER BY m.month
+                                                    GROUP BY m.year, m.month
+                                                    ORDER BY m.year, m.month
                                                     """, parameters);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var result = new List<MonthChanges>(_fileChangeMonths);
         while (await reader.ReadAsync(cancellationToken))
-        {
-            var start = starts[reader.Int32("month")];
-            result.Add(new MonthChanges(start.Year, start.Month, reader.Int32("added"), reader.Int32("deleted"),
-                reader.Int32("renamed")));
-        }
+            result.Add(new MonthChanges(reader.Int32("year"), reader.Int32("month"), reader.Int32("added"),
+                reader.Int32("deleted"), reader.Int32("renamed")));
 
         return new OverviewFileChanges(result);
     }

@@ -19,17 +19,9 @@ export function barScale(months: MonthChanges[]): number {
 }
 
 /** The totals line under the chart, the only place renames appear. */
-export function fileChangeTotals(months: MonthChanges[]): {
-  added: number
-  deleted: number
-  renamed: number
-} {
-  return months.reduce(
-    (sum, m) => ({
-      added: sum.added + m.added,
-      deleted: sum.deleted + m.deleted,
-      renamed: sum.renamed + m.renamed,
-    }),
-    { added: 0, deleted: 0, renamed: 0 },
-  )
+export function fileChangeTotals(
+  months: MonthChanges[],
+): Pick<MonthChanges, 'added' | 'deleted' | 'renamed'> {
+  const sum = (kind: 'added' | 'deleted' | 'renamed') => months.reduce((n, m) => n + m[kind], 0)
+  return { added: sum('added'), deleted: sum('deleted'), renamed: sum('renamed') }
 }

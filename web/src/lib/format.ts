@@ -27,6 +27,17 @@ export function formatDate(value: string): string {
   return new Date(value).toLocaleDateString()
 }
 
+const monthFormat = new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  timeZone: 'UTC',
+  year: 'numeric',
+})
+
+/** A calendar month the server cut in UTC, such as a bucket of a monthly chart; `month` is 1 to 12. */
+export function formatMonth(year: number, month: number): string {
+  return monthFormat.format(Date.UTC(year, month - 1, 1))
+}
+
 /** Seven characters, what git itself abbreviates to and what a reader compares against a commit list. */
 export function shortSha(sha: string): string {
   return sha.slice(0, 7)
