@@ -80,15 +80,13 @@ export interface OverviewFolder {
 
 /**
  * The top level of one repository: its folders listed, its root files counted instead of listed.
- * `qualifiedPath` is the repository's root, empty in a single-repository project; `rootFiles` is zero
- * for a repository with nothing at its root.
+ * `qualifiedPath` is the repository's root, empty in a single-repository project; `rootFiles` counts
+ * the files directly there as one entry at that path, and is null for a repository with none.
  */
 export interface OverviewRoot {
   qualifiedPath: string
   folders: OverviewFolder[]
-  rootFiles: number
-  rootLines: number
-  rootBytes: number
+  rootFiles: OverviewFolder | null
 }
 
 /** One of the largest indexed files; a file the build skipped is never ranked here. */

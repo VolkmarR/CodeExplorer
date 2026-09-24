@@ -195,7 +195,7 @@ public sealed class OperatorEndpointTests : IDisposable
         var root = Assert.Single(detail.Overview.Tree);
         Assert.Equal("one", root.QualifiedPath);
         Assert.Contains(root.Folders, e => e is { QualifiedPath: "one/src", Files: 2 });
-        Assert.Equal(1, root.RootFiles);
+        Assert.Equal(1, root.RootFiles?.Files);
         Assert.NotEmpty(detail.Overview.LargestFiles);
         Assert.NotNull(detail.Overview.Churn.Until);
         Assert.NotEmpty(detail.Overview.Authors);
