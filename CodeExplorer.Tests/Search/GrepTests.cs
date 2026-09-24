@@ -107,6 +107,43 @@ public sealed class GrepTests : IDisposable
     }
 
     /// <summary>
+    ///     A token-path miss whose filters hid whole-token matches is not yet a verdict on the filters:
+    ///     a longer name inside them — <c>MsgErrorDB</c> under the query <c>MsgError</c> — is something
+    ///     the token path never counts, and a reply that only said "widen your filters" sent agents
+    ///     away from the files they had scoped to. The substring path counts the longer name, so it
+    ///     answers with it and there is no miss to word.
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task A_filtered_token_miss_does_not_rule_out_a_longer_name_inside_the_filters(SearchEngine engine)
+    {
+        _host = new TestHost(engine);
+        await _host.IndexedProjectAsync("beta", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Mod770/Report.prg"] = "MsgErrorDB(self, oSql)\n",
+                ["src/Other/Shared.prg"] = "MsgError(\"failed\")\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("beta");
+
+        string text = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "MsgError", ["path"] = "Mod770" });
+
+        if (engine == SearchEngine.Substring)
+        {
+            Assert.Contains("one/src/Mod770/Report.prg", text);
+            return;
+        }
+
+        Assert.StartsWith("No matches", text);
+        Assert.Contains("does match in 1 file outside your filters", text);
+        Assert.Contains("regex=true", text);
+    }
+
+    /// <summary>
     ///     The miss that knows the most: nothing hid a file from it, so the reply says what it searched
     ///     before falling back to any engine hint (#87). A hint survives only where it names a mechanism
     ///     that sentence does not.
