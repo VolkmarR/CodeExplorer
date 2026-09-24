@@ -45,8 +45,8 @@ export function ExcludedPathsForm({ project }: { project: string }) {
     },
   })
 
-  // Proposals are never saved: Add copies one into the draft, and the Save below stays the only write
-  // (#217). The read is started by the button, not the page; `settled` holds the ones added or dropped since.
+  // Proposals are never saved: Add copies one into the draft and Save stays the only write (#217).
+  // The button starts the read, not the page; `settled` holds the ones added or dropped since.
   const suggest = useQuery({ ...excludedPathSuggestionsQuery(project), enabled: false })
   const [settled, setSettled] = useState<ReadonlySet<string>>(new Set())
   const suggestions = suggest.data?.suggestions.filter((s) => !settled.has(s.pattern))

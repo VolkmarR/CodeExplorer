@@ -85,12 +85,12 @@ internal static class ExcludedPathSuggestions
         List<ExcludedPathSuggestion> accepted, (string Pattern, SuggestionRule Rule, string Reason) candidate,
         CancellationToken cancellationToken)
     {
-        if (existing.Concat(accepted.Select(a => a.Pattern))
-            .Contains(candidate.Pattern, StringComparer.OrdinalIgnoreCase)) return;
+        var covering = Covering(existing, accepted);
+        if (covering.Patterns.Contains(candidate.Pattern, StringComparer.OrdinalIgnoreCase)) return;
 
         var parameters = new List<DuckDBParameter>();
         string matching = new ExcludedPaths([candidate.Pattern]).Matching("qualified_path", "p", parameters)!;
-        string covered = Covering(existing, accepted).Matching("qualified_path", "c", parameters) is { } c
+        string covered = covering.Matching("qualified_path", "c", parameters) is { } c
             ? $"NOT {c}"
             : "true";
         await using var command = connection.Query($"""
