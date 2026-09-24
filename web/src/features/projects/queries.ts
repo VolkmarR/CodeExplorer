@@ -1,7 +1,13 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { queryOptions } from '@tanstack/react-query'
-import { fetchProject, fetchProjectOverview, fetchProjects } from '@/features/projects/api'
+import {
+  fetchExcludedPaths,
+  fetchProject,
+  fetchProjectOverview,
+  fetchProjects,
+} from '@/features/projects/api'
 import { projectKey, projectsKey } from '@/lib/queryKeys'
+import type { OverviewParameters } from '@/lib/urls/overviewParams'
 
 /** The list of what exists. MCP has no discovery, so this is the only place a project is visible. */
 export function projectsQuery() {
@@ -13,20 +19,29 @@ export function projectQuery(slug: string) {
 }
 
 /**
- * What the build computed about the project as a whole. Its own query rather than a field on the one
- * above, because the overview is the page's heaviest read and the only one that would grow with the
- * project — keeping it separate is what lets the header and the repository table be shown from a
- * cached `projectQuery` while this one is still in flight. It goes stale on exactly the same event,
- * so it sits under the project's key and `invalidateProject` already covers it.
+ * The project as a whole, computed live over the page's filters (#216). Its own query rather than a
+ * field on the one above, because the overview is the page's heaviest read and the only one that
+ * would grow with the project — keeping it separate is what lets the header and the repository table
+ * be shown from a cached `projectQuery` while this one is still in flight. It sits under the
+ * project's key, so `invalidateProject` covers it after a build and after the excluded paths change.
  */
-export function projectOverviewQuery(slug: string) {
+export function projectOverviewQuery(slug: string, parameters: OverviewParameters) {
   return queryOptions({
-    queryFn: () => fetchProjectOverview(slug),
-    queryKey: [...projectKey(slug), 'overview'],
-    // What the build computed does not change until the next build, which invalidates this with the
-    // rest of the project. Everything under the project's key is fresh on those terms; the project's
-    // own record above is not, because its repository list and index status change without a build.
+    queryFn: () => fetchProjectOverview(slug, parameters),
+    queryKey: [...projectKey(slug), 'overview', parameters],
+    // Computed from the index and the excluded paths, and neither changes without something that
+    // invalidates the project's key: a build, or a save of the setting. The project's own record
+    // above is not fresh on those terms, because its repository list and index status change
+    // without either.
     staleTime: Infinity,
+  })
+}
+
+/** The overview page's excluded paths, as the settings page edits them. */
+export function excludedPathsQuery(slug: string) {
+  return queryOptions({
+    queryFn: () => fetchExcludedPaths(slug),
+    queryKey: [...projectKey(slug), 'excluded-paths'],
   })
 }
 

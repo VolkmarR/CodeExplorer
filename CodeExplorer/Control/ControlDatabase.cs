@@ -150,6 +150,16 @@ public sealed partial class ControlDatabase : IDisposable
                                   url VARCHAR NOT NULL,
                                   credential VARCHAR,
                                   PRIMARY KEY (project_slug, slug));
+                              -- The overview page's excluded paths (#216), one row per pattern in the order
+                              -- the operator wrote them. A table rather than a column on projects: a
+                              -- project record is cached as never changing (FindAsync), and this is the
+                              -- one thing about a project an operator edits. Arriving as a new table, it
+                              -- needs no migration backup: a restored file without it has no patterns to lose.
+                              CREATE TABLE IF NOT EXISTS excluded_paths (
+                                  project_slug VARCHAR NOT NULL,
+                                  position INTEGER NOT NULL,
+                                  pattern VARCHAR NOT NULL,
+                                  PRIMARY KEY (project_slug, position));
                               """;
         command.ExecuteNonQuery();
 
@@ -360,6 +370,9 @@ public sealed partial class ControlDatabase : IDisposable
         command.CommandText = "DELETE FROM repositories WHERE project_slug = $slug";
         command.Parameters.Add(new DuckDBParameter("slug", slug));
         await command.ExecuteNonQueryAsync(cancellationToken);
+        // Or a project created later under the same slug would open with this one's exclusions.
+        command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $slug";
+        await command.ExecuteNonQueryAsync(cancellationToken);
         command.CommandText = "DELETE FROM projects WHERE slug = $slug";
         int deleted = await command.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -370,6 +383,90 @@ public sealed partial class ControlDatabase : IDisposable
 
         await BackupAsync();
         return true;
+    }
+
+    /// <summary>
+    ///     The globs the project's overview page leaves out (#216), in the order they were written;
+    ///     empty for a project nobody configured. Read per page load rather than cached, so a save
+    ///     applies on the next one — it is one indexed read beside an overview that costs hundreds of
+    ///     milliseconds.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ExcludedPathsAsync(string projectSlug,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT pattern FROM excluded_paths WHERE project_slug = $project ORDER BY position";
+        command.Parameters.Add(new DuckDBParameter("project", projectSlug));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var patterns = new List<string>();
+        while (await reader.ReadAsync(cancellationToken)) patterns.Add(reader.Text("pattern"));
+        return patterns;
+    }
+
+    /// <summary>
+    ///     Replaces the project's excluded paths with <paramref name="requested" />, normalised by
+    ///     <see cref="ExcludedPaths.Normalize" />, and answers the list as stored — or, storing nothing,
+    ///     the sentence saying which limit it broke. Replaced whole in one transaction, because the form
+    ///     sends the whole list and two saves interleaving row by row would store neither.
+    /// </summary>
+    public async Task<(IReadOnlyList<string>? Saved, string? Problem)> SetExcludedPathsAsync(string projectSlug,
+        IEnumerable<string>? requested, CancellationToken cancellationToken)
+    {
+        var (patterns, problem) = ExcludedPaths.Normalize(requested);
+        if (patterns is null) return (null, problem);
+
+        await using (var connection = await OpenAsync(cancellationToken))
+        {
+            // Compiled here by the engine that will run it, one pattern at a time so the refusal can
+            // name the one at fault. A reversed range such as `[z-a]` is a class GLOB would accept
+            // and RE2 refuses; stored, it would fail every overview load until someone removed it.
+            foreach (string pattern in patterns)
+                if (await RefusedPatternAsync(connection, pattern, cancellationToken) is { } refused)
+                    return (null, $"'{pattern}' is not a pattern that can be matched: {refused}");
+
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.Transaction = (DuckDBTransaction)transaction;
+            command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $project";
+            command.Parameters.Add(new DuckDBParameter("project", projectSlug));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            command.CommandText = "INSERT INTO excluded_paths VALUES ($project, $position, $pattern)";
+            for (int position = 0; position < patterns.Count; position++)
+            {
+                command.Parameters.Clear();
+                command.Parameters.Add(new DuckDBParameter("project", projectSlug));
+                command.Parameters.Add(new DuckDBParameter("position", position));
+                command.Parameters.Add(new DuckDBParameter("pattern", patterns[position]));
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        await BackupAsync();
+        return (patterns, null);
+    }
+
+    /// <summary>Why RE2 refuses a pattern's translation, or null where it compiles.</summary>
+    private static async Task<string?> RefusedPatternAsync(DuckDBConnection connection, string pattern,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT regexp_matches('', $p, 'i')";
+        command.Parameters.Add(new DuckDBParameter("p", new ExcludedPaths([pattern]).Expression));
+        try
+        {
+            await command.ExecuteScalarAsync(cancellationToken);
+            return null;
+        }
+        catch (DuckDBException exception)
+        {
+            // Swallowed because it is the answer: the engine's own message is what was wrong with the
+            // pattern, and the caller refuses the save with it rather than storing the pattern.
+            return exception.Message;
+        }
     }
 
     /// <summary>Forgets one repository of a project. False when the project or the repository is unknown.</summary>

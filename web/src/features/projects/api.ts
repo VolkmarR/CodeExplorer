@@ -1,6 +1,7 @@
 import type { ChurnFile } from '@/features/churn/api'
 import type { CommitRef } from '@/features/history/api'
 import { http } from '@/lib/http'
+import type { OverviewParameters } from '@/lib/urls/overviewParams'
 
 /**
  * A project, its repositories, and what the build computed about it. Each shape mirrors a record in
@@ -119,8 +120,9 @@ export interface OverviewAuthor {
 }
 
 /**
- * What the build computed about the project as a whole and stored with the index, so this page shows
- * what an agent calling `project_overview` is told rather than a second opinion about it.
+ * What a project's index says about the project as a whole. The page computes it live, over its own
+ * filters and without the project's excluded paths (#216), so it can differ from what an agent calling
+ * `project_overview` is told from the stored row once either applies; with neither, the two agree.
  */
 export interface IndexOverview {
   languages: LanguageShare[]
@@ -133,13 +135,35 @@ export interface IndexOverview {
 }
 
 /**
- * Exactly one of the two is set. `unavailable` is the server's own prose saying why there is nothing
- * to show — a project never built, or one whose first build is still running — so the page says what
- * an agent asking the same question is told, rather than leaving a gap the reader has to interpret.
+ * How many files the excluded paths kept out of each kind of section: the files at HEAD (Languages,
+ * Top level, Largest files), the files the window's commits touched (Most changed), and the files any
+ * commit touched (Most commits).
+ */
+export interface OverviewExcluded {
+  files: number
+  changedFiles: number
+  committedFiles: number
+}
+
+/**
+ * Either `overview` or `unavailable` is set. `unavailable` is the server's own prose saying why there
+ * is nothing to show — a project never built, one whose first build is still running, a repository
+ * the project does not have — so the page says what an agent asking the same question is told,
+ * rather than leaving a gap the reader has to interpret.
+ *
+ * `excludedPatterns` counts the project's setting whether or not it was applied, which is what the
+ * page offers the "show excluded" switch on; `excluded` is null wherever nothing was left out.
  */
 export interface ProjectOverviewDetail {
   overview: IndexOverview | null
   unavailable: string | null
+  excludedPatterns: number
+  excluded: OverviewExcluded | null
+}
+
+/** The overview page's setting, read and written whole. */
+export interface ExcludedPathsBody {
+  patterns: string[]
 }
 
 export function fetchProjects() {
@@ -150,8 +174,26 @@ export function fetchProject(slug: string) {
   return http.get(`projects/${slug}`).json<ProjectDetail>()
 }
 
-export function fetchProjectOverview(slug: string) {
-  return http.get(`projects/${slug}/overview`).json<ProjectOverviewDetail>()
+/** Every field of the page's URL is a query parameter of the read, so a view is one request. */
+export function fetchProjectOverview(slug: string, parameters: OverviewParameters) {
+  const search: Record<string, string> = {}
+  if (parameters.days !== undefined) search.days = String(parameters.days)
+  if (parameters.repository) search.repository = parameters.repository
+  if (parameters.showExcluded) search.showExcluded = 'true'
+  return http
+    .get(`projects/${slug}/overview`, { searchParams: search })
+    .json<ProjectOverviewDetail>()
+}
+
+export function fetchExcludedPaths(slug: string) {
+  return http.get(`projects/${slug}/excluded-paths`).json<ExcludedPathsBody>()
+}
+
+/** Answers the list as the server stored it: trimmed, with blanks and repeats dropped. */
+export function saveExcludedPaths(slug: string, patterns: string[]) {
+  return http
+    .put(`projects/${slug}/excluded-paths`, { json: { patterns } })
+    .json<ExcludedPathsBody>()
 }
 
 export function createProject(slug: string, name: string, singleRepository: boolean) {

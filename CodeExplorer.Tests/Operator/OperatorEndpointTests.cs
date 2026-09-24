@@ -170,7 +170,7 @@ public sealed class OperatorEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task Project_page_reads_the_overview_the_build_stored()
+    public async Task Project_page_computes_the_overview_live_from_the_index()
     {
         await _host.IndexedProjectAsync("alpha",
             new Dictionary<string, Dictionary<string, string>>
@@ -186,8 +186,8 @@ public sealed class OperatorEndpointTests : IDisposable
         var detail = await OverviewAsync("alpha");
 
         Assert.NotNull(detail.Overview);
-        // The same grouping the tool reports, from the same row: C# and X# by language, and the
-        // extension no profile covers standing for itself and saying so.
+        // The same grouping the tool reports, computed live by the same statements: C# and X# by
+        // language, and the extension no profile covers standing for itself and saying so.
         Assert.Contains(detail.Overview.Languages, l => l is { Name: "C#", Mapped: true, Files: 1 });
         Assert.Contains(detail.Overview.Languages, l => l is { Name: "X#", Mapped: true, Files: 1 });
         Assert.Contains(detail.Overview.Languages, l => l is { Name: ".md", Mapped: false });

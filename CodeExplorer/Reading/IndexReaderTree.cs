@@ -32,6 +32,19 @@ public sealed partial class IndexReader
     }
 
     /// <summary>
+    ///     The overview computed now, over the repository <see cref="ScopeToAsync" /> narrowed to, a
+    ///     window of <paramref name="days" /> and without <paramref name="excluded" />: the overview
+    ///     page's own view of this index (#216), which never reads the stored row. The sections are the
+    ///     build's statements, so with nothing filtered the answer is the stored one; a few hundred
+    ///     milliseconds on the largest index here, which an operator opening a page can afford and an
+    ///     agent's first call should not be made to.
+    /// </summary>
+    public async Task<(IndexOverview Overview, OverviewExcluded? Excluded)> LiveOverviewAsync(int days,
+        ExcludedPaths excluded, CancellationToken cancellationToken) =>
+        await OverviewQueries.ComputeAsync(Connection, await PathsAsync(cancellationToken),
+            new OverviewScope(days, Repository?.Slug, excluded), cancellationToken);
+
+    /// <summary>
     ///     Lines <paramref name="first" /> to <paramref name="last" /> inclusive, in order; fewer when the file ends
     ///     first.
     /// </summary>

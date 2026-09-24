@@ -25,19 +25,26 @@ internal static class IndexQueries
     /// </summary>
     /// <param name="connection">Bound to the index being counted: a live project, or a shadow being built.</param>
     /// <param name="repositorySlug">One repository, or null for every one in the project.</param>
+    /// <param name="excluded">The overview page's excluded paths (#216), or null to count every file.</param>
     /// <param name="cancellationToken">Threaded through to the command.</param>
     public static async Task<IReadOnlyList<ExtensionCount>> ExtensionCountsAsync(DuckDBConnection connection,
-        string? repositorySlug, CancellationToken cancellationToken)
+        string? repositorySlug, ExcludedPaths? excluded, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
         // The join is paid for only when there is a repository to scope to: every other caller counts
         // the whole project, and files.repo_id is the only thing repositories would contribute.
         string scope = "";
+        var conditions = new List<string>(2);
         if (repositorySlug is not null)
         {
-            scope = " JOIN repositories r USING (repo_id) WHERE r.slug = $r";
+            scope = " JOIN repositories r USING (repo_id)";
+            conditions.Add("r.slug = $r");
             parameters.Add(new DuckDBParameter("r", repositorySlug));
         }
+
+        if (excluded?.Matching("f.qualified_path", "x", parameters) is { } matching)
+            conditions.Add($"NOT {matching}");
+        if (conditions.Count > 0) scope += $" WHERE {string.Join(" AND ", conditions)}";
 
         await using var command = connection.Query($"""
                                                     SELECT f.extension,
@@ -271,6 +278,7 @@ internal static class IndexQueries
             dropped.Add($"NOT ({excluding})");
         if (PathTerms.Including(filters.Extensions, path, "ce", parameters) is { } including)
             dropped.Add($"NOT ({including})");
+        if (filters.Excluded?.Matching(CommittedPath(paths), "cp", parameters) is { } excluded) dropped.Add(excluded);
         // OR and not AND: a path is off screen if EITHER filter drops it, and the DISTINCT below is
         // what keeps one dropped by both from being counted twice.
         conditions.Add($"({string.Join(" OR ", dropped)})");
@@ -381,6 +389,9 @@ internal static class IndexQueries
         if (PathTerms.Including(filters.Extensions, ChurnedPath(paths), "ce", parameters) is { } including)
             conditions.Add($"({including})");
 
+        if (filters.Excluded?.Matching(CommittedPath(paths), "cp", parameters) is { } excluded)
+            conditions.Add($"NOT {excluded}");
+
         return (conditions, parameters);
     }
 
@@ -390,8 +401,14 @@ internal static class IndexQueries
     ///     (ADR-0006) — so an exclude term reads against the path the caller was shown and not a
     ///     repository-relative one the project never prints.
     /// </summary>
-    private static string ChurnedPath(ProjectPaths paths) =>
-        paths.SingleRepository ? "lower(cf.path)" : "lower(c.repo_slug || '/' || cf.path)";
+    private static string ChurnedPath(ProjectPaths paths) => $"lower({CommittedPath(paths)})";
+
+    /// <summary>
+    ///     The same qualified path in the case git recorded it, for a matcher that ignores case itself
+    ///     (<see cref="ExcludedPaths.Matching" />) and would only pay for a lower-cased copy.
+    /// </summary>
+    internal static string CommittedPath(ProjectPaths paths) =>
+        paths.SingleRepository ? "cf.path" : "c.repo_slug || '/' || cf.path";
 
     /// <summary>
     ///     Whether a path a ranking returned is still there at HEAD, as a SQL fragment over a

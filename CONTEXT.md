@@ -165,10 +165,15 @@ _Avoid_: Coupling, correlation, related files, change coupling
 **Overview**:
 What a project is, in one answer: its repositories and where each stands, what it is written in, how
 it is laid out, what is largest in it, where work has been happening and who has been doing it.
-Computed by the build that produced the index and stored with it, so it describes the index rather
-than the repositories as they are now, and so a caller pays one row read however large the project
-is. It is the first thing an agent asks and the first thing an operator sees, and it is one answer
+It is the first thing an agent asks and the first thing an operator sees, and it is one answer
 because a reader who has to assemble it from a dozen calls has already formed a wrong picture.
+The agent's answer is the stored overview: computed by the build that produced the index and stored
+with it, so it describes the index rather than the repositories as they are now, and so a caller
+pays one row read however large the project is. The operator's overview page computes its own view
+of the same index on each load, by the same statements, over a window and a repository it can be
+filtered to and without the paths the project's settings exclude — so once a filter or an exclusion
+applies, the page may show different numbers than the agent is told, and says how many files it
+left out. Excluded paths are the page's setting only: nothing an agent reads is computed without them.
 _Avoid_: Summary, stats, dashboard, profile
 
 **Language**:

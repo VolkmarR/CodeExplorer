@@ -1,5 +1,6 @@
 import { FilePathLink } from '@/components/FilePathLink'
 import type { IndexOverview } from '@/features/projects/api'
+import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { TopLevelRow } from '@/features/projects/TopLevelRow'
 import { formatBytes, formatCount } from '@/lib/format'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,7 +11,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
  * files big enough that a reader should know before opening one. A repository with no root files
  * has no such line.
  */
-export function TopLevelCard({ project, overview }: { project: string; overview: IndexOverview }) {
+export function TopLevelCard({
+  project,
+  overview,
+  excluded,
+}: {
+  project: string
+  overview: IndexOverview
+  /** Files at HEAD the excluded paths left out, if any were: the same set both halves are read from. */
+  excluded: number | undefined
+}) {
   return (
     <Card>
       <CardHeader>
@@ -56,6 +66,9 @@ export function TopLevelCard({ project, overview }: { project: string; overview:
             ))}
           </div>
         ) : null}
+        <div className="font-sans">
+          <ExcludedNote project={project} files={excluded} what="the files at HEAD" />
+        </div>
       </CardContent>
     </Card>
   )

@@ -1,4 +1,5 @@
 using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 
 namespace CodeExplorer.Operator;
 
@@ -20,8 +21,11 @@ internal static class OperatorEndpoints
         project.MapGet("", (Project project, ProjectOverview overview, CancellationToken ct) =>
             overview.FindAsync(project, ct));
 
-        project.MapGet("/overview", (Project project, ProjectOverview overview, CancellationToken ct) =>
-            overview.OverviewAsync(project, ct));
+        // The page's filters are the query string, the way its URL carries them (#216).
+        project.MapGet("/overview", (Project project, int? days, string? repository, bool? showExcluded,
+                ProjectOverview overview, CancellationToken ct) =>
+            overview.OverviewAsync(project,
+                new OverviewFilter(days ?? HistoryWindow.DefaultDays, repository, showExcluded ?? false), ct));
 
         project.MapDelete("", (Project project, ProjectOverview overview, CancellationToken ct) =>
             NoContentAfter(overview.DeleteAsync(project, ct)));

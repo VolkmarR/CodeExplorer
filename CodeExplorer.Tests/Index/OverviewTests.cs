@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Json;
 using CodeExplorer.Index;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
@@ -209,6 +211,34 @@ public sealed class OverviewTests : IDisposable
         string top = ranked.Split('\n', StringSplitOptions.RemoveEmptyEntries)[1].Trim();
         Assert.Contains("one/src/Hot.prg", top, StringComparison.Ordinal);
         Assert.Contains(top, hot.Replace("\r", "", StringComparison.Ordinal), StringComparison.Ordinal);
+    }
+
+    /// <summary>Patterns that would empty or change every section of the page, were the tool to read them.</summary>
+    private static readonly string[] _everySection = ["**/*.prg", "**/*.md", "one/src/*"];
+
+    /// <summary>
+    ///     The excluded-paths setting is the overview page's and nothing else's (#216): the reply an
+    ///     agent is given is the same byte for byte once the setting exists, and after a rebuild made
+    ///     with it in place — which is what shows the build does not read it either.
+    /// </summary>
+    [Fact]
+    public async Task The_tools_reply_is_unaffected_by_the_excluded_paths_setting()
+    {
+        string before;
+        await using (var client = await BuildAsync("alpha"))
+            before = await TestHost.CallAsync(client, "project_overview", []);
+
+        using (var http = _host.CreateClient())
+        using (var response = await http.PutAsJsonAsync("/api/projects/alpha/excluded-paths",
+                   new { patterns = _everySection }, Ct))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        await using (var client = await _host.ConnectAsync("alpha"))
+            Assert.Equal(before, await TestHost.CallAsync(client, "project_overview", []));
+
+        await _host.RefreshAsync("alpha");
+        await using (var client = await _host.ConnectAsync("alpha"))
+            Assert.Equal(before, await TestHost.CallAsync(client, "project_overview", []));
     }
 
     /// <summary>The reply from one section's heading to the next's, for an assertion about that section alone.</summary>

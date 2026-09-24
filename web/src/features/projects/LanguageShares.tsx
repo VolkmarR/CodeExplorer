@@ -1,11 +1,21 @@
 import type { CSSProperties } from 'react'
 import type { IndexOverview, LanguageShare } from '@/features/projects/api'
+import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { formatCount } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /** What the project is written in, by lines, largest first. */
-export function LanguageShares({ overview }: { overview: IndexOverview }) {
+export function LanguageShares({
+  project,
+  overview,
+  excluded,
+}: {
+  project: string
+  overview: IndexOverview
+  /** Files at HEAD the excluded paths left out, if any were. */
+  excluded: number | undefined
+}) {
   const total = overview.languages.reduce((sum, language) => sum + language.lines, 0)
   return (
     <Card>
@@ -21,6 +31,7 @@ export function LanguageShares({ overview }: { overview: IndexOverview }) {
             and {formatCount(overview.otherLanguages)} more
           </p>
         ) : null}
+        <ExcludedNote project={project} files={excluded} what="the files at HEAD" />
       </CardContent>
     </Card>
   )

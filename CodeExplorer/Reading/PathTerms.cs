@@ -10,8 +10,11 @@ namespace CodeExplorer.Reading;
 ///     narrow by exactly the same thing — a rollup filtered differently from the files under it is a
 ///     directory whose churn nothing on screen adds up to.
 ///     Both null is the unfiltered ranking, which is what every surface asked for before #161.
+///     <see cref="Excluded" /> is the overview page's own setting, in its own glob syntax (#216), and
+///     is carried here rather than beside the record so that the page's ranking and its count of what
+///     was left out narrow by one thing, the way the two filters above do.
 /// </summary>
-public sealed record ChurnFilters(string? Extensions = null, string? Exclude = null)
+public sealed record ChurnFilters(string? Extensions = null, string? Exclude = null, ExcludedPaths? Excluded = null)
 {
     /// <summary>The ranking nothing was asked to leave out, named so a call site reads as one.</summary>
     public static readonly ChurnFilters None = new();
@@ -20,7 +23,8 @@ public sealed record ChurnFilters(string? Extensions = null, string? Exclude = n
     ///     Whether anything is filtered at all. Asked before the count of what was hidden is run,
     ///     because that count is a second scan of the window and an unfiltered call must not pay for it.
     /// </summary>
-    public bool Any => PathTerms.Split(Extensions).Count > 0 || PathTerms.Split(Exclude).Count > 0;
+    public bool Any =>
+        PathTerms.Split(Extensions).Count > 0 || PathTerms.Split(Exclude).Count > 0 || Excluded?.Any == true;
 }
 
 /// <summary>

@@ -1,10 +1,23 @@
 import type { IndexOverview } from '@/features/projects/api'
+import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { formatCount, formatDate } from '@/lib/format'
 import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-/** Who has touched the project most, over the whole imported history rather than the churn window. */
-export function AuthorsCard({ overview }: { overview: IndexOverview }) {
+/**
+ * Who has touched the project most, over the whole imported history rather than the churn window —
+ * so the filter bar's window does not reach it, and the card says which span it covers.
+ */
+export function AuthorsCard({
+  project,
+  overview,
+  excluded,
+}: {
+  project: string
+  overview: IndexOverview
+  /** Files any commit touched that the excluded paths left out, if any were. */
+  excluded: number | undefined
+}) {
   return (
     <Card>
       <CardHeader>
@@ -35,6 +48,13 @@ export function AuthorsCard({ overview }: { overview: IndexOverview }) {
                 </span>
               </div>
             ))}
+            {/* A commit is dropped only where every file it touched was excluded, so the count is
+                of files and the rows above are what is left of each author. */}
+            <ExcludedNote
+              project={project}
+              files={excluded}
+              what="the history (a commit still counts while it touched one file shown)"
+            />
           </>
         )}
       </CardContent>
