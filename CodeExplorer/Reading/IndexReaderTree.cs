@@ -46,7 +46,8 @@ public sealed partial class IndexReader
         var paths = await PathsAsync(cancellationToken);
         var scope = new OverviewScope(days, Repository?.Slug, excluded);
         var (overview, left) = await OverviewQueries.ComputeAsync(Connection, paths, scope, cancellationToken);
-        return (overview, left, await OverviewQueries.HotspotsAsync(Connection, paths, scope, cancellationToken));
+        return (overview, left,
+            await OverviewQueries.HotspotsAsync(Connection, paths, scope, overview.Churn.Window(), cancellationToken));
     }
 
     /// <summary>

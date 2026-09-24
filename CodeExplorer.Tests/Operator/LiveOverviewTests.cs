@@ -1,9 +1,5 @@
-using System.Net;
-using System.Net.Http.Json;
 using CodeExplorer.Index;
-using CodeExplorer.Operator;
 using CodeExplorer.Reading;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -18,8 +14,6 @@ public sealed class LiveOverviewTests : IDisposable
 {
     private readonly TestHost _host = new(SearchEngine.Substring);
 
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
     public void Dispose() => _host.Dispose();
 
     /// <summary>The three kinds of noise the ticket names, one of them at a repository's root.</summary>
@@ -29,9 +23,9 @@ public sealed class LiveOverviewTests : IDisposable
     public async Task Excluded_paths_leave_every_section_and_are_counted_per_kind_of_section()
     {
         await NoisyProjectAsync("alpha");
-        await SetExcludedAsync("alpha", _noise);
+        await _host.SetExcludedPathsAsync("alpha", _noise);
 
-        var detail = await OverviewAsync("alpha");
+        var detail = await _host.OverviewDetailAsync("alpha");
 
         var overview = Assert.IsType<IndexOverview>(detail.Overview);
         Assert.Equal(3, detail.ExcludedPatterns);
@@ -55,9 +49,9 @@ public sealed class LiveOverviewTests : IDisposable
     public async Task The_show_excluded_switch_lifts_the_exclusions_and_counts_nothing()
     {
         await NoisyProjectAsync("alpha");
-        await SetExcludedAsync("alpha", _noise);
+        await _host.SetExcludedPathsAsync("alpha", _noise);
 
-        var detail = await OverviewAsync("alpha", "?showExcluded=true");
+        var detail = await _host.OverviewDetailAsync("alpha", "?showExcluded=true");
 
         var overview = Assert.IsType<IndexOverview>(detail.Overview);
         // Still told how many patterns there are, which is what offers the switch back.
@@ -72,7 +66,7 @@ public sealed class LiveOverviewTests : IDisposable
     {
         await NoisyProjectAsync("alpha");
 
-        var detail = await OverviewAsync("alpha");
+        var detail = await _host.OverviewDetailAsync("alpha");
 
         // Compared as documents, so every section and every count is compared and not a sample of them:
         // one set of statements computes both, and nothing filtered must mean nothing differs.
@@ -106,9 +100,9 @@ public sealed class LiveOverviewTests : IDisposable
     public async Task A_pattern_matches_qualified_paths(string pattern, string[] excluded)
     {
         await NoisyProjectAsync("alpha");
-        await SetExcludedAsync("alpha", [pattern]);
+        await _host.SetExcludedPathsAsync("alpha", [pattern]);
 
-        var detail = await OverviewAsync("alpha");
+        var detail = await _host.OverviewDetailAsync("alpha");
 
         Assert.Equal(excluded.Length, detail.Excluded?.Files);
         // The churn ranking lists every file here (one commit each), so what is missing from it is
@@ -129,9 +123,9 @@ public sealed class LiveOverviewTests : IDisposable
                     ["src/A.cs"] = "class A;\n"
                 }
             }, singleRepository: true);
-        await SetExcludedAsync("solo", ["docs/*", "**/*.rc"]);
+        await _host.SetExcludedPathsAsync("solo", ["docs/*", "**/*.rc"]);
 
-        var detail = await OverviewAsync("solo");
+        var detail = await _host.OverviewDetailAsync("solo");
 
         Assert.Equal(2, detail.Excluded?.Files);
         var ranked = Assert.IsType<IndexOverview>(detail.Overview).Churn.Files.Select(f => f.QualifiedPath);
@@ -147,11 +141,11 @@ public sealed class LiveOverviewTests : IDisposable
             "Later", "Ada", "ada@example.invalid", 40 * 24 * 60);
         await _host.RefreshAsync("alpha");
 
-        var month = Assert.IsType<IndexOverview>((await OverviewAsync("alpha", "?days=30")).Overview);
+        var month = Assert.IsType<IndexOverview>((await _host.OverviewDetailAsync("alpha", "?days=30")).Overview);
         Assert.Equal(30, month.Churn.Days);
         Assert.Equal(["two/lib/B.cs"], month.Churn.Files.Select(f => f.QualifiedPath));
 
-        var two = Assert.IsType<IndexOverview>((await OverviewAsync("alpha", "?repository=two")).Overview);
+        var two = Assert.IsType<IndexOverview>((await _host.OverviewDetailAsync("alpha", "?repository=two")).Overview);
         Assert.Equal(["two"], two.Tree.Select(r => r.QualifiedPath));
         Assert.All(two.LargestFiles, f => Assert.StartsWith("two/", f.QualifiedPath, StringComparison.Ordinal));
         Assert.All(two.Churn.Files, f => Assert.Equal("two", f.RepositorySlug));
@@ -164,7 +158,7 @@ public sealed class LiveOverviewTests : IDisposable
     {
         await NoisyProjectAsync("alpha");
 
-        var detail = await OverviewAsync("alpha", "?repository=nope");
+        var detail = await _host.OverviewDetailAsync("alpha", "?repository=nope");
 
         Assert.Null(detail.Overview);
         Assert.Contains("No repository 'nope'", detail.Unavailable, StringComparison.Ordinal);
@@ -177,10 +171,10 @@ public sealed class LiveOverviewTests : IDisposable
         _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/A.verified.txt"] = "v2\n" },
             "Accept snapshots", "Snap", "snap@example.invalid", 60);
         await _host.RefreshAsync("alpha");
-        await SetExcludedAsync("alpha", _noise);
+        await _host.SetExcludedPathsAsync("alpha", _noise);
 
-        var overview = Assert.IsType<IndexOverview>((await OverviewAsync("alpha")).Overview);
-        var shown = Assert.IsType<IndexOverview>((await OverviewAsync("alpha", "?showExcluded=true")).Overview);
+        var overview = Assert.IsType<IndexOverview>((await _host.OverviewDetailAsync("alpha")).Overview);
+        var shown = Assert.IsType<IndexOverview>((await _host.OverviewDetailAsync("alpha", "?showExcluded=true")).Overview);
 
         Assert.DoesNotContain(overview.Authors, a => a.Email == "snap@example.invalid");
         Assert.Contains(shown.Authors, a => a.Email == "snap@example.invalid");
@@ -189,17 +183,10 @@ public sealed class LiveOverviewTests : IDisposable
     [Fact]
     public async Task A_project_with_no_history_shows_the_sections_that_say_so()
     {
-        // Built end to end with no repositories, as OverviewTests does, so the index is real and only
-        // the history is missing.
-        await _host.CreateProjectAsync("beta");
-        var shadow = await _host.Indexes.CreateShadowAsync("beta", Ct);
-        await _host.Services.GetRequiredService<OverviewBuilder>().FillAsync(shadow, false, Ct);
-        await shadow.CompleteAsync(false, _ => { }, Ct);
-        shadow.Dispose();
-        await _host.Indexes.SwapShadowAsync("beta", Ct);
-        await SetExcludedAsync("beta", _noise);
+        await _host.HistorylessProjectAsync("beta");
+        await _host.SetExcludedPathsAsync("beta", _noise);
 
-        var detail = await OverviewAsync("beta", "?days=30");
+        var detail = await _host.OverviewDetailAsync("beta", "?days=30");
 
         var overview = Assert.IsType<IndexOverview>(detail.Overview);
         Assert.Null(overview.Churn.Window());
@@ -234,19 +221,4 @@ public sealed class LiveOverviewTests : IDisposable
                 ["lib/B.cs"] = "class B;\n", ["docs/notes.md"] = "notes\n", ["lib/docs/deep.md"] = "deep\n"
             }
         });
-
-    private async Task SetExcludedAsync(string slug, string[] patterns)
-    {
-        using var http = _host.CreateClient();
-        using var response = await http.PutAsJsonAsync($"/api/projects/{slug}/excluded-paths", new { patterns }, Ct);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    private async Task<ProjectOverviewDetail> OverviewAsync(string slug, string query = "")
-    {
-        using var http = _host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectOverviewDetail>($"/api/projects/{slug}/overview{query}", Ct);
-        Assert.NotNull(detail);
-        return detail;
-    }
 }

@@ -1,8 +1,8 @@
-import type { CSSProperties } from 'react'
-import type { IndexOverview, OverviewHotspots } from '@/features/projects/api'
+import type { OverviewChurn, OverviewHotspots } from '@/features/projects/api'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { HotspotScatter } from '@/features/projects/HotspotScatter'
 import { FilePathLink } from '@/components/FilePathLink'
+import { ShareBar } from '@/components/ShareBar'
 import { formatCount } from '@/lib/format'
 import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,14 +15,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
  */
 export function HotspotsCard({
   project,
-  overview,
+  churn,
   hotspots,
 }: {
   project: string
-  overview: IndexOverview
+  /** Most changed's section, for its window: how far back, and whether there was history at all. */
+  churn: OverviewChurn
   hotspots: OverviewHotspots
 }) {
-  const { churn } = overview
   const { files } = hotspots
   const top = files[0]?.score ?? 0
   return (
@@ -66,14 +66,10 @@ export function HotspotsCard({
                         origin={{ view: 'overview' }}
                       />
                       {/* Relative to the top file, so it reads as how far behind it each one is. */}
-                      <span className="ml-auto h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
-                        <span
-                          className="block h-full w-(--share) rounded-full bg-primary"
-                          style={
-                            { '--share': `${top ? (file.score / top) * 100 : 0}%` } as CSSProperties
-                          }
-                        />
-                      </span>
+                      <ShareBar
+                        share={top ? (file.score / top) * 100 : 0}
+                        className="ml-auto w-16 shrink-0"
+                      />
                     </li>
                   ))}
                 </ol>
