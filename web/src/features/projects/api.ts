@@ -211,6 +211,39 @@ export interface ProjectOverviewDetail {
 export interface OverviewCards {
   hotspots: OverviewHotspots
   authorsPerFile: OverviewAuthorsPerFile
+  folderCoupling: OverviewFolderCoupling
+}
+
+/** A top-level folder of one repository and the commits in the window that touched it. */
+export interface FolderCommits {
+  folder: string
+  commits: number
+}
+
+/** Two top-level folders of one repository and the distinct commits that touched both. */
+export interface FolderPair {
+  first: string
+  second: string
+  commits: number
+}
+
+/** One repository's folder coupling: its busiest folders, capped, and the pairs among them. */
+export interface RepositoryCoupling {
+  repositorySlug: string
+  commits: number
+  folders: FolderCommits[]
+  pairs: FolderPair[]
+}
+
+/**
+ * The Folders that change together card (#213). Repositories come most commits first. Commits that
+ * touched more than `maxCommitPaths` paths are left out of the pairing and counted in
+ * `ceilingExcluded`.
+ */
+export interface OverviewFolderCoupling {
+  repositories: RepositoryCoupling[]
+  maxCommitPaths: number
+  ceilingExcluded: number
 }
 
 /** The overview page's setting, read and written whole. */

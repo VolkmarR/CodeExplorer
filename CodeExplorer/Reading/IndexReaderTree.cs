@@ -38,16 +38,18 @@ public sealed partial class IndexReader
     ///     build's statements, so with nothing filtered the answer is the stored one; a few hundred
     ///     milliseconds on the largest index here, which an operator opening a page can afford and an
     ///     agent's first call should not be made to. The page's own cards ride along: the page draws them
-    ///     and the stored row does not hold them.
+    ///     and the stored row does not hold them. <paramref name="maxCommitPaths" /> is the co-change
+    ///     ceiling the folder coupling card pairs under.
     /// </summary>
     public async Task<(IndexOverview Overview, OverviewExcluded? Excluded, OverviewCards Cards)>
-        LiveOverviewAsync(int days, ExcludedPaths excluded, CancellationToken cancellationToken)
+        LiveOverviewAsync(int days, ExcludedPaths excluded, int maxCommitPaths, CancellationToken cancellationToken)
     {
         var paths = await PathsAsync(cancellationToken);
         var scope = new OverviewScope(days, Repository?.Slug, excluded);
         var (overview, left) = await OverviewQueries.ComputeAsync(Connection, paths, scope, cancellationToken);
         return (overview, left,
-            await OverviewQueries.CardsAsync(Connection, paths, scope, overview.Churn.Window(), cancellationToken));
+            await OverviewQueries.CardsAsync(Connection, paths, scope, overview.Churn.Window(), maxCommitPaths,
+                cancellationToken));
     }
 
     /// <summary>

@@ -82,7 +82,41 @@ public sealed record OverviewAuthorsPerFile(IReadOnlyList<AuthoredFile> Files, i
 ///     each on the page's answer, so that a card is added here and in <see cref="OverviewQueries.CardsAsync" />
 ///     and nowhere else on the server.
 /// </summary>
-public sealed record OverviewCards(OverviewHotspots Hotspots, OverviewAuthorsPerFile AuthorsPerFile);
+public sealed record OverviewCards(
+    OverviewHotspots Hotspots,
+    OverviewAuthorsPerFile AuthorsPerFile,
+    OverviewFolderCoupling FolderCoupling);
+
+/// <summary>A top-level folder of one repository and the commits in the window that touched it.</summary>
+/// <param name="Folder">The folder's name, its first path segment in the repository.</param>
+/// <param name="Commits">Distinct commits under the ceiling that touched anything beneath it.</param>
+public sealed record FolderCommits(string Folder, int Commits);
+
+/// <summary>Two top-level folders of one repository that the same commits touched.</summary>
+/// <param name="First">The folder that sorts first by name.</param>
+/// <param name="Second">The other.</param>
+/// <param name="Commits">Distinct commits that touched something under both.</param>
+public sealed record FolderPair(string First, string Second, int Commits);
+
+/// <summary>
+///     One repository's folder coupling. Pairs never cross a repository, because a commit never does
+///     (CONTEXT.md, Co-Change).
+/// </summary>
+/// <param name="RepositorySlug">The repository.</param>
+/// <param name="Commits">Distinct commits under the ceiling that touched one of its top-level folders.</param>
+/// <param name="Folders">Its busiest top-level folders, most commits first, capped.</param>
+/// <param name="Pairs">The pairs among <paramref name="Folders" /> that share a commit, strongest first.</param>
+public sealed record RepositoryCoupling(
+    string RepositorySlug, int Commits, IReadOnlyList<FolderCommits> Folders, IReadOnlyList<FolderPair> Pairs);
+
+/// <summary>
+///     The Folders that change together card (#213): the page's alone like <see cref="OverviewHotspots" />.
+/// </summary>
+/// <param name="Repositories">Most commits first; empty where the window holds no history.</param>
+/// <param name="MaxCommitPaths">The ceiling the pairing ran under, <c>History:MaxCommitPaths</c>.</param>
+/// <param name="CeilingExcluded">Commits in the window that touched more paths than the ceiling.</param>
+public sealed record OverviewFolderCoupling(
+    IReadOnlyList<RepositoryCoupling> Repositories, int MaxCommitPaths, int CeilingExcluded);
 
 /// <summary>
 ///     The sections of an overview, as statements over a bare connection: the build runs them once over
@@ -139,6 +173,13 @@ internal static class OverviewQueries
     private const int _authoredFilesShown = 10;
 
     /// <summary>
+    ///     Top-level folders per repository on the co-change heatmap. Twelve is 66 cells in the upper
+    ///     triangle, about what a card can label legibly; the quieter folders are the ones least likely
+    ///     to couple anything.
+    /// </summary>
+    private const int _coupledFoldersShown = 12;
+
+    /// <summary>
     ///     Every section over one scope, and how many files the scope's exclusions kept out of them —
     ///     null where it excludes nothing, so a call that leaves nothing out pays for no count.
     ///     The churn section's window is anchored to the newest commit in the scope and not to the
@@ -180,11 +221,121 @@ internal static class OverviewQueries
     /// <param name="paths">How this project names its files (ADR-0006).</param>
     /// <param name="scope">The page's window, repository and excluded paths.</param>
     /// <param name="window">The churn section's window, for the cards that read one; null where there is no history.</param>
+    /// <param name="maxCommitPaths">The co-change ceiling, <c>History:MaxCommitPaths</c>.</param>
     /// <param name="cancellationToken">Threaded through every statement.</param>
     public static async Task<OverviewCards> CardsAsync(DuckDBConnection connection, ProjectPaths paths,
-        OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken) =>
+        OverviewScope scope, HistoryWindow? window, int maxCommitPaths, CancellationToken cancellationToken) =>
         new(await HotspotsAsync(connection, paths, scope, window, cancellationToken),
-            await AuthorsPerFileAsync(connection, scope, cancellationToken));
+            await AuthorsPerFileAsync(connection, scope, cancellationToken),
+            await FolderCouplingAsync(connection, paths, scope, window, maxCommitPaths, cancellationToken));
+
+    /// <summary>
+    ///     The pairs of top-level folders, within one repository, that the window's commits keep touching
+    ///     together (#213). A pair counts distinct commits, so one commit touching forty files in a folder
+    ///     counts once, the Churn rule for directories. A commit that touched more paths than the ceiling
+    ///     is left out, as the co-change tool leaves it out, and counted. The ceiling is measured on every
+    ///     path the commit touched, before the exclusions, so it means what it means there; the excluded
+    ///     paths are then dropped before pairing. A folder's own count is over the same commits the pairs
+    ///     are, so a pair's share of the smaller folder is never above one.
+    /// </summary>
+    /// <param name="connection">Bound to the live index.</param>
+    /// <param name="paths">How this project names its files (ADR-0006), for the excluded paths.</param>
+    /// <param name="scope">The page's repository and excluded paths.</param>
+    /// <param name="window">The churn section's window; null where there is no history.</param>
+    /// <param name="maxCommitPaths">The co-change ceiling.</param>
+    /// <param name="cancellationToken">Threaded through the statement.</param>
+    public static async Task<OverviewFolderCoupling> FolderCouplingAsync(DuckDBConnection connection,
+        ProjectPaths paths, OverviewScope scope, HistoryWindow? window, int maxCommitPaths,
+        CancellationToken cancellationToken)
+    {
+        if (window is null) return new OverviewFolderCoupling([], maxCommitPaths, 0);
+
+        var (inWindow, parameters) =
+            IndexQueries.ChurnScope(paths, window, scope.RepositorySlug, null, ChurnFilters.None);
+        parameters.Add(new DuckDBParameter("mc", maxCommitPaths));
+        // A file at the repository root is in no top-level folder, so it pairs with nothing.
+        var kept = new List<string> { "s.paired", "contains(w.path, '/')" };
+        if (scope.Excluded.Matching("w.committed", "x", parameters) is { } excluded)
+            kept.Add($"NOT {excluded}");
+
+        // in_window is MATERIALIZED because sized and folders both read it, and inlined it would be a
+        // second scan of commit_files for the same rows.
+        await using var command = connection.Query($"""
+                                                    WITH in_window AS MATERIALIZED (
+                                                        SELECT c.commit_id, c.repo_slug, cf.path,
+                                                               {IndexQueries.CommittedPath(paths)} AS committed
+                                                        FROM commit_files cf JOIN commits c USING (commit_id)
+                                                        WHERE {string.Join(" AND ", inWindow)}),
+                                                    sized AS (
+                                                        SELECT commit_id, count(*) <= $mc AS paired
+                                                        FROM in_window GROUP BY commit_id),
+                                                    folders AS (
+                                                        SELECT DISTINCT w.repo_slug, w.commit_id,
+                                                               split_part(w.path, '/', 1) AS folder
+                                                        FROM in_window w JOIN sized s USING (commit_id)
+                                                        WHERE {string.Join(" AND ", kept)}),
+                                                    per_folder AS (
+                                                        SELECT repo_slug, folder, count(*)::INTEGER AS commits,
+                                                               row_number() OVER (PARTITION BY repo_slug
+                                                                   ORDER BY count(*) DESC, folder) AS rank
+                                                        FROM folders GROUP BY repo_slug, folder),
+                                                    shown AS (
+                                                        SELECT f.* FROM folders f
+                                                        JOIN per_folder p USING (repo_slug, folder)
+                                                        WHERE p.rank <= {_coupledFoldersShown})
+                                                    SELECT 'folder' AS kind, repo_slug, folder AS first,
+                                                           NULL AS second, commits
+                                                    FROM per_folder WHERE rank <= {_coupledFoldersShown}
+                                                    UNION ALL
+                                                    SELECT 'repository', repo_slug, NULL, NULL,
+                                                           count(DISTINCT commit_id)::INTEGER
+                                                    FROM folders GROUP BY repo_slug
+                                                    UNION ALL
+                                                    SELECT 'ceiling', '', NULL, NULL,
+                                                           count(*) FILTER (WHERE NOT paired)::INTEGER
+                                                    FROM sized
+                                                    UNION ALL
+                                                    -- Joined on the commit alone: a commit is in one
+                                                    -- repository, so a pair never crosses one.
+                                                    SELECT 'pair', a.repo_slug, a.folder, b.folder,
+                                                           count(*)::INTEGER
+                                                    FROM shown a JOIN shown b
+                                                        ON a.commit_id = b.commit_id AND a.folder < b.folder
+                                                    GROUP BY a.repo_slug, a.folder, b.folder
+                                                    """, parameters);
+        await using var reader = await command.ReaderAsync(cancellationToken);
+        var repositories = new Dictionary<string, int>(StringComparer.Ordinal);
+        var folderRows = new List<(string Slug, FolderCommits Folder)>();
+        var pairRows = new List<(string Slug, FolderPair Pair)>();
+        int ceilingExcluded = 0;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            string slug = reader.Text("repo_slug");
+            int commits = reader.Int32("commits");
+            string kind = reader.Text("kind");
+            switch (kind)
+            {
+                case "ceiling": ceilingExcluded = commits; break;
+                case "repository": repositories[slug] = commits; break;
+                case "folder": folderRows.Add((slug, new FolderCommits(reader.Text("first"), commits))); break;
+                case "pair":
+                    pairRows.Add((slug, new FolderPair(reader.Text("first"), reader.Text("second"), commits)));
+                    break;
+                default: throw new InvalidOperationException($"Unknown folder coupling row kind '{kind}'.");
+            }
+        }
+
+        var coupling = repositories
+            .OrderByDescending(r => r.Value).ThenBy(r => r.Key, StringComparer.Ordinal)
+            .Select(r => new RepositoryCoupling(r.Key, r.Value,
+                folderRows.Where(f => f.Slug == r.Key).Select(f => f.Folder)
+                    .OrderByDescending(f => f.Commits).ThenBy(f => f.Folder, StringComparer.Ordinal).ToList(),
+                pairRows.Where(p => p.Slug == r.Key).Select(p => p.Pair)
+                    .OrderByDescending(p => p.Commits).ThenBy(p => p.First, StringComparer.Ordinal)
+                    .ThenBy(p => p.Second, StringComparer.Ordinal).ToList()))
+            .ToList();
+        return new OverviewFolderCoupling(coupling, maxCommitPaths, ceilingExcluded);
+    }
 
     /// <summary>
     ///     The files at HEAD that are both large and busy (#211): commits in the scope's window times
