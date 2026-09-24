@@ -167,6 +167,29 @@ export interface OverviewHotspots {
 }
 
 /**
+ * One file of the Most authors per file card (#212), over the whole imported history. `first`,
+ * `second` and `third` are the commit shares of its three most frequent authors, 0 to 1, and 0 where
+ * it has fewer.
+ */
+export interface AuthoredFile {
+  qualifiedPath: string
+  authors: number
+  commits: number
+  first: number
+  second: number
+  third: number
+}
+
+/**
+ * The Most authors per file card. The page's alone, like the hotspots. `excluded` counts the files at
+ * HEAD a commit touched that the excluded paths left out, and is null where nothing was excluded.
+ */
+export interface OverviewAuthorsPerFile {
+  files: AuthoredFile[]
+  excluded: number | null
+}
+
+/**
  * Either `overview` or `unavailable` is set. `unavailable` is the server's own prose saying why there
  * is nothing to show — a project never built, one whose first build is still running, a repository
  * the project does not have — so the page says what an agent asking the same question is told,
@@ -182,6 +205,8 @@ export interface ProjectOverviewDetail {
   excluded: OverviewExcluded | null
   /** Set with `overview`. */
   hotspots: OverviewHotspots | null
+  /** Set with `overview`. */
+  authorsPerFile: OverviewAuthorsPerFile | null
 }
 
 /** The overview page's setting, read and written whole. */

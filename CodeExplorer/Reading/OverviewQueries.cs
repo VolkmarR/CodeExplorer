@@ -53,6 +53,30 @@ public sealed record Hotspot(string QualifiedPath, int Commits, int Lines, long 
 public sealed record OverviewHotspots(IReadOnlyList<Hotspot> Files, int? Excluded);
 
 /// <summary>
+///     One file of the overview page's Most authors per file card (#212), over the whole imported history
+///     and by the path each commit recorded, so a rename starts its count again.
+/// </summary>
+/// <param name="QualifiedPath">The file at HEAD, spelled the way the project spells it (ADR-0006).</param>
+/// <param name="Authors">Distinct author emails among the commits that touched it.</param>
+/// <param name="Commits">The commits that touched it.</param>
+/// <param name="First">The share of <paramref name="Commits" /> its most frequent author made, 0 to 1.</param>
+/// <param name="Second">The same for the second; 0 where it has one author.</param>
+/// <param name="Third">The same for the third; 0 where it has fewer than three.</param>
+public sealed record AuthoredFile(
+    string QualifiedPath, int Authors, int Commits, double First, double Second, double Third);
+
+/// <summary>
+///     The Most authors per file card: the page's alone like <see cref="OverviewHotspots" />, so
+///     <c>project_overview</c> answers as it did before it (#212).
+/// </summary>
+/// <param name="Files">The top of the ranking; empty where the scope holds no history.</param>
+/// <param name="Excluded">
+///     Files at HEAD that a commit touched and the exclusions left out; null where the scope excludes
+///     nothing.
+/// </param>
+public sealed record OverviewAuthorsPerFile(IReadOnlyList<AuthoredFile> Files, int? Excluded);
+
+/// <summary>
 ///     The sections of an overview, as statements over a bare connection: the build runs them once over
 ///     <see cref="OverviewScope.Stored" /> and stores the result, and the overview page runs them per
 ///     view over its own scope (#216). One copy of the SQL for both, so that the page and the stored
@@ -99,6 +123,12 @@ internal static class OverviewQueries
     ///     which is a question about a repository rather than about the code in it.
     /// </summary>
     private const int _authorsShown = 10;
+
+    /// <summary>
+    ///     Files ranked by their number of authors: a screenful read from the top down, like Most
+    ///     changed. The tail is every file one person ever touched, which says nothing.
+    /// </summary>
+    private const int _authoredFilesShown = 10;
 
     /// <summary>
     ///     Every section over one scope, and how many files the scope's exclusions kept out of them —
@@ -184,6 +214,83 @@ internal static class OverviewQueries
     }
 
     /// <summary>
+    ///     The files at HEAD changed by the most different people over the whole imported history (#212),
+    ///     with the commit share of their first three authors, so the card can say whether anyone owns
+    ///     one. Authors are told apart by email, the identity git records, so one person under two names
+    ///     counts once. Commits and not lines, so a sweep adds one name to each file it touches and never
+    ///     makes its author the owner. A tie goes to the file with more commits and then to the path.
+    ///     Not a section of <see cref="ComputeAsync" />, for the reason <see cref="HotspotsAsync" /> is not.
+    /// </summary>
+    /// <param name="connection">Bound to the live index.</param>
+    /// <param name="scope">The page's repository and excluded paths; the window does not reach this card.</param>
+    /// <param name="window">
+    ///     The churn section's window, read here only for whether the scope holds history at all, so that
+    ///     this card and Most changed cannot disagree about it; null where there is none.
+    /// </param>
+    /// <param name="cancellationToken">Threaded through both statements.</param>
+    public static async Task<OverviewAuthorsPerFile> AuthorsPerFileAsync(DuckDBConnection connection,
+        OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
+    {
+        if (window is null) return new OverviewAuthorsPerFile([], scope.Excluded.Any ? 0 : null);
+
+        var parameters = new List<DuckDBParameter>();
+        string atHead = AtHead(scope, false, parameters);
+        var inScope = CommitScope(scope, parameters);
+        await using var command = connection.Query($"""
+                                                    WITH {atHead},
+                                                    -- One row per file and author: what the distinct count
+                                                    -- and the shares are both read off.
+                                                    by_author AS (
+                                                        SELECT c.repo_slug, cf.path, c.author_email,
+                                                               count(*)::INTEGER AS commits
+                                                        FROM commit_files cf
+                                                        JOIN commits c USING (commit_id)
+                                                        {Where(inScope)}
+                                                        GROUP BY c.repo_slug, cf.path, c.author_email),
+                                                    per_file AS (
+                                                        SELECT repo_slug, path,
+                                                               count(*)::INTEGER AS authors,
+                                                               sum(commits)::INTEGER AS commits,
+                                                               list(commits ORDER BY commits DESC) AS shares
+                                                        FROM by_author
+                                                        GROUP BY repo_slug, path)
+                                                    -- An index past the list's end is NULL: a file with
+                                                    -- fewer than three authors.
+                                                    SELECT h.qualified_path, p.authors, p.commits,
+                                                           p.shares[1] AS first,
+                                                           coalesce(p.shares[2], 0) AS second,
+                                                           coalesce(p.shares[3], 0) AS third
+                                                    FROM per_file p JOIN at_head h USING (repo_slug, path)
+                                                    ORDER BY p.authors DESC, p.commits DESC, h.qualified_path
+                                                    LIMIT {_authoredFilesShown}
+                                                    """, parameters);
+        await using var reader = await command.ReaderAsync(cancellationToken);
+        var files = new List<AuthoredFile>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            double commits = reader.Int32("commits");
+            files.Add(new AuthoredFile(reader.Text("qualified_path"), reader.Int32("authors"), (int)commits,
+                reader.Int32("first") / commits, reader.Int32("second") / commits, reader.Int32("third") / commits));
+        }
+
+        if (!scope.Excluded.Any) return new OverviewAuthorsPerFile(files, null);
+
+        var excludedParameters = new List<DuckDBParameter>();
+        string excluded = AtHead(scope, true, excludedParameters);
+        var excludedScope = CommitScope(scope, excludedParameters);
+        return new OverviewAuthorsPerFile(files, (int)await connection.CountAsync($"""
+                 WITH {excluded},
+                 -- Distinct and joined, not a correlated EXISTS per file at HEAD: DuckDB ran that one
+                 -- as a nested scan, 41 s on Radix with three patterns.
+                 committed AS (
+                     SELECT DISTINCT c.repo_slug, cf.path
+                     FROM commit_files cf JOIN commits c USING (commit_id)
+                     {Where(excludedScope)})
+                 SELECT count(*) FROM committed JOIN at_head USING (repo_slug, path)
+                 """, excludedParameters, cancellationToken));
+    }
+
+    /// <summary>
     ///     The two CTEs the hotspot ranking and its excluded count join: <c>touched</c>, each path the
     ///     window's commits touched with its commits and lines changed, and <c>at_head</c>, the indexed
     ///     files at HEAD in the scope — without the excluded paths, or where
@@ -197,20 +304,6 @@ internal static class OverviewQueries
     {
         var (inWindow, parameters) =
             IndexQueries.ChurnScope(paths, window, scope.RepositorySlug, null, ChurnFilters.None);
-        var atHead = new List<string> { "f.skip_reason IS NULL" };
-        // The join on repo_slug would narrow at_head to the repository anyway, but only after at_head has
-        // matched every file in the project against the excluded paths: dropping this condition took the
-        // one-repository ranking on Radix from 11 ms to 36 ms. Bound under its own name rather than
-        // leaning on the one the churn scope chose.
-        if (scope.RepositorySlug is not null)
-        {
-            atHead.Add("r.slug = $hr");
-            parameters.Add(new DuckDBParameter("hr", scope.RepositorySlug));
-        }
-
-        if (scope.Excluded.Matching("f.qualified_path", "x", parameters) is { } matching)
-            atHead.Add(excludedOnly ? matching : $"NOT {matching}");
-
         return ($"""
                  WITH touched AS (
                      SELECT c.repo_slug, cf.path,
@@ -221,11 +314,39 @@ internal static class OverviewQueries
                      JOIN commits c USING (commit_id)
                      WHERE {string.Join(" AND ", inWindow)}
                      GROUP BY c.repo_slug, cf.path),
-                 at_head AS (
-                     SELECT r.slug AS repo_slug, f.path, f.qualified_path, f.line_count
-                     FROM files f JOIN repositories r USING (repo_id)
-                     {Where(atHead)})
+                 {AtHead(scope, excludedOnly, parameters)}
                  """, parameters);
+    }
+
+    /// <summary>
+    ///     The <c>at_head</c> CTE the history cards join their per-path counts onto: the indexed files at
+    ///     HEAD in the scope, keyed by repository slug and path as a commit records them — without the
+    ///     excluded paths, or where <paramref name="excludedOnly" /> is set, only them. A skipped file is
+    ///     left out: a binary or an oversized file has no lines to multiply and nothing a link to it can
+    ///     show, the reason Largest files leaves it out (#215).
+    /// </summary>
+    private static string AtHead(OverviewScope scope, bool excludedOnly, List<DuckDBParameter> parameters)
+    {
+        var conditions = new List<string> { "f.skip_reason IS NULL" };
+        // The join on repo_slug would narrow at_head to the repository anyway, but only after at_head has
+        // matched every file in the project against the excluded paths: dropping this condition took the
+        // one-repository hotspot ranking on Radix from 11 ms to 36 ms. Bound under its own name rather
+        // than leaning on the one the caller's commit scope chose.
+        if (scope.RepositorySlug is not null)
+        {
+            conditions.Add("r.slug = $hr");
+            parameters.Add(new DuckDBParameter("hr", scope.RepositorySlug));
+        }
+
+        if (scope.Excluded.Matching("f.qualified_path", "x", parameters) is { } matching)
+            conditions.Add(excludedOnly ? matching : $"NOT {matching}");
+
+        return $"""
+                at_head AS (
+                    SELECT r.slug AS repo_slug, f.path, f.qualified_path, f.line_count
+                    FROM files f JOIN repositories r USING (repo_id)
+                    {Where(conditions)})
+                """;
     }
 
     /// <summary>
