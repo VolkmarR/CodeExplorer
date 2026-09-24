@@ -87,9 +87,14 @@ internal sealed partial class SearchTools(
         text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "pattern",
             "Nothing matches anywhere in the project"));
         // Where the pattern does match outside the filters, the filters are the whole answer: an engine
-        // hint there would send the caller to change a pattern that is already right.
+        // hint there would send the caller to change a pattern that is already right. The token path
+        // is the exception, because what it counted outside is whole tokens: a longer name inside the
+        // filters — MsgErrorDB under MsgError — is one it never counts, and "widen them" alone sent
+        // agents away from the files they had scoped to and on to the wrong routine.
         if (result.FilesMatchingWithoutFilters is not > 0)
             text.Append(Hint(request, result.FilesMatchingWithoutFilters is null));
+        else if (result.Engine == GrepSearch.TokenEngine)
+            text.Append(" Those are whole-token matches: a longer name that contains the query is not counted and may still be inside your filters, so retry with regex=true before widening them.");
 
         return text.ToString();
 
