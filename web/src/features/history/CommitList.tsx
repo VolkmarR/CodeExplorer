@@ -88,8 +88,8 @@ function CommitRow({
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex min-w-0 items-baseline gap-2">
             {showRepository ? (
-              <Badge variant="outline" className="shrink-0 font-mono">
-                {commit.repositorySlug}
+              <Badge variant="outline" className="shrink-0">
+                <span className="font-mono">{commit.repositorySlug}</span>
               </Badge>
             ) : null}
             <span className="truncate text-sm group-hover:underline" title={commit.subject}>

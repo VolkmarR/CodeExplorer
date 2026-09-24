@@ -75,15 +75,16 @@ function Toggles({
           // The empty extension is a real row — a Makefile, a LICENSE — and cannot be pressed,
           // because there is no term that selects it; it is here so the counts add up on screen.
           disabled={extension.extension === ''}
-          className="font-mono text-xs"
         >
-          {extension.extension === '' ? (
-            <span className="font-sans">no extension</span>
-          ) : (
-            extension.extension
-          )}
-          <span className="ml-1.5 tabular-nums text-muted-foreground">
-            {formatCount(extension.commits)}
+          <span className="text-xs">
+            {extension.extension === '' ? (
+              'no extension'
+            ) : (
+              <span className="font-mono">{extension.extension}</span>
+            )}
+            <span className="ml-1.5 tabular-nums text-muted-foreground">
+              {formatCount(extension.commits)}
+            </span>
           </span>
         </ToggleGroupItem>
       ))}

@@ -161,7 +161,7 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
                         reach. What it opens still asks first. */}
                     <DropdownMenu>
                       <DropdownMenuTrigger
-                        className="rounded-sm p-1 text-muted-foreground hover:text-foreground"
+                        render={<Button variant="ghost" size="icon-xs" />}
                         // Named as a repository, because a single-repository project's slug and its
                         // repository's are the same string: two controls labelled "Actions for
                         // edilverso" on one page is two controls a screen reader cannot tell apart.

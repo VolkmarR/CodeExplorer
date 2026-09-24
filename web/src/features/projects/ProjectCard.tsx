@@ -48,11 +48,7 @@ export function ProjectCard({
       badges={
         <div className="flex flex-wrap items-center gap-2">
           <IndexStatus status={project.index} />
-          {project.singleRepository ? (
-            <Badge variant="outline" className="text-muted-foreground">
-              single repository
-            </Badge>
-          ) : null}
+          {project.singleRepository ? <Badge variant="muted">single repository</Badge> : null}
         </div>
       }
       actions={

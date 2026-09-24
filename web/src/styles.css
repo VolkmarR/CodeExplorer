@@ -48,6 +48,9 @@
      themes reach it from different lightnesses. */
   --success: oklch(0.6 0.12 181);
   --warning: oklch(0.65 0.13 71);
+  /* The ground behind a search match. Translucent so the syntax colours read through it, which is
+     also why one value serves both themes and `.dark` does not repeat it. */
+  --highlight: oklch(0.879 0.169 91.605 / 35%);
   --border: oklch(0.91 0.01 265);
   --input: oklch(0.91 0.01 265);
   --ring: oklch(0.55 0.15 251);
@@ -118,6 +121,7 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-highlight: var(--highlight);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -133,16 +137,20 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-}
+  /* The code view's mark on the selected line: a primary rule down the gutter's left edge, drawn as
+     an inset shadow so it takes no width and the line numbers do not shift when it moves. */
+  --shadow-gutter-mark: inset 2px 0 0 var(--primary);
+  /* The top bar's loading bar: a third-width block crossing the full width and back to the start.
+     A theme token, so the element names it as `animate-slide` and the keyframe travels with it. */
+  --animate-slide: slide 1s ease-in-out infinite;
 
-/* The top bar's loading bar: a third-width block crossing the full width and back to the start.
-   Defined here because a keyframe has no utility-class form; the element names it with `animate-[…]`. */
-@keyframes slide {
-  from {
-    translate: -100% 0;
-  }
-  to {
-    translate: 300% 0;
+  @keyframes slide {
+    from {
+      translate: -100% 0;
+    }
+    to {
+      translate: 300% 0;
+    }
   }
 }
 

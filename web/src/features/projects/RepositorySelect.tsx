@@ -28,14 +28,16 @@ export function RepositorySelect({
 }) {
   return (
     <Select value={value} onValueChange={(next) => onChange(next ?? '')}>
-      <SelectTrigger id={id} className="w-full font-mono">
-        <SelectValue>{value === '' ? <span className="font-sans">All</span> : value}</SelectValue>
+      <SelectTrigger id={id} className="w-full">
+        <SelectValue>
+          {value === '' ? 'All' : <span className="font-mono">{value}</span>}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="">All repositories</SelectItem>
         {repositories.map((repository) => (
-          <SelectItem key={repository.slug} value={repository.slug} className="font-mono">
-            {repository.slug}
+          <SelectItem key={repository.slug} value={repository.slug}>
+            <span className="font-mono">{repository.slug}</span>
           </SelectItem>
         ))}
       </SelectContent>

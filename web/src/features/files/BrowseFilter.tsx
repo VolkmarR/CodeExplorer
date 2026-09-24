@@ -49,7 +49,7 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
           value={draft.glob}
           onChange={(event) => setDraft({ ...draft, glob: event.target.value })}
           placeholder="*Handler.cs — empty to browse the tree"
-          className="font-mono"
+          font="mono"
         />
       </div>
       {multiRepository ? (

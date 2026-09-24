@@ -91,7 +91,8 @@ export function SearchForm({ project, search }: { project: string; search: Searc
             value={draft.q}
             onChange={(event) => setDraft({ ...draft, q: event.target.value })}
             placeholder="Search code in this project"
-            className="pl-8 font-mono"
+            font="mono"
+            inset="icon"
             // The page is for typing a query; it should not take a click to start. The rule guards
             // against focus stolen from content a reader was in, and this page has none before the box.
             // oxlint-disable-next-line jsx-a11y/no-autofocus, react-doctor/no-autofocus
@@ -169,7 +170,8 @@ export function SearchForm({ project, search }: { project: string; search: Searc
             value={draft.extension ?? ''}
             onChange={(event) => setDraft({ ...draft, extension: event.target.value || undefined })}
             placeholder="prg"
-            className="h-8 w-24 font-mono"
+            font="mono"
+            className="h-8 w-24"
           />
         </div>
         <div className="flex items-center gap-2">
@@ -181,7 +183,8 @@ export function SearchForm({ project, search }: { project: string; search: Searc
             value={draft.path ?? ''}
             onChange={(event) => setDraft({ ...draft, path: event.target.value || undefined })}
             placeholder="*/src/*"
-            className="h-8 w-44 font-mono"
+            font="mono"
+            className="h-8 w-44"
           />
         </div>
 

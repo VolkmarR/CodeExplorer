@@ -42,7 +42,7 @@ export function MatchedLine({
       // oxlint-disable-next-line react/no-array-index-key, react-doctor/no-array-index-key, react-doctor/no-array-index-as-key
       <span key={index}>
         {piece.matched ? (
-          <mark className="rounded-xs bg-amber-300/35 text-inherit">{span}</mark>
+          <mark className="rounded-xs bg-highlight text-inherit">{span}</mark>
         ) : (
           span
         )}

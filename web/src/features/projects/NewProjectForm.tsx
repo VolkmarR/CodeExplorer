@@ -48,7 +48,7 @@ export function NewProjectForm({ onCancel, onCreated }: NewProjectFormProps) {
                 value={slug}
                 onChange={(event) => setSlug(event.target.value)}
                 placeholder="acme-platform"
-                className="font-mono"
+                font="mono"
                 required
               />
               <p className="text-xs text-muted-foreground">

@@ -1,7 +1,7 @@
 import type { HighlightRenderNode } from '@tanstack/highlight'
 import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import { languageFor } from '@/highlight/highlighter'
 import { codeLines } from '@/highlight/lines'
 import type { Origin } from '@/lib/urls/views'
@@ -108,103 +108,108 @@ export function CodeView({
     //
     // The viewport element is handed out because it is what scrolls, and the virtualiser measures
     // and drives the thing that scrolls rather than the box around it.
-    <ScrollArea className="max-h-(--reading-pane) rounded-lg border bg-card" viewportRef={viewport}>
-      <div
-        className="relative w-full font-mono text-xs"
-        style={{ height: `${rows.getTotalSize()}px` }}
-      >
-        {rows.getVirtualItems().map((row) => {
-          const number = row.index + 1
-          const attributed = runs.get(number)
-          return (
-            <div
-              key={row.key}
-              id={`L${number}`}
-              data-index={row.index}
-              // Measured rather than assumed: a wrapped line is as tall as it needs to be, and the
-              // gutter's label can be taller than the code beside it.
-              ref={rows.measureElement}
-              className={cn(
-                'absolute top-0 left-0 flex',
-                // Unwrapped, a row is as wide as its longest line and the pane scrolls sideways to
-                // it; wrapped, it is the pane's width and the code folds inside it.
-                wrap ? 'w-full' : 'min-w-full',
-                number === line && 'bg-primary/15',
-              )}
-              style={{ transform: `translateY(${row.start}px)` }}
-            >
-              {gutter ? (
-                <div
-                  className={cn(
-                    'w-56 shrink-0 border-r px-2 py-0.5 whitespace-nowrap select-none',
-                    // Alternating, so two adjacent runs by the same author read as two.
-                    attributed && attributed.index % 2 === 1 && 'bg-muted/40',
-                  )}
-                  title={attributed?.run.by?.subject}
-                >
-                  {blame === null ? (
-                    number === 1 ? (
-                      <span className="text-muted-foreground">loading…</span>
-                    ) : null
-                  ) : attributed?.first ? (
-                    attributed.run.by ? (
-                      <span className="flex items-baseline gap-2 overflow-hidden">
-                        {/* The abbreviated id is the link and not the whole line: the column is
+    //
+    // The frame is a div of its own because ScrollArea owns its appearance (`shadcn/no-restyle`);
+    // overflow-hidden clips the scrollbar to the frame's rounded corners.
+    <div className="overflow-hidden rounded-lg border bg-card">
+      <ScrollArea className="max-h-(--reading-pane)" viewportRef={viewport}>
+        <div
+          className="relative h-(--rows-height) w-full font-mono text-xs"
+          style={{ '--rows-height': `${rows.getTotalSize()}px` } as CSSProperties}
+        >
+          {rows.getVirtualItems().map((row) => {
+            const number = row.index + 1
+            const attributed = runs.get(number)
+            return (
+              <div
+                key={row.key}
+                id={`L${number}`}
+                data-index={row.index}
+                // Measured rather than assumed: a wrapped line is as tall as it needs to be, and the
+                // gutter's label can be taller than the code beside it.
+                ref={rows.measureElement}
+                className={cn(
+                  'absolute top-0 left-0 flex translate-y-(--row-start)',
+                  // Unwrapped, a row is as wide as its longest line and the pane scrolls sideways to
+                  // it; wrapped, it is the pane's width and the code folds inside it.
+                  wrap ? 'w-full' : 'min-w-full',
+                  number === line && 'bg-primary/15',
+                )}
+                style={{ '--row-start': `${row.start}px` } as CSSProperties}
+              >
+                {gutter ? (
+                  <div
+                    className={cn(
+                      'w-56 shrink-0 border-r px-2 py-0.5 whitespace-nowrap select-none',
+                      // Alternating, so two adjacent runs by the same author read as two.
+                      attributed && attributed.index % 2 === 1 && 'bg-muted/40',
+                    )}
+                    title={attributed?.run.by?.subject}
+                  >
+                    {blame === null ? (
+                      number === 1 ? (
+                        <span className="text-muted-foreground">loading…</span>
+                      ) : null
+                    ) : attributed?.first ? (
+                      attributed.run.by ? (
+                        <span className="flex items-baseline gap-2 overflow-hidden">
+                          {/* The abbreviated id is the link and not the whole line: the column is
                             narrow and already holds three things, and the sha is the one of them
                             that names the commit. */}
-                        <Link
-                          to="/projects/$project/commit"
-                          params={{ project }}
-                          search={commitSearch(attributed.run.by.sha, origin?.view ?? 'files')}
-                          className="text-muted-foreground hover:text-primary hover:underline"
-                        >
-                          {shortSha(attributed.run.by.sha)}
-                        </Link>
-                        <span className="text-muted-foreground">
-                          {formatDate(attributed.run.by.authoredAt)}
+                          <Link
+                            to="/projects/$project/commit"
+                            params={{ project }}
+                            search={commitSearch(attributed.run.by.sha, origin?.view ?? 'files')}
+                            className="text-muted-foreground hover:text-primary hover:underline"
+                          >
+                            {shortSha(attributed.run.by.sha)}
+                          </Link>
+                          <span className="text-muted-foreground">
+                            {formatDate(attributed.run.by.authoredAt)}
+                          </span>
+                          <span className="truncate">{attributed.run.by.authorName}</span>
                         </span>
-                        <span className="truncate">{attributed.run.by.authorName}</span>
-                      </span>
-                    ) : (
-                      // A run no commit of the walk wrote: history the index does not reach, not
-                      // a line nobody wrote. Said as such, quietly, rather than left blank.
-                      <span className="text-muted-foreground/70">not attributed</span>
-                    )
-                  ) : null}
-                </div>
-              ) : null}
-              <div
-                className={cn(
-                  'w-14 shrink-0 border-r px-2 py-0.5 text-right text-muted-foreground/70 select-none',
-                  number === line && 'shadow-[inset_2px_0_0_var(--primary)] text-primary',
-                )}
-              >
-                {/* The number is the link to itself, so the way to share a line from the file is the
+                      ) : (
+                        // A run no commit of the walk wrote: history the index does not reach, not
+                        // a line nobody wrote. Said as such, quietly, rather than left blank.
+                        <span className="text-muted-foreground/70">not attributed</span>
+                      )
+                    ) : null}
+                  </div>
+                ) : null}
+                <div
+                  className={cn(
+                    'w-14 shrink-0 border-r px-2 py-0.5 text-right text-muted-foreground/70 select-none',
+                    number === line && 'shadow-gutter-mark text-primary',
+                  )}
+                >
+                  {/* The number is the link to itself, so the way to share a line from the file is the
                     same as from a search result: click the number, copy the address bar. `replace`,
                     because each line clicked is not a page the back button should revisit. */}
-                <Link
-                  to="/projects/$project/file"
-                  params={{ project }}
-                  search={fileSearch(path, number, origin)}
-                  replace
-                  className="hover:text-primary hover:underline"
+                  <Link
+                    to="/projects/$project/file"
+                    params={{ project }}
+                    search={fileSearch(path, number, origin)}
+                    replace
+                    className="hover:text-primary hover:underline"
+                  >
+                    {number}
+                  </Link>
+                </div>
+                <div
+                  className={cn(
+                    'px-3 py-0.5',
+                    wrap ? 'min-w-0 flex-1 break-all whitespace-pre-wrap' : 'whitespace-pre',
+                  )}
                 >
-                  {number}
-                </Link>
+                  {renderNodes(lines.nodesAt(row.index))}
+                </div>
               </div>
-              <div
-                className={cn(
-                  'px-3 py-0.5',
-                  wrap ? 'min-w-0 flex-1 break-all whitespace-pre-wrap' : 'whitespace-pre',
-                )}
-              >
-                {renderNodes(lines.nodesAt(row.index))}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </ScrollArea>
+            )
+          })}
+        </div>
+      </ScrollArea>
+    </div>
   )
 }
 
