@@ -9,12 +9,19 @@ export interface CommitParameters {
   sha: string
   /** The view the reader came from, so the trail says how they got here and not where the route is. */
   from?: Origin['view']
+  /**
+   * Which page of the commit's files. Left out for the first, so every link to a commit stays the
+   * short URL it was before the list was paged.
+   */
+  page?: number
 }
 
 /** A hand-edited or truncated URL still opens, and the page says it names no commit rather than throwing. */
 export function validateCommitSearch(search: Record<string, unknown>): CommitParameters {
+  const page = Number(search.page)
   return {
     from: asView(search.from),
+    page: Number.isInteger(page) && page > 1 ? page : undefined,
     sha: typeof search.sha === 'string' ? search.sha : '',
   }
 }

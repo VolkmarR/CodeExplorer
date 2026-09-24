@@ -192,6 +192,31 @@ test('commit: the coercion table', () => {
       { from: true, sha: 'a' },
       { from: undefined, sha: 'a' },
     ],
+    [
+      { page: 3, sha: 'a' },
+      { from: undefined, page: 3, sha: 'a' },
+    ],
+    [
+      { page: '3', sha: 'a' },
+      { from: undefined, page: 3, sha: 'a' },
+    ],
+    // Page 1 is the URL without a page, so the first page and a plain link are the same URL.
+    [
+      { page: 1, sha: 'a' },
+      { from: undefined, page: undefined, sha: 'a' },
+    ],
+    [
+      { page: 0, sha: 'a' },
+      { from: undefined, page: undefined, sha: 'a' },
+    ],
+    [
+      { page: 2.5, sha: 'a' },
+      { from: undefined, page: undefined, sha: 'a' },
+    ],
+    [
+      { page: 'two', sha: 'a' },
+      { from: undefined, page: undefined, sha: 'a' },
+    ],
   ]
   for (const [input, expected] of cases) {
     expect(validateCommitSearch(input), JSON.stringify(input)).toEqual(expected)
