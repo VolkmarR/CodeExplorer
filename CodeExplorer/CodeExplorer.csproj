@@ -7,10 +7,10 @@
         <PackageReference Include="Azure.Storage.Blobs" Version="12.29.2"/>
         <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.5"/>
         <PackageReference Include="LibGit2Sharp" Version="0.32.0"/>
-        <PackageReference Include="Microsoft.Identity.Web" Version="4.14.2"/>
+        <PackageReference Include="Microsoft.Identity.Web" Version="4.15.0" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0"/>
-        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.0" />
-        <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.19.0" />
+        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />
+        <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
         <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0" />
         <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.19.0" />
         <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.19.0" />
