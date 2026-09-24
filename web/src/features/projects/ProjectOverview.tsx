@@ -2,6 +2,7 @@ import { useSuspenseQuery } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { AuthorsCard } from '@/features/projects/AuthorsCard'
 import { AuthorsPerFileCard } from '@/features/projects/AuthorsPerFileCard'
+import { FolderCouplingCard } from '@/features/projects/FolderCouplingCard'
 import { HotspotsCard } from '@/features/projects/HotspotsCard'
 import { LanguageShares } from '@/features/projects/LanguageShares'
 import { MostChangedCard } from '@/features/projects/MostChangedCard'
@@ -12,8 +13,8 @@ import { overviewSearch, type OverviewParameters } from '@/lib/urls/overviewPara
 
 /**
  * The project as a whole: what it is written in, how it is laid out, what is biggest in it, where
- * work has been happening, who has been doing it, which large files keep changing, and which files
- * nobody owns.
+ * work has been happening, who has been doing it, which large files keep changing, which files
+ * nobody owns, and which folders keep changing together.
  *
  * Computed live from the index for this page (#216), over the filter bar's window and repository and
  * without the paths the project's settings exclude — so it is not the stored row `project_overview`
@@ -87,6 +88,11 @@ export function ProjectOverview({ project }: { project: string }) {
               project={project}
               churn={data.overview.churn}
               authors={data.cards.authorsPerFile}
+            />
+            <FolderCouplingCard
+              repository={search.repository}
+              churn={data.overview.churn}
+              coupling={data.cards.folderCoupling}
             />
           </>
         )}

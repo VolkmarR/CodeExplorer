@@ -98,18 +98,7 @@ public sealed partial class HistoryQueries(IndexReaders readers, IConfiguration 
     /// </summary>
     private const int _maxLinesPerFile = 100_000;
 
-    /// <summary>
-    ///     Default for <c>History:MaxCommitPaths</c>, the most paths a commit may touch and still be
-    ///     paired. A reformat, a vendor drop or an initial import couples every path it touched to
-    ///     every other, and those pairs are one commit rather than evidence about any file in it.
-    ///     Two hundred is the judgement: high enough that a feature landing across a module still
-    ///     counts as coupling, low enough that nothing a person wrote by hand in one sitting reaches
-    ///     it. It is a setting and not a constant because what counts as a mass commit differs between
-    ///     a repository of two hundred files and one of eighty thousand.
-    /// </summary>
-    private const int _defaultMaxCommitPaths = 200;
-
-    private readonly int _maxCommitPaths = configuration.GetValue("History:MaxCommitPaths", _defaultMaxCommitPaths);
+    private readonly int _maxCommitPaths = CoChangeCeiling.From(configuration);
 
     /// <summary>
     ///     Where one path resolved for a tool that takes a single file. Exactly one of the three is set:

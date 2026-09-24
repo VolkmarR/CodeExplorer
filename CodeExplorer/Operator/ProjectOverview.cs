@@ -66,7 +66,7 @@ public sealed record RepositoryCommit(string Sha, string AuthorName, DateTimeOff
 ///     because the setting is empty or the page asked to see the excluded paths.
 /// </param>
 /// <param name="Cards">
-///     The cards only the page draws — Hotspots (#211), Most authors per file (#212) — set with
+///     The cards only the page draws — Hotspots (#211), Most authors per file (#212), Folders that change together (#213) — set with
 ///     <see cref="Overview" />. Beside the overview rather than in it, because <see cref="IndexOverview" />
 ///     is also the stored row and the <c>project_overview</c> reply, and neither has them.
 /// </param>
@@ -100,8 +100,15 @@ public sealed record ProjectDetail(
 ///     putting the composition here keeps <c>Control/</c> from depending on <c>Index/</c>, which
 ///     already depends on it (ADR-0005).
 /// </summary>
-public sealed class ProjectOverview(ControlDatabase control, IndexReaders readers, GitClones clones)
+public sealed class ProjectOverview(
+    ControlDatabase control,
+    IndexReaders readers,
+    GitClones clones,
+    IConfiguration configuration)
 {
+    /// <summary>The ceiling the folder coupling card pairs under, the co-change tool's own (#213).</summary>
+    private readonly int _maxCommitPaths = CoChangeCeiling.From(configuration);
+
     /// <summary>
     ///     One index read per project. An operator administers projects by hand, so the list is the
     ///     length of a screen and a single query joining across attached databases would buy nothing.
@@ -167,7 +174,8 @@ public sealed class ProjectOverview(ControlDatabase control, IndexReaders reader
         return await readers.OverIndexAsync(project.Slug, filter.Repository,
             async (index, token) =>
             {
-                var (overview, left, cards) = await index.LiveOverviewAsync(filter.Days, excluded, token);
+                var (overview, left, cards) = await index.LiveOverviewAsync(filter.Days, excluded,
+                    _maxCommitPaths, token);
                 return new ProjectOverviewDetail(overview, null, patterns.Count, left, cards);
             },
             problem => new ProjectOverviewDetail(null, problem.Explanation, patterns.Count), cancellationToken);
