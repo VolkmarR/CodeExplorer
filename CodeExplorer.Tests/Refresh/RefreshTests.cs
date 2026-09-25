@@ -233,14 +233,9 @@ public sealed class RefreshTests : IDisposable
         // looks like from here.
         _host.RemoveGitRepository("one");
 
-        using (var response = await _host.RequestRefreshAsync("alpha"))
-            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        await _host.WaitForRefreshesAsync();
+        string error = await FailedRefreshErrorAsync();
 
-        var status = await _host.RefreshStatusAsync("alpha");
-        Assert.Equal(RefreshState.Failed, status.State);
-        Assert.NotNull(status.Error);
-        Assert.Contains("one", status.Error, StringComparison.Ordinal);
+        Assert.Contains("one", error, StringComparison.Ordinal);
         // The point of failing rather than swapping: what was searchable before still is.
         Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
     }
@@ -281,16 +276,11 @@ public sealed class RefreshTests : IDisposable
         await _host.CreateProjectAsync("alpha");
         await _host.AddRepositoryAsync("alpha", "one", _host.CreateEmptyGitRepository("one"));
 
-        using (var response = await _host.RequestRefreshAsync("alpha"))
-            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        await _host.WaitForRefreshesAsync();
+        string error = await FailedRefreshErrorAsync();
 
         // Following the remote's HEAD must not turn an empty remote into a broken local copy: there is
         // no default branch to resolve because the remote advertises none, and that is an answer.
-        var status = await _host.RefreshStatusAsync("alpha");
-        Assert.Equal(RefreshState.Failed, status.State);
-        Assert.NotNull(status.Error);
-        Assert.Contains("has no commits yet", status.Error, StringComparison.Ordinal);
+        Assert.Contains("has no commits yet", error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -302,22 +292,17 @@ public sealed class RefreshTests : IDisposable
         _host.RenameDefaultBranch("one", "trunk");
         TestHost.BreakHead(_host.FixtureGitPath("one"), "main");
 
-        using (var response = await _host.RequestRefreshAsync("alpha"))
-            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        await _host.WaitForRefreshesAsync();
+        string error = await FailedRefreshErrorAsync();
 
-        var status = await _host.RefreshStatusAsync("alpha");
-        Assert.Equal(RefreshState.Failed, status.State);
-        Assert.NotNull(status.Error);
         // Not "has no commits yet": the remote is fine and the local copy is not, and the message says
         // which one is wrong and what the operator can do about it.
-        Assert.DoesNotContain("has no commits yet", status.Error, StringComparison.Ordinal);
-        Assert.Contains("local copy", status.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("has no commits yet", error, StringComparison.Ordinal);
+        Assert.Contains("local copy", error, StringComparison.Ordinal);
         // The way out is one the reader can take through the product: whoever reads the status cannot
         // reach the server's disk, and a path there only discloses its layout (#232). The path goes
         // to the log, which the operator who can reach the disk does read.
-        Assert.Contains("remove repository 'one' from project 'alpha'", status.Error, StringComparison.Ordinal);
-        Assert.DoesNotContain(_host.DataDirectory, status.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("remove repository 'one' from project 'alpha'", error, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, error, StringComparison.OrdinalIgnoreCase);
         _host.Logs.Only(LogLevel.Warning, _host.ClonePath("alpha", "one"));
         // The old index is still serving, as it is for any other refresh that could read nothing.
         Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
