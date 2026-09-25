@@ -40,15 +40,14 @@ public sealed class IndexBuilder(
     ///     and decides what becomes of it, which is what keeps this a build and not a refresh.
     /// </summary>
     /// <param name="shadow">The index to write into, created by the caller and disposed by it.</param>
-    /// <param name="repositories">The clones to read, in the order their repositories are to be numbered.</param>
+    /// <param name="opened">The clones to read, in the order their repositories are to be numbered.</param>
     /// <param name="configured">
-    ///     Every repository the project has, including those that could not be opened this time: a
-    ///     skipped repository is missing from the files until it opens again, but keeps its history.
+    ///     Every repository the project has, opened or not: a skipped one keeps its history (ADR-0007).
     /// </param>
     /// <param name="singleRepository">How this project names its files (ADR-0006), recorded in the index.</param>
     /// <param name="report">How far the build has got, for the status an operator polls.</param>
     /// <param name="cancellationToken">Checked between files, which is the granularity of the walk.</param>
-    public async Task<IndexSummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
+    public async Task<IndexSummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> opened,
         IReadOnlyList<ProjectRepository> configured, bool singleRepository, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
@@ -59,7 +58,7 @@ public sealed class IndexBuilder(
         // The tree walk and the appender are synchronous git and DuckDB calls; a worker thread
         // keeps them off the request thread, and the token is checked between files.
         var (files, lines) = await Task.Run(
-            () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, repositories, report,
+            () => Ingest(shadow.Connection, shadow.Catalog, singleRepository, opened, report,
                 cancellationToken),
             cancellationToken);
         // After the whole walk and not inside it: a name resolves against every other file in the
@@ -74,7 +73,7 @@ public sealed class IndexBuilder(
         // After the files, because attribution is joined onto them and a file row is what says which
         // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished
         // and an index that is live with no history would be one nothing ever goes back to fill in.
-        await history.FillAsync(shadow, repositories, configured, report, cancellationToken);
+        await history.FillAsync(shadow, opened, configured, report, cancellationToken);
         // After the history, because the overview ranks it, and before CompleteAsync for the same
         // reason the history runs before it: an index that went live without an overview is one
         // nothing would ever go back and fill in.
@@ -87,7 +86,7 @@ public sealed class IndexBuilder(
         await shadow.CompleteAsync(singleRepository, report, cancellationToken);
 
         recording.Built(files, lines);
-        return new IndexSummary(repositories.Count, files, lines, []);
+        return new IndexSummary(opened.Count, files, lines, []);
     }
 
     private (long Files, long Lines) Ingest(

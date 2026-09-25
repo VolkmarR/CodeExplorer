@@ -31,8 +31,8 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     /// <param name="shadow">The shadow being built, its connection already bound to it.</param>
     /// <param name="opened">The same opened copies the file walk read, in the same order.</param>
     /// <param name="configured">
-    ///     Every repository the project has in the control database, opened or not. It decides whose
-    ///     history is kept; <paramref name="opened" /> only decides whose history is walked.
+    ///     Every repository the project has, opened or not. It decides whose history is kept;
+    ///     <paramref name="opened" /> only decides whose history is walked.
     /// </param>
     /// <param name="report">How far the pass has got, for the status an operator polls.</param>
     /// <param name="cancellationToken">Checked per commit, which is where the time goes.</param>
@@ -63,10 +63,8 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         // A repository the operator removed since the last build left its commits in the carried-over
         // history. They are pruned before anything is appended, so a slug reused for a different remote
         // cannot inherit the old one's commits or, worse, replay its own commits onto the old one's
-        // attribution. Pruned by what is configured and not by what opened: a repository whose fetch
-        // failed this once is skipped, not removed, and pruning it would make the next refresh re-walk
-        // it from the root and hand out new ids for commits the index already held (#228). Its
-        // carried-over rows stay exactly as they were, since nothing below walks it.
+        // attribution. Pruned by what is configured and not by what opened, so a repository whose fetch
+        // failed this once keeps its history (ADR-0007, #228).
         Prune(connection, configured, cancellationToken);
 
         int appended = 0;

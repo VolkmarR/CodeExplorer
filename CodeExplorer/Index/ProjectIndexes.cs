@@ -428,7 +428,8 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     a commit already recorded cannot change, so carrying it over is not a cache that can go stale.
     ///     Done here rather than by the caller, so that "a shadow starts out knowing what the live index
     ///     knew" is a property of creating one and not of a caller remembering to ask. The build prunes
-    ///     what no longer belongs — a repository since removed — because only it knows what was read.
+    ///     what no longer belongs — a repository since removed from the project — alongside the rest of
+    ///     the history it writes, so this copy stays a plain carry-over of everything.
     ///     Nothing to carry is the ordinary case for a first build. A live file at the current version
     ///     holds every history table: the schema creates them all in one statement and the
     ///     <c>index_info</c> row that says which version it is was written last, so once the version
