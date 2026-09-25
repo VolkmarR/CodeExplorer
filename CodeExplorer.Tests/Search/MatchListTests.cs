@@ -196,6 +196,69 @@ public sealed class MatchListTests : IDisposable
         Assert.DoesNotContain("No matches", text);
     }
 
+    /// <summary>
+    ///     A named group captures in RE2 like any other, so it is counted as one (#238). The .NET
+    ///     spelling is one the bundled RE2 rejects, and the reply says which spelling it takes.
+    /// </summary>
+    [Fact]
+    public async Task A_named_capture_group_is_extracted()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string text = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "Status\\.(?P<name>\\w+)", ["group"] = 1 });
+        Assert.Contains("2 distinct values from 4 matches in 2 files", text);
+        Assert.Contains("    3      2  Open", text);
+        Assert.Contains("    1      1  Closed", text);
+
+        string dotnet = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "Status\\.(?<name>\\w+)", ["group"] = 1 });
+        Assert.Contains("Write it (?P<name>...) instead.", dotnet);
+
+        // An optional literal parenthesis before a '<' is not that spelling, nor is one before '='
+        // a lookahead.
+        string literal = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "Status\\.\\(?<?=?(?P<name>\\w+)", ["group"] = 1 });
+        Assert.Contains("    3      2  Open", literal);
+    }
+
+    /// <summary>
+    ///     A parenthesis quoted by <c>\Q...\E</c> or escaped or inside a class is a literal and opens no
+    ///     group, so asking for group 1 is refused by name rather than handed to the engine (#238).
+    /// </summary>
+    [Theory]
+    [InlineData("\\Q(\\E")]
+    [InlineData("\\Q(")]
+    [InlineData("\\(")]
+    [InlineData("[(]")]
+    [InlineData("[](]")]
+    public async Task A_literal_parenthesis_opens_no_capture_group(string query)
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string text = await ListAsync(client, new Dictionary<string, object?> { ["query"] = query, ["group"] = 1 });
+
+        Assert.Contains("The pattern has no capture groups, so group=1 cannot be extracted.", text);
+    }
+
+    /// <summary>
+    ///     Wrapped as a whole word, <c>a)|(b</c> would balance into a pattern with a group of its own;
+    ///     alone it is no pattern at all, and a <c>\Q</c> left open is a literal to the end (#238).
+    /// </summary>
+    [Fact]
+    public async Task A_whole_word_pattern_means_what_it_meant_alone()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string unbalanced = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "a)|(b", ["wholeWord"] = true });
+        Assert.Contains("not a valid RE2", unbalanced);
+
+        string quoted = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "\\QStatus.Open", ["wholeWord"] = true });
+        Assert.Contains("    3      2  Status.Open", quoted);
+    }
+
     [Fact]
     public async Task A_malformed_pattern_is_explained()
     {

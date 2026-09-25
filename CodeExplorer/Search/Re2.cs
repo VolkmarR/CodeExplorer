@@ -1,4 +1,5 @@
 using CodeExplorer.Language;
+using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer.Search;
@@ -27,10 +28,21 @@ internal static class Re2
     /// <summary>Why this pattern cannot be run at all, or null when RE2 may have a go at it.</summary>
     public static string? Unsupported(string pattern)
     {
-        foreach ((string needle, string name) in _unsupportedSyntax)
-            if (pattern.Contains(needle, StringComparison.Ordinal))
-                return $"The pattern uses {name}, which RE2 does not support. "
-                       + "Match the wider text instead and read the hit, or grep for the inner part with context.";
+        foreach (int open in GroupOpenings(pattern))
+        {
+            var group = pattern.AsSpan(open);
+            foreach ((string needle, string name) in _unsupportedSyntax)
+                if (group.StartsWith(needle, StringComparison.Ordinal))
+                    return $"The pattern uses {name}, which RE2 does not support. "
+                           + "Match the wider text instead and read the hit, or grep for the inner part with context.";
+
+            // Checked after lookbehind, whose needles begin the same way. The .NET spelling of a named
+            // group arrived in RE2 only after the version DuckDB bundles, which rejects it with a bare
+            // "invalid named capture group" that does not say what to write instead (#238).
+            if (group.StartsWith("(?<", StringComparison.Ordinal))
+                return "The pattern names a group as (?<name>...), which this RE2 does not accept. "
+                       + "Write it (?P<name>...) instead.";
+        }
 
         // \1..\9 is a backreference; \0 is not one and \\1 is an escaped backslash followed by a digit.
         for (int i = 0; i + 1 < pattern.Length; i++)
@@ -68,7 +80,25 @@ internal static class Re2
     ///     counts.
     /// </summary>
     public static string WholeWord(string pattern) =>
-        $"{SymbolText.Re2WordStart}(?:{pattern}){SymbolText.Re2WordEnd}";
+        $"{SymbolText.Re2WordStart}(?:{Closed(pattern)}){SymbolText.Re2WordEnd}";
+
+    /// <summary>The caller's pattern as group 1, so a rewrite can mark exactly what it matched.</summary>
+    public static string Grouped(string pattern) => $"({Closed(pattern)})";
+
+    /// <summary>
+    ///     Compiles the caller's pattern on its own, throwing the <see cref="DuckDBException" /> that
+    ///     <see cref="IsPatternRejection" /> recognises when RE2 refuses it. Run before any wrapped form
+    ///     is, because a wrapper can balance what the caller left unbalanced: <c>a)|(b</c> is no pattern,
+    ///     yet <c>(?:a)|(b)</c> is one that matches something else and captures a group besides (#238).
+    ///     An empty subject, so the check costs a compile and no scan.
+    /// </summary>
+    public static async Task CompileAsync(DuckDBConnection connection, string pattern,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.Query("SELECT regexp_matches('', $pattern)",
+            [new DuckDBParameter("pattern", pattern)]);
+        await command.ScalarAsync(cancellationToken);
+    }
 
     /// <summary>
     ///     The caller's pattern as a whole word, written so that every character of the text belongs to
@@ -83,38 +113,63 @@ internal static class Re2
     ///     could start — which is what a lookbehind would have said, in the engine that has none.
     /// </summary>
     public static string WholeWordTokens(string pattern) =>
-        $"({pattern}){SymbolText.Re2WordEnd}|{SymbolText.Re2WordChar}+{SymbolText.Re2NonWordChar}?|{SymbolText.Re2NonWordChar}";
+        $"({Closed(pattern)}){SymbolText.Re2WordEnd}|{SymbolText.Re2WordChar}+{SymbolText.Re2NonWordChar}?|{SymbolText.Re2NonWordChar}";
 
     /// <summary>
-    ///     How many capture groups the pattern opens, counting only real ones: <c>(?:</c>, <c>(?i)</c>
-    ///     and friends capture nothing, a <c>\(</c> is a literal parenthesis and a <c>(</c> inside a
-    ///     character class is one too. Used to tell "group 1 matched nothing" from "there is no group
-    ///     1", which read identically as an empty answer and mean opposite things.
+    ///     The pattern with a <c>\Q</c> it leaves open closed by <c>\E</c>. Alone, RE2 quotes to the end
+    ///     of the pattern; wrapped, the quote would swallow the wrapper's closing parenthesis too and
+    ///     turn a pattern RE2 accepted into one it refuses (#238).
     /// </summary>
-    public static int CaptureGroups(string pattern)
+    private static string Closed(string pattern)
     {
-        int groups = 0;
-        bool inClass = false;
         for (int i = 0; i < pattern.Length; i++)
         {
-            char c = pattern[i];
-            if (c == '\\')
-            {
-                i++;
-                continue;
-            }
-
-            if (inClass)
-            {
-                if (c == ']') inClass = false;
-                continue;
-            }
-
-            if (c == '[') inClass = true;
-            else if (c == '(' && (i + 1 >= pattern.Length || pattern[i + 1] != '?')) groups++;
+            if (pattern[i] != '\\') continue;
+            int end = EscapeEnd(pattern, i);
+            if (end == pattern.Length - 1 && i + 1 < pattern.Length && pattern[i + 1] == 'Q'
+                && !pattern.EndsWith("\\E", StringComparison.Ordinal))
+                return pattern + "\\E";
+            i = end;
         }
 
-        return groups;
+        return pattern;
+    }
+
+    /// <summary>
+    ///     How many capture groups the pattern opens, counting only real ones: a plain <c>(</c> and a
+    ///     named <c>(?P&lt;name&gt;</c> capture; <c>(?:</c>, <c>(?i)</c> and friends
+    ///     do not, and a parenthesis that is escaped, quoted by <c>\Q...\E</c> or inside a character class
+    ///     is a literal. Used to tell "group 1 matched nothing" from "there is no group 1", which read
+    ///     identically as an empty answer and mean opposite things.
+    /// </summary>
+    public static int CaptureGroups(string pattern) =>
+        GroupOpenings(pattern).Count(open => open + 1 == pattern.Length || pattern[open + 1] != '?'
+                                             || pattern.AsSpan(open).StartsWith("(?P<"));
+
+    /// <summary>
+    ///     The index of every <c>(</c> that opens a group, skipping the ones that are literals: escaped,
+    ///     quoted by <c>\Q...\E</c> or inside a character class. A needle searched for in the raw text
+    ///     would find <c>(?=</c> in <c>\(?=</c>, an optional literal parenthesis before an equals sign.
+    /// </summary>
+    private static IEnumerable<int> GroupOpenings(string pattern)
+    {
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            switch (pattern[i])
+            {
+                case '\\':
+                    i = EscapeEnd(pattern, i);
+                    break;
+                case '[':
+                    // An unterminated class is a pattern RE2 rejects; nothing after it is a group.
+                    i = ClassEnd(pattern, i);
+                    if (i < 0) yield break;
+                    break;
+                case '(':
+                    yield return i;
+                    break;
+            }
+        }
     }
 
     /// <summary>

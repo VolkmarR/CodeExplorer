@@ -504,6 +504,32 @@ public sealed class GrepTests : IDisposable
         Assert.DoesNotContain("src/Glued.cs", spanned);
     }
 
+    /// <summary>
+    ///     The caller's pattern is wrapped for a whole word or for marking a multiline match, and a
+    ///     wrapper must not change what it means (#238): <c>a)|(b</c> is not a pattern, though its
+    ///     whole-word wrapping balances it into one, and a <c>\Q</c> left open would quote the marking's
+    ///     own closing parenthesis.
+    /// </summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task A_wrapped_pattern_means_what_it_meant_alone(bool multiline, bool wholeWord)
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+
+        string unbalanced = await GrepAsync(client,
+            new Dictionary<string, object?>
+                { ["query"] = "a)|(b", ["regex"] = true, ["multiline"] = multiline, ["wholeWord"] = wholeWord });
+        Assert.Contains("not a valid RE2", unbalanced);
+
+        string quoted = await GrepAsync(client,
+            new Dictionary<string, object?>
+                { ["query"] = "\\QStatus", ["regex"] = true, ["multiline"] = multiline, ["wholeWord"] = wholeWord });
+        Assert.DoesNotContain("not a valid RE2", quoted);
+        Assert.Contains("Status", quoted);
+    }
+
     private async Task<McpClient> StartAsync(SearchEngine engine)
     {
         _host = new TestHost(engine);
