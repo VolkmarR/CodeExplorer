@@ -88,7 +88,7 @@ public sealed class ProjectRefresh(
         }
         finally
         {
-            foreach (var open in opened) open.LocalCopy.Dispose();
+            Release(opened);
         }
     }
 
@@ -133,11 +133,17 @@ public sealed class ProjectRefresh(
             // Anything else — cancellation above all — ends the refresh before the caller owns the copies
             // opened so far, so they are released here. Left open, their pack files stay held, and on
             // Windows a later removal of the repository fails on them (#241).
-            foreach (var open in opened) open.LocalCopy.Dispose();
+            Release(opened);
             throw;
         }
 
         // The open copies are the caller's from here: it owns them for as long as the ingest reads them.
         return (opened, skipped);
+    }
+
+    /// <summary>Closes the local copies a refresh opened, whichever of its two owners is holding them.</summary>
+    private static void Release(List<OpenedRepository> opened)
+    {
+        foreach (var open in opened) open.LocalCopy.Dispose();
     }
 }
