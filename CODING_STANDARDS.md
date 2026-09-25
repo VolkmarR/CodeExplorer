@@ -95,6 +95,10 @@ Two kinds of failure, two mechanisms. Never mix them.
   answer the caller acts on, so an error that arrives shaped like one teaches the agent something
   false.
 - **Infrastructure failure throws** `McpException`, with the remediation in the message.
+- A refresh reports a failure through its status, whose reader cannot reach the server's disk. Only
+  an `McpException` or an `ExplainedFailureException` reaches it in its own words, so a sentence
+  written for that reader on the refresh path throws one of the two and names no server path; any
+  other exception is reported as the project and the phase it failed in, and logged whole (#262).
 - Distinguish "no results" from "results existed and filters excluded them". They read identically
   to an agent and mean opposite things.
 - API errors return `new { error = "..." }` with the matching status code. No `ProblemDetails`, no
