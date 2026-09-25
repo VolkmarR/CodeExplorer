@@ -20,11 +20,9 @@ public enum RepositoryUrlKind
 
 /// <summary>
 ///     The one place that knows which URL shapes libgit2 accepts, and which of them reach the server's
-///     own disk. Two modules read it: <c>Control/</c> to decide whether a repository may be added, and
-///     <c>Git/</c> to refuse a stored local one once local repositories are switched off. It lived in
-///     <c>Control/</c> while the API was its only reader; a second reader in a module that may not
-///     reach <c>Control/</c> is what puts it here (ADR-0005), and one classifier for both is what keeps
-///     the two from disagreeing about what counts as local (GHSA-5373-pppr-q3q9).
+///     own disk. <c>Control/</c> reads it to decide whether a repository may be added, and <c>Git/</c>
+///     to refuse a stored local one once local repositories are switched off; one classifier keeps the
+///     two from disagreeing about what counts as local (ADR-0005, revisited for GHSA-5373-pppr-q3q9).
 /// </summary>
 public static partial class RepositoryUrl
 {

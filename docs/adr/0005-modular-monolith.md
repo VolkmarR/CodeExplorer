@@ -35,7 +35,8 @@ dependency and no project, and put boundaries where the coupling really is.
 ## Shape
 
 - `Control/`: `control.duckdb`, projects, repositories, credentials, their operator endpoints.
-- `Git/`: clones and tree reading. URL classification moved to `Control/` in the #146 revisit and on to `Infrastructure/` for GHSA-5373-pppr-q3q9.
+- `Git/`: clones and tree reading. URL classification moved to `Control/` in the #146 revisit, and
+  on to `Infrastructure/` for GHSA-5373-pppr-q3q9.
 - `Index/`: one DuckDB file per project, attach and `USE`, ingest, Parquet durability. The
   local-or-Azure decision lives in one class here, not behind an interface.
 - `Search/`: the MCP tools and the line classifier they share.

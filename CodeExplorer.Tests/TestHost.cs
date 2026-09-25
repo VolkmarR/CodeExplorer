@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using CodeExplorer.Operator;
 using CodeExplorer.Reading;
 using CodeExplorer.Refresh;
@@ -129,7 +130,7 @@ public sealed class TestHost : IDisposable
             if (_transferStallSeconds is { } stall)
                 builder.UseSetting("Git:TransferStallSeconds", stall.ToString(CultureInfo.InvariantCulture));
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
-            if (_allowLocalRepositories) builder.UseSetting("Control:AllowLocalRepositories", "true");
+            if (_allowLocalRepositories) builder.UseSetting(RepositoryUrl.AllowLocalSetting, "true");
             if (!_authenticated) return;
 
             foreach ((string key, string value) in Tenant.Configuration) builder.UseSetting(key, value);
@@ -504,6 +505,19 @@ public sealed class TestHost : IDisposable
         Assert.Equal(RefreshState.Succeeded, status.State);
         Assert.NotNull(status.Summary);
         return status.Summary;
+    }
+
+    /// <summary>Asks for a refresh, waits for it, and answers the error it failed with.</summary>
+    public async Task<string> FailedRefreshErrorAsync(string project)
+    {
+        using (var response = await RequestRefreshAsync(project))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await WaitForRefreshesAsync();
+
+        var status = await RefreshStatusAsync(project);
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.NotNull(status.Error);
+        return status.Error;
     }
 
     /// <summary>Asks for a refresh and returns the response, for a test that asserts on the refusal.</summary>
