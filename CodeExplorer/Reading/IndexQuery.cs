@@ -92,17 +92,23 @@ internal static class IndexQuery
     ///     so a build is cancellable between statements and not inside one.
     /// </summary>
     public static void Execute(this DuckDBConnection connection, string sql,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => connection.Execute(sql, [], cancellationToken);
+
+    /// <summary>
+    ///     The same with parameters bound, so a number a build statement needs is a parameter as it is
+    ///     on the query path, and never text spelled in the process culture (#261).
+    /// </summary>
+    public static void Execute(this DuckDBConnection connection, string sql,
+        IEnumerable<DuckDBParameter> parameters, CancellationToken cancellationToken)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
+        using var command = connection.Query(sql, parameters);
         cancellationToken.ThrowIfCancellationRequested();
         command.ExecuteNonQuery();
     }
 
     /// <summary>
     ///     Text as a SQL string literal, quotes included, where nothing can be bound: <c>ATTACH</c>,
-    ///     <c>COPY</c> and <c>SET</c> take no parameters, and a build's <see cref="Execute" /> binds none.
+    ///     <c>COPY</c> and <c>SET</c> take no parameters.
     ///     A slug is validated on the way into the control database and is still escaped rather than trusted.
     /// </summary>
     public static string Literal(string value) => $"'{value.Replace("'", "''")}'";
