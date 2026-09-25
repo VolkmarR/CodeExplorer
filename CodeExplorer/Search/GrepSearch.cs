@@ -542,8 +542,9 @@ public sealed partial class GrepSearch(IndexReaders readers)
     ///     A literal every match of the pattern must contain, or null. Ripgrep's "inner literal" idea,
     ///     reduced to what is provably sound: only characters at the top level (outside any group or
     ///     class), not under a quantifier that allows zero, and never when the top level has an
-    ///     alternation. A shorter literal than ripgrep would find costs a weaker prefilter, never a
-    ///     wrong answer. Exposed for tests.
+    ///     alternation. Whatever it does not fully understand ends the current run, never adds to it: a
+    ///     shorter literal than ripgrep would find costs a weaker prefilter, a wrong one drops a file
+    ///     that matches (#234). Exposed for tests.
     /// </summary>
     internal static string? RequiredLiteral(string pattern)
     {
@@ -581,10 +582,17 @@ public sealed partial class GrepSearch(IndexReaders readers)
                 case '|' when depth == 0:
                     return null;
                 case '\\':
-                    if (++i >= pattern.Length) break;
-                    // \d, \s, \b, \1 and the like are classes or anchors; \. and \( are the character itself.
-                    if (char.IsLetterOrDigit(pattern[i])) Break();
-                    else Literal(pattern[i], i + 1 < pattern.Length ? pattern[i + 1] : '\0');
+                    // \. and \( are the character itself. Every other escape (\d, \b, \x41, \pL, \Q..\E,
+                    // octal) is consumed whole and ends the run: kept, its tail would read as literals.
+                    if (i + 1 < pattern.Length && !char.IsLetterOrDigit(pattern[i + 1]))
+                    {
+                        i++;
+                        Literal(pattern[i], i + 1 < pattern.Length ? pattern[i + 1] : '\0');
+                        break;
+                    }
+
+                    i = EscapeEnd(pattern, i);
+                    Break();
                     break;
                 case '(':
                     depth++;
@@ -595,12 +603,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
                     Break();
                     break;
                 case '[':
-                    // Skip the class: a leading ']' or '^]' is literal, and '\' escapes inside it.
-                    i++;
-                    if (i < pattern.Length && pattern[i] == '^') i++;
-                    if (i < pattern.Length && pattern[i] == ']') i++;
-                    while (i < pattern.Length && pattern[i] != ']')
-                        i += pattern[i] == '\\' ? 2 : 1;
+                    // An unterminated class is a pattern RE2 rejects; no prefilter rather than a guess.
+                    if ((i = ClassEnd(pattern, i)) < 0) return null;
                     Break();
                     break;
                 case '{':
@@ -608,7 +612,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
                     while (i < pattern.Length && pattern[i] != '}') i++;
                     Break();
                     break;
-                case '.' or '^' or '$' or '?' or '*' or '+' or '}':
+                // The filter tests one line at a time, so a literal holding a line break matches nothing.
+                case '.' or '^' or '$' or '?' or '*' or '+' or '}' or '\n' or '\r':
                     Break();
                     break;
                 default:
@@ -620,6 +625,66 @@ public sealed partial class GrepSearch(IndexReaders readers)
         Break();
         string literal = best.ToString();
         return literal.Trim().Length == 0 ? null : literal;
+    }
+
+    /// <summary>
+    ///     The index of the last character of the escape starting at <paramref name="start" />, in RE2's
+    ///     forms: <c>\xHH</c>, <c>\x{...}</c>, <c>\pX</c>, <c>\p{...}</c>, <c>\Q...\E</c>, up to three octal
+    ///     digits, or a single character. A malformed tail runs to the end, which RE2 rejects anyway.
+    /// </summary>
+    private static int EscapeEnd(string pattern, int start)
+    {
+        int last = pattern.Length - 1;
+        int i = start + 1;
+        if (i > last) return last;
+        switch (pattern[i])
+        {
+            case 'x' or 'p' or 'P' when i < last && pattern[i + 1] == '{':
+                int close = pattern.IndexOf('}', i);
+                return close < 0 ? last : close;
+            case 'x':
+                return Math.Min(i + 2, last);
+            case 'p' or 'P':
+                return Math.Min(i + 1, last);
+            case 'Q':
+                int end = pattern.IndexOf("\\E", i, StringComparison.Ordinal);
+                return end < 0 ? last : end + 1;
+            case >= '0' and <= '7':
+                while (i < last && i - start < 3 && pattern[i + 1] is >= '0' and <= '7') i++;
+                return i;
+            default:
+                return i;
+        }
+    }
+
+    /// <summary>
+    ///     The index of the <c>]</c> closing the class opened at <paramref name="start" />, or -1. A
+    ///     <c>]</c> right after <c>[</c> or <c>[^</c> is a member, as are escapes and <c>[:name:]</c>.
+    /// </summary>
+    private static int ClassEnd(string pattern, int start)
+    {
+        int i = start + 1;
+        if (i < pattern.Length && pattern[i] == '^') i++;
+        if (i < pattern.Length && pattern[i] == ']') i++;
+        while (i < pattern.Length)
+        {
+            switch (pattern[i])
+            {
+                case ']':
+                    return i;
+                case '\\':
+                    i = EscapeEnd(pattern, i);
+                    break;
+                case '[' when i + 1 < pattern.Length && pattern[i + 1] == ':':
+                    int close = pattern.IndexOf(":]", i + 2, StringComparison.Ordinal);
+                    if (close >= 0) i = close + 1;
+                    break;
+            }
+
+            i++;
+        }
+
+        return -1;
     }
 
     /// <summary>The FTS tokenizer keeps letters, digits and underscore; a token with none of them has no index entry.</summary>

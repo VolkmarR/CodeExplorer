@@ -301,6 +301,32 @@ public sealed class GrepTests : IDisposable
     ///     page times page size, does not fit an <c>int</c>: wrapped, it went negative, which DuckDB
     ///     refused as an error and the multiline scan read as page 1 labelled page 2147483647.
     /// </summary>
+    /// <summary>
+    ///     The literal prefilter must never drop a file that matches (#234). Each pattern once fed the
+    ///     filter a literal the match does not contain — the digits of <c>\x41</c>, the class name of
+    ///     <c>\pL</c>, the <c>]</c> ending a <c>[:digit:]</c>, a newline no single line can hold — and
+    ///     the unfiltered recount went through the same filter, so the miss looked like a real one.
+    /// </summary>
+    [Theory]
+    [InlineData("\\x41BC")]
+    [InlineData("\\pLfoo")]
+    [InlineData("[[:digit:]]x")]
+    [InlineData("foo,\n  bar")]
+    public async Task Multiline_prefilter_keeps_every_file_that_matches(string query)
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("prefilter", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new() { ["src/Fixture.cs"] = "ABC\nxfoo\n7x\nfoo,\n  bar\n" }
+        });
+        await using var client = await _host.ConnectAsync("prefilter");
+
+        string text = await GrepAsync(client, new Dictionary<string, object?>
+            { ["query"] = query, ["multiline"] = true, ["caseSensitive"] = true });
+
+        Assert.Contains("one/src/Fixture.cs  -  1 match", text);
+    }
+
     [Theory]
     [InlineData(SearchEngine.Fts, false)]
     [InlineData(SearchEngine.Substring, false)]
@@ -328,6 +354,18 @@ public sealed class GrepTests : IDisposable
     [InlineData("foo\\.bar", "foo.bar")]
     [InlineData("\\d+", null)]
     [InlineData("[abc]x{2}", null)]
+    [InlineData("needle", "needle")]
+    [InlineData("\\x41BC", "BC")]
+    [InlineData("\\x{41}BC", "BC")]
+    [InlineData("\\pLfoo", "foo")]
+    [InlineData("\\p{Greek}foo", "foo")]
+    [InlineData("\\101BC", "BC")]
+    [InlineData("\\Qa.b\\Ecd", "cd")]
+    [InlineData("[[:digit:]]x", "x")]
+    [InlineData("[^]a]bc", "bc")]
+    [InlineData("[\\]x]yz", "yz")]
+    [InlineData("foo,\n  bar", "  bar")]
+    [InlineData("[abc", null)]
     public void Required_literal_is_sound(string pattern, string? expected) =>
         Assert.Equal(expected, Search.GrepSearch.RequiredLiteral(pattern));
 
