@@ -130,21 +130,22 @@ public sealed class LocalCopy : IDisposable
     public IEnumerable<CommittedFile> Files() => Files(_repository.Head.Tip.Tree, "");
 
     /// <summary>
-    ///     The commits of this repository's history, newest first, stopping at the first one in
-    ///     <paramref name="known" /> — which is how a refresh walks only what it has not recorded yet.
+    ///     The commits of this repository's history, newest first, stopping before
+    ///     <paramref name="stopAt" /> — which is how a refresh walks only what it has not recorded yet.
     ///     First-parent only and on HEAD alone (ADR-0007): a merge is one commit and its side branch is
     ///     not walked, so a pull request reads as a single change, and nothing outside the default
     ///     branch is recorded for files the index does not hold either.
-    ///     Stopping at the first known commit is sound only because the walk is first-parent: that makes
-    ///     it a line and not a graph, so everything past a recorded commit is recorded too.
+    ///     Stopping at one commit is sound only because the walk is first-parent: that makes it a line
+    ///     and not a graph, so everything past the newest recorded commit is recorded too. A walk that
+    ///     never meets it runs to a root, which is how the caller learns HEAD's line no longer holds it.
     /// </summary>
-    /// <param name="known">Commit SHAs already recorded for this repository.</param>
+    /// <param name="stopAt">The newest commit already recorded for this repository, or null for none.</param>
     /// <param name="cancellationToken">Checked per commit, which is where the diff cost is.</param>
-    public IEnumerable<RecordedCommit> History(IReadOnlySet<string> known, CancellationToken cancellationToken)
+    public IEnumerable<RecordedCommit> History(string? stopAt, CancellationToken cancellationToken)
     {
         // No SortBy, so the walk streams. First-parent makes the history a line, and a line has one
         // order however it is sorted — but GIT_SORT_TOPOLOGICAL makes libgit2 pre-traverse and buffer
-        // the whole walk before it yields anything, which is paid before the `known` early-out below
+        // the whole walk before it yields anything, which is paid before the `stopAt` early-out below
         // can fire. On a ten-thousand-commit repository that is the entire cost of a refresh that
         // turns out to have nothing new.
         var filter = new CommitFilter
@@ -155,7 +156,7 @@ public sealed class LocalCopy : IDisposable
         foreach (var commit in _repository.Commits.QueryBy(filter))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (known.Contains(commit.Sha)) yield break;
+            if (commit.Sha == stopAt) yield break;
             yield return Describe(commit);
         }
     }

@@ -69,7 +69,10 @@ Attribution answers the ownership question and is honest about the other one; th
   gives the attribution at HEAD in one pass — 32 s for the same repository, 0.4 s of which is the
   replay itself, agreeing with blame on every line of a random sample. The costs it moves: a refresh
   loads the carried-over ranges and replays only the new commits, so `attribution` is state and not a
-  cache; a history rewritten under the watermark restarts from an empty state; and renames follow
+  cache; a history rewritten upstream is re-imported from the root, which a walk that does not stop
+  at the newest recorded commit detects, and which deletes the repository's commits and allocates
+  them fresh ids above every remaining one — no id is renumbered, the rows that held it are gone
+  (#227); and renames follow
   libgit2's detection on the patch, where blob keying followed content equality. Parallel blame was
   measured and rejected first — slower at two and four workers on a two-vCPU host.
 - **Clones are now full and permanent.** Removing `Depth = 1` makes a clone its repository's whole

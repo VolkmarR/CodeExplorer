@@ -292,6 +292,23 @@ public sealed class TestHost : IDisposable
         repo.Branches.Rename(repo.Head, branch);
     }
 
+    /// <summary>The commit a fixture's HEAD is at, for a test that resets the fixture back to it later.</summary>
+    public string HeadOf(string name)
+    {
+        using var repo = new Repository(FixturePath(name));
+        return repo.Head.Tip.Sha;
+    }
+
+    /// <summary>
+    ///     <c>reset --hard</c> on a fixture, which the next forced fetch mirrors as a force push would.
+    ///     Hard, so a commit made on top afterwards starts from that commit's tree.
+    /// </summary>
+    public void ResetGitRepository(string name, string sha)
+    {
+        using var repo = new Repository(FixturePath(name));
+        repo.Reset(ResetMode.Hard, repo.Lookup<Commit>(sha));
+    }
+
     /// <summary>
     ///     Points a repository's HEAD at a branch that does not exist: the state #31 left a clone in,
     ///     and, on a fixture, a remote whose own default branch cannot be resolved. Written as a file

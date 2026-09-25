@@ -39,9 +39,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
 
         // The walk and the diffs are synchronous git calls, like the file walk: a worker thread keeps
         // them off the request thread and the token is checked inside.
-        var summary = await Task.Run(
-            () => Fill(shadow.Connection, shadow.Catalog, repositories, report, cancellationToken),
-            cancellationToken);
+        var summary = await Task.Run(() => Fill(shadow, repositories, report, cancellationToken), cancellationToken);
 
         recording.Built(summary.Commits, summary.AttributedFiles);
         if (logger.IsEnabled(LogLevel.Information))
@@ -51,10 +49,10 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         return summary;
     }
 
-    private static HistorySummary Fill(DuckDBConnection connection, string catalog,
-        IReadOnlyList<OpenedRepository> repositories, Action<RefreshProgress> report,
-        CancellationToken cancellationToken)
+    private HistorySummary Fill(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
+        Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
+        var (connection, catalog) = (shadow.Connection, shadow.Catalog);
         // A repository the operator removed since the last build left its commits in the carried-over
         // history. They are pruned before anything is appended, so the tables hold exactly the
         // repositories this build read — and so a slug reused for a different remote cannot inherit
@@ -65,7 +63,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         long attributed = 0;
         foreach (var (repository, copy) in repositories)
         {
-            var fresh = AppendCommits(connection, catalog, repository.Slug, copy, report, cancellationToken);
+            var fresh = AppendCommits(shadow, repository.Slug, copy, report, cancellationToken);
             appended += fresh.Count;
             attributed += Replay(connection, catalog, repository.Slug, fresh, report, cancellationToken);
         }
@@ -86,12 +84,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         // An empty list is a project whose every repository failed to open, which the refresh refuses
         // before it gets here; guarding anyway, because `IN ()` is a syntax error and not an empty set.
         string kept = slugs.Length == 0 ? "false" : $"repo_slug IN ({slugs})";
-        // commit_files hangs off commit_id, so it follows whatever commits keeps. The delete is written
-        // as a subquery rather than a join because DuckDB's DELETE takes no USING.
-        connection.Execute($"DELETE FROM commit_files WHERE commit_id NOT IN (SELECT commit_id FROM commits WHERE {kept})",
-            cancellationToken);
-        connection.Execute($"DELETE FROM attribution WHERE NOT ({kept})", cancellationToken);
-        connection.Execute($"DELETE FROM commits WHERE NOT ({kept})", cancellationToken);
+        Forget(connection, $"NOT ({kept})", cancellationToken);
     }
 
     /// <summary>
@@ -101,16 +94,22 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     on a first build and on every increment alike. The walk hands them over newest first, so they
     ///     are buffered and reversed — which is also the memory ceiling of this class, one record per
     ///     new commit with its edits, paid once because a later refresh stops at the watermark.
+    ///     The walk stops only at the newest recorded commit, since every older one is its ancestor on a
+    ///     first-parent line. One that runs to a root instead, although the repository has history, went
+    ///     down a line that no longer holds that commit: a reset or force push upstream, or a switch of
+    ///     the default branch. Appending would keep commits HEAD no longer has and replay onto the
+    ///     attribution of a tip that is gone, so the repository's rows are deleted and the walk, which
+    ///     already holds the whole line, is imported as a first build would import it (#227).
     ///     Returns the new commits with the ids they were given, oldest first, for the replay.
     /// </summary>
-    private static List<(int Id, RecordedCommit Commit)> AppendCommits(DuckDBConnection connection,
-        string catalog, string slug, LocalCopy copy, Action<RefreshProgress> report,
-        CancellationToken cancellationToken)
+    private List<(int Id, RecordedCommit Commit)> AppendCommits(ShadowIndex shadow, string slug, LocalCopy copy,
+        Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
-        var known = Strings(connection, $"SELECT sha FROM commits WHERE repo_slug = {IndexQuery.Literal(slug)}",
-            cancellationToken);
+        var (connection, catalog) = (shadow.Connection, shadow.Catalog);
+        string inRepository = $"repo_slug = {IndexQuery.Literal(slug)}";
+        string? newest = NewestRecorded(connection, inRepository, cancellationToken);
         var fresh = new List<RecordedCommit>();
-        foreach (var commit in copy.History(known, cancellationToken))
+        foreach (var commit in copy.History(newest, cancellationToken))
         {
             // The walk is where a first import spends its minutes, and how long it is cannot be known
             // before it ends, so the count runs without a total rather than against an invented one.
@@ -118,6 +117,16 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
                 report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
                     $"Reading the history of '{slug}'", fresh.Count));
             fresh.Add(commit);
+        }
+
+        if (newest is not null && fresh.Count > 0 && fresh[^1].ParentSha is null)
+        {
+            if (logger.IsEnabled(LogLevel.Information))
+                logger.LogInformation(
+                    "History of repository {Repository} of project {Project} was rewritten upstream: HEAD's "
+                    + "first-parent line no longer holds the newest recorded commit {Commit}. Re-importing it "
+                    + "from the root", slug, shadow.Slug, newest);
+            Forget(connection, inRepository, cancellationToken);
         }
 
         var numbered = new List<(int, RecordedCommit)>(fresh.Count);
@@ -153,12 +162,26 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     }
 
     /// <summary>
+    ///     Deletes the history of every repository the <c>repo_slug</c> predicate
+    ///     <paramref name="selected" /> picks out. commit_files hangs off commit_id, so it goes first,
+    ///     while the commits that say which of its rows are whose still exist. A subquery rather than a
+    ///     join because DuckDB's DELETE takes no USING.
+    /// </summary>
+    private static void Forget(DuckDBConnection connection, string selected, CancellationToken cancellationToken)
+    {
+        connection.Execute(
+            $"DELETE FROM commit_files WHERE commit_id IN (SELECT commit_id FROM commits WHERE {selected})",
+            cancellationToken);
+        connection.Execute($"DELETE FROM attribution WHERE {selected}", cancellationToken);
+        connection.Execute($"DELETE FROM commits WHERE {selected}", cancellationToken);
+    }
+
+    /// <summary>
     ///     Replays the new commits' edits onto the repository's attribution and writes the result back.
     ///     The carried-over <c>attribution</c> rows are the state as of the last recorded commit, so a
     ///     refresh loads them and applies only what is new. When the oldest new commit has no parent the
-    ///     walk went back to a root — a first build, or a history rewritten under the watermark — and the
-    ///     state starts empty instead, because whatever was carried over describes a tree no commit in
-    ///     this walk descends from.
+    ///     walk went back to a root — a first build, or a re-import after a rewrite — and the state starts
+    ///     empty instead, because there is no carried-over state this walk descends from.
     ///     A refresh that continues the history loads, deletes and rewrites only the paths its commits
     ///     touch — each change's path and the path it moved or copied from, which are the only two
     ///     <see cref="Apply" /> reads or writes. Every other path's runs are already what replaying would
@@ -180,8 +203,8 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         bool fromRoot = fresh[0].Commit.ParentSha is null;
         try
         {
-            // The rows this replay owns: the whole repository from a root, since the carried-over state
-            // describes a tree nothing in this walk descends from; otherwise only the touched paths.
+            // The rows this replay owns: the whole repository from a root, since no carried-over state
+            // belongs to a walk that started there; otherwise only the touched paths.
             // One predicate for the load and the delete, so they cannot disagree about which rows those are.
             string owned = fromRoot ? inRepository : $"{inRepository} AND path IN (SELECT path FROM touched_paths)";
             if (!fromRoot) StageTouchedPaths(connection, fresh, cancellationToken);
@@ -466,15 +489,15 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static HashSet<string> Strings(DuckDBConnection connection, string sql,
+    /// <summary>The SHA of the repository's newest recorded commit, or null when it has none yet.</summary>
+    private static string? NewestRecorded(DuckDBConnection connection, string inRepository,
         CancellationToken cancellationToken)
     {
-        var values = new HashSet<string>(StringComparer.Ordinal);
         using var command = connection.CreateCommand();
-        command.CommandText = sql;
+        // The highest id is the newest commit because ids are handed out oldest first and never
+        // renumbered (AppendCommits); an author date could not say this, a rebase moves it backwards.
+        command.CommandText = $"SELECT sha FROM commits WHERE {inRepository} ORDER BY commit_id DESC LIMIT 1";
         cancellationToken.ThrowIfCancellationRequested();
-        using var reader = command.ExecuteReader();
-        while (reader.Read()) values.Add(reader.GetString(0));
-        return values;
+        return command.ExecuteScalar() as string;
     }
 }
