@@ -7,9 +7,9 @@ namespace CodeExplorer.Control;
 ///     shape every project had before ADR-0006. It is accepted here and in no update, because it
 ///     cannot change once the project exists.
 /// </summary>
-internal sealed record CreateProjectRequest(string Slug, string? Name, bool SingleRepository = false);
+internal sealed record CreateProjectRequest(string? Slug, string? Name, bool SingleRepository = false);
 
-internal sealed record AddRepositoryRequest(string Slug, string Url, string? Credential);
+internal sealed record AddRepositoryRequest(string? Slug, string Url, string? Credential);
 
 /// <summary>
 ///     A project's excluded paths, both ways: the whole list is read and the whole list is written, so
@@ -35,7 +35,7 @@ internal static class ControlEndpoints
             await control.CreateAsync(request.Slug, request.Name, request.SingleRepository, ct) switch
             {
                 CreateProjectOutcome.Created => Results.Created($"/projects/{request.Slug}/mcp",
-                    new Project(request.Slug, request.Name!.Trim(), request.SingleRepository)),
+                    new Project(request.Slug!, request.Name!.Trim(), request.SingleRepository)),
                 CreateProjectOutcome.InvalidSlug => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
                 CreateProjectOutcome.MissingName => Results.BadRequest(new { error = "Name is required." }),
                 _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." })

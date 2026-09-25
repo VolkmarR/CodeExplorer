@@ -133,6 +133,37 @@ public sealed class ProjectEndpointTests : IDisposable
         Assert.Equal(HttpStatusCode.Conflict, dup.StatusCode);
     }
 
+    /// <summary>
+    ///     A body with no slug at all is the operator's mistake, not the server's (#237). System.Text.Json
+    ///     binds the absent property as null despite the non-nullable declaration, and the slug rule
+    ///     used to throw on it and answer 500.
+    /// </summary>
+    [Fact]
+    public async Task Creating_a_project_without_a_slug_answers_400_with_the_slug_rule()
+    {
+        using var http = _host.CreateClient();
+
+        using var response = await http.PostAsJsonAsync("/api/projects", new { name = "x" }, Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorBody>(Ct);
+        Assert.Equal(ControlDatabase.SlugRule, error!.Error);
+    }
+
+    [Fact]
+    public async Task Adding_a_repository_without_a_slug_answers_400_with_the_slug_rule()
+    {
+        await _host.CreateProjectAsync("alpha");
+        using var http = _host.CreateClient();
+
+        using var response = await http.PostAsJsonAsync("/api/projects/alpha/repositories",
+            new { url = "https://example.com/one.git" }, Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorBody>(Ct);
+        Assert.Equal(ControlDatabase.SlugRule, error!.Error);
+    }
+
     [Fact]
     public async Task A_single_repository_project_refuses_a_second_repository()
     {
