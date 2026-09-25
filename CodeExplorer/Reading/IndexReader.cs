@@ -10,8 +10,8 @@ namespace CodeExplorer.Reading;
 ///     together with the answers every reader used to derive for itself: which repositories the build
 ///     read, how this project spells a path (ADR-0006), and whether a <c>repo</c> argument names one of
 ///     them. The read-only questions that are not text searches — what exists, what a file says, how big
-///     things are — are asked of the reader too. Glob matching is the SQL <c>GLOB</c> operator
-///     (ADR-0004), so <c>*</c> crosses <c>/</c> and there is no brace expansion.
+///     things are — are asked of the reader too. Glob matching means what the SQL <c>GLOB</c> operator
+///     does (ADR-0004), run as RE2 by <see cref="GlobRegex" /> so that it cannot backtrack, so <c>*</c> crosses <c>/</c> and there is no brace expansion.
 ///     Callers never construct or keep one: <see cref="IndexReaders" /> opens it, hands it over for the
 ///     length of one call and disposes it, and that dispose is what lets a swap proceed.
 /// </summary>

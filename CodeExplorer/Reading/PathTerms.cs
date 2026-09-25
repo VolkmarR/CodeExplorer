@@ -55,14 +55,20 @@ public static class PathTerms
     /// <summary>
     ///     One term as SQL over <paramref name="path" />, an expression that already lower-cases the
     ///     path it reads.
+    ///     A glob term is run as the RE2 expression that means what <c>GLOB</c> would
+    ///     (<see cref="GlobRegex" />), because <c>GLOB</c> backtracks at every star and a caller's term
+    ///     with a dozen of them held a search for minutes (GHSA-v284-9964-6mjr).
     /// </summary>
     /// <param name="term">A term from <see cref="Split" />, bound as <paramref name="parameter" />.</param>
     /// <param name="path">The SQL naming the path to match, e.g. <c>lower(f.qualified_path)</c>.</param>
-    /// <param name="parameter">The bound parameter holding the term; values are never inlined.</param>
-    public static string Match(string term, string path, string parameter) =>
-        term.Contains('*', StringComparison.Ordinal) || term.Contains('?', StringComparison.Ordinal)
-            ? $"{path} GLOB {parameter}"
-            : $"contains({path}, {parameter})";
+    /// <param name="parameter">The bound parameter's name, without its <c>$</c>; values are never inlined.</param>
+    /// <param name="parameters">The term, or its translation, is added here as <paramref name="parameter" />.</param>
+    public static string Match(string term, string path, string parameter, List<DuckDBParameter> parameters)
+    {
+        bool glob = term.Contains('*', StringComparison.Ordinal) || term.Contains('?', StringComparison.Ordinal);
+        parameters.Add(new DuckDBParameter(parameter, glob ? GlobRegex.Translate(term) : term));
+        return glob ? $"regexp_full_match({path}, ${parameter})" : $"contains({path}, ${parameter})";
+    }
 
     /// <summary>
     ///     The terms of an <c>extensions</c> argument as a disjunction — a path is kept where it ends
@@ -88,11 +94,7 @@ public static class PathTerms
 
         var conditions = new List<string>(terms.Count);
         for (int i = 0; i < terms.Count; i++)
-        {
-            string glob = AsExtensionGlob(terms[i]);
-            conditions.Add(Match(glob, path, $"${prefix}{i}"));
-            parameters.Add(new DuckDBParameter($"{prefix}{i}", glob));
-        }
+            conditions.Add(Match(AsExtensionGlob(terms[i]), path, $"{prefix}{i}", parameters));
 
         return string.Join(" OR ", conditions);
     }
@@ -125,10 +127,7 @@ public static class PathTerms
 
         var conditions = new List<string>(terms.Count);
         for (int i = 0; i < terms.Count; i++)
-        {
-            conditions.Add($"NOT ({Match(terms[i], path, $"${prefix}{i}")})");
-            parameters.Add(new DuckDBParameter($"{prefix}{i}", terms[i]));
-        }
+            conditions.Add($"NOT ({Match(terms[i], path, $"{prefix}{i}", parameters)})");
 
         return string.Join(" AND ", conditions);
     }

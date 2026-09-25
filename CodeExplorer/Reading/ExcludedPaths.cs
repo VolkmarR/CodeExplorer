@@ -1,4 +1,3 @@
-using System.Text;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer.Reading;
@@ -92,13 +91,17 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
     public string Expression => $"^(?:{string.Join("|", Patterns.Select(AsRegex))})$";
 
     /// <summary>
-    ///     Why RE2 refuses <paramref name="pattern" />'s translation, or null where it compiles. Asked of
-    ///     the engine that will run it, one pattern at a time so the answer can name the one at fault: a
-    ///     reversed range such as <c>[z-a]</c> is a class GLOB would accept and RE2 refuses.
+    ///     Why <paramref name="pattern" /> cannot be matched, or null where it can. A reversed range such
+    ///     as <c>[z-a]</c> is refused by name: GLOB accepts one and matches nothing with it, which in a
+    ///     list the operator maintains is a line that silently does nothing. Anything else is asked of the
+    ///     engine that will run it, one pattern at a time so the answer can name the one at fault.
     /// </summary>
     public static async Task<string?> RefusedAsync(DuckDBConnection connection, string pattern,
         CancellationToken cancellationToken)
     {
+        if (GlobRegex.ReversedRange(pattern) is { } reversed)
+            return $"the range {reversed} runs backwards, so no character falls in it.";
+
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT regexp_matches('', $p, 'i')";
         command.Parameters.Add(new DuckDBParameter("p", new ExcludedPaths([pattern]).Expression));
@@ -117,9 +120,7 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
 
     /// <summary>
     ///     One pattern as the RE2 expression matched against the qualified path with a <c>/</c> in
-    ///     front. <c>*</c> is any run of characters and <c>?</c> any one, both crossing <c>/</c> as
-    ///     GLOB's do, and a run of stars means what one does; a bracket is a class with <c>!</c>
-    ///     negating it, and everything else is literal.
+    ///     front, translated as every glob here is (<see cref="GlobRegex" />).
     ///     The <c>/</c> in front is what anchors: a pattern that does not begin with one or with a
     ///     <c>*</c> is given one, so <c>docs/*</c> is the root's <c>docs</c>, while <c>**/x</c> is left
     ///     free to match the root's own <c>/x</c>. A leading <c>?</c> is anchored like any other
@@ -128,78 +129,7 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
     ///     <c>src/**/*.cs</c> reaches <c>src/A.cs</c> the way a leading <c>**/</c> reaches the root. As
     ///     GLOB it could only have matched <c>//</c> there, which no path holds.
     /// </summary>
-    internal static string AsRegex(string pattern)
-    {
-        string glob = pattern.StartsWith('/') || pattern.StartsWith('*') ? pattern : "/" + pattern;
-        var regex = new StringBuilder(glob.Length * 2);
-        for (int i = 0; i < glob.Length; i++)
-        {
-            char c = glob[i];
-            if (c == '/' && StarsAfter(glob, i + 1) is var stars and > 0 && i + 1 + stars < glob.Length
-                && glob[i + 1 + stars] == '/')
-            {
-                regex.Append("/(?:.*/)?");
-                i += stars + 1;
-            }
-            else if (c == '*')
-            {
-                regex.Append(".*");
-                i += StarsAfter(glob, i + 1);
-            }
-            else if (c == '?')
-                regex.Append('.');
-            else if (c == '[' && ClassEnd(glob, i) is var end and > 0)
-            {
-                string members = glob[(i + 1)..end];
-                regex.Append('[')
-                    .Append(members.StartsWith('!') ? "^" + Escaped(members[1..], true) : Escaped(members, true))
-                    .Append(']');
-                i = end;
-            }
-            else
-                regex.Append(Escaped(c.ToString(), false));
-        }
-
-        return regex.ToString();
-    }
-
-    /// <summary>How many stars run from <paramref name="start" />, so a run is read as the one it means.</summary>
-    private static int StarsAfter(string glob, int start)
-    {
-        int end = start;
-        while (end < glob.Length && glob[end] == '*') end++;
-        return end - start;
-    }
-
-    /// <summary>
-    ///     Where the class opened at <paramref name="open" /> closes, or 0 where it never does and the
-    ///     bracket is a literal. A <c>]</c> first in the class, after any <c>!</c>, is a member, as GLOB
-    ///     reads it.
-    /// </summary>
-    private static int ClassEnd(string glob, int open)
-    {
-        int start = open + 1;
-        if (start < glob.Length && glob[start] == '!') start++;
-        if (start < glob.Length && glob[start] == ']') start++;
-        int end = glob.IndexOf(']', start);
-        return end < 0 ? 0 : end;
-    }
-
-    /// <summary>
-    ///     Text made literal for RE2, which refuses an escaped letter or space, so only its own
-    ///     metacharacters are escaped. Inside a class only the three that mean something there are.
-    /// </summary>
-    private static string Escaped(string text, bool inClass)
-    {
-        string special = inClass ? @"\]^" : @"\.+*?()|[]{}^$";
-        var escaped = new StringBuilder(text.Length);
-        foreach (char c in text)
-        {
-            // A range's hyphen is kept as it is; it means the same thing in a GLOB class.
-            if (special.Contains(c, StringComparison.Ordinal)) escaped.Append('\\');
-            escaped.Append(c);
-        }
-
-        return escaped.ToString();
-    }
+    internal static string AsRegex(string pattern) =>
+        GlobRegex.Translate(pattern.StartsWith('/') || pattern.StartsWith('*') ? pattern : "/" + pattern,
+            widenDirectoryStars: true);
 }

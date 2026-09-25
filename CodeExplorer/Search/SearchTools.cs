@@ -50,7 +50,7 @@ internal sealed partial class SearchTools(
         [Description("Only search files with this extension, without the dot, e.g. \"cs\" or \"tsx\".")]
         string? ext = null,
         [Description("""
-                     Match across line breaks, so a pattern can span a wrapped statement such as `repo.Update(entity,\n  e => e.Status = ...)`. Implies regex. Same RE2 syntax, and `.` also crosses newlines here. Every line a match spans is returned and marked as matched. Slower than single-line mode; give the pattern a distinctive literal so candidate files can be narrowed first.
+                     Match across line breaks, so a pattern can span a wrapped statement such as `repo.Update(entity,\n  e => e.Status = ...)`. Implies regex. Same RE2 syntax, and `.` also crosses newlines here. Every line a match spans is returned and marked as matched. Slower than single-line mode; give the pattern a distinctive literal so candidate files can be narrowed first. A page reads at most 8 MiB of file content to mark its matches; a file past that is listed with its match count and the page to ask for to see its lines.
                      """)]
         bool multiline = false,
         [Description("""
@@ -170,7 +170,22 @@ internal sealed partial class SearchTools(
         }
         else
         {
-            foreach (var file in result.Files) AppendFile(text, request, file);
+            for (int i = 0; i < result.Files.Count; i++)
+            {
+                var file = result.Files[i];
+                if (!file.Unread)
+                {
+                    AppendFile(text, request, file);
+                    continue;
+                }
+
+                // A page of one is read whatever the file's size, and this is the page that file is on.
+                long alone = ((long)(result.Page - 1) * result.PageSize) + i + 1;
+                text.Append(CultureInfo.InvariantCulture,
+                    $"\n{file.QualifiedPath}  -  {file.MatchCount} {ToolReply.Plural(file.MatchCount, "match", "matches")}\n"
+                    + $"  ... lines not shown: a multiline page reads at most {GrepSearch.MaxMultilinePageBytes / (1024 * 1024)} MiB of file content, and the files above used it. "
+                    + $"Call grep with pageSize=1 and page={alone} to see this file's lines.\n");
+            }
         }
 
         if (result.Page < lastPage)

@@ -64,6 +64,7 @@ internal sealed partial class FileTools(
                  - An entry without a range uses startLine and maxLines, which apply to every such entry.
                  - If you only need to know what surrounds a grep hit, grep with context=N is cheaper than reading the file at all.
                  - Output is capped and the budget is shared between the entries, so asking for many windows gives you less of each. When one is cut short the reply says what to pass to continue.
+                 - One call takes at most 100 entries and reads at most 100,000 lines across them; an entry past that line budget is cut short or not read, and says so.
                  - A file that exists but was not indexed (binary, oversized) is reported with the reason instead of its content.
                  """)]
     public async Task<string> ReadFile(
@@ -121,7 +122,7 @@ internal sealed partial class FileTools(
                 // Whatever the entries before this one left unused is handed on, so four small windows
                 // and one large one read in full where an equal split would truncate the large one.
                 int allowance = Math.Max(0, ToolReply.MaxOutputChars - text.Length) / (reads.Count - read);
-                Append(text, reads[read], target.ExplicitRange, allowance);
+                Append(text, reads[read], target, allowance);
                 read++;
             }
 
@@ -132,7 +133,7 @@ internal sealed partial class FileTools(
     /// <summary>How a caller gets the rest of a read that hit the reply ceiling.</summary>
     private const string _readAdvice = "Read fewer paths at once, or pass a narrower line range.";
 
-    private static void Append(StringBuilder text, FileRead read, bool explicitRange, int allowance)
+    private static void Append(StringBuilder text, FileRead read, ReadTarget target, int allowance)
     {
         if (read.File is not { } file)
         {
@@ -181,9 +182,17 @@ internal sealed partial class FileTools(
             ToolReply.Clip(text, read.Lines[i]).Append('\n');
         }
 
+        // The query module stopped the window short of what was asked, not the reply: the lines of one
+        // call are a budget shared by its entries. Said as a fact of the window, because the reply cap's
+        // note above is about a different limit and a different remedy.
+        bool cut = end < Math.Min(target.End, file.LineCount);
+        if (cut)
+            text.Append(CultureInfo.InvariantCulture,
+                $"  ... the rest of this window was not read: one call reads at most {FileQueries.MaxLinesPerRead} lines across its entries.\n");
+
         // An explicit range is what the caller asked for; only a default window or a cap stopped short of
         // what they wanted, and then the next call is spelled out.
-        if (last < file.LineCount && (!explicitRange || last < end))
+        if (last < file.LineCount && (!target.ExplicitRange || last < end || cut))
             text.Append(CultureInfo.InvariantCulture, $"Continue with \"{file.QualifiedPath}:{last + 1}\".\n");
     }
 
@@ -319,7 +328,7 @@ internal sealed partial class FileTools(
     public async Task<string> ListTree(
         [Description("Qualified path of the directory to list: `repo` or `repo/dir/sub`. Empty for the project root.")]
         string path = "",
-        [Description("How many levels to descend, at least 1. Default 1 lists only direct children.")]
+        [Description("How many levels to descend, 1-64. Default 1 lists only direct children.")]
         int depth = 1,
         CancellationToken cancellationToken = default)
     {

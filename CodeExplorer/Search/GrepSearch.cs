@@ -45,8 +45,16 @@ public sealed record GrepLine(int LineNumber, string Text, bool IsMatch, Attribu
 ///     One file's share of the answer. <see cref="MatchesShown" /> is how many of the
 ///     <see cref="MatchCount" /> matches <see cref="Lines" /> covers; in multiline mode one match can
 ///     span several lines, so it is not the number of marked lines. Both are zero-lines for a files-only search.
+///     <see cref="Unread" /> is a multiline file the page counted but did not read, because the files
+///     before it spent <see cref="GrepSearch.MaxMultilinePageBytes" />: it has no lines, and why is not
+///     the file's.
 /// </summary>
-public sealed record GrepFile(string QualifiedPath, int MatchCount, int MatchesShown, IReadOnlyList<GrepLine> Lines);
+public sealed record GrepFile(
+    string QualifiedPath,
+    int MatchCount,
+    int MatchesShown,
+    IReadOnlyList<GrepLine> Lines,
+    bool Unread = false);
 
 /// <summary>
 ///     A page of matches; the answer when the search was not a <see cref="Problem" />.
@@ -100,6 +108,15 @@ public sealed partial class GrepSearch(IndexReaders readers)
     ///     page would only be truncated, so paging is the honest way to see more.
     /// </summary>
     public const int MaxPageSize = 100;
+
+    /// <summary>
+    ///     The most file content one multiline page reads to mark its matches. Marking needs each file
+    ///     whole, as one string, so a page of a hundred files at <c>Index:MaxFileBytes</c> each was
+    ///     gigabytes pulled into the server for a reply capped at kilobytes (GHSA-v284-9964-6mjr). Eight
+    ///     MiB is a hundred ordinary source files many times over. The page's first file is read
+    ///     whatever its size, so a file larger than this still shows its matches on a page of its own.
+    /// </summary>
+    public const long MaxMultilinePageBytes = 8L * 1024 * 1024;
 
     /// <summary>
     ///     Wrapped around every multiline match by <c>regexp_replace</c> so the exact boundaries come
@@ -426,11 +443,11 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // The extract alone decides both whether a document matches and how often: it is empty exactly
         // when regexp_matches is false, empty matches and empty documents included, so testing
         // regexp_matches first would run the pattern over every matching document twice.
-        var counts = new List<(long FileId, string Path, int Count)>();
+        var counts = new List<(long FileId, string Path, int Count, long Bytes)>();
         await using (var command = connection.Query($"""
                                                      {Documents(fileFilter + literalFilter)}
-                                                     SELECT file_id, qualified_path, match_count FROM (
-                                                         SELECT file_id, qualified_path,
+                                                     SELECT file_id, qualified_path, size_bytes, match_count FROM (
+                                                         SELECT file_id, qualified_path, size_bytes,
                                                                 {matchCount} AS match_count
                                                          FROM docs)
                                                      WHERE match_count > 0
@@ -440,7 +457,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         {
             while (await reader.ReadAsync(cancellationToken))
                 counts.Add((reader.Int64("file_id"), reader.Text("qualified_path"),
-                    (int)reader.Int64("match_count")));
+                    (int)reader.Int64("match_count"), reader.Int64("size_bytes")));
         }
 
         int? withoutFilters = null;
@@ -463,7 +480,20 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // match of the tokenising form too, so both are written back whole after their marked group 1:
         // the only groups a rewrite can name without counting the caller's are 0 and 1.
         // WithoutMarkedCopies then drops the copy of group 1 each one repeats.
-        string ids = string.Join(",", pageFiles.Select(f => f.FileId.ToString(CultureInfo.InvariantCulture)));
+        // Marking reads each file whole, so the page's files are read while they fit the byte budget
+        // (MaxMultilinePageBytes). The first always is, or a file larger than the budget could never be
+        // shown; a later one that does not fit is skipped rather than ending the walk, so a small file
+        // after a large one is still read.
+        var read = new HashSet<long>();
+        long bytes = 0;
+        foreach (var file in pageFiles)
+        {
+            if (read.Count > 0 && bytes + file.Bytes > MaxMultilinePageBytes) continue;
+            read.Add(file.FileId);
+            bytes += file.Bytes;
+        }
+
+        string ids = string.Join(",", read.Select(id => id.ToString(CultureInfo.InvariantCulture)));
         string rewrite = wholeWord
             ? @"$tokens, chr(1) || '\1' || chr(2) || '\0'"
             : @"'(' || $q || ')', chr(1) || '\1' || chr(2)";
@@ -485,8 +515,14 @@ public sealed partial class GrepSearch(IndexReaders readers)
         }
 
         var files = new List<GrepFile>();
-        foreach ((long fileId, string path, int count) in pageFiles)
+        foreach ((long fileId, string path, int count, _) in pageFiles)
         {
+            if (!read.Contains(fileId))
+            {
+                files.Add(new GrepFile(path, count, 0, [], Unread: true));
+                continue;
+            }
+
             if (!marked.TryGetValue(fileId, out string? content)) continue;
             (var lines, int shown) = SpannedLines(content, bounds);
             files.Add(new GrepFile(path, count, shown, lines));
@@ -501,10 +537,10 @@ public sealed partial class GrepSearch(IndexReaders readers)
         {
             return $"""
                     WITH candidates AS (
-                        SELECT f.file_id, f.qualified_path FROM files f
+                        SELECT f.file_id, f.qualified_path, f.size_bytes FROM files f
                         WHERE f.skip_reason IS NULL{candidateFilter}),
                     docs AS (
-                        SELECT c.file_id, c.qualified_path,
+                        SELECT c.file_id, c.qualified_path, c.size_bytes,
                                string_agg(l.content, chr(10) ORDER BY l.line_number) AS content
                         FROM candidates c JOIN lines l USING (file_id)
                         GROUP BY ALL)

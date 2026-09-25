@@ -81,7 +81,8 @@ public sealed partial class IndexReader
     }
 
     /// <summary>
-    ///     Case-insensitive <c>GLOB</c> over the qualified path, within <see cref="Repository" /> when
+    ///     A case-insensitive glob over the qualified path, run as the RE2 expression that means what
+    ///     <c>GLOB</c> would (<see cref="GlobRegex" />) because <c>GLOB</c> backtracks, within <see cref="Repository" /> when
     ///     one was resolved. The window count rides along with the rows so one statement yields both
     ///     the total and the page. <paramref name="limit" /> is clamped to <see cref="MaxFiles" /> and is
     ///     the size of a <paramref name="page" />, which walks the same ordering: the sort is on the
@@ -95,7 +96,8 @@ public sealed partial class IndexReader
         limit = Math.Clamp(limit, 1, MaxFiles);
         page = Math.Max(page, 1);
         long skip = Paging.Skip(page, limit);
-        var parameters = new List<DuckDBParameter> { new("g", glob.ToLowerInvariant()) };
+        string regex = GlobRegex.Translate(glob);
+        var parameters = new List<DuckDBParameter> { new("g", regex) };
         string scope = "";
         if (Repository is not null)
         {
@@ -108,7 +110,7 @@ public sealed partial class IndexReader
         await using (var command = Connection.Query($"""
                                                      {_fileColumns}, count(*) OVER () AS total
                                                      {_fileSource}
-                                                     WHERE lower(f.qualified_path) GLOB $g{scope}
+                                                     WHERE regexp_full_match(f.qualified_path, $g, 'i'){scope}
                                                      ORDER BY f.qualified_path
                                                      LIMIT {limit} OFFSET {skip}
                                                      """, parameters))
@@ -128,14 +130,14 @@ public sealed partial class IndexReader
             total = (int)await Connection.CountAsync($"""
                                                       SELECT count(*)
                                                       {_fileSource}
-                                                      WHERE lower(f.qualified_path) GLOB $g{scope}
+                                                      WHERE regexp_full_match(f.qualified_path, $g, 'i'){scope}
                                                       """, parameters, cancellationToken);
 
         int? elsewhere = null;
         if (total == 0 && Repository is not null)
             elsewhere = (int)await Connection.CountAsync(
-                "SELECT count(*) FROM files f WHERE lower(f.qualified_path) GLOB $g",
-                [new DuckDBParameter("g", glob.ToLowerInvariant())], cancellationToken);
+                "SELECT count(*) FROM files f WHERE regexp_full_match(f.qualified_path, $g, 'i')",
+                [new DuckDBParameter("g", regex)], cancellationToken);
 
         return new GlobResult(total, files, elsewhere, page, limit);
     }
@@ -216,10 +218,11 @@ public sealed partial class IndexReader
         var files = new Dictionary<string, List<TreeItem>>(StringComparer.Ordinal);
 
         // A file counts towards every ancestor within reach, so its path below the prefix is split once
-        // and joined back at each of its first k segments. `depth` is a bound this code sets, never a
-        // caller's text, so it is inlined; k is filtered rather than bounded per row because a
-        // correlated range() measured three times slower, and an absurd depth costs nothing here —
-        // every extra k is filtered out before the grouping (23 ms at depth 1000, 17 ms at depth 3).
+        // and joined back at each of its first k segments. `depth` is an int, never a caller's text, so
+        // it is inlined; k is filtered rather than bounded per row because a correlated range() measured
+        // three times slower (23 ms at depth 1000, 17 ms at depth 3). The range is still a row per k per
+        // file before that filter, so a caller's depth is capped before it reaches here
+        // (FileQueries.MaxTreeDepth): at a billion it was a billion rows per file (GHSA-v284-9964-6mjr).
         await using (var command = Connection.Query($"""
                                                      WITH below AS (
                                                          SELECT str_split(substr(f.directory, length($p) + 1), '/') AS segments,

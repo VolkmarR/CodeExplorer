@@ -93,12 +93,29 @@ public sealed class FileQueries(IndexReaders readers)
     private const string _engine = "index listing";
 
     /// <summary>
-    ///     The most lines one window may reach, whoever asks. A file view scrolls and asks for the whole
-    ///     file. <c>Index:MaxFileBytes</c> (25 MiB by default) admits files longer than this, and a window
-    ///     over one stops here. A tool that protects an agent's context sets a lower ceiling of its own;
-    ///     this one protects the server.
+    ///     The most lines one read may load, across all of its windows, whoever asks. A file view scrolls
+    ///     and asks for the whole file. <c>Index:MaxFileBytes</c> (25 MiB by default) admits files longer
+    ///     than this, and a window over one stops here. It was a ceiling per window until
+    ///     GHSA-v284-9964-6mjr: a thousand copies of one explicit range loaded a hundred million lines
+    ///     before the reply was capped. A tool that protects an agent's context sets a lower ceiling of
+    ///     its own; this one protects the server.
     /// </summary>
-    private const int _maxLinesPerWindow = 100_000;
+    public const int MaxLinesPerRead = 100_000;
+
+    /// <summary>
+    ///     The most windows one read may ask for. Each is a locate and a read of the index, and the reply
+    ///     budget is shared between them, so past a hundred every window is a few lines long and the call
+    ///     is better split (GHSA-v284-9964-6mjr).
+    /// </summary>
+    public const int MaxWindows = 100;
+
+    /// <summary>
+    ///     The deepest tree listing one call may ask for. The depth is a row generator in the tree
+    ///     statement, cross-joined with every file under the listed directory, so it is work the caller
+    ///     sizes and not only output (GHSA-v284-9964-6mjr). Sixty-four levels is deeper than any source
+    ///     tree the index has held; past it the listing is all of the subtree anyway.
+    /// </summary>
+    public const int MaxTreeDepth = 64;
 
     /// <summary>
     ///     The windows asked for, each answered on its own, over one open of the index. The one refusal
@@ -114,10 +131,14 @@ public sealed class FileQueries(IndexReaders readers)
         if (request.Windows.Count == 0)
             return Task.FromResult<Outcome>(
                 new Problem("No paths given. Pass at least one qualified path such as `repo/src/File.cs`."));
+        if (request.Windows.Count > MaxWindows)
+            return Task.FromResult<Outcome>(new Problem(
+                $"One read takes at most {MaxWindows} entries, and this one has {request.Windows.Count}. Split it into several calls."));
 
         return readers.OverIndexAsync(slug, null, async (index, token) =>
         {
             var reads = new List<FileRead>(request.Windows.Count);
+            int budget = MaxLinesPerRead;
             // Per request, because the tool invites several windows into one file and each was locating
             // it and reading its history again (#180). The lease holds the index still, so a remembered
             // answer is the answer. Keyed by the path exactly as written, because a miss quotes that
@@ -126,6 +147,16 @@ public sealed class FileQueries(IndexReaders readers)
             var commits = new Dictionary<long, FileCommits>();
             foreach (var window in request.Windows)
             {
+                // The entries after the budget is spent are each told so, in place, rather than the call
+                // failing: the windows before them were read and are worth returning.
+                if (budget == 0)
+                {
+                    reads.Add(new FileRead(window, null, new Problem(
+                        $"'{window.Path}' was not read: the entries before it already read {MaxLinesPerRead} lines, the most one call reads. Read it in a call of its own."),
+                        [], null));
+                    continue;
+                }
+
                 // The path rule and the refusal sentences are the reader's, so an agent that got the path
                 // wrong is told the same thing here as by imports or file_history.
                 if (!located.TryGetValue(window.Path, out var found))
@@ -138,10 +169,11 @@ public sealed class FileQueries(IndexReaders readers)
                 }
 
                 int start = Math.Max(1, window.Start);
-                int end = (int)Math.Min(file.LineCount, Math.Min(window.End, (long)start + _maxLinesPerWindow - 1));
+                int end = (int)Math.Min(file.LineCount, Math.Min(window.End, (long)start + budget - 1));
                 IReadOnlyList<string> lines = file.SkipReason is null && start <= end
                     ? await index.LinesAsync(file.FileId, start, end, token)
                     : [];
+                budget -= lines.Count;
                 // Carried on the read and not fetched separately: they are columns on the row the read
                 // already has in hand, so a second request would be one for data this one was holding.
                 FileCommits? history = null;
@@ -182,6 +214,10 @@ public sealed class FileQueries(IndexReaders readers)
         if (request.Depth < 1)
             return Task.FromResult<Outcome>(new Problem(
                 "depth must be at least 1. Use 1 for direct children, 2 to include grandchildren, and so on."));
+        if (request.Depth > MaxTreeDepth)
+            return Task.FromResult<Outcome>(new Problem(
+                $"depth may be at most {MaxTreeDepth}, which already reaches the bottom of any source tree. "
+                + $"Pass {MaxTreeDepth} for the whole subtree, or list a subdirectory."));
 
         return readers.OverDirectoryAsync(slug, request.Path, async (index, directory, token) =>
         {
@@ -252,6 +288,9 @@ public sealed class FileQueries(IndexReaders readers)
             return
                 $"\"{glob}\" has an unbalanced [ ]: a [ opens a character class such as [0-9] and matches nothing without its ]. "
                 + "Close it, or write the character you meant.";
+        if (GlobRegex.ReversedRange(glob) is { } reversed)
+            return $"\"{glob}\" has the range [{reversed}], which runs backwards, so no character falls in it and the glob matches nothing. "
+                   + "Write it low to high.";
         return null;
     }
 }
