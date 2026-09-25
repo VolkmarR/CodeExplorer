@@ -53,10 +53,16 @@ public sealed class TestHost : IDisposable
     ///     commit. A fixture large enough to cross the shipped default would take longer to build than
     ///     the rest of the suite takes to run.
     /// </param>
+    /// <param name="transferStallSeconds">
+    ///     Lowered to seconds so a stalled remote gives up within a test's patience. The limit is
+    ///     libgit2's and process-wide, so only a test that runs alone may set it (see
+    ///     <c>StalledRemoteTests</c>).
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
         bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
-        int? maxCommitPaths = null)
+        int? maxCommitPaths = null, int? transferStallSeconds = null)
     {
+        _transferStallSeconds = transferStallSeconds;
         _engine = engine;
         _drainSeconds = drainSeconds;
         _minimumFreeBytes = minimumFreeBytes;
@@ -74,6 +80,7 @@ public sealed class TestHost : IDisposable
     private readonly bool _authenticated;
     private readonly string? _extensionDirectory;
     private readonly int? _maxCommitPaths;
+    private readonly int? _transferStallSeconds;
 
     /// <summary>
     ///     Private, so a test cannot build a client that bypasses <see cref="CreateClient" /> or reach a
@@ -100,6 +107,8 @@ public sealed class TestHost : IDisposable
                 builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
             if (_maxCommitPaths is { } paths)
                 builder.UseSetting("History:MaxCommitPaths", paths.ToString(CultureInfo.InvariantCulture));
+            if (_transferStallSeconds is { } stall)
+                builder.UseSetting("Git:TransferStallSeconds", stall.ToString(CultureInfo.InvariantCulture));
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
             if (!_authenticated) return;
 
