@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using CodeExplorer.Index;
 using CodeExplorer.Operator;
 using CodeExplorer.Reading;
@@ -294,22 +295,8 @@ public sealed class TestHost : IDisposable
     ///     The same with each file's bytes written as given, for a test about how content is decoded:
     ///     the string overload always writes UTF-8, so it cannot commit a Windows-1252 or UTF-16 file.
     /// </summary>
-    public string CreateGitRepository(string name, Dictionary<string, byte[]> files)
-    {
-        string path = CreateEmptyGitRepository(name);
-        using var repo = new Repository(path);
-        foreach ((string relative, byte[] content) in files)
-        {
-            string full = Path.Combine(path, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-            File.WriteAllBytes(full, content);
-            Commands.Stage(repo, relative);
-        }
-
-        var author = new Signature("Test", "test@example.invalid", DateTimeOffset.UnixEpoch);
-        repo.Commit("fixture", author, author);
-        return path;
-    }
+    public string CreateGitRepository(string name, Dictionary<string, byte[]> files) =>
+        Commit(CreateEmptyGitRepository(name), files);
 
     /// <summary>
     ///     An initialised repository with no commits: a remote that really is empty, as opposed to a
@@ -431,15 +418,21 @@ public sealed class TestHost : IDisposable
         repo.Commit(subject, author, author);
     }
 
+    // Encoding.UTF8.GetBytes writes no byte order mark, as File.WriteAllText did before the bytes overload.
     private static string Commit(string path, Dictionary<string, string> files, string subject = "fixture",
+        Signature? author = null) =>
+        Commit(path, files.ToDictionary(file => file.Key, file => Encoding.UTF8.GetBytes(file.Value)), subject,
+            author);
+
+    private static string Commit(string path, Dictionary<string, byte[]> files, string subject = "fixture",
         Signature? author = null)
     {
         using var repo = new Repository(path);
-        foreach ((string relative, string content) in files)
+        foreach ((string relative, byte[] content) in files)
         {
             string full = Path.Combine(path, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-            File.WriteAllText(full, content);
+            File.WriteAllBytes(full, content);
             Commands.Stage(repo, relative);
         }
 

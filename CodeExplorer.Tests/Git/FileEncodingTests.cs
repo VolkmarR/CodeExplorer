@@ -32,7 +32,9 @@ public sealed class FileEncodingTests : IDisposable
             new Dictionary<string, byte[]>
             {
                 ["src/Legacy.prg"] = Legacy,
-                ["src/Modern.prg"] = "// Größe, Maß und Übermaß\r\nlocal cText := \"naïve\"\n"u8.ToArray()
+                ["src/Modern.prg"] = "// Größe, Maß und Übermaß\r\nlocal cText := \"naïve\"\n"u8.ToArray(),
+                // libgit2 calls any blob with a UTF-16 mark binary, and this change leaves that call alone.
+                ["src/Wide.prg"] = [.. Encoding.Unicode.Preamble, .. Encoding.Unicode.GetBytes("// Größe\r\n")]
             }));
         await _host.RefreshAsync("alpha");
         await using var client = await _host.ConnectAsync("alpha");
@@ -41,6 +43,7 @@ public sealed class FileEncodingTests : IDisposable
         Assert.Contains("one/src/Legacy.prg  -  2 matches", found);
         Assert.Contains("1: // Größe der Liste", found);
         Assert.Contains("one/src/Modern.prg", found);
+        Assert.DoesNotContain("Wide.prg", found);
         Assert.DoesNotContain(ReplacementCharacter, found);
 
         string legacy = await ReadAsync(client, "one/src/Legacy.prg");
