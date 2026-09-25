@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vite-plus/test'
-import type { MonthChanges } from '@/features/projects/api'
+import type { PeriodChanges } from '@/features/projects/api'
 import { barScale, fileChangeTotals } from '@/features/projects/fileChanges'
 
-const month = (added: number, deleted: number, renamed = 0): MonthChanges => ({
-  year: 2026,
-  month: 1,
+const month = (added: number, deleted: number, renamed = 0): PeriodChanges => ({
+  start: '2026-01-01',
   added,
   deleted,
   renamed,

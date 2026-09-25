@@ -28,33 +28,38 @@ export function OverviewControls({
   search,
   repositories,
   excludedPatterns,
+  showWindow = true,
   onChange,
 }: {
   search: OverviewParameters
   repositories: RepositoryDetail[]
   excludedPatterns: number
+  /** False on a page whose numbers the window does not change. */
+  showWindow?: boolean
   onChange: (change: Partial<OverviewParameters>) => void
 }) {
   const days = search.days ?? DEFAULT_OVERVIEW_DAYS
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div className="flex items-center gap-2">
-        <Label htmlFor="overview-window" className="text-xs text-muted-foreground">
-          Window
-        </Label>
-        <Select value={String(days)} onValueChange={(next) => onChange({ days: Number(next) })}>
-          <SelectTrigger id="overview-window" className="w-36">
-            <SelectValue>{describeWindow(days)}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {windowsWith(OVERVIEW_WINDOWS, days).map((offered) => (
-              <SelectItem key={offered} value={String(offered)}>
-                {describeWindow(offered)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {showWindow ? (
+        <div className="flex items-center gap-2">
+          <Label htmlFor="overview-window" className="text-xs text-muted-foreground">
+            Window
+          </Label>
+          <Select value={String(days)} onValueChange={(next) => onChange({ days: Number(next) })}>
+            <SelectTrigger id="overview-window" className="w-36">
+              <SelectValue>{describeWindow(days)}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {windowsWith(OVERVIEW_WINDOWS, days).map((offered) => (
+                <SelectItem key={offered} value={String(offered)}>
+                  {describeWindow(offered)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
 
       {repositories.length > 1 ? (
         <div className="flex items-center gap-2">

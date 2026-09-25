@@ -6,7 +6,16 @@
  *
  * `app/navigation.ts` holds the row each of these is drawn as, and what it links to.
  */
-export const VIEWS = ['overview', 'files', 'search', 'history', 'churn', 'settings'] as const
+export const VIEWS = [
+  'overview',
+  'activity',
+  'risk',
+  'files',
+  'search',
+  'history',
+  'churn',
+  'settings',
+] as const
 
 export type View = (typeof VIEWS)[number]
 

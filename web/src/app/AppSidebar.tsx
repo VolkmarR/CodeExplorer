@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Boxes, Plus, SquareCode } from 'lucide-react'
-import { PROJECT_VIEWS } from '@/app/navigation'
+import { childViews, TOP_VIEWS } from '@/app/navigation'
 import type { View } from '@/lib/urls/views'
 import { indexState, type IndexState } from '@/features/projects/indexState'
 import { StateDot } from '@/features/projects/StateDot'
@@ -20,6 +20,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from '@/components/ui/sidebar'
 import { formatTime } from '@/lib/format'
 
@@ -161,25 +164,50 @@ function ProjectBlock({
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
-          {PROJECT_VIEWS.map(({ view: item, Icon, label, link }) => (
-            <SidebarMenuItem key={item}>
-              <SidebarMenuButton
-                isActive={view === item}
-                tooltip={label}
-                render={
-                  // `exact`, because which item is lit is decided once from the path above and a
-                  // link's own match would be a second answer to the same question. The router
-                  // matches a prefix by default, so Overview — whose path is every other view's
-                  // first segments — reports itself as the page you are on while you stand on
-                  // Settings, and a reader is told twice where they are, once wrongly.
-                  <Link {...link} params={{ project }} activeOptions={{ exact: true }}>
-                    <Icon />
-                    <span>{label}</span>
-                  </Link>
-                }
-              />
-            </SidebarMenuItem>
-          ))}
+          {TOP_VIEWS.map((row) => {
+            const { view: item, Icon, label, link } = row
+            const children = childViews(item)
+            return (
+              <SidebarMenuItem key={item}>
+                <SidebarMenuButton
+                  // Lit on its pages too, because in the collapsed rail it is the only one drawn.
+                  isActive={view === item || children.some((child) => child.view === view)}
+                  tooltip={label}
+                  render={
+                    // `exact`, because which item is lit is decided once from the path above and a
+                    // link's own match would be a second answer to the same question. The router
+                    // matches a prefix by default, so Overview — whose path is every other view's
+                    // first segments — reports itself as the page you are on while you stand on
+                    // Settings, and a reader is told twice where they are, once wrongly.
+                    <Link {...link} params={{ project }} activeOptions={{ exact: true }}>
+                      <Icon />
+                      <span>{label}</span>
+                    </Link>
+                  }
+                />
+                {'subLabel' in row ? (
+                  <SidebarMenuSub>
+                    {[{ ...row, label: row.subLabel }, ...children].map((page) => (
+                      <SidebarMenuSubItem key={page.view}>
+                        <SidebarMenuSubButton
+                          isActive={view === page.view}
+                          render={
+                            <Link
+                              {...page.link}
+                              params={{ project }}
+                              activeOptions={{ exact: true }}
+                            >
+                              <span>{page.label}</span>
+                            </Link>
+                          }
+                        />
+                      </SidebarMenuSubItem>
+                    ))}
+                  </SidebarMenuSub>
+                ) : null}
+              </SidebarMenuItem>
+            )
+          })}
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>

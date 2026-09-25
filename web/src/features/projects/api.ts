@@ -136,8 +136,8 @@ export interface IndexOverview {
 
 /**
  * How many files the excluded paths kept out of each kind of section: the files at HEAD (Languages,
- * Top level, Largest files), the files the window's commits touched (Most changed), and the files any
- * commit touched (Most commits).
+ * Top level, Largest files), and the files the window's commits touched: once for Most changed and
+ * once for Most commits, which count those commits differently.
  */
 export interface OverviewExcluded {
   files: number
@@ -215,11 +215,13 @@ export interface OverviewCards {
   fileChanges: OverviewFileChanges
 }
 
-/** One calendar month (UTC) of the Files added and deleted card. */
-export interface MonthChanges {
-  year: number
-  /** 1 to 12. */
-  month: number
+/** How long one bar of the Files added and deleted card is: a UTC day, a week from Monday, or a month. */
+export type ChangePeriod = 'Day' | 'Week' | 'Month'
+
+/** One bar of the Files added and deleted card. */
+export interface PeriodChanges {
+  /** `yyyy-mm-dd`, the day the period starts. The first and last are clipped to the window. */
+  start: string
   added: number
   deleted: number
   /** Files git detected as moved, counted apart from adds and deletes. */
@@ -227,20 +229,24 @@ export interface MonthChanges {
 }
 
 /**
- * The Files added and deleted card (#214): the months oldest first, ending at the month of the newest
- * commit, with the true counts; empty where there is no history.
+ * The Files added and deleted card (#214): the window's periods oldest first, with the true counts;
+ * empty where there is no history.
  */
 export interface OverviewFileChanges {
-  months: MonthChanges[]
+  period: ChangePeriod
+  periods: PeriodChanges[]
 }
 
-/** A top-level folder of one repository and the commits in the window that touched it. */
+/**
+ * A folder of one repository and the commits in the window that touched it: a top-level folder, or a
+ * child of the folder that holds nearly all of the repository, such as `src/Api` under `src`.
+ */
 export interface FolderCommits {
   folder: string
   commits: number
 }
 
-/** Two top-level folders of one repository and the distinct commits that touched both. */
+/** Two folders of one repository and the distinct commits that touched both. */
 export interface FolderPair {
   first: string
   second: string

@@ -5,7 +5,7 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     The overview page's Folders that change together card (#213): pairs of top-level folders in one
+///     The overview page's Folders that change together card (#213): pairs of folders in one
 ///     repository that the window's commits touched together, counted in distinct commits. Asserted
 ///     against the JSON the browser receives, like the rest of the live overview.
 /// </summary>
@@ -98,6 +98,38 @@ public sealed class FolderCouplingTests : IDisposable
         var one = Assert.Single(coupling.Repositories);
         Assert.Equal(["lib", "src"], one.Folders.Select(f => f.Folder));
         Assert.Equal([new FolderPair("lib", "src", 1)], one.Pairs);
+    }
+
+    [Fact]
+    public async Task A_folder_holding_nearly_every_file_is_shown_by_its_subfolders()
+    {
+        // The solution under src: nine of the ten files, in three projects and one file of its own.
+        await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/App.sln"] = "s\n", ["src/Api/A.cs"] = "a\n", ["src/Api/B.cs"] = "b\n",
+                ["src/Api/C.cs"] = "c\n", ["src/Web/D.cs"] = "d\n", ["src/Web/E.cs"] = "e\n",
+                ["src/Web/F.cs"] = "f\n", ["src/Shared/G.cs"] = "g\n", ["src/Shared/H.cs"] = "h\n",
+                ["tests/T.cs"] = "t\n"
+            }
+        });
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string>
+            {
+                ["src/App.sln"] = "s2\n", ["src/Api/A.cs"] = "a2\n", ["src/Web/D.cs"] = "d2\n",
+                ["tests/T.cs"] = "t2\n"
+            },
+            "Second", "Ada", "ada@example.invalid", 1);
+        await _host.RefreshAsync("alpha");
+
+        var one = Assert.Single((await FolderCouplingAsync("alpha")).Repositories);
+
+        // src itself is gone, its file of its own pairs with nothing, and tests stays a top-level folder.
+        Assert.Equal(["src/Api", "src/Web", "tests", "src/Shared"], one.Folders.Select(f => f.Folder));
+        Assert.Contains(new FolderPair("src/Api", "src/Web", 2), one.Pairs);
+        Assert.Contains(new FolderPair("src/Api", "tests", 2), one.Pairs);
+        Assert.DoesNotContain(one.Pairs, p => p.First == "src" || p.Second == "src");
     }
 
     [Fact]
