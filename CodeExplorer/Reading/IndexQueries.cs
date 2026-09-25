@@ -130,12 +130,12 @@ internal static class IndexQueries
                                                         -- commit_files.added and the statement fail to bind.
                                                         ORDER BY count(*) DESC,
                                                                  sum(cf.added) + sum(cf.deleted) DESC, cf.path
-                                                        LIMIT {limit})
+                                                        LIMIT $limit)
                                                     SELECT ranked.*,
                                                            {AtHeadExists("ranked.repo_slug")} AS at_head
                                                     FROM ranked
                                                     ORDER BY commits DESC, added + deleted DESC, path
-                                                    """, parameters);
+                                                    """, [.. parameters, new("limit", limit)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         return await ReadChurnedAsync(reader, paths, cancellationToken);
     }
@@ -176,6 +176,7 @@ internal static class IndexQueries
         // what makes one depth mean one thing: the first N segments of the path the agent was shown.
         int beneathScope = depth - (repositorySlug is null && !paths.SingleRepository ? 1 : 0);
         parameters.Add(new DuckDBParameter("n", Math.Max(beneathScope, 0)));
+        parameters.Add(new DuckDBParameter("limit", limit));
 
         await using var command = connection.Query($"""
                                                     WITH touched AS (
@@ -207,10 +208,7 @@ internal static class IndexQueries
                                                         GROUP BY repo_slug, below
                                                         ORDER BY count(DISTINCT commit_id) DESC,
                                                                  sum(added) + sum(deleted) DESC, below
-                                                        -- Inlined rather than parameterised, and safe
-                                                        -- because it is an int the caller has already
-                                                        -- clamped; RankAsync inlines its own the same way.
-                                                        LIMIT {limit}
+                                                        LIMIT $limit
                                                     ),
                                                     ranked AS (
                                                         SELECT grouped.* EXCLUDE (below),

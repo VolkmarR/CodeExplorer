@@ -390,11 +390,11 @@ internal static class OverviewQueries
                                                         SELECT repo_id, string_split(path, '/') AS parts
                                                         FROM files {where})
                                                     SELECT r.slug AS repo_slug,
-                                                           list_slice(parts, 1, least(len(parts) - 1, {_couplingDepth})) AS dirs,
+                                                           list_slice(parts, 1, least(len(parts) - 1, $depth)) AS dirs,
                                                            count(*)::INTEGER AS files
                                                     FROM split JOIN repositories r USING (repo_id)
                                                     GROUP BY ALL
-                                                    """, parameters);
+                                                    """, [.. parameters, new("depth", _couplingDepth)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var rows = new List<(string Slug, string[] Dirs, int Files)>();
         while (await reader.ReadAsync(cancellationToken))
@@ -477,6 +477,7 @@ internal static class OverviewQueries
         var (inWindow, parameters) =
             IndexQueries.ChurnScope(paths, window, scope.RepositorySlug, null, ChurnFilters.None);
         parameters.Add(new DuckDBParameter("mc", maxCommitPaths));
+        parameters.Add(new DuckDBParameter("shown", _coupledFoldersShown));
         // Bound, not inlined: the prefixes are folder names out of the repositories.
         var prefixRows = prefixes.Select((p, i) =>
         {
@@ -533,7 +534,7 @@ internal static class OverviewQueries
                                                                    ORDER BY count(*) DESC, folder) AS rank
                                                         FROM folders GROUP BY repo_slug, folder),
                                                     top AS (
-                                                        SELECT * FROM per_folder WHERE rank <= {_coupledFoldersShown}),
+                                                        SELECT * FROM per_folder WHERE rank <= $shown),
                                                     shown AS (
                                                         SELECT f.* FROM folders f SEMI JOIN top USING (repo_slug, folder))
                                                     SELECT 'folder' AS kind, repo_slug, folder AS first,
@@ -622,8 +623,8 @@ internal static class OverviewQueries
                                                     -- Spelled out for the reason RankAsync gives.
                                                     ORDER BY t.commits::BIGINT * h.line_count DESC, t.changed DESC,
                                                              h.qualified_path
-                                                    LIMIT {_hotspotsShown}
-                                                    """, parameters);
+                                                    LIMIT $limit
+                                                    """, [.. parameters, new("limit", _hotspotsShown)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var files = new List<Hotspot>();
         while (await reader.ReadAsync(cancellationToken))
@@ -676,8 +677,8 @@ internal static class OverviewQueries
                                                            coalesce(shares[3] / commits, 0) AS third
                                                     FROM per_file
                                                     ORDER BY authors DESC, commits DESC, qualified_path
-                                                    LIMIT {_authoredFilesShown}
-                                                    """, parameters);
+                                                    LIMIT $limit
+                                                    """, [.. parameters, new("limit", _authoredFilesShown)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var files = new List<AuthoredFile>();
         while (await reader.ReadAsync(cancellationToken))
@@ -922,8 +923,8 @@ internal static class OverviewQueries
                                                     FROM files
                                                     {Where(conditions)}
                                                     ORDER BY size_bytes DESC, qualified_path
-                                                    LIMIT {_largestFilesShown}
-                                                    """, parameters);
+                                                    LIMIT $limit
+                                                    """, [.. parameters, new("limit", _largestFilesShown)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var files = new List<OverviewFile>();
         while (await reader.ReadAsync(cancellationToken))
@@ -967,8 +968,8 @@ internal static class OverviewQueries
                                                     {Where(conditions)}
                                                     GROUP BY author_email
                                                     ORDER BY commits DESC, author_email
-                                                    LIMIT {_authorsShown}
-                                                    """, parameters);
+                                                    LIMIT $limit
+                                                    """, [.. parameters, new("limit", _authorsShown)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var authors = new List<OverviewAuthor>();
         while (await reader.ReadAsync(cancellationToken))

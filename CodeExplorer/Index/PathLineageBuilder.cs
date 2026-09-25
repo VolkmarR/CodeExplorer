@@ -1,3 +1,4 @@
+using System.Globalization;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
@@ -169,7 +170,9 @@ internal static class PathLineageBuilder
     ///     first repeat instead of circling, and <see cref="_maxHops" /> stops an honestly long one.
     /// </summary>
     private static void Chains(DuckDBConnection connection, CancellationToken cancellationToken) =>
-        connection.Execute(
+        // Inlined and not bound because a build's Execute binds nothing, and spelled in the invariant
+        // culture because it is SQL text: the process culture is whatever the host was started with.
+        connection.Execute(string.Create(CultureInfo.InvariantCulture,
             $"""
              CREATE OR REPLACE TEMP TABLE lineage_chain AS
              WITH RECURSIVE walk AS (
@@ -182,7 +185,7 @@ internal static class PathLineageBuilder
                      ON h.repo_slug = w.repo_slug AND h.scope = w.member
                  WHERE w.hop < {_maxHops} AND NOT list_contains(w.seen, h.previous))
              SELECT repo_slug, root, hop, member FROM walk
-             """, cancellationToken);
+             """), cancellationToken);
 
     /// <summary>
     ///     Which commits each path on a chain accounts for, as one row per path and commit. Written out

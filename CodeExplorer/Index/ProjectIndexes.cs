@@ -106,9 +106,11 @@ public sealed class ShadowIndex(DuckDBConnection connection, string catalog, str
             await FtsExtension.CreateIndexAsync(Connection, cancellationToken);
         }
 
-        await using var command = Connection.CreateCommand();
-        command.CommandText =
-            $"INSERT INTO index_info VALUES ({ProjectIndexes.SchemaVersion}, now(), {(fullTextLoaded ? "true" : "false")}, {(singleRepository ? "true" : "false")})";
+        await using var command = Connection.Query("INSERT INTO index_info VALUES ($version, now(), $fts, $single)",
+        [
+            new("version", ProjectIndexes.SchemaVersion), new("fts", fullTextLoaded),
+            new("single", singleRepository)
+        ]);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

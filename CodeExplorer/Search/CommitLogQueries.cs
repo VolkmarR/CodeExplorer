@@ -196,8 +196,8 @@ public sealed partial class HistoryQueries
                                                                  subject
                                                           FROM commits {scope}
                                                           ORDER BY commit_id DESC
-                                                          LIMIT {limit} OFFSET {skip}
-                                                          """, parameters);
+                                                          LIMIT $limit OFFSET $skip
+                                                          """, [.. parameters, new("limit", limit), new("skip", skip)]);
         return await ChangesAsync(command, cancellationToken);
     }
 
@@ -215,9 +215,9 @@ public sealed partial class HistoryQueries
                                                           FROM commit_files cf JOIN commits c USING (commit_id)
                                                           WHERE c.repo_slug = $r AND cf.path = $p
                                                           ORDER BY c.commit_id DESC
-                                                          LIMIT {limit}
+                                                          LIMIT $limit
                                                           """,
-            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path)]);
+            [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path), new("limit", limit)]);
         return await ChangesAsync(command, cancellationToken);
     }
 
@@ -265,8 +265,8 @@ public sealed partial class HistoryQueries
                                                           FROM commits {scope}
                                                           GROUP BY author_email
                                                           ORDER BY commits DESC, author_email
-                                                          LIMIT {limit}
-                                                          """, parameters);
+                                                          LIMIT $limit
+                                                          """, [.. parameters, new("limit", limit)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var authors = new List<RecordedAuthor>();
         long addresses = 0, commits = 0;
@@ -334,7 +334,7 @@ public sealed partial class HistoryQueries
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
         await using var command = index.Connection.Query(
-            LoggedStatement(scope, limit, skip, newestFirst: true), parameters);
+            LoggedStatement(scope, newestFirst: true), [.. parameters, new("limit", limit), new("skip", skip)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var commits = new List<LoggedCommit>();
         while (await reader.ReadAsync(cancellationToken)) commits.Add(Logged(reader));
@@ -352,15 +352,16 @@ public sealed partial class HistoryQueries
         CancellationToken cancellationToken)
     {
         await using var command = index.Connection.Query(
-            LoggedStatement("WHERE sha = $sha", 1, 0, newestFirst: false), [new DuckDBParameter("sha", sha)]);
+            LoggedStatement("WHERE sha = $sha", newestFirst: false),
+            [new DuckDBParameter("sha", sha), new("limit", 1), new("skip", 0)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? Logged(reader) : null;
     }
 
     /// <summary>
-    ///     The statement for the logged commits that <paramref name="scope" />, <paramref name="limit" /> and
-    ///     <paramref name="skip" /> pick out of <c>commits</c>, ordered by <c>commit_id</c>, with the sums of
-    ///     what each one did. One
+    ///     The statement for the logged commits that <paramref name="scope" /> and the bound
+    ///     <c>$limit</c> and <c>$skip</c> pick out of <c>commits</c>, ordered by <c>commit_id</c>, with the
+    ///     sums of what each one did. One
     ///     statement rather than a copy per caller, because the page of the log and a commit's own page
     ///     must count the same way — two spellings would drift the first time one of them learned to
     ///     count something else. The direction is one flag for the same reason: the page is cut in one
@@ -370,14 +371,14 @@ public sealed partial class HistoryQueries
     ///     aggregate it follows. The sums are cast because DuckDB widens <c>sum</c> of an INTEGER to
     ///     HUGEINT, which the driver hands back as a BigInteger.
     /// </summary>
-    private static string LoggedStatement(string scope, int limit, long skip, bool newestFirst)
+    private static string LoggedStatement(string scope, bool newestFirst)
     {
-        // A literal chosen here and two integers, never caller text, so all three are safe to inline.
+        // A literal chosen here, never caller text, so it is safe to inline.
         string order = newestFirst ? "DESC" : "ASC";
         return $"""
          -- page holds the commits being listed and nothing else, so the join and the sums below
          -- are over its rows of commit_files alone.
-         WITH page AS (SELECT * FROM commits {scope} ORDER BY commit_id {order} LIMIT {limit} OFFSET {skip})
+         WITH page AS (SELECT * FROM commits {scope} ORDER BY commit_id {order} LIMIT $limit OFFSET $skip)
          SELECT c.sha, c.repo_slug, c.author_name, c.author_email, c.authored_at, c.subject, c.body,
                 count(cf.path)::INTEGER AS files_changed,
                 coalesce(sum(cf.added), 0)::INTEGER AS added,

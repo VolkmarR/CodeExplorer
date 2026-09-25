@@ -120,8 +120,8 @@ public sealed partial class IndexReader
                                                      {_fileSource}
                                                      WHERE regexp_full_match(f.qualified_path, $g, 'i'){scope}
                                                      ORDER BY f.qualified_path
-                                                     LIMIT {limit} OFFSET {skip}
-                                                     """, parameters))
+                                                     LIMIT $limit OFFSET $skip
+                                                     """, [.. parameters, new("limit", limit), new("skip", skip)]))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -219,7 +219,7 @@ public sealed partial class IndexReader
         string prefix = directory.Length == 0 ? "" : directory + "/";
         var scope = new List<DuckDBParameter>
         {
-            new("r", repositorySlug), new("p", prefix), new("d", directory)
+            new("r", repositorySlug), new("p", prefix), new("d", directory), new("depth", depth)
         };
 
         // Children of each directory below the location, keyed by the directory they sit in, and the
@@ -229,11 +229,10 @@ public sealed partial class IndexReader
         var files = new Dictionary<string, List<TreeItem>>(StringComparer.Ordinal);
 
         // A file counts towards every ancestor within reach, so its path below the prefix is split once
-        // and joined back at each of its first k segments. `depth` is an int, never a caller's text, so
-        // it is inlined; k is filtered rather than bounded per row because a correlated range() measured
-        // three times slower (23 ms at depth 1000, 17 ms at depth 3). The range is still a row per k per
-        // file before that filter, so TreeAsync clamps the depth to MaxTreeDepth first: at a billion it
-        // was a billion rows per file (GHSA-v284-9964-6mjr).
+        // and joined back at each of its first k segments. k is filtered rather than bounded per row
+        // because a correlated range() measured three times slower (23 ms at depth 1000, 17 ms at
+        // depth 3). The range is still a row per k per file before that filter, so TreeAsync clamps the
+        // depth to MaxTreeDepth first: at a billion it was a billion rows per file (GHSA-v284-9964-6mjr).
         await using (var command = Connection.Query($"""
                                                      WITH below AS (
                                                          SELECT str_split(substr(f.directory, length($p) + 1), '/') AS segments,
@@ -248,7 +247,7 @@ public sealed partial class IndexReader
                                                             CAST(count(*) AS BIGINT) AS files,
                                                             CAST(sum(line_count) AS BIGINT) AS lines,
                                                             CAST(sum(size_bytes) AS BIGINT) AS bytes
-                                                     FROM below, range(1, {depth} + 1) AS t(k)
+                                                     FROM below, range(1, $depth + 1) AS t(k)
                                                      WHERE len(segments) >= k
                                                      GROUP BY directory
                                                      ORDER BY directory
@@ -273,10 +272,10 @@ public sealed partial class IndexReader
         // every file under the subtree — forty thousand of them on Radix — to discard all of them, on
         // the call the web tree view makes most.
         string deeper = depth > 1
-            ? $"""
+            ? """
 
-                  OR (starts_with(f.directory, $p) AND f.directory <> $d
-                      AND len(str_split(substr(f.directory, length($p) + 1), '/')) <= {depth - 1})
+                 OR (starts_with(f.directory, $p) AND f.directory <> $d
+                     AND len(str_split(substr(f.directory, length($p) + 1), '/')) <= $depth - 1)
               """
             : "";
         await using (var command = Connection.Query($"""

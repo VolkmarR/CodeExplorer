@@ -500,8 +500,8 @@ public sealed partial class IndexReader : IDisposable
         CancellationToken cancellationToken)
     {
         await using var command = Connection.Query(
-            $"SELECT qualified_path FROM files WHERE lower(name) = lower($n) ORDER BY qualified_path LIMIT {limit}",
-            [new DuckDBParameter("n", name)]);
+            "SELECT qualified_path FROM files WHERE lower(name) = lower($n) ORDER BY qualified_path LIMIT $limit",
+            [new DuckDBParameter("n", name), new("limit", limit)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var result = new List<string>();
         while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("qualified_path"));

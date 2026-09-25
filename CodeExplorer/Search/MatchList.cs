@@ -1,3 +1,4 @@
+using System.Globalization;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
@@ -146,11 +147,13 @@ public sealed class MatchList(IndexReaders readers)
             // which is the difference between extracting from a project and extracting from its hits.
             // unnest flattens the per-line array, so a line matching three times contributes three
             // rows, the way `grep -o` emits one line per match. The group index is inlined because
-            // regexp_extract_all takes it as a literal; it is bounded above, so it is a small integer.
+            // regexp_extract_all takes it as a literal; it is bounded above, so it is a small integer,
+            // and it is spelled in the invariant culture because a literal is SQL text, not display text.
+            string groupLiteral = group.ToString(CultureInfo.InvariantCulture);
             await using (var command = connection.Query($"""
                                                          WITH extracted AS (
                                                              SELECT l.file_id,
-                                                                    unnest(list_filter(regexp_extract_all(l.content, $extract, {group}, $flags), v -> v <> '')) AS value
+                                                                    unnest(list_filter(regexp_extract_all(l.content, $extract, {groupLiteral}, $flags), v -> v <> '')) AS value
                                                              FROM lines l JOIN files f USING (file_id)
                                                              WHERE regexp_matches(l.content, $q, $flags){fileFilter}),
                                                          grouped AS (
@@ -166,8 +169,8 @@ public sealed class MatchList(IndexReaders readers)
                                                          SELECT g.value, g.n, g.files, t.total_distinct, t.total_matches, t.total_files
                                                          FROM grouped g CROSS JOIN totals t
                                                          ORDER BY g.n DESC, g.value
-                                                         LIMIT {limit}
-                                                         """, [.. matchParameters, .. fileParameters]))
+                                                         LIMIT $limit
+                                                         """, [.. matchParameters, .. fileParameters, new("limit", limit)]))
             await using (var reader = await command.ReaderAsync(cancellationToken))
             {
                 while (await reader.ReadAsync(cancellationToken))
