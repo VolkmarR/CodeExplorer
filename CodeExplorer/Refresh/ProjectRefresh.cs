@@ -77,10 +77,10 @@ public sealed class ProjectRefresh(
                     // Reported before the publish waits on the writer gate, so a wait behind a restore of
                     // the same project is billed to the store it is holding up.
                     report(new RefreshProgress(RefreshProgress.StoreStep, _totalSteps, RefreshProgress.StorePhase));
-                    // No phase names the flush to disk: it is the CHECKPOINT the swap runs before it
-                    // detaches the shadow (#242), inside the swap phase. It lands after StoreStep is
+                    // No phase names the flush to disk: it is the CHECKPOINT the publish runs on the
+                    // shadow after storing it and before the swap (#242). It lands after StoreStep is
                     // reported, outside the step-3 window #91 is about, so its half-second is billed to
-                    // the swap rather than to nothing.
+                    // the store rather than to nothing.
                     published = await indexes.PublishShadowAsync(shadow, condition, report, cancellationToken);
                 }
 

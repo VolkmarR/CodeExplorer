@@ -391,16 +391,17 @@ public sealed partial class ProjectIndexes : IDisposable
 
             string path = RestorePath(slug);
             string catalog = RestoreCatalog(slug);
+            string refusal = NotPutInPlace(slug, "restored index",
+                "Nothing was restored; the next read of the project tries again.");
             await using (var connection = await ConnectAsync(cancellationToken))
             {
                 await AttachEmptyAsync(connection, catalog, path, cancellationToken);
                 await _durable.LoadAsync(connection, copy, FtsAvailable, cancellationToken);
+                await CheckpointAsync(connection, slug, catalog, refusal, cancellationToken);
             }
 
             await ReplaceFileAsync(slug, "the restored index was put in place anyway",
-                MoveIntoPlace(slug, catalog, path, "restored index",
-                    "Nothing was restored; the next read of the project tries again.", cancellationToken),
-                cancellationToken);
+                MoveIntoPlace(slug, catalog, path, refusal, cancellationToken), cancellationToken);
 
             if (_logger.IsEnabled(LogLevel.Information))
                 _logger.LogInformation("Restored project {Project} from its durable copy", slug);
@@ -553,14 +554,16 @@ public sealed partial class ProjectIndexes : IDisposable
             // attach of the live catalog — one that would quietly re-bind a connection ADR-0003 says the
             // swap must strand — and a store that is unreachable leaves the old index serving.
             await _durable.StoreAsync(shadow.Connection, slug, cancellationToken);
+            string catalog = ShadowCatalog(slug);
+            string refusal = NotPutInPlace(slug, "new index",
+                "The index that was serving still is; refresh the project to try again.");
+            await CheckpointAsync(shadow.Connection, slug, catalog, refusal, cancellationToken);
             shadow.Dispose();
 
             report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.TotalStepCount,
                 RefreshProgress.SwapPhase));
             await ReplaceFileAsync(slug, "the new index was swapped in anyway",
-                MoveIntoPlace(slug, ShadowCatalog(slug), ShadowPath(slug), "new index",
-                    "The index that was serving still is; refresh the project to try again.", cancellationToken),
-                cancellationToken);
+                MoveIntoPlace(slug, catalog, ShadowPath(slug), refusal, cancellationToken), cancellationToken);
             return true;
         }
     }
@@ -576,31 +579,29 @@ public sealed partial class ProjectIndexes : IDisposable
 
     /// <summary>
     ///     The file work of a swap and of a restore: a finished file, attached under its own catalog, made
-    ///     the project's live one. Run with the gate shut, by a caller holding the writer gate.
+    ///     the project's live one. Run with the gate shut, by a caller holding the writer gate, after
+    ///     <see cref="CheckpointAsync" /> has written the file out.
     /// </summary>
     /// <param name="slug">The project whose live file is replaced.</param>
     /// <param name="catalog">The catalog the finished file is attached under.</param>
     /// <param name="path">The finished file.</param>
-    /// <param name="replacement">What the file is, as the refusal names it: "new index", "restored index".</param>
-    /// <param name="remedy">The refusal's last sentence: what still serves, and what tries again.</param>
-    /// <param name="cancellationToken">Threaded through the checkpoint and both detaches.</param>
-    private Func<DuckDBConnection, Task> MoveIntoPlace(string slug, string catalog, string path,
-        string replacement, string remedy, CancellationToken cancellationToken) =>
+    /// <param name="refusal">Thrown when a log is left beside the file; see <see cref="NotPutInPlace" />.</param>
+    /// <param name="cancellationToken">Threaded through both detaches.</param>
+    private Func<DuckDBConnection, Task> MoveIntoPlace(string slug, string catalog, string path, string refusal,
+        CancellationToken cancellationToken) =>
         async connection =>
         {
-            bool checkpointed = await CheckpointAsync(connection, slug, catalog, cancellationToken);
             // Both catalogs go before the move: DETACH is what closes the file handles, and neither file
             // can be deleted or moved while the instance holds one. The new one first, so a refusal
-            // below leaves the live catalog attached and serving.
-            await DetachAsync(connection, catalog, cancellationToken);
-            // A log still here holds rows the file does not, and moving the file without it would put
-            // an index missing its tail in place. Refused rather than moved with it: nothing opens a
-            // log under a name other than the one it was written beside. A failed checkpoint is refused
-            // too, log or not: DuckDB invalidates the database it failed on, so the file is not trusted.
-            if (!checkpointed || File.Exists(path + ".wal"))
-                throw new InvalidOperationException(
-                    $"The {replacement} of project '{slug}' was not put in place, because part of it had not "
-                    + $"been written to its file yet. {remedy}");
+            // below leaves the live catalog attached and serving. Its DETACH checkpoints again, and
+            // reports a checkpoint that failed as its own error after detaching anyway.
+            await WrittenOutOrRefusedAsync(() => DetachAsync(connection, catalog, cancellationToken), slug, refusal,
+                cancellationToken);
+            // A log still here holds rows the file does not — written after the checkpoint, and not
+            // checkpointed by a DETACH that found the database still in use — and moving the file
+            // without it would put an index missing its tail in place. Refused rather than moved with
+            // it: nothing opens a log under a name other than the one it was written beside.
+            if (File.Exists(path + ".wal")) throw new InvalidOperationException(refusal);
             await DetachAsync(connection, slug, cancellationToken);
             // One overwriting move, never delete-then-move: a move that fails after the old file was
             // deleted would leave the project with no index at all, and the caller's cleanup would then
@@ -612,27 +613,46 @@ public sealed partial class ProjectIndexes : IDisposable
         };
 
     /// <summary>
-    ///     Writes everything committed to a finished file into the file itself, and answers whether that
-    ///     worked. Explicit rather than trusted to the DETACH: a DETACH checkpoints only when nothing else
-    ///     is using the database, and one that did not leaves committed rows of the new file — the
-    ///     <c>index_info</c> row a build writes last among them — in a log beside it (#242).
+    ///     Writes everything committed to a finished file into the file itself, or throws
+    ///     <paramref name="refusal" />. Explicit rather than trusted to the DETACH: a DETACH checkpoints
+    ///     only when nothing else is using the database, and one that did not leaves committed rows of the
+    ///     new file — the <c>index_info</c> row a build writes last among them — in a log beside it (#242).
+    ///     Run before the drain and not inside the file work, because nothing reads a finished file yet
+    ///     and the flush would otherwise hold every reader of the project and every attach out.
     /// </summary>
-    private async Task<bool> CheckpointAsync(DuckDBConnection connection, string slug, string catalog,
+    private Task CheckpointAsync(DuckDBConnection connection, string slug, string catalog, string refusal,
+        CancellationToken cancellationToken) =>
+        WrittenOutOrRefusedAsync(() => connection.ExecuteAsync($"CHECKPOINT {Quote(catalog)}", cancellationToken),
+            slug, refusal, cancellationToken);
+
+    /// <summary>
+    ///     Runs a statement that checkpoints a finished file — the explicit <c>CHECKPOINT</c>, and the
+    ///     <c>DETACH</c> that checkpoints again on its way out — and turns its failure into
+    ///     <paramref name="refusal" />. Refused whether or not a log is left: DuckDB invalidates the
+    ///     database a checkpoint failed on, so the file is not trusted. DuckDB's message names the file,
+    ///     so it goes to the log and the operator's sentence to the status.
+    /// </summary>
+    private async Task WrittenOutOrRefusedAsync(Func<Task> statement, string slug, string refusal,
         CancellationToken cancellationToken)
     {
         try
         {
-            await connection.ExecuteAsync($"CHECKPOINT {Quote(catalog)}", cancellationToken);
-            return true;
+            await statement();
         }
         catch (DuckDBException ex) when (!cancellationToken.IsCancellationRequested)
         {
-            // Safe to swallow: the caller refuses the move on a false answer with a sentence of its own,
-            // and DuckDB's message, which names the file, belongs in the log rather than in the status.
-            _logger.LogWarning(ex, "The finished index of project {Project} could not be checkpointed", slug);
-            return false;
+            _logger.LogWarning(ex, "The finished index of project {Project} could not be written to its file", slug);
+            throw new InvalidOperationException(refusal, ex);
         }
     }
+
+    /// <summary>Why a finished file was not made the project's live one, in the operator's words.</summary>
+    /// <param name="slug">The project.</param>
+    /// <param name="replacement">What the file is: "new index", "restored index".</param>
+    /// <param name="remedy">What still serves, and what tries again.</param>
+    private static string NotPutInPlace(string slug, string replacement, string remedy) =>
+        $"The {replacement} of project '{slug}' was not put in place, because part of it had not been "
+        + $"written to its file yet. {remedy}";
 
     /// <summary>
     ///     Removes the shadow file after a refresh failed part-way. The live index is untouched and
@@ -855,14 +875,23 @@ public sealed partial class ProjectIndexes : IDisposable
 
     /// <summary>
     ///     Detaches a catalog and forgets what was remembered about it, so the next attach asks again.
-    ///     The caller holds the attach gate, which is not reentrant.
+    ///     The caller holds the attach gate, which is not reentrant. Forgotten even when the statement
+    ///     throws: a DETACH whose checkpoint failed has detached all the same and says so in its error,
+    ///     and remembering a catalog that is gone would skip the next attach. One that really is still
+    ///     attached costs only the <c>ATTACH IF NOT EXISTS</c> the next caller then runs.
     /// </summary>
     private async Task DetachAsync(DuckDBConnection connection, string catalog,
         CancellationToken cancellationToken)
     {
-        await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
-        _attached.TryRemove(catalog, out _);
-        _readable.TryRemove(catalog, out _);
+        try
+        {
+            await connection.ExecuteAsync($"DETACH DATABASE IF EXISTS {Quote(catalog)}", cancellationToken);
+        }
+        finally
+        {
+            _attached.TryRemove(catalog, out _);
+            _readable.TryRemove(catalog, out _);
+        }
     }
 
     /// <summary>
