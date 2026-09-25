@@ -570,7 +570,7 @@ internal sealed partial class FileTools(
                     + $"\"{colon.Groups["path"].Value}:{colon.Groups["a"].Value}-{colon.Groups["b"].Value}\".");
 
             if (Range().Match(trimmed) is not { Success: true } range)
-                return new ReadTarget(trimmed, startLine, Last(startLine, maxLines), false);
+                return new ReadTarget(trimmed, startLine, WindowEnd(startLine, maxLines), false);
 
             // A number too large for an int is refused as this entry's answer: thrown, it failed the whole
             // call and every well-formed entry beside it (#233).
@@ -585,7 +585,7 @@ internal sealed partial class FileTools(
             int start = Math.Max(1, first);
             if (!range.Groups["b"].Success)
                 // "path:120" reads maxLines from there; "path:120-180" reads exactly that window.
-                return new ReadTarget(range.Groups["path"].Value, start, Last(start, maxLines), false);
+                return new ReadTarget(range.Groups["path"].Value, start, WindowEnd(start, maxLines), false);
 
             if (end < start)
                 return Refused(trimmed,
@@ -599,6 +599,6 @@ internal sealed partial class FileTools(
         ///     The last line of a window of <paramref name="lines" /> from <paramref name="start" />, held at
         ///     <see cref="int.MaxValue" />: a start near it would otherwise wrap the end negative.
         /// </summary>
-        private static int Last(int start, int lines) => (int)Math.Min(start + (long)lines - 1, int.MaxValue);
+        private static int WindowEnd(int start, int lines) => (int)Math.Min(start + (long)lines - 1, int.MaxValue);
     }
 }

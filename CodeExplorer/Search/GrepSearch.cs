@@ -647,6 +647,6 @@ public sealed partial class GrepSearch(IndexReaders readers)
         ///     The files ahead of this page. A <c>long</c>, because <see cref="Page" /> is clamped only from
         ///     below and a large one times the page size wraps an <c>int</c> negative (#233).
         /// </summary>
-        public long Skip => (long)(Page - 1) * PageSize;
+        public long Skip => (Page - 1L) * PageSize;
     }
 }
