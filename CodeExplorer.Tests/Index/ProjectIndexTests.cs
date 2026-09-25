@@ -64,7 +64,9 @@ public sealed class ProjectIndexTests : IDisposable
     /// <summary>
     ///     The size is the blob's byte count, which is not its character count once a file holds more
     ///     than ASCII, and it is what both skip reasons are decided on: a binary is sized too, and a
-    ///     text file one byte over the limit is refused by it.
+    ///     text file one byte over the limit is refused by it. A binary over the limit is refused by its
+    ///     size too, because the size is asked first: it is read off the object header, and the binary
+    ///     test would inflate the whole blob (#230).
     /// </summary>
     [Fact]
     public async Task A_file_is_sized_in_bytes_and_skipped_by_its_size_or_content()
@@ -76,37 +78,21 @@ public sealed class ProjectIndexTests : IDisposable
             {
                 ["a.cs"] = "// café\nclass A {}\n",
                 ["logo.png"] = "PNG\0\0binary",
-                ["dump.sql"] = new string('x', 25 * 1024 * 1024 + 1)
+                ["dump.sql"] = new string('x', 25 * 1024 * 1024 + 1),
+                ["backup.bak"] = "\0\0" + new string('x', 25 * 1024 * 1024)
             }
         });
 
         var files = await host.ScalarsAsync("alpha",
             "SELECT path || '|' || size_bytes || '|' || coalesce(skip_reason, '') FROM files ORDER BY path");
-        Assert.Equal(["a.cs|20|", "dump.sql|26214401|larger than 25 MiB", "logo.png|11|binary"], files);
+        Assert.Equal([
+            "a.cs|20|", "backup.bak|26214402|larger than 25 MiB", "dump.sql|26214401|larger than 25 MiB",
+            "logo.png|11|binary"
+        ], files);
 
-        // Skipped files count towards the repository's bytes: 20 + 26214401 + 11.
+        // Skipped files count towards the repository's bytes: 20 + 26214402 + 26214401 + 11.
         var bytes = await host.ScalarsAsync("alpha", "SELECT byte_count::VARCHAR FROM repositories");
-        Assert.Equal(["26214432"], bytes);
-    }
-
-    /// <summary>
-    ///     The size is read from the object header and the binary test inflates the whole blob, so a
-    ///     file over the limit is refused by its size before its content is looked at: a committed
-    ///     database dump must not be inflated on every refresh only to be called binary (#230). The
-    ///     reason it gets is the observable half of that order — it is skipped for size either way.
-    /// </summary>
-    [Fact]
-    public async Task An_oversized_binary_is_skipped_for_its_size()
-    {
-        var host = Start(SearchEngine.Substring);
-        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
-        {
-            ["main"] = new() { ["backup.bak"] = "\0\0" + new string('x', 25 * 1024 * 1024) }
-        });
-
-        var files = await host.ScalarsAsync("alpha",
-            "SELECT path || '|' || size_bytes || '|' || coalesce(skip_reason, '') FROM files");
-        Assert.Equal(["backup.bak|26214402|larger than 25 MiB"], files);
+        Assert.Equal(["52428834"], bytes);
     }
 
     [Fact]
