@@ -53,7 +53,9 @@ public sealed class StalledRemoteTests : IDisposable
         await _host.AddRepositoryAsync("alpha", "healthy", healthy);
         await _host.AddRepositoryAsync("alpha", "stalled", RemoteUrl);
 
-        var (summary, elapsed) = await RefreshAsync("alpha");
+        var refresh = _host.RefreshAsync("alpha");
+        var elapsed = await TimedAsync(refresh);
+        var summary = await refresh;
 
         string skipped = Assert.Single(summary.Skipped);
         Assert.Contains("'stalled'", skipped, StringComparison.Ordinal);
@@ -75,28 +77,25 @@ public sealed class StalledRemoteTests : IDisposable
 
         using (var response = await _host.RequestRefreshAsync("alpha"))
             Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        var clock = Stopwatch.StartNew();
-        await _host.WaitForRefreshesAsync().WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
-        clock.Stop();
+        var elapsed = await TimedAsync(_host.WaitForRefreshesAsync());
 
         // An empty remote is the only repository, so the refresh fails as a whole — with the empty
         // remote's sentence, which is the proof the clone ran to the end instead of timing out.
         string error = Assert.IsType<string>((await _host.RefreshStatusAsync("alpha")).Error);
         Assert.Contains("no commits yet", error, StringComparison.Ordinal);
         Assert.DoesNotContain("stopped responding", error, StringComparison.Ordinal);
-        Assert.True(clock.Elapsed > TimeSpan.FromSeconds(StallSeconds * 2), $"The refresh took only {clock.Elapsed}.");
+        Assert.True(elapsed > TimeSpan.FromSeconds(StallSeconds * 2), $"The refresh took only {elapsed}.");
     }
 
     /// <summary>
     ///     Bounded here rather than by the runner, so a regression fails the test instead of hanging the
     ///     suite: a libgit2 call that never returns cannot be cancelled by the token either.
     /// </summary>
-    private async Task<(IndexSummary Summary, TimeSpan Elapsed)> RefreshAsync(string project)
+    private static async Task<TimeSpan> TimedAsync(Task refresh)
     {
         var clock = Stopwatch.StartNew();
-        var summary = await _host.RefreshAsync(project)
-            .WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
-        return (summary, clock.Elapsed);
+        await refresh.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        return clock.Elapsed;
     }
 
     /// <summary>
@@ -121,7 +120,7 @@ public sealed class StalledRemoteTests : IDisposable
         }
     });
 
-    private static void StartThread(Action body) => new Thread(() => body()) { IsBackground = true }.Start();
+    private static void StartThread(Action body) => new Thread(new ThreadStart(body)) { IsBackground = true }.Start();
 
     /// <summary>
     ///     Answers the smart-HTTP reference discovery of a repository with no refs, a few bytes at a time.

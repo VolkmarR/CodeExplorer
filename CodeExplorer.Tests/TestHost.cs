@@ -62,7 +62,6 @@ public sealed class TestHost : IDisposable
         bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
         int? maxCommitPaths = null, int? transferStallSeconds = null)
     {
-        _transferStallSeconds = transferStallSeconds;
         _engine = engine;
         _drainSeconds = drainSeconds;
         _minimumFreeBytes = minimumFreeBytes;
@@ -70,6 +69,7 @@ public sealed class TestHost : IDisposable
         _authenticated = authenticated;
         _extensionDirectory = extensionDirectory;
         _maxCommitPaths = maxCommitPaths;
+        _transferStallSeconds = transferStallSeconds;
         Factory = Build();
     }
 
