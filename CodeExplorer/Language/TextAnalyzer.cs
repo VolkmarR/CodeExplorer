@@ -60,6 +60,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     // Each null where the profile gives the shape nothing to match, rather than a compiled pattern
     // that matches nothing and is still run on every candidate line.
     private readonly Regex? _assignment;
+    private readonly Func<string, CandidateLines> _declarationCandidatesFor;
     private readonly Regex? _generated;
     private readonly StringComparison _keywordComparison;
     private readonly Regex? _keywordDeclaration;
@@ -259,12 +260,22 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         // a nullable, `[]` for an array, and both together.
         string type = $@"[{SymbolText.Re2WordClass}\.]+(?:{arguments})?[\[\]\?]*";
 
-        string MemberPattern(string guard) =>
-            $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+{guard}{type}\s+({word}+)\s*[\(<{{=;]";
+        // Every shape below takes its name slot as an argument, because two callers fill it: the
+        // patterns .NET runs capture whatever word stands there and report it, and the candidate
+        // predicate for one symbol spells that symbol there (#239). Without the second, a line shaped
+        // like a declaration counted as a candidate whenever it mentioned the name anywhere — `public
+        // void Run(OrderService s)` for `OrderService` — and a thousand of those sorting first used
+        // up the candidate cap before the real declaration was read.
+        string captured = $"({word}+)";
+
+        string MemberPattern(string guard, string name) =>
+            modifiers is null
+                ? _matchesNothing
+                : $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+{guard}{type}\s+{name}\s*[\(<{{=;]";
 
         // The wider of the two, and the one published as a candidate predicate.
-        string memberPattern = modifiers is null ? _matchesNothing : MemberPattern("");
-        string memberDeclarationPattern = modifiers is null ? _matchesNothing : MemberPattern(typeGuard);
+        string memberPattern = MemberPattern("", captured);
+        string memberDeclarationPattern = MemberPattern(typeGuard, captured);
         // The xBase, Delphi and SQL shape: the introducing word and then the name, with the return
         // type — where there is one — after it rather than before. The name may be qualified, which
         // is how every language that splits declaration from implementation writes the second half:
@@ -276,19 +287,27 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         string openers = Alternation(profile.DeclarationBodyOpeners) is { } words
             ? $@"|\s(?:{words})\b"
             : "";
-        string keywordPattern = modifiers is null || !profile.DeclarationNamesFollowKeyword
-            ? _matchesNothing
-            : $@"^\s*(?:(?:{modifiers})\s+)+(?:({word}+)\s*\.\s*)?({word}+)\s*(?:[\(<{{=;:]{openers})";
+        // The head is the name and the qualifier in front of it, because either is what the line
+        // declares: `procedure TCustomer.Save;` is a site for `Save` and for `TCustomer`.
+        string KeywordPattern(string head) =>
+            modifiers is null || !profile.DeclarationNamesFollowKeyword
+                ? _matchesNothing
+                : $@"^\s*(?:(?:{modifiers})\s+)+{head}\s*(?:[\(<{{=;:]{openers})";
+        string keywordPattern = KeywordPattern($@"(?:{captured}\s*\.\s*)?{captured}");
         string? typeKeywords = Alternation(profile.DeclarationKeywords);
-        string typePattern = typeKeywords is null
-            ? _matchesNothing
-            : $@"^\s*(?:\[[^\]]*\]\s*)*(?:{word}+\s+)*\b(?:{typeKeywords})\s+({word}+)";
+        string TypePattern(string name) =>
+            typeKeywords is null
+                ? _matchesNothing
+                : $@"^\s*(?:\[[^\]]*\]\s*)*(?:{word}+\s+)*\b(?:{typeKeywords})\s+{name}";
+        string typePattern = TypePattern(captured);
         // Delphi's `TCustomer = class(TBase)`, where the name is in front of the word that says what
         // kind of thing it is. Written out as its own shape rather than folded into the one above: an
         // alternation covering both would match a line that is neither.
-        string precedingTypePattern = typeKeywords is null || !profile.TypeNamesPrecedeKeyword
-            ? _matchesNothing
-            : $@"^\s*({word}+)\s*=\s*(?:{typeKeywords})\b";
+        string PrecedingTypePattern(string name) =>
+            typeKeywords is null || !profile.TypeNamesPrecedeKeyword
+                ? _matchesNothing
+                : $@"^\s*{name}\s*=\s*(?:{typeKeywords})\b";
+        string precedingTypePattern = PrecedingTypePattern(captured);
 
         _memberDeclaration = PatternOrNull(flag, memberDeclarationPattern);
         _keywordDeclaration = PatternOrNull(flag, keywordPattern);
@@ -297,10 +316,29 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         // Only the shapes this language actually writes. A language that declares nothing this can
         // read asks the engine for no lines at all, rather than for the lines a pattern that matches
         // nothing would return.
-        string[] shapes = [.. new[] { memberPattern, keywordPattern, typePattern, precedingTypePattern }.Where(p => p != _matchesNothing)];
-        DeclarationCandidates = shapes.Length == 0
-            ? CandidateLines.None
-            : CandidateLines.Matching($"{flag}{string.Join("|", shapes.Select(p => $"(?:{p})"))}");
+        CandidateLines Candidates(params string[] patterns)
+        {
+            string[] shapes = [.. patterns.Where(p => p != _matchesNothing)];
+            return shapes.Length == 0
+                ? CandidateLines.None
+                : CandidateLines.Matching($"{flag}{string.Join("|", shapes.Select(p => $"(?:{p})"))}");
+        }
+
+        DeclarationCandidates = Candidates(memberPattern, keywordPattern, typePattern, precedingTypePattern);
+        // The same four shapes with the symbol where the captured name was. A line the capturing
+        // shapes read as declaring the symbol matches here at the same place, so this loses no
+        // declaration; it is still a prefilter, and Declares stays the final word.
+        _declarationCandidatesFor = symbol =>
+        {
+            string literal = SymbolText.Re2Literal(symbol);
+            return Candidates(
+                MemberPattern("", literal),
+                KeywordPattern($@"(?:{literal}\s*\.\s*{word}+|(?:{word}+\s*\.\s*)?{literal})"),
+                // The one shape with nothing after the name, so it needs the boundary the greedy
+                // capture gave it: `class OrderServiceX` declares no `OrderService`.
+                TypePattern(literal + SymbolText.Re2WordEnd),
+                PrecedingTypePattern(literal));
+        };
 
         _assignment = PatternOrNull("", AssignmentPattern(profile.AssignmentOperators));
         // Not compiled: nothing in production asks it, and a test asking a handful of paths does not
@@ -367,6 +405,12 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     public bool SeparatesDeclarationFromImplementation => _profile.SeparatesDeclarationFromImplementation;
 
     public CandidateLines DeclarationCandidates { get; }
+
+    public CandidateLines DeclarationCandidatesFor(string symbol)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(symbol);
+        return _declarationCandidatesFor(symbol);
+    }
 
     public FilePosition Start => _start;
 

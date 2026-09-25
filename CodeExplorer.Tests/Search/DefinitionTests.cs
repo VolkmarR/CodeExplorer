@@ -516,6 +516,58 @@ public sealed class DefinitionTests : IDisposable
         Assert.Contains("1: define FSEDIT_GET := 11", text);
     }
 
+    /// <summary>
+    ///     #239: a line shaped like a declaration that only mentions the name — here as a parameter
+    ///     type — declares another name, and more than the candidate cap of them sorting first used to
+    ///     crowd the real declaration out of the lines read at all.
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task Lines_that_only_mention_the_name_do_not_crowd_out_its_declaration(SearchEngine engine)
+    {
+        _host = new TestHost(engine);
+        string uses = string.Concat(Enumerable.Range(0, 1100)
+            .Select(i => $"    public void Run{i}(OrderService s) {{ }}\n"));
+        await _host.IndexedProjectAsync("crowd", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["a/Uses.cs"] = $"public class Uses\n{{\n{uses}}}\n",
+                ["z/OrderService.cs"] = "public class OrderService {}\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("crowd");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "OrderService" });
+
+        Assert.Contains("\"OrderService\" is declared in 1 place.", text);
+        Assert.Contains("one/z/OrderService.cs", text);
+        Assert.DoesNotContain("candidate lines", text);
+    }
+
+    /// <summary>
+    ///     #239: where more lines than the cap really are shaped like a declaration of the name, the
+    ///     ones past it are never placed, and the reply says so rather than reading as the whole answer.
+    /// </summary>
+    [Fact]
+    public async Task A_search_that_reaches_the_candidate_cap_says_so()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        string overloads = string.Concat(Enumerable.Range(0, 1001)
+            .Select(i => $"    public void Advance(int n{i}) {{ }}\n"));
+        await _host.IndexedProjectAsync("capped", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new() { ["src/Overloads.cs"] = $"public class Overloads\n{{\n{overloads}}}\n" }
+        });
+        await using var client = await _host.ConnectAsync("capped");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Advance" });
+
+        Assert.Contains("more than 1000 candidate lines", text);
+        Assert.Contains("may be incomplete", text);
+    }
+
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation()
     {

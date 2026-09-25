@@ -281,6 +281,18 @@ public interface ILanguageAnalyzer
     CandidateLines DeclarationCandidates { get; }
 
     /// <summary>
+    ///     <see cref="DeclarationCandidates" /> narrowed to the lines that could declare this one
+    ///     name, for a search that asks about a single symbol (#239). A line that only mentions the
+    ///     name — as a parameter type, a return type, a base type — is shaped like a declaration of
+    ///     something else, and without this it counts as a candidate all the same. Still a prefilter:
+    ///     <see cref="Declares" /> says what each line declares. The default is the unnarrowed set,
+    ///     which is what an analyser that cannot tie a shape to a name — a parser reading every line —
+    ///     has to answer, and wider is never wrong here.
+    /// </summary>
+    /// <param name="symbol">The name, exactly as it is looked for.</param>
+    CandidateLines DeclarationCandidatesFor(string symbol) => DeclarationCandidates;
+
+    /// <summary>
     ///     Where a file begins: nothing open, nothing entered. The first line of a file is read from
     ///     here, and every line after it from what <see cref="After" /> returned for the one above.
     /// </summary>
