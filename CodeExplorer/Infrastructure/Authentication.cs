@@ -322,7 +322,7 @@ public static class Authentication
         if (!settings.Enabled) return;
 
         auth.MapGet("/signin", (string? returnUrl) =>
-            Results.Challenge(new AuthenticationProperties { RedirectUri = Local(returnUrl) },
+            Results.Challenge(new AuthenticationProperties { RedirectUri = LocalReturnUrl(returnUrl) },
                 [OpenIdConnectDefaults.AuthenticationScheme]));
 
         // POST, where the sign-in beside it is a GET, because signing out changes state and signing in
@@ -352,12 +352,16 @@ public static class Authentication
     ///     protocol-relative one, the backslash spelling some browsers normalise into one — becomes
     ///     the home page, because a sign-in endpoint that redirects anywhere is a phishing hop that
     ///     arrives with the tenant's own domain in the address bar.
+    ///     Control characters are refused anywhere in it, as ASP.NET Core's own <c>IsLocalUrl</c> does:
+    ///     a browser's URL parser strips tab and newline, so <c>/&lt;TAB&gt;/evil</c> is followed as
+    ///     <c>//evil</c>, and checking only the leading characters sees neither (GHSA-g2ch-php8-x3w9).
     /// </summary>
-    private static string Local(string? returnUrl) =>
+    internal static string LocalReturnUrl(string? returnUrl) =>
         returnUrl is not null
         && returnUrl.StartsWith('/')
         && !returnUrl.StartsWith("//", StringComparison.Ordinal)
         && !returnUrl.StartsWith("/\\", StringComparison.Ordinal)
+        && !returnUrl.Any(char.IsControl)
             ? returnUrl
             : "/";
 
