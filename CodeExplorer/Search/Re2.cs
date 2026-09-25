@@ -80,10 +80,10 @@ internal static class Re2
     ///     counts.
     /// </summary>
     public static string WholeWord(string pattern) =>
-        $"{SymbolText.Re2WordStart}(?:{Closed(pattern)}){SymbolText.Re2WordEnd}";
+        $"{SymbolText.Re2WordStart}(?:{WithQuoteClosed(pattern)}){SymbolText.Re2WordEnd}";
 
     /// <summary>The caller's pattern as group 1, so a rewrite can mark exactly what it matched.</summary>
-    public static string Grouped(string pattern) => $"({Closed(pattern)})";
+    public static string Grouped(string pattern) => $"({WithQuoteClosed(pattern)})";
 
     /// <summary>
     ///     Compiles the caller's pattern on its own, throwing the <see cref="DuckDBException" /> that
@@ -113,23 +113,22 @@ internal static class Re2
     ///     could start — which is what a lookbehind would have said, in the engine that has none.
     /// </summary>
     public static string WholeWordTokens(string pattern) =>
-        $"({Closed(pattern)}){SymbolText.Re2WordEnd}|{SymbolText.Re2WordChar}+{SymbolText.Re2NonWordChar}?|{SymbolText.Re2NonWordChar}";
+        $"({WithQuoteClosed(pattern)}){SymbolText.Re2WordEnd}|{SymbolText.Re2WordChar}+{SymbolText.Re2NonWordChar}?|{SymbolText.Re2NonWordChar}";
 
     /// <summary>
     ///     The pattern with a <c>\Q</c> it leaves open closed by <c>\E</c>. Alone, RE2 quotes to the end
     ///     of the pattern; wrapped, the quote would swallow the wrapper's closing parenthesis too and
     ///     turn a pattern RE2 accepted into one it refuses (#238).
     /// </summary>
-    private static string Closed(string pattern)
+    private static string WithQuoteClosed(string pattern)
     {
         for (int i = 0; i < pattern.Length; i++)
         {
             if (pattern[i] != '\\') continue;
-            int end = EscapeEnd(pattern, i);
-            if (end == pattern.Length - 1 && i + 1 < pattern.Length && pattern[i + 1] == 'Q'
-                && !pattern.EndsWith("\\E", StringComparison.Ordinal))
+            if (i + 1 < pattern.Length && pattern[i + 1] == 'Q'
+                                       && pattern.IndexOf("\\E", i + 2, StringComparison.Ordinal) < 0)
                 return pattern + "\\E";
-            i = end;
+            i = EscapeEnd(pattern, i);
         }
 
         return pattern;

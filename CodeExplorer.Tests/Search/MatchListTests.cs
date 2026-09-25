@@ -254,6 +254,11 @@ public sealed class MatchListTests : IDisposable
             new Dictionary<string, object?> { ["query"] = "a)|(b", ["wholeWord"] = true });
         Assert.Contains("not a valid RE2", unbalanced);
 
+        // Its groups are not counted either: a pattern that is none has no groups to count.
+        string counted = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "a)|(b", ["group"] = 2 });
+        Assert.Contains("not a valid RE2", counted);
+
         string quoted = await ListAsync(client,
             new Dictionary<string, object?> { ["query"] = "\\QStatus.Open", ["wholeWord"] = true });
         Assert.Contains("    3      2  Status.Open", quoted);

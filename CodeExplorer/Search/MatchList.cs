@@ -95,15 +95,6 @@ public sealed class MatchList(IndexReaders readers)
             return new Problem(
                 $"group={request.Group} is out of range; it must be 0 for the whole match or 1-{MaxGroup} for a capture group.");
 
-        // Checked here rather than left to the engine: DuckDB reports a missing group as an invalid
-        // argument, which reads as a broken pattern and sends the caller off fixing a parenthesis
-        // that was never wrong.
-        int groups = Re2.CaptureGroups(query);
-        if (request.Group > groups)
-            return new Problem(
-                $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
-                + "Put parentheses around the part that varies, or use group=0 for the whole match.");
-
         return await readers.OverIndexAsync(slug, request.Filter.Repository,
             (index, token) => QueryAsync(index, request, query, token), cancellationToken);
     }
@@ -133,6 +124,17 @@ public sealed class MatchList(IndexReaders readers)
         try
         {
             await Re2.CompileAsync(connection, query, cancellationToken);
+
+            // Counted once the pattern is known to compile, since a pattern that does not has no
+            // groups to count. Checked here rather than left to the engine: DuckDB reports a missing
+            // group as an invalid argument, which reads as a broken pattern and sends the caller off
+            // fixing a parenthesis that was never wrong.
+            int groups = Re2.CaptureGroups(query);
+            if (request.Group > groups)
+                return new Problem(
+                    $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
+                    + "Put parentheses around the part that varies, or use group=0 for the whole match.");
+
             var matches = new List<DistinctMatch>();
             int totalDistinct = 0;
             long totalMatches = 0;
