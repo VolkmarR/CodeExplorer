@@ -333,11 +333,47 @@ public sealed class RefreshTests : IDisposable
     {
         await _host.CreateProjectAsync("alpha");
         await _host.AddRepositoryAsync("alpha", "one", _host.CreateGitRepository("one", Fixture()["one"]));
-        // A file where the clone directory goes: libgit2 refuses to clone over it, and says where.
-        string clone = _host.ClonePath("alpha", "one");
-        Directory.CreateDirectory(Path.GetDirectoryName(clone)!);
-        await File.WriteAllTextAsync(clone, "", Ct);
+        // A file where the local copy's directory goes: libgit2 refuses to clone over it, and says where.
+        string localCopy = _host.ClonePath("alpha", "one");
+        Directory.CreateDirectory(Path.GetDirectoryName(localCopy)!);
+        await File.WriteAllTextAsync(localCopy, "", Ct);
 
+        string error = await FailedRefreshErrorAsync();
+
+        Assert.Contains("Cloning repository 'one'", error, StringComparison.Ordinal);
+        Assert.Contains("the local copy", error, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, error.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase);
+        _host.Logs.Only(LogLevel.Warning, localCopy);
+    }
+
+    /// <summary>
+    ///     A half-made local copy that cannot be cleared away fails before libgit2 is asked anything, in
+    ///     .NET's words, and .NET names the file it could not delete. The same rule holds: the
+    ///     repository in the message, the path in the log (#232). Windows only, because a file held
+    ///     open blocks its delete there and nowhere else.
+    /// </summary>
+    [Fact]
+    public async Task A_local_copy_that_cannot_be_cleared_names_the_repository_and_not_the_path()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete a file held open.");
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "one", _host.CreateGitRepository("one", Fixture()["one"]));
+        // Not a repository, so the refresh clones afresh and has to clear the folder first.
+        string localCopy = _host.ClonePath("alpha", "one");
+        Directory.CreateDirectory(localCopy);
+        string held = Path.Combine(localCopy, "held");
+        await using var hold = new FileStream(held, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
+
+        string error = await FailedRefreshErrorAsync();
+
+        Assert.Contains("repository 'one'", error, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, error.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase);
+        _host.Logs.Only(LogLevel.Warning, localCopy);
+    }
+
+    /// <summary>Requests a refresh of project alpha, waits for it, and answers the error it failed with.</summary>
+    private async Task<string> FailedRefreshErrorAsync()
+    {
         using (var response = await _host.RequestRefreshAsync("alpha"))
             Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         await _host.WaitForRefreshesAsync();
@@ -345,9 +381,7 @@ public sealed class RefreshTests : IDisposable
         var status = await _host.RefreshStatusAsync("alpha");
         Assert.Equal(RefreshState.Failed, status.State);
         Assert.NotNull(status.Error);
-        Assert.Contains("Cloning repository 'one'", status.Error, StringComparison.Ordinal);
-        Assert.DoesNotContain(_host.DataDirectory, status.Error.Replace('/', '\\'),
-            StringComparison.OrdinalIgnoreCase);
+        return status.Error;
     }
 
     /// <summary>
