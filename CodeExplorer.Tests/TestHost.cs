@@ -215,6 +215,19 @@ public sealed class TestHost : IDisposable
         return connection;
     }
 
+    /// <summary>
+    ///     A connection to the server's index instance, the one every project and shadow is attached to,
+    ///     for a test that has to hold a catalog open the way a straggling query does. The same process
+    ///     cache as <see cref="OpenControlDatabaseAsync" />: this is the server's instance, not a second one.
+    /// </summary>
+    public async Task<DuckDBConnection> OpenIndexInstanceAsync()
+    {
+        var connection =
+            new DuckDBConnection($"Data Source={Path.Combine(DataDirectory, "indexes", "instance.duckdb")}");
+        await connection.OpenAsync(Ct);
+        return connection;
+    }
+
     /// <summary>A statement run on the server's control database, through a connection of its own.</summary>
     public async Task ExecuteOnControlDatabaseAsync(string sql)
     {
