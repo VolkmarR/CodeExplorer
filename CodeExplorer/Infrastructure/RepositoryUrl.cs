@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace CodeExplorer.Infrastructure;
 
-/// <summary>Where a repository URL points, which decides both whether it is accepted and how it is cloned.</summary>
+/// <summary>Where a repository URL points, which decides whether it is accepted and whether it is read.</summary>
 public enum RepositoryUrlKind
 {
     /// <summary>Not accepted: unparseable, an unknown scheme, or carrying a password or token.</summary>

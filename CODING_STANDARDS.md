@@ -34,7 +34,7 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
   A module reaches another only through its public types; `Search/` never opens `control.duckdb`.
   What no concept owns and more than one module is handed — telemetry, the durable store, the key
   ring, authentication, settings, the project record and its route binding, the outcome type every
-  index-backed answer returns, the tool arguments and the tool reply — lives in `Infrastructure/`,
+  index-backed answer returns, the repository URL classifier, the tool arguments and the tool reply — lives in `Infrastructure/`,
   the one folder not named after a concept, and nothing else does: reading an index is a module and
   has one (ADR-0005, revisited for #153). Only `Program.cs` stays at the root. `ModuleBoundaryTests` turns the arrows into
   a failing build: it sweeps every ordered pair of module folders against an allow-list, so an arrow

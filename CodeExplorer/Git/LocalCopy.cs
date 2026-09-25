@@ -3,8 +3,8 @@ using LibGit2Sharp;
 namespace CodeExplorer.Git;
 
 /// <summary>
-///     What opening a repository's local copy for a refresh came to. The three answers a fetched clone
-///     can give are cases and not a null, a bool and a scan the caller has to run in the right order:
+///     What opening a repository's local copy for a refresh came to. The answers a clone can give are
+///     cases and not a null, a bool and a scan the caller has to run in the right order:
 ///     <see cref="Opened" /> hands over the copy to read, and the <see cref="Refused" /> cases carry
 ///     the sentence the refresh reports in the repository's place. Nothing is open behind a refusal.
 /// </summary>
