@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
@@ -192,14 +193,18 @@ public sealed partial class ControlDatabase : IDisposable
         _backupGate.Dispose();
     }
 
-    public static bool IsValidSlug(string slug) => SlugPattern.IsMatch(slug);
+    /// <summary>
+    ///     Null is a slug the body left out: System.Text.Json binds an absent property as null whatever
+    ///     the record declares, and it is refused by the same rule as a malformed one (#237).
+    /// </summary>
+    public static bool IsValidSlug([NotNullWhen(true)] string? slug) => slug is not null && SlugPattern.IsMatch(slug);
 
     /// <summary>
     ///     <paramref name="singleRepository" /> is written once, here. There is deliberately no update
     ///     path for it (ADR-0006): it decides how every file in the project is named, and a name that
     ///     can change is one agents cannot hold.
     /// </summary>
-    public async Task<CreateProjectOutcome> CreateAsync(string slug, string? name, bool singleRepository,
+    public async Task<CreateProjectOutcome> CreateAsync(string? slug, string? name, bool singleRepository,
         CancellationToken cancellationToken)
     {
         if (!IsValidSlug(slug)) return CreateProjectOutcome.InvalidSlug;
@@ -303,7 +308,7 @@ public sealed partial class ControlDatabase : IDisposable
     /// <param name="credential">Plaintext, accepted once and stored protected; never read back in the clear.</param>
     /// <param name="cancellationToken">Threaded through to the DuckDB command.</param>
     public async Task<(AddRepositoryOutcome Outcome, ProjectRepository? Repository)> AddRepositoryAsync(
-        string projectSlug, string slug, string url, string? credential, CancellationToken cancellationToken)
+        string projectSlug, string? slug, string url, string? credential, CancellationToken cancellationToken)
     {
         if (await FindAsync(projectSlug, cancellationToken) is not { } project)
             return (AddRepositoryOutcome.NoProject, null);
