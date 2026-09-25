@@ -29,6 +29,12 @@ public abstract record CloneOpen
     ///     before libgit2 is asked, so nothing is cloned or fetched from it (GHSA-5373-pppr-q3q9).
     /// </summary>
     public sealed record LocalNotAllowed(string Explanation) : Refused(Explanation);
+
+    /// <summary>
+    ///     A stored credential beside a URL that would carry it unencrypted. Decided before libgit2 is
+    ///     asked, so the token is never handed to it (GHSA-4f8q-c6jj-fr44).
+    /// </summary>
+    public sealed record ClearTextCredential(string Explanation) : Refused(Explanation);
 }
 
 /// <summary>

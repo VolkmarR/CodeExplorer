@@ -73,6 +73,13 @@ public sealed class GitClones(
             return new CloneOpen.LocalNotAllowed(
                 $"Repository '{repository.Slug}' was not read. {RepositoryUrl.LocalRefusal}");
 
+        // The API refuses this pair now, but a server that predates the refusal may hold one. Here and
+        // not in Credentials, so nothing is cloned, cleared or fetched either: every transfer this class
+        // makes starts behind this line (GHSA-4f8q-c6jj-fr44).
+        if (repository.HasCredential && RepositoryUrl.SendsCredentialInClear(repository.Url))
+            return new CloneOpen.ClearTextCredential(
+                $"Repository '{repository.Slug}' was not read. {RepositoryUrl.ClearTextCredentialRefusal}");
+
         string path = Path.Combine(_cloneRoot, repository.ProjectSlug, repository.Slug + ".git");
         try
         {

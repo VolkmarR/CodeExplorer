@@ -63,6 +63,12 @@ through MCP — anyone in the tenant, or anyone who can reach the port when auth
 Switching the setting off again stops the refresh reading local repositories already stored; each is
 reported as skipped until it is pointed at a remote.
 
+A credential is accepted only beside an https or ssh URL. An `http://` or `git://` URL is still
+accepted without one, but with one it is refused, because libgit2 would send the token as HTTP basic
+auth in clear text to anyone on the path (GHSA-4f8q-c6jj-fr44). A repository stored with that pair
+before the refusal is skipped by every refresh, and the token never leaves the server, until it is
+added again under its https URL.
+
 With authentication off, the server answers only the loopback host names `localhost`, `127.0.0.1`
 and `[::1]`, so a web page that rebinds its own name to 127.0.0.1 is refused with a 400. A configured
 `AllowedHosts` replaces that list. With authentication on or off, `/api` and every MCP endpoint
