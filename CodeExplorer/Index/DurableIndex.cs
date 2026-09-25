@@ -76,7 +76,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     private readonly string _scratch =
         Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "scratch");
 
-    // One gate per project, so a fetch never reads while a store writes (#229). A store replaces the
+    // One gate per project, so a fetch, a store and a remove of it never overlap (#229). A store replaces the
     // tables one at a time in the order a fetch reads them, so the two overlapping could fetch the
     // older index_info and then a mix of both generations behind it — a set that passes every check a
     // fetch makes, because each table is present and the version matches. Per project, like the writer
@@ -96,20 +96,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     /// </summary>
     public async Task StoreAsync(DuckDBConnection connection, string slug, CancellationToken cancellationToken)
     {
-        var gate = GateFor(slug);
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            await StoreUngatedAsync(connection, slug, cancellationToken);
-        }
-        finally
-        {
-            gate.Release();
-        }
-    }
-
-    private async Task StoreUngatedAsync(DuckDBConnection connection, string slug, CancellationToken cancellationToken)
-    {
+        using var held = await HoldAsync(slug, cancellationToken);
         using var recording = Telemetry.DurableCopy(slug, Telemetry.StoreOperation);
         string scratch = Scratch(slug);
         try
@@ -145,20 +132,9 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     /// </summary>
     public async Task<DurableCopy?> FetchAsync(string slug, CancellationToken cancellationToken)
     {
-        var gate = GateFor(slug);
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            return await FetchUngatedAsync(slug, cancellationToken);
-        }
-        finally
-        {
-            gate.Release();
-        }
-    }
-
-    private async Task<DurableCopy?> FetchUngatedAsync(string slug, CancellationToken cancellationToken)
-    {
+        // Held until every table is in the scratch folder and no longer: the load reads only those
+        // local files, so from here on a store can replace the originals without mixing them in.
+        using var held = await HoldAsync(slug, cancellationToken);
         // Started here and not in LoadAsync, so the measurement covers the transfer — which on a cold
         // wake is most of what a restore costs — and not only the insert that follows it.
         var copy = new DurableCopy(Scratch(slug), Telemetry.DurableCopy(slug, Telemetry.FetchOperation));
@@ -223,8 +199,13 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     }
 
     /// <summary>Forgets a project's durable copy, for a project an operator deleted.</summary>
-    public Task RemoveAsync(string slug, CancellationToken cancellationToken) =>
-        store.RemoveAsync($"indexes/{slug}/", cancellationToken);
+    public async Task RemoveAsync(string slug, CancellationToken cancellationToken)
+    {
+        // Gated too: a store still uploading when the project is deleted would otherwise put back the
+        // tables it had not reached yet, a durable copy of a project that no longer exists.
+        using var held = await HoldAsync(slug, cancellationToken);
+        await store.RemoveAsync($"indexes/{slug}/", cancellationToken);
+    }
 
     /// <summary>
     ///     There was nothing to load: no copy, or one an older build wrote. Recorded as such rather than
@@ -281,10 +262,21 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     }
 
     /// <summary>
-    ///     The gate that keeps a project's fetch and store apart, created on first use. A semaphore that
-    ///     loses the <c>GetOrAdd</c> race was never waited on, so dropping it undisposed holds nothing.
+    ///     Waits for the project's durable copy to itself and holds it until disposed. The gate is
+    ///     created on first use; a semaphore that loses the <c>GetOrAdd</c> race was never waited on,
+    ///     so dropping it undisposed holds nothing.
     /// </summary>
-    private SemaphoreSlim GateFor(string slug) => _gates.GetOrAdd(slug, _ => new SemaphoreSlim(1, 1));
+    private async Task<Held> HoldAsync(string slug, CancellationToken cancellationToken)
+    {
+        var gate = _gates.GetOrAdd(slug, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        return new Held(gate);
+    }
+
+    private readonly struct Held(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
 
     /// <summary>Every project under its own prefix, which is what makes one project's copy removable on its own.</summary>
     private static string Name(string slug, string table) => $"indexes/{slug}/{table}.parquet";

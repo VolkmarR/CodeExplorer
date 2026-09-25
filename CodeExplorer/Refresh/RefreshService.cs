@@ -197,6 +197,15 @@ public sealed class RefreshService(
                 return;
             }
 
+            // Reported before the restore rather than after the check, so a restore that takes minutes
+            // shows as a refresh running and not as one still waiting for the slot.
+            Report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount, RefreshProgress.StartPhase));
+
+            // Before the check below, which sizes the shadow from the live file: on a wiped disk there is
+            // none until the durable copy is restored, and the check would size the shadow of a large
+            // project at the floor (#229). The restore itself is the one an agent's first open would pay.
+            await indexes.RestoreIfAbsentAsync(project.Slug, cancellationToken);
+
             // Checked again here and not only when it was accepted: another project's refresh may have
             // filled the disk in between, and that is exactly the condition ADR-0003 says to avoid.
             if (InsufficientDisk(project.Slug) is { } refusal)
@@ -205,7 +214,6 @@ public sealed class RefreshService(
                 return;
             }
 
-            Report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount, RefreshProgress.StartPhase));
             var summary = await refresh.RunAsync(project, Report, cancellationToken);
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Succeeded, "Done", started,
                 DateTimeOffset.UtcNow, summary, null) { Phases = timeline.Close() };
