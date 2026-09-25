@@ -311,7 +311,8 @@ public sealed class GitClones(
     ///     follows the remote's HEAD the way the refspec follows its branches. Without it a default
     ///     branch renamed or deleted upstream leaves HEAD naming a branch the prune removed: the tree
     ///     walk reads HEAD, so the repository reports itself as having no commits, and nothing else
-    ///     ever writes HEAD, so it stays that way for every later refresh (#31).
+    ///     ever writes HEAD, so it stays that way for every later refresh (#31). A remote whose HEAD is
+    ///     detached names no branch, and the clone keeps the one it has (#260).
     /// </summary>
     private void AlignHead(Repository clone, ProjectRepository repository, string path,
         CancellationToken cancellationToken)
@@ -329,11 +330,10 @@ public sealed class GitClones(
             // when its HEAD is detached, as the commit id it is at. A commit id names no reference and
             // is not looked up as one: libgit2 throws on it rather than answering null (#260), and
             // following it would serve a commit that is on no branch.
-            string? branch = advertised.FirstOrDefault(r => r.CanonicalName == "HEAD")?.TargetIdentifier;
-            if (branch is not null && !branch.StartsWith("refs/", StringComparison.Ordinal)) branch = null;
-
             // The refspec just fetched every remote branch, so a branch the remote defaults to is here.
-            if (branch is not null && clone.Refs[branch] is not null)
+            if (advertised.FirstOrDefault(r => r.CanonicalName == "HEAD")?.TargetIdentifier is { } branch
+                && branch.StartsWith("refs/", StringComparison.Ordinal)
+                && clone.Refs[branch] is not null)
             {
                 if (clone.Refs.Head.TargetIdentifier != branch) clone.Refs.UpdateTarget(clone.Refs.Head, branch);
                 return;

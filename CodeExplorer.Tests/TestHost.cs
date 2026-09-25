@@ -383,14 +383,16 @@ public sealed class TestHost : IDisposable
     ///     because that is all HEAD is, and because libgit2 refuses such a symbolic reference.
     /// </summary>
     public static void BreakHead(string gitDirectory, string branch) =>
-        File.WriteAllText(Path.Combine(gitDirectory, "HEAD"), $"ref: refs/heads/{branch}\n");
+        WriteHead(gitDirectory, $"ref: refs/heads/{branch}");
 
     /// <summary>
     ///     Detaches a repository's HEAD at a commit, so a fixture advertises HEAD as a commit id rather
     ///     than as a symbolic reference naming a branch (#260).
     /// </summary>
-    public static void DetachHead(string gitDirectory, string sha) =>
-        File.WriteAllText(Path.Combine(gitDirectory, "HEAD"), sha + "\n");
+    public static void DetachHead(string gitDirectory, string sha) => WriteHead(gitDirectory, sha);
+
+    private static void WriteHead(string gitDirectory, string content) =>
+        File.WriteAllText(Path.Combine(gitDirectory, "HEAD"), content + "\n");
 
     /// <summary>The bare clone of one repository, for a test that has to look at it or break it.</summary>
     public string ClonePath(string project, string repository) =>
