@@ -213,7 +213,8 @@ public sealed class MatchListTests : IDisposable
 
         string dotnet = await ListAsync(client,
             new Dictionary<string, object?> { ["query"] = "Status\\.(?<name>\\w+)", ["group"] = 1 });
-        Assert.Contains("Write it (?P<name>...) instead.", dotnet);
+        Assert.Contains("not a valid RE2", dotnet);
+        Assert.Contains("Name a group as (?P<name>...).", dotnet);
 
         // An optional literal parenthesis before a '<' is not that spelling, nor is one before '='
         // a lookahead.
@@ -272,6 +273,11 @@ public sealed class MatchListTests : IDisposable
         string unbalanced = await ListAsync(client, new Dictionary<string, object?> { ["query"] = "Status\\.(" });
         Assert.Contains("not a valid RE2", unbalanced);
         Assert.DoesNotContain("No matches", unbalanced);
+
+        // A quoted \1 is two literal characters, not a backreference.
+        string quoted = await ListAsync(client, new Dictionary<string, object?> { ["query"] = "\\Q\\1\\E" });
+        Assert.DoesNotContain("backreference (", quoted);
+        Assert.StartsWith("No matches", quoted);
 
         string lookbehind =
             await ListAsync(client, new Dictionary<string, object?> { ["query"] = "(?<=Status\\.)(\\w+)" });

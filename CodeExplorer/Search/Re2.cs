@@ -35,23 +35,17 @@ internal static class Re2
                 if (group.StartsWith(needle, StringComparison.Ordinal))
                     return $"The pattern uses {name}, which RE2 does not support. "
                            + "Match the wider text instead and read the hit, or grep for the inner part with context.";
-
-            // Checked after lookbehind, whose needles begin the same way. The .NET spelling of a named
-            // group arrived in RE2 only after the version DuckDB bundles, which rejects it with a bare
-            // "invalid named capture group" that does not say what to write instead (#238).
-            if (group.StartsWith("(?<", StringComparison.Ordinal))
-                return "The pattern names a group as (?<name>...), which this RE2 does not accept. "
-                       + "Write it (?P<name>...) instead.";
         }
 
-        // \1..\9 is a backreference; \0 is not one and \\1 is an escaped backslash followed by a digit.
+        // \1..\9 is a backreference; \0 is not one, and neither is \\1, an escaped backslash followed by
+        // a digit, or a \1 quoted by \Q...\E.
         for (int i = 0; i + 1 < pattern.Length; i++)
         {
             if (pattern[i] != '\\') continue;
             if (pattern[i + 1] is >= '1' and <= '9')
                 return $"The pattern uses a backreference (\\{pattern[i + 1]}), which RE2 does not support. "
                        + "Repeat the text instead of referring back to a group.";
-            i++;
+            i = EscapeEnd(pattern, i);
         }
 
         return null;
@@ -69,7 +63,13 @@ internal static class Re2
     /// <summary>The rejection as agent-facing prose, naming what RE2 lacks rather than only quoting it.</summary>
     public static string Rejected(DuckDBException exception) =>
         $"The pattern is not a valid RE2 regular expression: {FirstLine(exception.Message)}. "
-        + "RE2 has no lookaround and no backreferences; escape literal metacharacters with a backslash.";
+        + "RE2 has no lookaround and no backreferences; escape literal metacharacters with a backslash."
+        // The .NET spelling (?<name>...) arrived in RE2 after the version DuckDB bundles, whose refusal
+        // ("invalid perl operator: (?<") does not say what to write instead (#238). Keyed on the
+        // engine's own message, so an upgrade that accepts the spelling stops the advice by itself.
+        + (exception.Message.Contains("invalid perl operator: (?<", StringComparison.Ordinal)
+            ? " Name a group as (?P<name>...)."
+            : "");
 
     /// <summary>
     ///     The caller's pattern as a whole word: no letter, digit or underscore immediately before or
@@ -80,10 +80,7 @@ internal static class Re2
     ///     counts.
     /// </summary>
     public static string WholeWord(string pattern) =>
-        $"{SymbolText.Re2WordStart}(?:{WithQuoteClosed(pattern)}){SymbolText.Re2WordEnd}";
-
-    /// <summary>The caller's pattern as group 1, so a rewrite can mark exactly what it matched.</summary>
-    public static string Grouped(string pattern) => $"({WithQuoteClosed(pattern)})";
+        $"{SymbolText.Re2WordStart}(?:{pattern}){SymbolText.Re2WordEnd}";
 
     /// <summary>
     ///     Compiles the caller's pattern on its own, throwing the <see cref="DuckDBException" /> that
@@ -113,22 +110,23 @@ internal static class Re2
     ///     could start — which is what a lookbehind would have said, in the engine that has none.
     /// </summary>
     public static string WholeWordTokens(string pattern) =>
-        $"({WithQuoteClosed(pattern)}){SymbolText.Re2WordEnd}|{SymbolText.Re2WordChar}+{SymbolText.Re2NonWordChar}?|{SymbolText.Re2NonWordChar}";
+        $"({pattern}){SymbolText.Re2WordEnd}|{SymbolText.Re2WordChar}+{SymbolText.Re2NonWordChar}?|{SymbolText.Re2NonWordChar}";
 
     /// <summary>
-    ///     The pattern with a <c>\Q</c> it leaves open closed by <c>\E</c>. Alone, RE2 quotes to the end
-    ///     of the pattern; wrapped, the quote would swallow the wrapper's closing parenthesis too and
-    ///     turn a pattern RE2 accepted into one it refuses (#238).
+    ///     The pattern with a <c>\Q</c> it leaves open closed by <c>\E</c>, which RE2 reads the same:
+    ///     alone, it quotes to the end of the pattern. Applied once where a caller's pattern comes in,
+    ///     so that no wrapper put around it later can have its closing parenthesis quoted too, which
+    ///     turned a pattern RE2 accepted into one it refuses (#238).
     /// </summary>
-    private static string WithQuoteClosed(string pattern)
+    public static string WithQuoteClosed(string pattern)
     {
         for (int i = 0; i < pattern.Length; i++)
         {
             if (pattern[i] != '\\') continue;
-            if (i + 1 < pattern.Length && pattern[i + 1] == 'Q'
-                                       && pattern.IndexOf("\\E", i + 2, StringComparison.Ordinal) < 0)
+            int end = EscapeEnd(pattern, i);
+            if (pattern.AsSpan(i).StartsWith("\\Q") && !pattern.AsSpan(i + 2, end - i - 1).EndsWith("\\E"))
                 return pattern + "\\E";
-            i = EscapeEnd(pattern, i);
+            i = end;
         }
 
         return pattern;
@@ -142,8 +140,8 @@ internal static class Re2
     ///     identically as an empty answer and mean opposite things.
     /// </summary>
     public static int CaptureGroups(string pattern) =>
-        GroupOpenings(pattern).Count(open => open + 1 == pattern.Length || pattern[open + 1] != '?'
-                                             || pattern.AsSpan(open).StartsWith("(?P<"));
+        GroupOpenings(pattern).Count(open =>
+            !pattern.AsSpan(open).StartsWith("(?") || pattern.AsSpan(open).StartsWith("(?P<"));
 
     /// <summary>
     ///     The index of every <c>(</c> that opens a group, skipping the ones that are literals: escaped,
