@@ -142,6 +142,7 @@ Environment variables, with `__` where a setting has a `:`.
 | `AzureAd__ClientSecret`       | a secret reference                                      | Only the browser sign-in needs it.                       |
 | `AzureAd__Scopes`             | `api://<client-id>/CodeExplorer.Access`                 | What a project's protected-resource document tells an MCP client to ask for. |
 | `Refresh__WarmUpOnStart`      | `false` under scale to zero, `true` at `minReplicas` 1  | See "Warm-up" below.                                     |
+| `Git__TransferStallSeconds`   | unset (300), or more for a remote slow to start a pack  | How long a clone or fetch waits on a silent remote before the repository is skipped. |
 | `Telemetry__OtlpEndpoint`     | your collector, or unset                                | Unset exports nothing at all.                            |
 | `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | `true`                                          | See "Ingress terminates TLS" below.                      |
 
