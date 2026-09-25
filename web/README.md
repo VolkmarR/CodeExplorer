@@ -35,9 +35,11 @@ proxy in `vite.config.ts` has something to name. `ASPNETCORE_URLS` overrides it 
 target with it if you do.
 
 The server refuses an `/api` request whose `Origin` is not its own, and a browser on the dev server
-sends `http://localhost:5173`. The proxy therefore presents `http://localhost:5000`, the server's own
-origin, in place of exactly that one and passes every other origin through to be refused. Open the
-UI as `http://localhost:5173`: under `127.0.0.1:5173` every write is a 403.
+sends `http://localhost:5173` with every write. The proxy removes exactly that origin, so the server
+sees a request with no `Origin`, which it serves, and passes every other origin through to be
+refused. Open the UI as `http://localhost:5173`: under `127.0.0.1:5173` every write is a 403.
+`changeOrigin` presents `localhost:5000` as the Host, so the server's own Host check never sees the
+name the browser used; a rebound name reaching `vp dev` is refused by Vite's `server.allowedHosts`.
 
 ## Layout
 

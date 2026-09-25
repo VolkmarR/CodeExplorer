@@ -39,8 +39,8 @@ var keyRing = builder.AddKeyRing();
 // Entra where a tenant is configured and an open server where none is (ADR-0004). Read here rather
 // than at first use because a half-configured tenant has to stop the server, not a request.
 var authentication = builder.AddAuthentication();
-// With no tenant, loopback host names only unless AllowedHosts says otherwise (GHSA-qxhv-3r9w-q8h4).
-var hosts = builder.AddLoopbackHosts(authentication);
+// GHSA-qxhv-3r9w-q8h4: with no tenant, a page that rebinds its own name to 127.0.0.1 is refused.
+bool loopbackOnly = builder.AddLoopbackHosts(authentication);
 // Blob Storage when a container is configured and a folder on disk when none is (ADR-0004), so a
 // plain `dotnet run` with an empty appsettings needs no Azure and still keeps a durable copy.
 builder.Services.AddSingleton<DurableStore>();
@@ -95,7 +95,7 @@ var app = builder.Build();
 // needs. It warns about the two shapes that are not the deployed one.
 keyRing.Report(app.Logger);
 authentication.Report(app.Logger);
-hosts.Report(app.Logger);
+if (loopbackOnly) RequestOrigin.ReportLoopbackOnly(app.Logger);
 
 // First, so a page on another origin is refused before anything reads a cookie or a project for it.
 app.UseSameOriginOnly();
@@ -115,7 +115,7 @@ if (authentication.Enabled)
 app.UseBoundProject();
 
 // Operator endpoints, one group per module (ADR-0005).
-var api = app.MapGroup("/api");
+var api = app.MapGroup("/api").SameOriginOnly();
 api.MapAuthentication(authentication);
 api.MapControl();
 api.MapRefresh();
@@ -123,7 +123,7 @@ api.MapSearch();
 api.MapOperator();
 
 // One MCP endpoint per project (ADR-0002), bound from the route before the SDK sees the request.
-app.MapGroup("/projects/{project}").BindProject().MapMcp("/mcp").ProtectMcp(authentication);
+app.MapGroup("/projects/{project}").BindProject().MapMcp("/mcp").ProtectMcp(authentication).SameOriginOnly();
 
 // The operator web UI is a Vite build into wwwroot. It is absent until someone runs that build, and
 // the server must still start: MapFallbackToFile would 404 at request time, which is the same answer
