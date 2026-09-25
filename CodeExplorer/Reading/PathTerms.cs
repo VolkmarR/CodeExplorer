@@ -66,15 +66,7 @@ public static class PathTerms
         var split = Split(terms);
         if (split.Count > MaxTerms)
             return $"`{argument}` takes at most {MaxTerms} comma-separated terms, and this one has {split.Count}. Widen a term with * instead of listing more.";
-        foreach (string term in split)
-        {
-            if (term.Length > GlobRegex.MaxLength)
-                return $"A `{argument}` term may be at most {GlobRegex.MaxLength} characters; '{term[..40]}…' is longer.";
-            if (GlobRegex.ReversedRange(term) is { } reversed)
-                return $"The `{argument}` term \"{term}\" has the range [{reversed}], which runs backwards, so no character falls in it and the term matches nothing. Write it low to high.";
-        }
-
-        return null;
+        return split.Select(term => GlobRegex.Refusal(term, $"The `{argument}` term")).FirstOrDefault(r => r is not null);
     }
 
     /// <summary>
