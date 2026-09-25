@@ -467,6 +467,43 @@ public sealed class GrepTests : IDisposable
         Assert.DoesNotContain("needle in a comment", called);
     }
 
+    /// <summary>
+    ///     wholeWord against letters outside ASCII (#235). RE2's <c>\b</c> is ASCII-only, so it put a
+    ///     boundary inside <c>fooÄbar</c> and none in front of <c>Ändern</c>. The boundary that replaced
+    ///     it consumes a character, and a match must not lose the one it shares with its neighbour —
+    ///     across a comma or across a line break.
+    /// </summary>
+    [Fact]
+    public async Task Whole_words_are_bounded_by_letters_outside_ascii_too()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("umlaut", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Glued.cs"] = "var x = fooÄbar;\n",
+                ["src/Words.cs"] = "Ändern(bar,bar);\nbar\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("umlaut");
+
+        string bar = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "bar", ["regex"] = true, ["wholeWord"] = true });
+        Assert.Contains("src/Words.cs", bar);
+        Assert.DoesNotContain("src/Glued.cs", bar);
+
+        string change = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "Ändern", ["regex"] = true, ["wholeWord"] = true });
+        Assert.Contains("1: Ändern(bar,bar);", change);
+
+        string spanned = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "bar", ["multiline"] = true, ["wholeWord"] = true });
+        Assert.Contains("src/Words.cs  -  3 matches", spanned);
+        Assert.Contains("1: Ändern(bar,bar);", spanned);
+        Assert.Contains("2: bar", spanned);
+        Assert.DoesNotContain("src/Glued.cs", spanned);
+    }
+
     private async Task<McpClient> StartAsync(SearchEngine engine)
     {
         _host = new TestHost(engine);

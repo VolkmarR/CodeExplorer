@@ -44,20 +44,63 @@ public static class SymbolText
     }
 
     /// <summary>
+    ///     <see cref="IsWordChar" /> as an RE2 character class, which .NET reads the same way. Spelled out
+    ///     because RE2's <c>\w</c> and <c>\b</c> are ASCII-only: <c>\bÄnderung</c> found nothing after a
+    ///     space and <c>\bbar</c> found <c>fooÄbar</c>, so an identifier with a German or Italian letter
+    ///     at either end was a symbol "nothing in this project spells" (#235).
+    /// </summary>
+    public const string Re2WordChar = $"[{Re2WordClass}]";
+
+    /// <summary>Any character <see cref="Re2WordChar" /> is not, line breaks included.</summary>
+    public const string Re2NonWordChar = $"[^{Re2WordClass}]";
+
+    /// <summary>The inside of <see cref="Re2WordChar" />, for a class that holds a word character and more.</summary>
+    public const string Re2WordClass = @"\p{L}\p{Nd}_";
+
+    /// <summary>
+    ///     A word boundary in front of a match, for RE2, which has no lookbehind to test one without
+    ///     consuming the character before it. That is harmless to a yes-or-no test of a line; a caller
+    ///     that counts or extracts matches has to allow for it, because two matches one character apart
+    ///     share the character between them.
+    /// </summary>
+    public const string Re2WordStart = $"(?:^|{Re2NonWordChar})";
+
+    /// <summary>A word boundary after a match; consumes the character after it, as <see cref="Re2WordStart" /> does.</summary>
+    public const string Re2WordEnd = $"(?:$|{Re2NonWordChar})";
+
+    /// <summary>
     ///     The identifier as an RE2 pattern for the engine: escaped, and anchored on a word boundary at
-    ///     each end that has a word character to anchor to. A <c>\b</c> against punctuation would mean
+    ///     each end that has a word character to anchor to. A boundary against punctuation would mean
     ///     the opposite of what it does against a letter, so it is left off there rather than applied
     ///     blindly.
     ///     One copy, because the two searches that ask the engine for a symbol anchor it here and then
     ///     re-find it on the line with <see cref="IndexOf" />: two definitions of a word character
     ///     would be the two matchers disagreeing that this design exists to prevent.
+    ///     It tests a line and does not count on it; <see cref="OccurrencePattern" /> is the one that counts.
     /// </summary>
     public static string WholeWordPattern(string symbol)
     {
         ArgumentNullException.ThrowIfNull(symbol);
         if (symbol.Length == 0) return "";
-        string head = IsWordChar(symbol[0]) ? @"\b" : "";
-        string tail = IsWordChar(symbol[^1]) ? @"\b" : "";
+        string head = IsWordChar(symbol[0]) ? Re2WordStart : "";
+        string tail = IsWordChar(symbol[^1]) ? Re2WordEnd : "";
+        return head + Re2Literal(symbol) + tail;
+    }
+
+    /// <summary>
+    ///     The identifier as an RE2 pattern whose every match is a candidate occurrence, and whose group
+    ///     1 is empty exactly when that candidate is a whole one. <see cref="WholeWordPattern" /> cannot
+    ///     count: its end boundary consumes the character after a match, so in <c>Ship(Ship())</c> the
+    ///     second name had lost the <c>(</c> its own start boundary needed. Here the end is not a
+    ///     boundary but a capture of the word character that would break one — never a character the
+    ///     next match can start on, since a start boundary is not a word character.
+    /// </summary>
+    public static string OccurrencePattern(string symbol)
+    {
+        ArgumentNullException.ThrowIfNull(symbol);
+        if (symbol.Length == 0) return "()";
+        string head = IsWordChar(symbol[0]) ? Re2WordStart : "";
+        string tail = IsWordChar(symbol[^1]) ? $"({Re2WordChar}?)" : "()";
         return head + Re2Literal(symbol) + tail;
     }
 

@@ -211,7 +211,7 @@ internal sealed partial class SearchTools
         string? exclude = null,
         [Description("Only search files with this extension, without the dot, e.g. \"csproj\" or \"cs\".")]
         string? ext = null,
-        [Description("Only match whole words, by anchoring the pattern on word boundaries.")]
+        [Description("Only match whole words: no letter, digit or underscore may sit right before or after the match, whatever its alphabet. Group numbers are unchanged.")]
         bool wholeWord = false,
         [Description("Maximum distinct values to return, 1-1000. Default 200, ordered by frequency.")]
         int limit = MatchList.DefaultLimit,

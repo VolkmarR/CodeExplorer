@@ -54,7 +54,7 @@ internal sealed partial class SearchTools(
                      """)]
         bool multiline = false,
         [Description("""
-                     Only match whole words, by anchoring the pattern on word boundaries. Regex mode only; it is what you lose by switching to regex for alternation: without it `ERP|SAP` also matches "property" and "interpreter".
+                     Only match whole words: no letter, digit or underscore may sit right before or after the match, whatever its alphabet, so `bar` does not match inside "fooÄbar". Regex mode only; it is what you lose by switching to regex for alternation: without it `ERP|SAP` also matches "property" and "interpreter".
                      """)]
         bool wholeWord = false,
         [Description("Lines of context to return around each match, 0-10. Default 0.")]

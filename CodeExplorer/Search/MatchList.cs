@@ -104,9 +104,6 @@ public sealed class MatchList(IndexReaders readers)
                 $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
                 + "Put parentheses around the part that varies, or use group=0 for the whole match.");
 
-        // Non-capturing, so the group numbers the caller passed still mean what they meant.
-        if (request.WholeWord) query = $@"\b(?:{query})\b";
-
         return await readers.OverIndexAsync(slug, request.Filter.Repository,
             (index, token) => QueryAsync(index, request, query, token), cancellationToken);
     }
@@ -119,11 +116,16 @@ public sealed class MatchList(IndexReaders readers)
         var filter = request.Filter with { Repository = index.Repository?.Slug };
         int limit = Math.Clamp(request.Limit, 1, MaxLimit);
 
+        // A whole word is tested with one form and extracted from another (Re2.WholeWordTokens), whose
+        // group 1 is the caller's whole match and so whose group n + 1 is the caller's group n. Every
+        // stretch between matches comes back as an empty value, which the grouping drops like any other.
         var matchParameters = new List<DuckDBParameter>
         {
-            new("q", query),
+            new("q", request.WholeWord ? Re2.WholeWord(query) : query),
+            new("extract", request.WholeWord ? Re2.WholeWordTokens(query) : query),
             new("flags", request.CaseSensitive ? "" : "i")
         };
+        int group = request.WholeWord ? request.Group + 1 : request.Group;
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
 
@@ -138,11 +140,11 @@ public sealed class MatchList(IndexReaders readers)
             // which is the difference between extracting from a project and extracting from its hits.
             // unnest flattens the per-line array, so a line matching three times contributes three
             // rows, the way `grep -o` emits one line per match. The group index is inlined because
-            // regexp_extract_all takes it as a literal; it is bounded above, so it is a digit.
+            // regexp_extract_all takes it as a literal; it is bounded above, so it is a small integer.
             await using (var command = connection.Query($"""
                                                          WITH extracted AS (
                                                              SELECT l.file_id,
-                                                                    unnest(regexp_extract_all(l.content, $q, {request.Group}, $flags)) AS value
+                                                                    unnest(regexp_extract_all(l.content, $extract, {group}, $flags)) AS value
                                                              FROM lines l JOIN files f USING (file_id)
                                                              WHERE regexp_matches(l.content, $q, $flags){fileFilter}),
                                                          grouped AS (

@@ -247,15 +247,20 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         // no recursion to fake it with. Three is `Dictionary<string, List<Foo<int>>>` — past what
         // these codebases write — and a type nested deeper is a miss rather than a wrong answer,
         // which is the direction this module errs in everywhere (CONTEXT.md, Declaration).
+        // A character of a name, as IsWordChar defines one. Not \w: these patterns also go to DuckDB as
+        // the candidate predicate, where RE2's \w is ASCII-only, so `METHOD Größe()` was never a
+        // candidate and the member was never declared (#235). .NET reads the class the same way.
+        const string word = SymbolText.Re2WordChar;
+
         string arguments = "<[^<>]*>";
         for (int depth = 1; depth < _maxTypeArgumentDepth; depth++) arguments = $"<(?:[^<>]|{arguments})*>";
 
         // A name, the argument list where there is one, and the markers that ride after it: `?` for
         // a nullable, `[]` for an array, and both together.
-        string type = $@"[\w\.]+(?:{arguments})?[\[\]\?]*";
+        string type = $@"[{SymbolText.Re2WordClass}\.]+(?:{arguments})?[\[\]\?]*";
 
         string MemberPattern(string guard) =>
-            $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+{guard}{type}\s+(\w+)\s*[\(<{{=;]";
+            $@"^\s*(?:\[[^\]]*\]\s*)*(?:(?:{modifiers})\s+)+{guard}{type}\s+({word}+)\s*[\(<{{=;]";
 
         // The wider of the two, and the one published as a candidate predicate.
         string memberPattern = modifiers is null ? _matchesNothing : MemberPattern("");
@@ -273,17 +278,17 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
             : "";
         string keywordPattern = modifiers is null || !profile.DeclarationNamesFollowKeyword
             ? _matchesNothing
-            : $@"^\s*(?:(?:{modifiers})\s+)+(?:(\w+)\s*\.\s*)?(\w+)\s*(?:[\(<{{=;:]{openers})";
+            : $@"^\s*(?:(?:{modifiers})\s+)+(?:({word}+)\s*\.\s*)?({word}+)\s*(?:[\(<{{=;:]{openers})";
         string? typeKeywords = Alternation(profile.DeclarationKeywords);
         string typePattern = typeKeywords is null
             ? _matchesNothing
-            : $@"^\s*(?:\[[^\]]*\]\s*)*(?:[\w]+\s+)*\b(?:{typeKeywords})\s+(\w+)";
+            : $@"^\s*(?:\[[^\]]*\]\s*)*(?:{word}+\s+)*\b(?:{typeKeywords})\s+({word}+)";
         // Delphi's `TCustomer = class(TBase)`, where the name is in front of the word that says what
         // kind of thing it is. Written out as its own shape rather than folded into the one above: an
         // alternation covering both would match a line that is neither.
         string precedingTypePattern = typeKeywords is null || !profile.TypeNamesPrecedeKeyword
             ? _matchesNothing
-            : $@"^\s*(\w+)\s*=\s*(?:{typeKeywords})\b";
+            : $@"^\s*({word}+)\s*=\s*(?:{typeKeywords})\b";
 
         _memberDeclaration = PatternOrNull(flag, memberDeclarationPattern);
         _keywordDeclaration = PatternOrNull(flag, keywordPattern);
