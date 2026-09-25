@@ -222,8 +222,8 @@ public sealed class TestHost : IDisposable
     /// </summary>
     public async Task<DuckDBConnection> OpenIndexInstanceAsync()
     {
-        var connection =
-            new DuckDBConnection($"Data Source={Path.Combine(DataDirectory, "indexes", "instance.duckdb")}");
+        // The instance's default catalog is a file in the index folder like any project's.
+        var connection = new DuckDBConnection($"Data Source={IndexFile("instance")}");
         await connection.OpenAsync(Ct);
         return connection;
     }

@@ -155,12 +155,12 @@ public sealed class RefreshTests : IDisposable
                 Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
             await WaitForSwapAsync(_host, "alpha");
 
-            // The shadow is finished and waiting to be swapped in. A committed write puts rows in its log,
-            // and DuckDB's own fault switch makes every checkpoint stop short of emptying a log. An open
-            // transaction does not do it: DuckDB 1.5 checkpoints committed rows past a reader and past
-            // an uncommitted writer alike, so this is the only way found to keep a log beside the shadow.
-            // The switch also makes the checkpoint itself fail, so both reasons to refuse hold at once;
-            // DuckDB offers no state where a checkpoint succeeds and a log survives it.
+            // The shadow is finished, checkpointed and waiting to be swapped in. A committed write puts
+            // rows in its log after that checkpoint, and DuckDB's own fault switch makes the DETACH's
+            // checkpoint stop short of emptying the log — and fail, which DuckDB reports after detaching.
+            // An open transaction does not do it: DuckDB 1.5 checkpoints committed rows past a reader and
+            // past an uncommitted writer alike, so this is the only way found to keep a log beside the
+            // shadow. No DuckDB state found leaves a log after a DETACH that reported success.
             await straggler.ExecuteAsync("CREATE TABLE \"alpha$shadow\".main.straggler AS SELECT 1 AS one", Ct);
             await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
         }
