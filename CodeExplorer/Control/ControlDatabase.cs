@@ -65,6 +65,15 @@ public sealed partial class ControlDatabase : IDisposable
     // its life. Concurrent because every request reads it and any request may be the one that fills it.
     private readonly ConcurrentDictionary<string, Project> _bySlug = new(StringComparer.Ordinal);
 
+    // Bumped by every writer that forgets a slug, under _cacheGate and after its commit. FindAsync
+    // stores only when the count it read before its query is still current, and stores under the same
+    // gate, so a delete that commits between its read and its store cannot be undone by that store
+    // (#237): either the store sees the bump and skips, or it lands first and the writer removes it.
+    // One count for every slug rather than one each: writes are operator actions, and what a bump for
+    // another slug costs is one uncached read, never a wrong answer.
+    private readonly Lock _cacheGate = new();
+    private long _cacheGeneration;
+
     private readonly string _connectionString;
 
     /// <summary>The file itself, which the backup snapshots beside and the restore writes.</summary>
@@ -227,7 +236,7 @@ public sealed partial class ControlDatabase : IDisposable
         // Nothing positive can be cached for a slug that was free a statement ago, so this is the
         // belt to the delete below: the rule is that every writer forgets, not that the one that
         // matters does.
-        _bySlug.TryRemove(slug, out _);
+        Forget(slug);
 
         await BackupAsync();
         return CreateProjectOutcome.Created;
@@ -265,6 +274,9 @@ public sealed partial class ControlDatabase : IDisposable
     {
         if (_bySlug.TryGetValue(slug, out var known)) return known;
 
+        // Read before the query takes its snapshot, so a writer that bumps after this read may have
+        // committed after the snapshot too, and one that bumped before it had committed before it.
+        long generation = Volatile.Read(ref _cacheGeneration);
         await using var connection = await OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT name, single_repository FROM projects WHERE slug = $slug";
@@ -273,8 +285,22 @@ public sealed partial class ControlDatabase : IDisposable
         if (!await reader.ReadAsync(cancellationToken)) return null;
 
         var project = new Project(slug, reader.Text("name"), reader.Flag("single_repository"));
-        _bySlug[slug] = project;
+        lock (_cacheGate)
+        {
+            if (_cacheGeneration == generation) _bySlug[slug] = project;
+        }
+
         return project;
+    }
+
+    /// <summary>Drops a slug from the cache after a committed write, and voids every read still in flight.</summary>
+    private void Forget(string slug)
+    {
+        lock (_cacheGate)
+        {
+            _cacheGeneration++;
+            _bySlug.TryRemove(slug, out _);
+        }
     }
 
     /// <summary>
@@ -383,7 +409,7 @@ public sealed partial class ControlDatabase : IDisposable
         await transaction.CommitAsync(cancellationToken);
         // Forgotten whether or not a row went: the next request then asks the database, which is the
         // only thing that knows.
-        _bySlug.TryRemove(slug, out _);
+        Forget(slug);
         if (deleted != 1) return false;
 
         await BackupAsync();
