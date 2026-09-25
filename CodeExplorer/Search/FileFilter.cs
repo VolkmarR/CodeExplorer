@@ -55,8 +55,7 @@ public sealed record FileFilter(
             for (int i = 0; i < includes.Count; i++)
             {
                 if (i > 0) where.Append(" OR ");
-                where.Append(PathTerms.Match(includes[i], matched, $"$p{i}"));
-                parameters.Add(new DuckDBParameter($"p{i}", includes[i]));
+                where.Append(PathTerms.Match(includes[i], matched, $"p{i}", parameters));
             }
 
             where.Append(')');

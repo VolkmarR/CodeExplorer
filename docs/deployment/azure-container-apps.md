@@ -282,4 +282,9 @@ a foreign `Origin` on `/api` and the MCP endpoints, so a replica missing
 The first with GHSA-4f8q-c6jj-fr44 refuses a credential beside an `http://` or `git://` URL, which
 would send it in clear text, and there is no setting to allow it: a repository stored with that pair
 is reported as skipped by every refresh, and its token never sent, until it is deleted and added
-again under its https or ssh URL.
+again under its https or ssh URL. The first with GHSA-v284-9964-6mjr bounds what one MCP call can ask
+of a replica, with no setting for any of it: `list_tree` depth at most 64, `read_file` at most 100
+entries and 100,000 lines across them, and a `multiline` grep page at most 8 MiB of file content
+beyond its first file. Globs keep their meaning but run as RE2, so an agent whose glob or `exclude`
+held a query for minutes gets its answer, and one that passed a larger depth or more entries is told
+the limit and how to split the call.

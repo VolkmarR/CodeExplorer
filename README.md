@@ -75,6 +75,15 @@ and `[::1]`, so a web page that rebinds its own name to 127.0.0.1 is refused wit
 refuse with a 403 a request whose `Origin` header is present and is not the server's own, which is
 what stops a page on another site from writing to the server without reading the answer.
 
+One MCP call cannot size the server's work without a bound (GHSA-v284-9964-6mjr). `list_tree` takes
+a depth of at most 64. `read_file` takes at most 100 entries and reads at most 100,000 lines across
+them, explicit ranges included; an entry past that budget is cut short or not read, and says so. A
+`multiline` grep page reads at most 8 MiB of file content to mark its matches: its first file is read
+whatever its size, and a later file that does not fit is listed with its count and the page to ask
+for. Globs — `glob`, and every `path`, `exclude` and extension term — keep SQL `GLOB`'s meaning but
+run as RE2, so they cannot backtrack; `glob` refuses a reversed range such as `[z-a]`. None of these
+is a setting.
+
 The Azure half of that is not covered by the tests — they assert that a configured deployment gets a
 blob repository and a Key Vault encryptor, and nothing reaches an account. To check it for real:
 point both settings at a container and a key the signed-in identity may use, start the server, add a
