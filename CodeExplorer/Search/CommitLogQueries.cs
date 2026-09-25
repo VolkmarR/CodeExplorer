@@ -126,8 +126,6 @@ public sealed partial class HistoryQueries
 
             bool hasHistory = await HasHistoryAsync(index, token);
             int limit = Math.Clamp(request.Limit, 1, _maxCommits);
-            // Clamped only from below, so the offset below is a long: a large page times the limit wraps
-            // an int negative, which DuckDB refuses as an error instead of answering an empty page (#233).
             int page = Math.Max(1, request.Page);
             string? scope = index.Repository?.Slug;
             // Who the filter matched is read before the page is, so that a page which comes back empty
@@ -145,7 +143,7 @@ public sealed partial class HistoryQueries
                 ? await MatchedAsync(index, scope, asked, path, token)
                 : null;
             var commits = hasHistory && author?.Addresses != 0
-                ? await CommitsAsync(index, scope, asked, mentions, path, limit, (page - 1L) * limit, token)
+                ? await CommitsAsync(index, scope, asked, mentions, path, limit, Paging.Skip(page, limit), token)
                 : [];
             return new LogAnswer(hasHistory, index.Repository, page, limit, commits, author, mentions, path);
         }, cancellationToken), (LogAnswer answer) => new Telemetry.Measured(answer.Commits.Count, 0));
@@ -176,11 +174,10 @@ public sealed partial class HistoryQueries
         Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             int pageSize = Math.Clamp(request.PageSize, 1, _maxCommits);
-            // A long offset, for the reason LogAsync gives.
             int page = Math.Max(1, request.Page);
             string? scope = index.Repository?.Slug;
             long total = await CommitCountAsync(index, scope, token);
-            var commits = await LoggedAsync(index, scope, pageSize, (page - 1L) * pageSize, token);
+            var commits = await LoggedAsync(index, scope, pageSize, Paging.Skip(page, pageSize), token);
             return new ChangeLogAnswer(total, page, pageSize, commits);
         }, cancellationToken), (ChangeLogAnswer answer) => new Telemetry.Measured(answer.Commits.Count, 0));
 

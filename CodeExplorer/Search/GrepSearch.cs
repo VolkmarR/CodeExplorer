@@ -643,10 +643,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
             Math.Clamp(request.Context, 0, MaxContext),
             Math.Clamp(request.MaxLinesPerFile, 1, GrepSearch.MaxLinesPerFile));
 
-        /// <summary>
-        ///     The files ahead of this page. A <c>long</c>, because <see cref="Page" /> is clamped only from
-        ///     below and a large one times the page size wraps an <c>int</c> negative (#233).
-        /// </summary>
-        public long Skip => (Page - 1L) * PageSize;
+        /// <summary>The files ahead of this page.</summary>
+        public long Skip => Paging.Skip(Page, PageSize);
     }
 }
