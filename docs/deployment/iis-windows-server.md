@@ -251,6 +251,11 @@ Azure guide describes the registration in full and none of it differs here.
 Leaving them unset is a real option for a server that is only reachable inside a network: every
 endpoint then answers anonymously. It is a decision to make deliberately, because it applies to the
 MCP endpoints too — anyone who can reach the host can read every indexed repository.
+Unauthenticated, the server answers only the loopback host names (`localhost`, `127.0.0.1`,
+`[::1]`) unless `AllowedHosts` names others, so set it to the names the site is reached under,
+separated by semicolons (`codeexplorer.corp.example;codeexplorer`). Every other name gets a 400, and
+the startup log says why. That default is what keeps a web page from rebinding its own name to the
+server's address and reading it from a browser inside the network.
 
 Windows Authentication is not an alternative. The app registers a bearer scheme and a cookie scheme
 and nothing else, and MCP clients discover the tenant from the 401's `resource_metadata` — an
