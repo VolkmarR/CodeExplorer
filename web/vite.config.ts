@@ -11,6 +11,10 @@ import pkg from './package.json' with { type: 'json' }
 // build` writes into the server's wwwroot, so one `dotnet run` then serves the API and the UI
 // together. The router plugin must come before the React plugin: it generates routeTree.gen.ts from
 // src/routes, and React Fast Refresh has to see the generated file.
+const devPort = 5173
+const devOrigin = `http://localhost:${devPort}`
+const serverOrigin = 'http://localhost:5000'
+
 export default defineConfig({
   // The sidebar names the bundle the browser is running. Taken from package.json so there is one
   // place the number is written, and inlined so no request is spent on a constant.
@@ -28,9 +32,22 @@ export default defineConfig({
     alias: { '@': path.resolve(import.meta.dirname, 'src') },
   },
   server: {
-    port: 5173,
+    port: devPort,
     proxy: {
-      '/api': { target: 'http://localhost:5000', changeOrigin: true },
+      '/api': {
+        target: serverOrigin,
+        changeOrigin: true,
+        // The server refuses an /api request whose Origin is not its own (GHSA-qxhv-3r9w-q8h4), and
+        // a browser on the dev server sends http://localhost:5173 with every write. So the proxy
+        // presents the server's own origin, http://localhost:5000, in place of the dev server's, and
+        // only in place of it: any other origin passes through unchanged and is refused as it would
+        // be without the proxy, or a page on any site could write through a running `vp dev`.
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            if (req.headers.origin === devOrigin) proxyReq.setHeader('origin', serverOrigin)
+          })
+        },
+      },
     },
   },
   build: {

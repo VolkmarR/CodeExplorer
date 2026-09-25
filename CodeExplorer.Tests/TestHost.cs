@@ -66,11 +66,17 @@ public sealed class TestHost : IDisposable
     ///     On everywhere but where the refusal is the subject, because every fixture is a repository on
     ///     this disk; the shipped default is off (GHSA-5373-pppr-q3q9).
     /// </param>
+    /// <param name="allowedHosts">
+    ///     The operator's own <c>AllowedHosts</c>, which replaces the loopback default an
+    ///     unauthenticated server otherwise answers under (GHSA-qxhv-3r9w-q8h4).
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
         bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
-        int? maxCommitPaths = null, int? transferStallSeconds = null, bool allowLocalRepositories = true)
+        int? maxCommitPaths = null, int? transferStallSeconds = null, bool allowLocalRepositories = true,
+        string? allowedHosts = null)
     {
         _allowLocalRepositories = allowLocalRepositories;
+        _allowedHosts = allowedHosts;
         _engine = engine;
         _drainSeconds = drainSeconds;
         _minimumFreeBytes = minimumFreeBytes;
@@ -91,6 +97,7 @@ public sealed class TestHost : IDisposable
     private readonly int? _maxCommitPaths;
     private readonly int? _transferStallSeconds;
     private bool _allowLocalRepositories;
+    private readonly string? _allowedHosts;
 
     /// <summary>
     ///     Private, so a test cannot build a client that bypasses <see cref="CreateClient" /> or reach a
@@ -131,6 +138,7 @@ public sealed class TestHost : IDisposable
                 builder.UseSetting("Git:TransferStallSeconds", stall.ToString(CultureInfo.InvariantCulture));
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
             if (_allowLocalRepositories) builder.UseSetting(RepositoryUrl.AllowLocalSetting, "true");
+            if (_allowedHosts is { } hosts) builder.UseSetting(RequestOrigin.AllowedHostsSetting, hosts);
             if (!_authenticated) return;
 
             foreach ((string key, string value) in Tenant.Configuration) builder.UseSetting(key, value);

@@ -63,6 +63,12 @@ through MCP — anyone in the tenant, or anyone who can reach the port when auth
 Switching the setting off again stops the refresh reading local repositories already stored; each is
 reported as skipped until it is pointed at a remote.
 
+With authentication off, the server answers only the loopback host names `localhost`, `127.0.0.1`
+and `[::1]`, so a web page that rebinds its own name to 127.0.0.1 is refused with a 400. A configured
+`AllowedHosts` replaces that list. With authentication on or off, `/api` and every MCP endpoint
+refuse with a 403 a request whose `Origin` header is present and is not the server's own, which is
+what stops a page on another site from writing to the server without reading the answer.
+
 The Azure half of that is not covered by the tests — they assert that a configured deployment gets a
 blob repository and a Key Vault encryptor, and nothing reaches an account. To check it for real:
 point both settings at a container and a key the signed-in identity may use, start the server, add a
