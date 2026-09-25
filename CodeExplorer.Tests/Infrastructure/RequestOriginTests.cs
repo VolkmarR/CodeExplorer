@@ -15,11 +15,15 @@ public sealed class RequestOriginTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static async Task<HttpStatusCode> GetAsync(TestHost host, string path, string? hostHeader = null,
-        string? origin = null)
+    private static Task<HttpStatusCode> GetAsync(TestHost host, string path, string? hostHeader = null,
+        string? origin = null) =>
+        SendAsync(host, new HttpRequestMessage(HttpMethod.Get, path), hostHeader, origin);
+
+    private static async Task<HttpStatusCode> SendAsync(TestHost host, HttpRequestMessage message,
+        string? hostHeader = null, string? origin = null)
     {
         using var http = host.CreateClient();
-        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        using var request = message;
         if (hostHeader is not null) request.Headers.Host = hostHeader;
         if (origin is not null) request.Headers.Add("Origin", origin);
         using var response = await http.SendAsync(request, Ct);
@@ -76,16 +80,14 @@ public sealed class RequestOriginTests
     public async Task A_cross_origin_write_changes_nothing()
     {
         using var host = new TestHost(SearchEngine.Substring);
-        using var http = host.CreateClient();
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/projects")
+        var create = new HttpRequestMessage(HttpMethod.Post, "/api/projects")
         {
             Content = new StringContent("""{"slug":"planted","name":"Planted"}""", Encoding.UTF8, "application/json")
         };
-        request.Headers.Add("Origin", "http://attacker.example");
-        using var refused = await http.SendAsync(request, Ct);
-        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, await SendAsync(host, create, origin: "http://attacker.example"));
 
+        using var http = host.CreateClient();
         Assert.DoesNotContain("planted", await http.GetStringAsync("/api/projects", Ct), StringComparison.Ordinal);
     }
 

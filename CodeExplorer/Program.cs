@@ -39,9 +39,8 @@ var keyRing = builder.AddKeyRing();
 // Entra where a tenant is configured and an open server where none is (ADR-0004). Read here rather
 // than at first use because a half-configured tenant has to stop the server, not a request.
 var authentication = builder.AddAuthentication();
-// With no tenant, only loopback host names are answered unless AllowedHosts says otherwise, so a page
-// that rebinds its own name to 127.0.0.1 is refused (GHSA-qxhv-3r9w-q8h4).
-builder.AddLoopbackHosts(authentication);
+// With no tenant, loopback host names only unless AllowedHosts says otherwise (GHSA-qxhv-3r9w-q8h4).
+var hosts = builder.AddLoopbackHosts(authentication);
 // Blob Storage when a container is configured and a folder on disk when none is (ADR-0004), so a
 // plain `dotnet run` with an empty appsettings needs no Azure and still keeps a durable copy.
 builder.Services.AddSingleton<DurableStore>();
@@ -96,7 +95,7 @@ var app = builder.Build();
 // needs. It warns about the two shapes that are not the deployed one.
 keyRing.Report(app.Logger);
 authentication.Report(app.Logger);
-RequestOrigin.Report(app.Configuration, authentication, app.Logger);
+hosts.Report(app.Logger);
 
 // First, so a page on another origin is refused before anything reads a cookie or a project for it.
 app.UseSameOriginOnly();

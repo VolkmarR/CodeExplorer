@@ -42,6 +42,8 @@ export default defineConfig({
         // presents the server's own origin, http://localhost:5000, in place of the dev server's, and
         // only in place of it: any other origin passes through unchanged and is refused as it would
         // be without the proxy, or a page on any site could write through a running `vp dev`.
+        // `changeOrigin` means the server's Host check sees localhost whatever name the browser used,
+        // so a rebound name is refused here instead, by Vite's own `server.allowedHosts` default.
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq, req) => {
             if (req.headers.origin === devOrigin) proxyReq.setHeader('origin', serverOrigin)

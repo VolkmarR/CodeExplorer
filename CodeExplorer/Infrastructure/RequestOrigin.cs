@@ -2,6 +2,10 @@ using Microsoft.AspNetCore.HostFiltering;
 
 namespace CodeExplorer.Infrastructure;
 
+/// <summary>What <see cref="RequestOrigin.AddLoopbackHosts" /> decided at start, for the log line.</summary>
+/// <param name="LoopbackOnly">Whether only the loopback host names are answered.</param>
+public sealed record HostRestriction(bool LoopbackOnly);
+
 /// <summary>
 ///     Which requests the server answers by where they come from, rather than by who sent them
 ///     (GHSA-qxhv-3r9w-q8h4). Two checks, because a browser can reach an unauthenticated server two
@@ -11,7 +15,8 @@ namespace CodeExplorer.Infrastructure;
 ///     without reading the answer, which still creates, refreshes or deletes; the Origin header tells
 ///     that one apart, so the API and the MCP endpoints refuse an origin that is not their own. The
 ///     MCP specification asks a Streamable HTTP server for the second check for the same reason.
-///     At the root for the reason <see cref="Authentication" /> is: who may call belongs to no concept.
+///     In Infrastructure/ beside <see cref="Authentication" />, and for its reason: who may call
+///     belongs to no concept in CONTEXT.md.
 /// </summary>
 public static class RequestOrigin
 {
@@ -26,35 +31,31 @@ public static class RequestOrigin
     private static readonly string[] _loopbackHosts = ["localhost", "127.0.0.1", "[::1]"];
 
     /// <summary>
-    ///     Whether the loopback default applies: authentication off and no <c>AllowedHosts</c> of the
-    ///     operator's own. With a tenant, a rebound page is just another anonymous caller the fallback
-    ///     policy already refuses, so the framework's allow-everything default stays.
+    ///     Restricts host filtering to the loopback names when authentication is off and the operator
+    ///     named no <c>AllowedHosts</c> of their own. With a tenant, a rebound page is just another
+    ///     anonymous caller the fallback policy already refuses, so the framework's allow-everything
+    ///     default stays. Decided once at start, as authentication is: a restart is what changes it.
+    ///     A <c>Configure</c> and not a <c>PostConfigure</c>: the framework's own post-configuration
+    ///     fills in <c>AllowedHosts</c> from configuration only when nothing has set it, so an absent
+    ///     setting finds this list there instead of <c>*</c>.
     /// </summary>
-    private static bool LoopbackOnly(IConfiguration configuration, AuthenticationSettings authentication) =>
-        !authentication.Enabled && string.IsNullOrWhiteSpace(configuration[AllowedHostsSetting]);
-
-    /// <summary>
-    ///     Restricts host filtering to the loopback names where <see cref="LoopbackOnly" /> says so. A
-    ///     <c>Configure</c> and not a <c>PostConfigure</c>: the framework's own post-configuration fills
-    ///     in <c>AllowedHosts</c> from configuration only when nothing has set it, so a configured value
-    ///     still wins by being read there, and an absent one finds this list instead of <c>*</c>.
-    /// </summary>
-    public static void AddLoopbackHosts(this WebApplicationBuilder builder, AuthenticationSettings authentication)
+    public static HostRestriction AddLoopbackHosts(this WebApplicationBuilder builder,
+        AuthenticationSettings authentication)
     {
-        var configuration = builder.Configuration;
-        builder.Services.Configure<HostFilteringOptions>(options =>
-        {
-            if (LoopbackOnly(configuration, authentication)) options.AllowedHosts = [.. _loopbackHosts];
-        });
+        var restriction = new HostRestriction(!authentication.Enabled
+                                              && string.IsNullOrWhiteSpace(builder.Configuration[AllowedHostsSetting]));
+        if (restriction.LoopbackOnly)
+            builder.Services.Configure<HostFilteringOptions>(options => options.AllowedHosts = [.. _loopbackHosts]);
+        return restriction;
     }
 
     /// <summary>
     ///     Said at start because a server behind IIS or a proxy with authentication off answers its
     ///     real host name with a 400 and nothing else, and this line is what names the fix.
     /// </summary>
-    public static void Report(IConfiguration configuration, AuthenticationSettings authentication, ILogger logger)
+    public static void Report(this HostRestriction restriction, ILogger logger)
     {
-        if (LoopbackOnly(configuration, authentication))
+        if (restriction.LoopbackOnly)
             logger.LogWarning(
                 "Only loopback host names ({Hosts}) are answered, because authentication is off and no "
                 + "{Setting} is configured. Set {Setting} to serve other names",
