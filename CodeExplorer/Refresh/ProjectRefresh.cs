@@ -47,7 +47,7 @@ public sealed class ProjectRefresh(
         var skipped = new List<string>();
         var condition = new PublishCondition(discards,
             async token => await control.FindAsync(project.Slug, token) is not null);
-        bool refused = false;
+        bool kept = false;
         try
         {
             // Inside the try, so a fetch that ends the refresh — cancellation above all — still closes
@@ -87,11 +87,8 @@ public sealed class ProjectRefresh(
 
                 // Thrown inside the try, so the catch below removes the shadow the publish refused.
                 if (!published)
-                {
-                    refused = true;
                     throw new InvalidOperationException(Deleted(project,
                         "while its refresh was running, so nothing the refresh built was kept"));
-                }
             }
             catch
             {
@@ -104,36 +101,37 @@ public sealed class ProjectRefresh(
                 logger.LogInformation(
                     "Refreshed project {Project}: {Repositories} repositories, {Files} files, {Lines} lines",
                     project.Slug, summary.Repositories, summary.Files, summary.Lines);
+            kept = true;
             return summary with { Skipped = skipped };
         }
         finally
         {
             foreach (var open in opened) open.LocalCopy.Dispose();
             // After the copies are closed, which on Windows is what lets them be removed.
-            if (refused) await RemoveClonesOfDeletedAsync(project.Slug);
+            if (!kept) await RemoveClonesIfDeletedAsync(project.Slug, condition);
         }
     }
 
     /// <summary>
-    ///     Removes the local copies of a project deleted under a running refresh, once the refresh has
-    ///     closed them. The delete removed them too, but a fetch that ran after it cloned them again, and
-    ///     a copy is fetched from its own <c>origin</c>: left behind, a project created later under the
-    ///     slug, with a repository of the same slug, would index the deleted project's remote
-    ///     (GHSA-253f-grfp-cqq7). No refresh of a new project under the slug can be running meanwhile,
-    ///     because the service takes one refresh per slug at a time.
+    ///     Removes the local copies of a project deleted under a refresh that then failed, however it
+    ///     failed, once the refresh has closed them. The delete removed them too, but a fetch that ran
+    ///     after it cloned them again, and a copy is fetched from its own <c>origin</c>: left behind, a
+    ///     project created later under the slug, with a repository of the same slug, would index the
+    ///     deleted project's remote (GHSA-253f-grfp-cqq7). No refresh of a new project under the slug can
+    ///     be running meanwhile, because the service takes one refresh per slug at a time.
     /// </summary>
-    private async Task RemoveClonesOfDeletedAsync(string slug)
+    private async Task RemoveClonesIfDeletedAsync(string slug, PublishCondition condition)
     {
         try
         {
             // Not the refresh's token: this is cleanup after the refresh ended, cancelled or not.
-            await clones.RemoveAsync(slug, null, CancellationToken.None);
+            if (!await indexes.StillHoldsAsync(slug, condition, CancellationToken.None))
+                await clones.RemoveAsync(slug, null, CancellationToken.None);
         }
         catch (Exception ex)
         {
-            // Safe to swallow: the refresh is already failing with the reason that matters — the project
-            // is gone — and an escaping exception here would replace it. The log line is how a copy left
-            // behind is noticed.
+            // Safe to swallow: the refresh is already failing with its own reason, and an escaping
+            // exception here would replace it. The log line is how a copy left behind is noticed.
             logger.LogWarning(ex, "The local copies of deleted project {Project} could not be removed", slug);
         }
     }

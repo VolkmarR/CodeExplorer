@@ -187,9 +187,6 @@ public sealed class RefreshService(
 
         try
         {
-            // Whether a queued project was deleted meanwhile is ProjectRefresh's question, asked where
-            // it is tied to the publish (GHSA-253f-grfp-cqq7); a check here would go stale before the swap.
-
             // Reported before the restore rather than after the check, so a restore that takes minutes
             // shows as a refresh running and not as one still waiting for the slot.
             Report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount, RefreshProgress.StartPhase));
