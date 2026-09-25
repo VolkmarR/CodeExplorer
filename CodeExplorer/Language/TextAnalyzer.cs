@@ -416,9 +416,8 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     hole, at the literal the hole was opened in, which is what says how the hole ends.
     ///     <see cref="Depth" /> counts the braces nested inside a hole, so that the <c>}</c> of a
     ///     collection expression in it does not end it.
-    ///     <see cref="Extra" /> is how many more times than its form's own opener a literal that
-    ///     <see cref="StringDelimiter.Extends" /> repeated the opener's last character, and so how many
-    ///     more its closer needs: a C# raw literal opened with four quotes is one past the form's three.
+    ///     <see cref="Extra" /> is how many more of its closer's last character a literal whose form
+    ///     <see cref="StringDelimiter.OpenerRepeats" /> needs before it closes.
     /// </summary>
     private readonly record struct Frame(int Index, int Depth, bool Hole, int Extra = 0);
 
@@ -645,7 +644,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
             if (opened >= 0)
             {
                 var form = _analyzer._forms[opened].Form;
-                int extra = form.Extends ? RunOf(_line, _at + form.Open.Length, form.Open[^1]) : 0;
+                int extra = form.OpenerRepeats ? RunOf(_line, _at + form.Open.Length, form.Open[^1]) : 0;
                 Push(opened, false, extra);
                 _at += form.Open.Length + extra;
                 return;
@@ -706,15 +705,14 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
                 if (At(_line, _at + hole.Open.Length, hole.Open)) _at += 2 * hole.Open.Length;
                 else
                 {
-                    Push(frame.Index, true);
+                    Push(frame.Index, true, 0);
                     _at += hole.Open.Length;
                 }
 
                 return;
             }
 
-            // A literal opened with more than its form's quotes is closed only by as many: a shorter run
-            // inside it is text, which is what it was opened with more of them to hold.
+            // A shorter run than the one that opened it is text (StringDelimiter.OpenerRepeats).
             if (At(_line, _at, open.Close)
                 && (frame.Extra == 0 || RunOf(_line, _at + open.Close.Length, open.Close[^1]) >= frame.Extra))
             {
@@ -733,7 +731,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
             _at++;
         }
 
-        private void Push(int index, bool hole, int extra = 0)
+        private void Push(int index, bool hole, int extra)
         {
             if (_depth == _frames.Length)
             {
@@ -1189,7 +1187,9 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     {
         Span<Frame> frames = stackalloc Frame[_maxNesting];
         // A position this analyser did not make — Unknown among them — is a caller asking about the
-        // line alone, so the line is walked as though nothing were open above it. Walked from Unknown
+        // line alone, which ImportsOn promises to answer from the line, so the line is walked as
+        // though nothing were open above it. That is ImportsOn's exception to ADR-0008's Unknown
+        // rule, not the lexical answer: StateAt still says Unknown there. Walked from Unknown
         // instead, the cursor knew nowhere code ended and answered 0, and every import a build read
         // past the nesting bound came back empty (#240).
         var from = position is TextPosition text && text.Owner == this ? position : _start;

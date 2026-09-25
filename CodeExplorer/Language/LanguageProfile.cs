@@ -50,7 +50,7 @@ public sealed record StringDelimiter(string Open, string Close, StringEscape Esc
     ///     times: C#'s raw literal, opened by three quotes or more and closed by exactly as many. A
     ///     fixed closer read one opened with four as closed by the <c>"""</c> it was written to hold.
     /// </summary>
-    public bool Extends { get; init; }
+    public bool OpenerRepeats { get; init; }
 }
 
 /// <summary>

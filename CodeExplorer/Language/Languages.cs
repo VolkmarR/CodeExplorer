@@ -173,17 +173,16 @@ public static class Languages
     ///     and not a use. The interpolated forms name their holes, so a call written inside one is
     ///     still read as a call — a literal that swallowed its holes would lose real calls, which is
     ///     the worse of the two errors.
-    ///     A raw literal is opened by three quotes or more and closed by as many, which is what lets
-    ///     one opened with four hold three; closed at the first <c>"""</c>, the rest of it was code.
-    ///     The char literal is here because without it <c>'"'</c> opened a string that took the rest
+    ///     A raw literal is opened by three quotes or more and closed by as many
+    ///     (<see cref="StringDelimiter.OpenerRepeats" />). The char literal is here because without it <c>'"'</c> opened a string that took the rest
     ///     of its line (#240). It does not span: a stray apostrophe ends with its line.
     ///     Written longest opener first for a reader; the analyser orders them itself.
     /// </summary>
     private static readonly StringDelimiter[] _cSharpLiterals =
     [
         new StringDelimiter("$\"\"\"", "\"\"\"", StringEscape.None)
-            { SpansLines = true, Hole = _cSharpHole, Extends = true },
-        new StringDelimiter("\"\"\"", "\"\"\"", StringEscape.None) { SpansLines = true, Extends = true },
+            { SpansLines = true, Hole = _cSharpHole, OpenerRepeats = true },
+        new StringDelimiter("\"\"\"", "\"\"\"", StringEscape.None) { SpansLines = true, OpenerRepeats = true },
         new StringDelimiter("$@\"", "\"", StringEscape.Doubled)
             { SpansLines = true, Hole = _cSharpHole },
         new StringDelimiter("@$\"", "\"", StringEscape.Doubled)
@@ -324,9 +323,8 @@ public static class Languages
         new LanguageProfile("C#", ["cs", "csx"])
         {
             LineComments = ["//"],
-            // No line-start `*`, here or in the two ECMA profiles: the continuation line of a `/* */`
-            // block is inside the comment the scan carries, so outside one a leading `*` is a
-            // multiplication, a dereference or a generator method, and reading it as a comment hid
+            // No line-start `*`, as in every C-family profile (LanguageProfile.LineStartComments): at
+            // the top level it is a multiplication or a dereference, and reading it as a comment hid
             // every name on the line (#240).
             BlockComments = [_cBlockComment],
             Strings = _cSharpLiterals,
