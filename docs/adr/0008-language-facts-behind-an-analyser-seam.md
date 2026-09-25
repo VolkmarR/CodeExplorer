@@ -159,7 +159,11 @@ reported as a right one. A doubtful form is left out.
   keyword welded into the shared pattern is a language fact the profile author cannot see, and this
   module has absorbed that one twice already. The combined pattern is what `DeclarationCandidates`
   publishes, so a shape added for one language costs the others nothing and the engine narrows every
-  file with its own language's.
+  file with its own language's. `DeclarationCandidatesFor(symbol)` publishes the same shapes with
+  one name spelled where each puts the declared name, for `find_definition`: without it a line
+  shaped like a declaration of another name that only mentions this one — `Run(OrderService s)` —
+  was a candidate, and enough of them filled the candidate cap before the declaration was read
+  (#239).
 - **The per-language narrowing is built from the extensions the project holds, not from the
   language table.** `find_definition` needs one query covering every language at once, and the
   obvious way to write it — walk the registrations, emit a branch per language, and a `NOT IN` for
