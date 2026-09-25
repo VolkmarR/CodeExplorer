@@ -550,10 +550,12 @@ public sealed class DefinitionTests : IDisposable
     ///     #239: where more lines than the cap really are shaped like a declaration of the name, the
     ///     ones past it are never placed, and the reply says so rather than reading as the whole answer.
     /// </summary>
-    [Fact]
-    public async Task A_search_that_reaches_the_candidate_cap_says_so()
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task A_search_that_reaches_the_candidate_cap_says_so(SearchEngine engine)
     {
-        _host = new TestHost(SearchEngine.Substring);
+        _host = new TestHost(engine);
         string overloads = string.Concat(Enumerable.Range(0, 1001)
             .Select(i => $"    public void Advance(int n{i}) {{ }}\n"));
         await _host.IndexedProjectAsync("capped", new Dictionary<string, Dictionary<string, string>>
