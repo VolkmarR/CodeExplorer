@@ -145,7 +145,10 @@ IIS terminates TLS and forwards the request to the app over the loopback. The ap
 `UseForwardedHeaders`, but the ASP.NET Core Module in-process preserves the original scheme and host,
 so sign-in redirects come out as `https` without further configuration. **If** you put something else
 in front of IIS — ARR, a hardware load balancer, a reverse proxy — that stops being true, and you
-need `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` as the Azure guide describes.
+need `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` as the Azure guide describes. The scheme and host the
+app sees are also what it takes as its own origin, so a proxy that terminates TLS without that
+setting gets every write from the UI refused with a 403, with a tenant or without one
+(GHSA-qxhv-3r9w-q8h4).
 
 ### Writable paths
 
@@ -196,7 +199,8 @@ immediately and restores the projects behind it.
 `Git:TransferStallSeconds` — 300 by default — is how long a clone or fetch waits on a remote that has
 gone silent before the refresh skips that repository and says the remote stopped responding. It
 bounds each wait, not the transfer, so raise it only for a remote that is slow to start sending a
-large pack.
+large pack. It must be between 1 and 2147483: zero would be libgit2's "no limit", the hang the
+setting exists to end, so it is refused with an error naming the setting rather than honoured.
 
 `Control:AllowLocalRepositories` — `false` by default — decides whether a repository may be a local
 path, a UNC share or a `file://` URL. Leave it off unless every caller who can add a repository may
@@ -253,7 +257,8 @@ endpoint then answers anonymously. It is a decision to make deliberately, becaus
 MCP endpoints too — anyone who can reach the host can read every indexed repository.
 Unauthenticated, the server answers only the loopback host names (`localhost`, `127.0.0.1`,
 `[::1]`) unless `AllowedHosts` names others, so set it to the names the site is reached under,
-separated by semicolons (`codeexplorer.corp.example;codeexplorer`). Every other name gets a 400, and
+separated by semicolons (`codeexplorer.corp.example;codeexplorer`), with the section 5 settings — the
+name is `AllowedHosts` there too, since it has no `:`. Every other name gets a 400, and
 the startup log says why. That default is what keeps a web page from rebinding its own name to the
 server's address and reading it from a browser inside the network.
 
@@ -304,3 +309,7 @@ work.
 | Startup stops naming `Index:SearchEngine`                        | The extension directory has no `windows_amd64` copy. Section 2 — and note that the image's Linux copy will not do. |
 | Credentials stopped decrypting after maintenance                 | The application pool identity changed. Section 6.                          |
 | `IOException` on an index file, intermittently                   | Two worker processes. Check `maxProcesses` and overlapped recycling in section 3. |
+| HTTP 400 on every request, no tenant configured                  | `AllowedHosts` is unset, so only loopback names are answered. Section 7; the startup log names it too. |
+| HTTP 403 on every write from the UI, reads work                  | A proxy in front of IIS terminates TLS and the app sees `http`. `ASPNETCORE_FORWARDEDHEADERS_ENABLED`, section 4. |
+| A refresh skips a repository as "a local path or file URL"       | `Control:AllowLocalRepositories` is off, which it is by default, and has been since GHSA-5373-pppr-q3q9 for repositories stored before it. Point the repository at its remote, or section 5. |
+| A refresh skips a repository because "the remote stopped responding" | The remote sent nothing for `Git:TransferStallSeconds`. Check the remote first; raise the setting only for one slow to start a pack. |

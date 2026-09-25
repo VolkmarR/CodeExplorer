@@ -142,8 +142,9 @@ Environment variables, with `__` where a setting has a `:`.
 | `AzureAd__ClientSecret`       | a secret reference                                      | Only the browser sign-in needs it.                       |
 | `AzureAd__Scopes`             | `api://<client-id>/CodeExplorer.Access`                 | What a project's protected-resource document tells an MCP client to ask for. |
 | `Refresh__WarmUpOnStart`      | `false` under scale to zero, `true` at `minReplicas` 1  | See "Warm-up" below.                                     |
-| `Git__TransferStallSeconds`   | unset (300), or more for a remote slow to start a pack  | How long a clone or fetch waits on a silent remote before the repository is skipped. |
+| `Git__TransferStallSeconds`   | unset (300), or more for a remote slow to start a pack  | How long a clone or fetch waits on a silent remote before the repository is skipped. 1 to 2147483; zero is refused, not "no limit". |
 | `Control__AllowLocalRepositories` | unset (`false`)                                     | Whether a local path or `file://` URL may be added as a repository. Leave it off: it lets whoever may add a repository read any repository on the replica's disk. |
+| `AllowedHosts`                | unset with a tenant; the app's FQDN without one         | With no `AzureAd__ClientId` the server answers only `localhost`, `127.0.0.1` and `[::1]`, so ingress traffic gets a 400 until this names the FQDN. |
 | `Telemetry__OtlpEndpoint`     | your collector, or unset                                | Unset exports nothing at all.                            |
 | `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | `true`                                          | See "Ingress terminates TLS" below.                      |
 
@@ -272,3 +273,9 @@ with an empty disk and restores lazily as ADR-0003 intends.
 
 A release that raises `SchemaVersion` makes the first warm-up after it long, because every project is
 rebuilt rather than restored (ADR-0007). Deploy those before a warm-up window rather than during one.
+
+The first release with GHSA-5373-pppr-q3q9 refuses local repositories unless
+`Control__AllowLocalRepositories` is `true`, and that covers ones stored before it: a refresh
+reports each as skipped until it is pointed at a remote. The first with GHSA-qxhv-3r9w-q8h4 refuses
+a foreign `Origin` on `/api` and the MCP endpoints, so a replica missing
+`ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` now fails every write from the UI, not only the sign-in.
