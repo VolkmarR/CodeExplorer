@@ -30,16 +30,22 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     /// </summary>
     /// <param name="shadow">The shadow being built, its connection already bound to it.</param>
     /// <param name="repositories">The same opened copies the file walk read, in the same order.</param>
+    /// <param name="configured">
+    ///     Every repository the project has in the control database, opened or not. It decides whose
+    ///     history is kept; <paramref name="repositories" /> only decides whose history is walked.
+    /// </param>
     /// <param name="report">How far the pass has got, for the status an operator polls.</param>
     /// <param name="cancellationToken">Checked per commit, which is where the time goes.</param>
     public async Task<HistorySummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
-        Action<RefreshProgress> report, CancellationToken cancellationToken)
+        IReadOnlyList<ProjectRepository> configured, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
     {
         using var recording = Telemetry.HistoryBuild(shadow.Slug);
 
         // The walk and the diffs are synchronous git calls, like the file walk: a worker thread keeps
         // them off the request thread and the token is checked inside.
-        var summary = await Task.Run(() => Fill(shadow, repositories, report, cancellationToken), cancellationToken);
+        var summary = await Task.Run(() => Fill(shadow, repositories, configured, report, cancellationToken),
+            cancellationToken);
 
         recording.Built(summary.Commits, summary.AttributedFiles);
         if (logger.IsEnabled(LogLevel.Information))
@@ -50,14 +56,18 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     }
 
     private HistorySummary Fill(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
-        Action<RefreshProgress> report, CancellationToken cancellationToken)
+        IReadOnlyList<ProjectRepository> configured, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
     {
         var (connection, catalog) = (shadow.Connection, shadow.Catalog);
         // A repository the operator removed since the last build left its commits in the carried-over
-        // history. They are pruned before anything is appended, so the tables hold exactly the
-        // repositories this build read — and so a slug reused for a different remote cannot inherit
-        // the old one's commits or, worse, replay its own commits onto the old one's attribution.
-        Prune(connection, repositories, cancellationToken);
+        // history. They are pruned before anything is appended, so a slug reused for a different remote
+        // cannot inherit the old one's commits or, worse, replay its own commits onto the old one's
+        // attribution. Pruned by what is configured and not by what opened: a repository whose fetch
+        // failed this once is skipped, not removed, and pruning it would make the next refresh re-walk
+        // it from the root and hand out new ids for commits the index already held (#228). Its
+        // carried-over rows stay exactly as they were, since nothing below walks it.
+        Prune(connection, configured, cancellationToken);
 
         int appended = 0;
         long attributed = 0;
@@ -77,12 +87,12 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         return new HistorySummary(appended, attributed);
     }
 
-    private static void Prune(DuckDBConnection connection, IReadOnlyList<OpenedRepository> repositories,
+    private static void Prune(DuckDBConnection connection, IReadOnlyList<ProjectRepository> configured,
         CancellationToken cancellationToken)
     {
-        string slugs = string.Join(", ", repositories.Select(open => IndexQuery.Literal(open.Repository.Slug)));
-        // An empty list is a project whose every repository failed to open, which the refresh refuses
-        // before it gets here; guarding anyway, because `IN ()` is a syntax error and not an empty set.
+        string slugs = string.Join(", ", configured.Select(repository => IndexQuery.Literal(repository.Slug)));
+        // An empty list is a project with no repository left, whose whole history goes; spelled out
+        // because `IN ()` is a syntax error and not an empty set.
         string kept = slugs.Length == 0 ? "false" : $"repo_slug IN ({slugs})";
         Forget(connection, $"NOT ({kept})", cancellationToken);
     }

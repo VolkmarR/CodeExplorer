@@ -54,8 +54,8 @@ public sealed class ProjectRefresh(
                 // over the live one while the instance still holds it open.
                 using (var shadow = await indexes.CreateShadowAsync(project.Slug, cancellationToken))
                 {
-                    summary = await builder.FillAsync(shadow, opened, project.SingleRepository, report,
-                        cancellationToken);
+                    summary = await builder.FillAsync(shadow, opened, repositories, project.SingleRepository,
+                        report, cancellationToken);
                     report(new RefreshProgress(RefreshProgress.StoreStep, _totalSteps, RefreshProgress.StorePhase));
                     // Exported from the shadow rather than from the live index after the swap, which is
                     // what the tables about to be swapped in are. Doing it here means the export needs
