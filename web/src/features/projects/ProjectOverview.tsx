@@ -16,16 +16,11 @@ import { overviewSearch, type OverviewParameters } from '@/lib/urls/overviewPara
 /** The three pages the overview is split over, each a route of its own. */
 export type OverviewPage = 'code' | 'activity' | 'risk'
 
-const PAGE_ROUTES = {
-  activity: '/projects/$project/activity',
-  code: '/projects/$project',
-  risk: '/projects/$project/risk',
-} as const satisfies Record<OverviewPage, string>
-
 /**
  * One page of the project as a whole. Code is what it is written in and how it is laid out; Activity
  * is where work has been happening, who has been doing it, and whether the codebase is growing; Risk
- * is which large files keep changing, which files nobody owns, which folders change together, and\n * which files are the largest.
+ * is which large files keep changing, which files nobody owns, which folders change together, and
+ * which files are the largest.
  *
  * All three read the one overview answer, so moving between them with the same filters is a cache
  * hit rather than a second computation. It is computed live from the index (#216), over the filter
@@ -48,11 +43,8 @@ export function ProjectOverview({
   const { data } = useSuspenseQuery(projectOverviewQuery(project, search))
 
   function show(change: Partial<OverviewParameters>) {
-    void navigate({
-      params: { project },
-      search: overviewSearch(search, change),
-      to: PAGE_ROUTES[page],
-    })
+    // The page the filter bar is on, whichever of the three it is.
+    void navigate({ search: overviewSearch(search, change), to: '.' })
   }
 
   // Offered whenever there is an overview to filter, and also where a filter is why there is none:
@@ -113,23 +105,25 @@ export function ProjectOverview({
             />
           </>
         ) : null}
-        {page === 'risk' && cards ? (
-          <>
-            <HotspotsCard project={project} churn={overview.churn} hotspots={cards.hotspots} />
-            <AuthorsPerFileCard
-              project={project}
-              churn={overview.churn}
-              authors={cards.authorsPerFile}
-            />
-            <FolderCouplingCard
-              repository={search.repository}
-              churn={overview.churn}
-              coupling={cards.folderCoupling}
-            />
-          </>
-        ) : null}
         {page === 'risk' ? (
-          <LargestFilesCard project={project} overview={overview} excluded={excluded?.files} />
+          <>
+            {cards ? (
+              <>
+                <HotspotsCard project={project} churn={overview.churn} hotspots={cards.hotspots} />
+                <AuthorsPerFileCard
+                  project={project}
+                  churn={overview.churn}
+                  authors={cards.authorsPerFile}
+                />
+                <FolderCouplingCard
+                  repository={search.repository}
+                  churn={overview.churn}
+                  coupling={cards.folderCoupling}
+                />
+              </>
+            ) : null}
+            <LargestFilesCard project={project} overview={overview} excluded={excluded?.files} />
+          </>
         ) : null}
       </div>
     </div>

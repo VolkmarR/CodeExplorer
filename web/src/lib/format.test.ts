@@ -6,7 +6,14 @@ import {
   formatCount,
   shortSha,
   splitFileName,
+  utcDayParts,
 } from '@/lib/format'
+
+test('a UTC day is read as that day, not the one the browser zone makes of it', () => {
+  // 1 September 2025 was a Monday; read as local midnight west of UTC it would be a Sunday in August.
+  expect(utcDayParts('2025-09-01')).toEqual({ date: 1, monday: true, month: 8 })
+  expect(utcDayParts('2025-12-31')).toEqual({ date: 31, monday: false, month: 11 })
+})
 
 /**
  * `splitFileName`'s doc states an invariant rather than a behaviour: the highlighter and the file
