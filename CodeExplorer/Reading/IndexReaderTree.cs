@@ -83,15 +83,19 @@ public sealed partial class IndexReader
     /// <summary>
     ///     Case-insensitive <c>GLOB</c> over the qualified path, within <see cref="Repository" /> when
     ///     one was resolved. The window count rides along with the rows so one statement yields both
-    ///     the total and the page. <paramref name="limit" /> is clamped to <see cref="MaxFiles" />.
-    ///     <paramref name="skip" /> walks the same ordering: the sort is on the qualified path, which
-    ///     is unique, so a row cannot sit on two pages or fall between them.
+    ///     the total and the page. <paramref name="limit" /> is clamped to <see cref="MaxFiles" /> and is
+    ///     the size of a <paramref name="page" />, which walks the same ordering: the sort is on the
+    ///     qualified path, which is unique, so a row cannot sit on two pages or fall between them.
+    ///     The page is cut here rather than by the caller, so that the clamped limit is the one the offset
+    ///     is counted in: an offset in the asked size over pages of the clamped one skipped rows (#233).
+    ///     The offset is a <c>long</c> because the page is clamped only from below.
     /// </summary>
-    public async Task<GlobResult> GlobAsync(string glob, int limit, int skip,
+    public async Task<GlobResult> GlobAsync(string glob, int limit, int page,
         CancellationToken cancellationToken)
     {
         limit = Math.Clamp(limit, 1, MaxFiles);
-        skip = Math.Max(skip, 0);
+        page = Math.Max(page, 1);
+        long skip = (page - 1L) * limit;
         var parameters = new List<DuckDBParameter> { new("g", glob.ToLowerInvariant()) };
         string scope = "";
         if (Repository is not null)
@@ -134,7 +138,7 @@ public sealed partial class IndexReader
                 "SELECT count(*) FROM files f WHERE lower(f.qualified_path) GLOB $g",
                 [new DuckDBParameter("g", glob.ToLowerInvariant())], cancellationToken);
 
-        return new GlobResult(total, files, elsewhere);
+        return new GlobResult(total, files, elsewhere, page, limit);
     }
 
     /// <summary>

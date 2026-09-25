@@ -184,13 +184,15 @@ internal static class SearchEndpoints
 
         // A page and not the whole match: a glob over a large project matches thousands of files, and
         // the view was rendering every row of them. The page size is the view's, so the API answers
-        // what was asked rather than a ceiling the client then has to live within.
+        // what was asked rather than a ceiling the client then has to live within — up to the one the
+        // index reads with, and the size echoed is the one the page was cut with, so a pager walking
+        // by it reaches every row.
         project.MapGet("/files",
             async (Project project, FileQueries files, CancellationToken ct, string glob = "*",
                     string? repository = null, int page = 1, int pageSize = _defaultFilePageSize) =>
                 Answer<GlobListing>(
                     await files.GlobAsync(project.Slug, new GlobRequest(glob, repository, pageSize, page), ct),
-                    listing => FileList(listing, pageSize)));
+                    FileList));
 
         project.MapGet("/tree",
             async (Project project, FileQueries files, CancellationToken ct, string path = "") =>
@@ -323,8 +325,8 @@ internal static class SearchEndpoints
                     f.AtHead ? f.QualifiedPath : null))
                 .ToList()));
 
-    private static IResult FileList(GlobListing listing, int pageSize) =>
-        Results.Ok(new FileListResponse(listing.Total, listing.Page, pageSize,
+    private static IResult FileList(GlobListing listing) =>
+        Results.Ok(new FileListResponse(listing.Total, listing.Page, listing.PageSize,
             listing.Files
                 .Select(f => new FileListEntry(f.QualifiedPath, f.RepositorySlug, f.LineCount, f.SizeBytes,
                     f.SkipReason))

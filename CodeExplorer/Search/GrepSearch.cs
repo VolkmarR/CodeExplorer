@@ -211,7 +211,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
                          page_files AS (
                              SELECT file_id, qualified_path, n FROM per_file
                              ORDER BY n DESC, qualified_path
-                             LIMIT {bounds.PageSize} OFFSET {(bounds.Page - 1) * bounds.PageSize})
+                             LIMIT {bounds.PageSize} OFFSET {bounds.Skip})
                          """;
 
         // The lines the answer shows: the kept ones and their context window, grouped so that
@@ -430,7 +430,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
                 matchParameters, cancellationToken);
 
         long totalMatches = counts.Sum(c => (long)c.Count);
-        var pageFiles = counts.Skip((bounds.Page - 1) * bounds.PageSize).Take(bounds.PageSize).ToList();
+        var pageFiles = counts.Skip((int)Math.Min(bounds.Skip, counts.Count)).Take(bounds.PageSize).ToList();
         if (request.FilesOnly || pageFiles.Count == 0)
             return new GrepResult(MultilineEngine, counts.Count, totalMatches, bounds.Page, bounds.PageSize,
                 [.. pageFiles.Select(f => new GrepFile(f.Path, f.Count, 0, []))], withoutFilters);
@@ -642,5 +642,11 @@ public sealed partial class GrepSearch(IndexReaders readers)
             Math.Clamp(request.PageSize, 1, MaxPageSize),
             Math.Clamp(request.Context, 0, MaxContext),
             Math.Clamp(request.MaxLinesPerFile, 1, GrepSearch.MaxLinesPerFile));
+
+        /// <summary>
+        ///     The files ahead of this page. A <c>long</c>, because <see cref="Page" /> is clamped only from
+        ///     below and a large one times the page size wraps an <c>int</c> negative (#233).
+        /// </summary>
+        public long Skip => (long)(Page - 1) * PageSize;
     }
 }

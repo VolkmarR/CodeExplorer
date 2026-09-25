@@ -136,11 +136,18 @@ public sealed record TreeItem(
     string? SkipReason);
 
 /// <summary>
-///     <see cref="Total" /> counts every match, <see cref="Files" /> the first <c>limit</c> of them.
+///     <see cref="Total" /> counts every match, <see cref="Files" /> the page of them asked for.
 ///     <see cref="MatchesInOtherRepositories" /> is filled only when a repository-scoped glob matched
 ///     nothing, so a scoped miss is told apart from a pattern that matches nowhere.
+///     <see cref="Page" /> and <see cref="PageSize" /> are the ones the rows were cut with, after clamping,
+///     so a caller that echoes them describes the page it got rather than the one it asked for.
 /// </summary>
-public sealed record GlobResult(int Total, IReadOnlyList<IndexedFile> Files, int? MatchesInOtherRepositories);
+public sealed record GlobResult(
+    int Total,
+    IReadOnlyList<IndexedFile> Files,
+    int? MatchesInOtherRepositories,
+    int Page,
+    int PageSize);
 
 /// <summary>
 ///     A directory an agent named, resolved to what the index holds. <see cref="Repository" /> is null

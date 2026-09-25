@@ -42,6 +42,22 @@ public sealed class GitLogTests(GitLogFixture fixture) : IClassFixture<GitLogFix
     }
 
     /// <summary>
+    ///     The largest page a caller can spell is a page past the end like any other (#233). Its offset
+    ///     does not fit an <c>int</c>, and wrapped negative it reached DuckDB as an error; the count in
+    ///     the sentence is the same product, so it has to be computed as wide as the offset.
+    /// </summary>
+    [Fact]
+    public async Task Git_log_answers_the_largest_page_as_a_page_past_the_end()
+    {
+        var client = await StartAsync();
+        string reply = await TestHost.CallAsync(client, "git_log",
+            new Dictionary<string, object?> { ["page"] = int.MaxValue, ["limit"] = 50 });
+
+        Assert.Contains("No commits on page 2147483647. There are fewer than 107374182301 commits", reply,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     <c>author</c> narrows the log, and the header carries the filter: a narrowed log that
     ///     introduces itself as "5 commits" is the wrong fact #86 was about, arrived at from the other
     ///     direction.

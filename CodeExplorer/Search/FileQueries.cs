@@ -54,7 +54,8 @@ public sealed record GlobListing(
     IReadOnlyList<IndexedFile> Files,
     int? MatchesInOtherRepositories,
     IReadOnlyList<IndexedRepository> Repositories,
-    int Page = 1) : Outcome;
+    int Page,
+    int PageSize) : Outcome;
 
 /// <summary>Everything a tree listing asks for: a directory, blank for the project level, and a depth.</summary>
 public sealed record TreeRequest(string Path, int Depth);
@@ -165,10 +166,9 @@ public sealed class FileQueries(IndexReaders readers)
 
         return readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
-            int page = Math.Max(1, request.Page);
-            var result = await index.GlobAsync(pattern, request.Limit, (page - 1) * request.Limit, token);
+            var result = await index.GlobAsync(pattern, request.Limit, request.Page, token);
             return new GlobListing(pattern, index.Repository, result.Total, result.Files,
-                result.MatchesInOtherRepositories, await index.RepositoriesAsync(token), page);
+                result.MatchesInOtherRepositories, await index.RepositoriesAsync(token), result.Page, result.PageSize);
         }, cancellationToken);
     }
 

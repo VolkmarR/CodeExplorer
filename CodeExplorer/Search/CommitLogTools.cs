@@ -76,7 +76,7 @@ internal sealed partial class HistoryTools
         // end of a real author's commits are opposite facts and the second sentence would fit both.
         if (answer.Author is { Addresses: 0 } miss) return NoSuchAuthor(miss, answer.Repository, answer.Path);
 
-        int skip = (answer.Page - 1) * answer.Limit;
+        long skip = (answer.Page - 1L) * answer.Limit;
         string where = Scope(answer.Repository, answer.Path);
         if (answer.Commits.Count == 0)
             return (skip > 0
