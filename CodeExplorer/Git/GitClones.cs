@@ -41,7 +41,10 @@ public sealed class GitClones(
     // entry per repository for the life of the process, which is bounded by the control database.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
 
-    private readonly string _cloneRoot = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones");
+    // Absolute, because libgit2 resolves a relative data directory before it names a path in an error,
+    // and the path has to be written the same way to be recognised and kept out of a message (#232).
+    private readonly string _cloneRoot =
+        Path.GetFullPath(Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones"));
     private readonly IDataProtector _protector = dataProtection.CreateProtector(KeyRing.CredentialPurpose);
 
     // Set when the one class that talks to a remote is built, which is before its first transfer.
@@ -262,7 +265,7 @@ public sealed class GitClones(
             throw TransferFailed("Fetching", repository, path, ex, watch);
         }
 
-        AlignHead(clone, repository, cancellationToken);
+        AlignHead(clone, repository, path, cancellationToken);
     }
 
     /// <summary>
@@ -272,7 +275,8 @@ public sealed class GitClones(
     ///     walk reads HEAD, so the repository reports itself as having no commits, and nothing else
     ///     ever writes HEAD, so it stays that way for every later refresh (#31).
     /// </summary>
-    private void AlignHead(Repository clone, ProjectRepository repository, CancellationToken cancellationToken)
+    private void AlignHead(Repository clone, ProjectRepository repository, string path,
+        CancellationToken cancellationToken)
     {
         if (AdvertisedReferences(repository, cancellationToken) is { } advertised)
         {
@@ -308,7 +312,7 @@ public sealed class GitClones(
         if (logger.IsEnabled(LogLevel.Warning))
             logger.LogWarning("The local copy of repository {Repository} of project {Project} at {Path} has a "
                               + "HEAD naming no branch it holds, and the remote's default branch could not be read "
-                              + "to repair it", repository.Slug, repository.ProjectSlug, clone.Info.Path);
+                              + "to repair it", repository.Slug, repository.ProjectSlug, path);
         throw new McpException(
             $"The local copy of repository '{repository.Slug}' has a HEAD naming "
             + $"'{clone.Refs.Head.TargetIdentifier}', which is no branch it holds, and the default branch of "
@@ -396,9 +400,11 @@ public sealed class GitClones(
               + "the limit for a remote that is slow to start sending."
             : $"{WithoutPath(ex.Message, path).TrimEnd('.')}. Ask the operator to check the URL and the stored "
               + "credential for this repository, then try again.";
+        // The message and not the exception: RefreshService logs the failure with its stack already,
+        // and what only this line can add is libgit2's own words with the path still in them.
         if (logger.IsEnabled(LogLevel.Warning))
-            logger.LogWarning(ex, "{Verb} repository {Repository} of project {Project} into {Path} failed", verb,
-                repository.Slug, repository.ProjectSlug, path);
+            logger.LogWarning("{Verb} repository {Repository} of project {Project} into {Path} failed: {Reason}",
+                verb, repository.Slug, repository.ProjectSlug, path, ex.Message);
         return new McpException($"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: {reason}");
     }
 
@@ -406,19 +412,14 @@ public sealed class GitClones(
     ///     The message with the local copy's path written as "the local copy", and then any other path
     ///     under the folder holding every local copy — a parent libgit2 could not create — written as
     ///     "the local copies". Both separators, because libgit2 writes forward slashes on Windows where
-    ///     .NET writes back slashes, and the full path as well as the configured one, because libgit2
-    ///     resolves a relative data directory.
+    ///     .NET writes back slashes.
     /// </summary>
     private string WithoutPath(string message, string path) =>
         Without(Without(message, path, "the local copy"), _cloneRoot, "the local copies");
 
-    private static string Without(string message, string path, string replacement)
-    {
-        string full = Path.GetFullPath(path);
-        foreach (string form in new[] { full, full.Replace('\\', '/'), path, path.Replace('\\', '/') })
-            message = message.Replace(form, replacement, StringComparison.OrdinalIgnoreCase);
-        return message;
-    }
+    private static string Without(string message, string path, string replacement) =>
+        message.Replace(path, replacement, StringComparison.OrdinalIgnoreCase)
+            .Replace(path.Replace('\\', '/'), replacement, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     ///     When a transfer last heard from its remote. This, and not the exception, is how a stall is

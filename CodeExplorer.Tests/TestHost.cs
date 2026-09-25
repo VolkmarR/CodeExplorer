@@ -16,6 +16,7 @@ using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Xunit;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer.Tests;
 
@@ -104,7 +105,10 @@ public sealed class TestHost : IDisposable
     private WebApplicationFactory<Program> Build() =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
-            builder.ConfigureServices(services => services.AddSingleton<ILoggerProvider>(Logs));
+            // Warning and up only: that is every line a test asserts on so far, and capturing each
+            // Information line of every host in the suite would hold the whole refresh chatter in memory.
+            builder.ConfigureServices(services => services.AddLogging(logging =>
+                logging.AddProvider(Logs).AddFilter<LogProbe>(null, LogLevel.Warning)));
             builder.UseSetting("Storage:DataDirectory", DataDirectory);
             builder.UseSetting("Storage:DurableDirectory", DurableDirectory);
             builder.UseSetting("Index:SearchEngine", _engine.ToString());
