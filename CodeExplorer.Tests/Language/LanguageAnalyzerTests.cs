@@ -181,9 +181,12 @@ public sealed class LanguageAnalyzerTests
     ///     reads the RE2 syntax these shapes are written in the same way; the engine's reading is
     ///     covered end-to-end in <see cref="DefinitionTests" />.
     /// </summary>
-    private static bool IsCandidateFor(string extension, string symbol, string line) =>
-        Languages.Default.For(extension).DeclarationCandidatesFor(symbol) is CandidateLines.Re2Pattern shape
+    private static bool Keeps(CandidateLines candidates, string line) =>
+        candidates is CandidateLines.Re2Pattern shape
         && System.Text.RegularExpressions.Regex.IsMatch(line, shape.Pattern);
+
+    private static bool IsCandidateFor(string extension, string symbol, string line) =>
+        Keeps(Languages.Default.For(extension).DeclarationCandidatesFor(symbol), line);
 
     /// <summary>
     ///     #239: the candidate predicate for one name loses no line that declares it, in every shape —
@@ -224,8 +227,7 @@ public sealed class LanguageAnalyzerTests
         string symbol)
     {
         // Still a candidate for what it does declare, so the narrowing is by name and not by shape.
-        Assert.True(Languages.Default.For(extension).DeclarationCandidates is CandidateLines.Re2Pattern shape
-                    && System.Text.RegularExpressions.Regex.IsMatch(line, shape.Pattern));
+        Assert.True(Keeps(Languages.Default.For(extension).DeclarationCandidates, line));
         Assert.False(IsCandidateFor(extension, symbol, line));
     }
 

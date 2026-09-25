@@ -406,11 +406,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
 
     public CandidateLines DeclarationCandidates { get; }
 
-    public CandidateLines DeclarationCandidatesFor(string symbol)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(symbol);
-        return _declarationCandidatesFor(symbol);
-    }
+    public CandidateLines DeclarationCandidatesFor(string symbol) => _declarationCandidatesFor(symbol);
 
     public FilePosition Start => _start;
 
