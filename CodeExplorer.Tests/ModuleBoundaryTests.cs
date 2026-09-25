@@ -53,8 +53,8 @@ public sealed partial class ModuleBoundaryTests
     ///             <c>Git/</c> reaches nothing but <c>Infrastructure/</c> either, and the two no longer
     ///             touch at all. <c>Git/</c> read the repository record and the credential purpose out of
     ///             <c>Control/</c> while <c>Control/</c> read <c>Git/</c>'s URL classifier; the first two
-    ///             moved to <c>Infrastructure/</c> and the classifier moved to <c>Control/</c>, whose
-    ///             validation has been its only reader since ADR-0007 made every clone full.
+    ///             moved to <c>Infrastructure/</c>, and the classifier followed them once both modules
+    ///             had to ask whether a URL is on the server's own disk (GHSA-5373-pppr-q3q9).
     ///         </item>
     ///         <item>
     ///             <c>Index/</c> builds, so it reaches what a build reads: <c>Git/</c> for the local copy

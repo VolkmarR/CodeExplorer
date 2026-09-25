@@ -35,7 +35,7 @@ dependency and no project, and put boundaries where the coupling really is.
 ## Shape
 
 - `Control/`: `control.duckdb`, projects, repositories, credentials, their operator endpoints.
-- `Git/`: clones and tree reading. URL classification moved to `Control/`; see the #146 revisit.
+- `Git/`: clones and tree reading. URL classification moved to `Control/` in the #146 revisit and on to `Infrastructure/` for GHSA-5373-pppr-q3q9.
 - `Index/`: one DuckDB file per project, attach and `USE`, ingest, Parquet durability. The
   local-or-Azure decision lives in one class here, not behind an interface.
 - `Search/`: the MCP tools and the line classifier they share.
@@ -261,3 +261,13 @@ the folder — and a file that crosses a module says so in a `using` at its top.
   the sweep, and a `using` kept alive only by a cref would otherwise read as an arrow nobody draws
   in code. Three did at the move — `Language/` → `Reading/`, `Reading/` → `Search/` and `Search/` →
   `Index/` — and none of them was a reference the table allows.
+
+## Revisited for GHSA-5373-pppr-q3q9, on 2026-09-25: the URL classifier joins `Infrastructure/`
+
+Local repositories became a setting, `Control:AllowLocalRepositories`, off by default, and two
+modules now have to ask whether a URL is on the server's own disk: `Control/` when a repository is
+added, and `Git/` when a stored one is about to be cloned or fetched after the setting was switched
+off. `Git/` may not reach `Control/`, and two classifiers could disagree about what counts as local,
+which is a way around the setting. So `RepositoryUrl` moved to `Infrastructure/`, where what more
+than one module is handed lives, with the setting's name and its refusal sentence beside it. The
+arrows are unchanged: both modules already reached `Infrastructure/`.

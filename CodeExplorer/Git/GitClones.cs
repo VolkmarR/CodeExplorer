@@ -45,6 +45,7 @@ public sealed class GitClones(
     // and the path has to be written the same way to be recognised and kept out of a message (#232).
     private readonly string _cloneRoot =
         Path.GetFullPath(Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones"));
+    private readonly bool _localAllowed = RepositoryUrl.LocalAllowed(configuration);
     private readonly IDataProtector _protector = dataProtection.CreateProtector(KeyRing.CredentialPurpose);
 
     // Set when the one class that talks to a remote is built, which is before its first transfer.
@@ -65,6 +66,13 @@ public sealed class GitClones(
     public async Task<CloneOpen> OpenRefreshedAsync(ProjectRepository repository,
         CancellationToken cancellationToken)
     {
+        // Before the clone and the fetch alike, and on the stored URL: a repository added while the
+        // setting was on must stop being read once it is off, and a copy that already exists is
+        // fetched from that same URL, which its origin was cloned from (GHSA-5373-pppr-q3q9).
+        if (!_localAllowed && RepositoryUrl.Classify(repository.Url) == RepositoryUrlKind.Local)
+            return new CloneOpen.LocalNotAllowed(
+                $"Repository '{repository.Slug}' was not read. {RepositoryUrl.LocalRefusal}");
+
         string path = Path.Combine(_cloneRoot, repository.ProjectSlug, repository.Slug + ".git");
         try
         {

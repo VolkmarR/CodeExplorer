@@ -160,7 +160,8 @@ public sealed class ProjectRefresh(
                 repositories.Count));
             try
             {
-                // Empty and LFS are decided behind the open (CloneOpen); a refusal holds nothing to dispose.
+                // Empty, LFS and a local repository switched off are decided behind the open (CloneOpen); a
+                // refusal holds nothing to dispose.
                 var open = await clones.OpenRefreshedAsync(repository, cancellationToken);
                 if (open is CloneOpen.Refused refused) skipped.Add(refused.Explanation);
                 else opened.Add(new OpenedRepository(repository, ((CloneOpen.Opened)open).Copy));
