@@ -160,6 +160,37 @@ public sealed class DurabilityTests : IDisposable
         Assert.Equal(["class Rebuilt;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
     }
 
+    /// <summary>
+    ///     A refresh that is the first thing a wiped replica does (#229): the cron arrives before any agent
+    ///     has connected, so there is no local file to carry history over from and only the durable copy
+    ///     knows it. Asserted with a commit no walk would produce, planted and stored before the wipe: a
+    ///     refresh that restored first keeps it, and one that re-walked from the root cannot.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_on_a_wiped_disk_carries_history_over_from_the_durable_copy()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+        // Id 0, below every real one, for the reason HistoryTests gives: a ghost planted as the newest
+        // commit would read as a rewrite of HEAD's line and be re-imported rather than carried.
+        await host.ExecuteAsync("alpha", "INSERT INTO commits VALUES (0, 'one', 'deadbeef', 'Ghost', "
+                                         + "'ghost@example.invalid', now(), 'Known only to the index', '')");
+        // A refresh carries the ghost into the shadow it builds, and so into the durable copy it stores.
+        await host.RefreshAsync("alpha");
+        const string sql = "SELECT commit_id || ' ' || subject FROM commits ORDER BY commit_id";
+        var before = await host.ScalarsAsync("alpha", sql);
+
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        host.CommitToGitRepository("one", new Dictionary<string, string> { ["src/A.cs"] = "class Alpha2;\n" });
+        await host.RefreshAsync("alpha");
+
+        // Every commit the durable copy held, under the id it had, and the new one appended after them.
+        var after = await host.ScalarsAsync("alpha", sql);
+        Assert.Equal(before, after.Take(before.Count));
+        Assert.Equal(before.Count + 1, after.Count);
+    }
+
     [Fact]
     public async Task The_project_list_reads_every_project_without_restoring_any_of_them()
     {
