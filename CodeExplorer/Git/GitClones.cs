@@ -75,7 +75,8 @@ public sealed class GitClones(
 
         // The API refuses this pair now, but a server that predates the refusal may hold one. Here and
         // not in Credentials, so nothing is cloned, cleared or fetched either: every transfer this class
-        // makes starts behind this line (GHSA-4f8q-c6jj-fr44).
+        // makes starts behind this line (GHSA-4f8q-c6jj-fr44). An https remote that redirects to http is
+        // libgit2's to refuse, and it does: it will not follow a redirect off https.
         if (repository.HasCredential && RepositoryUrl.SendsCredentialInClear(repository.Url))
             return new CloneOpen.ClearTextCredential(
                 $"Repository '{repository.Slug}' was not read. {RepositoryUrl.ClearTextCredentialRefusal}");

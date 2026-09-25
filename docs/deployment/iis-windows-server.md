@@ -212,7 +212,7 @@ repositories already stored; each is reported as skipped.
 A repository credential is accepted only beside an https or ssh URL; with an `http://` or `git://`
 URL it is refused, because it would cross the network in clear text (GHSA-4f8q-c6jj-fr44). There is
 no setting to allow it. A repository stored with that pair before the refusal is skipped by every
-refresh until it is added again under its https URL.
+refresh until it is deleted and added again under its https or ssh URL.
 
 `Storage:DurableDirectory` is optional and the second disk above is a suggestion, not a requirement —
 it defaults to `durable` under the data directory. Separating them is worth it precisely because they
@@ -317,5 +317,5 @@ work.
 | HTTP 400 on every request, no tenant configured                  | `AllowedHosts` is unset, so only loopback names are answered. Section 7; the startup log names it too. |
 | HTTP 403 on every write from the UI, reads work                  | A proxy in front of IIS terminates TLS and the app sees `http`. `ASPNETCORE_FORWARDEDHEADERS_ENABLED`, section 4. |
 | A refresh skips a repository as "a local path or file URL"       | `Control:AllowLocalRepositories` is off, which it is by default, and has been since GHSA-5373-pppr-q3q9 for repositories stored before it. Point the repository at its remote, or section 5. |
-| A refresh skips a repository because "a credential is only sent over https or ssh" | It was stored with a credential beside an `http://` or `git://` URL, which is refused since GHSA-4f8q-c6jj-fr44. Delete it and add it again under its https URL, section 5. |
+| A refresh skips a repository because "a credential is only sent over https or ssh" | It was stored with a credential beside an `http://` or `git://` URL, which is refused since GHSA-4f8q-c6jj-fr44. Delete it and add it again under its https or ssh URL, section 5. |
 | A refresh skips a repository because "the remote stopped responding" | The remote sent nothing for `Git:TransferStallSeconds`. Check the remote first; raise the setting only for one slow to start a pack. |

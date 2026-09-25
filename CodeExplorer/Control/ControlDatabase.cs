@@ -30,6 +30,7 @@ public enum AddRepositoryOutcome
 
     /// <summary>A credential beside an <c>http://</c> or <c>git://</c> URL, which would send it in clear text (GHSA-4f8q-c6jj-fr44).</summary>
     ClearTextCredential,
+
     SlugTaken,
 
     /// <summary>The project was declared single-repository and already has its one (ADR-0006).</summary>
