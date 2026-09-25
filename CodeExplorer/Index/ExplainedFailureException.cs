@@ -7,8 +7,8 @@ namespace CodeExplorer.Index;
 ///     a message nobody wrote for that reader — .NET's or DuckDB's — names the files it could not
 ///     write (#262). It lives here and not in <c>Refresh/</c> for the reason
 ///     <see cref="RefreshProgress" /> does: the index throws half of them, and cannot depend on the
-///     refresh that reports them. An <see cref="InvalidOperationException" />, as each of them was
-///     before it had a type of its own. Not an <c>McpException</c>: no MCP tool is on these paths.
+///     refresh that reports them. An <see cref="InvalidOperationException" />, so a catch written for
+///     one still matches; not an <c>McpException</c>, because no MCP tool is on these paths.
 /// </summary>
 public sealed class ExplainedFailureException(string message, Exception? innerException = null)
     : InvalidOperationException(message, innerException);

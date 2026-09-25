@@ -195,11 +195,10 @@ public sealed class RefreshTests : IDisposable
 
         string error;
         await using (File.Open(held, FileMode.Open, FileAccess.Read, FileShare.None))
-            error = await _host.FailedRefreshErrorAsync("alpha");
+            error = await FailedRefreshErrorAsync();
 
         Assert.Contains("'alpha'", error, StringComparison.Ordinal);
         Assert.Contains(RefreshProgress.StorePhase, error, StringComparison.Ordinal);
-        Assert.DoesNotContain(_host.DataDirectory, error, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("lines.parquet", error, StringComparison.Ordinal);
         Assert.DoesNotContain('/', error);
         Assert.DoesNotContain('\\', error);

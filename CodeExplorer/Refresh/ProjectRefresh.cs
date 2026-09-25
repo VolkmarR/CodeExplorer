@@ -40,7 +40,7 @@ public sealed class ProjectRefresh(
         // operator deleted the project, or deleted it and created another under the slug, whose record
         // is the one to build.
         project = await control.FindAsync(project.Slug, cancellationToken)
-                  ?? throw new ExplainedFailureException(Deleted(project, "before its refresh could start"));
+                  ?? throw Deleted(project, "before its refresh could start");
 
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         var opened = new List<OpenedRepository>();
@@ -86,8 +86,8 @@ public sealed class ProjectRefresh(
 
                 // Thrown inside the try, so the catch below removes the shadow the publish refused.
                 if (!published)
-                    throw new ExplainedFailureException(Deleted(project,
-                        "while its refresh was running, so nothing the refresh built was kept"));
+                    throw Deleted(project,
+                        "while its refresh was running, so nothing the refresh built was kept");
             }
             catch
             {
@@ -137,9 +137,8 @@ public sealed class ProjectRefresh(
 
     /// <summary>
     ///     Why a refresh of a deleted project ended without an index, for the status an operator reads.
-    ///     InvalidOperationException carries it, for the reason the no-repository failure above says.
     /// </summary>
-    private static string Deleted(Project project, string when) => $"Project '{project.Slug}' was deleted {when}.";
+    private static ExplainedFailureException Deleted(Project project, string when) => new($"Project '{project.Slug}' was deleted {when}.");
 
     /// <summary>
     ///     Brings every local copy up to date and opens it, before the index is touched: a fetch that

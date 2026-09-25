@@ -31,9 +31,8 @@ public enum RefreshState
 ///     What the status endpoint answers with, polled by the web UI and by whatever drives the cron
 ///     (ADR-0004: no SignalR, no SSE). It lives in memory, so a replica that scaled to zero comes back
 ///     reporting <see cref="RefreshState.NeverRun" />; when the last refresh finished is durable and
-///     is read from the index itself, on the project page beside this. Its <c>Error</c> is a sentence
-///     written for its reader and never an exception's own message, which can name a path on the
-///     server's disk (#262).
+///     is read from the index itself, on the project page beside this. What its <c>Error</c> may say is
+///     <see cref="ExplainedFailureException" />'s rule.
 /// </summary>
 public sealed record RefreshStatus(
     string Project,
