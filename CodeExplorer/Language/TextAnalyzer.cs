@@ -419,7 +419,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     <see cref="Extra" /> is how many more of its closer's last character a literal whose form
     ///     <see cref="StringDelimiter.OpenerRepeats" /> needs before it closes.
     /// </summary>
-    private readonly record struct Frame(int Index, int Depth, bool Hole, int Extra = 0);
+    private readonly record struct Frame(int Index, int Depth, bool Hole, int Extra);
 
     /// <summary>
     ///     What earlier lines of one file left open, as this analyser records it. It names the analyser
@@ -712,10 +712,20 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
                 return;
             }
 
-            // A shorter run than the one that opened it is text (StringDelimiter.OpenerRepeats).
-            if (At(_line, _at, open.Close)
-                && (frame.Extra == 0 || RunOf(_line, _at + open.Close.Length, open.Close[^1]) >= frame.Extra))
+            if (At(_line, _at, open.Close))
             {
+                if (frame.Extra > 0)
+                {
+                    // A shorter run than the one that opened it is text (StringDelimiter.OpenerRepeats),
+                    // and so is every run inside it, so the whole of it is passed at once.
+                    int run = RunOf(_line, _at + open.Close.Length, open.Close[^1]);
+                    if (run < frame.Extra)
+                    {
+                        _at += open.Close.Length + run;
+                        return;
+                    }
+                }
+
                 // A doubled delimiter stands for itself and does not close the literal.
                 if (open.Escape == StringEscape.Doubled && At(_line, _at + open.Close.Length, open.Close))
                 {
@@ -874,8 +884,15 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     {
         if (!_profile.SeparatesDeclarationFromImplementation) return null;
         if (MarkerOn(line) is { } opened) return opened;
-        return position is TextPosition text && text.Owner == this ? text.Section : null;
+        return Own(position)?.Section;
     }
+
+    /// <summary>
+    ///     The position as this analyser's own, or null where another made it or none did: its frames
+    ///     index this analyser's tables and nobody else's.
+    /// </summary>
+    private TextPosition? Own(FilePosition position) =>
+        position is TextPosition text && text.Owner == this ? text : null;
 
     /// <summary>
     ///     The section this line moves the file into, or null when it moves it nowhere. Read at the
@@ -965,8 +982,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
                 lineClassified = true;
                 // A line inside a clause that opened further up is an import line too, which is what
                 // the build already read it as: the second line of a Delphi `uses` holds no opener.
-                import = IsImportLine(line)
-                         || (position is TextPosition { OpenClause: true } open && open.Owner == this);
+                import = Own(position)?.OpenClause == true || IsImportLine(line);
                 typeDeclared = TypeOn(line);
             }
 
@@ -1096,14 +1112,13 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     private ImportsOnLine Extract(FilePosition position, string line)
     {
         if (_importForms.Length == 0) return ImportsOnLine.Nothing;
-        var carried = position as TextPosition;
-        bool mine = carried is not null && carried.Owner == this;
+        var carried = Own(position);
         // A line that begins inside a block comment or inside a literal opened further up is not
         // code, and a `using` written in one imports nothing. A hole is never the outermost span, so
         // this one test covers both.
-        if (mine && carried!.Frames.Length > 0) return ImportsOnLine.Nothing;
+        if (carried?.Frames.Length > 0) return ImportsOnLine.Nothing;
 
-        bool continuing = mine && carried!.OpenClause;
+        bool continuing = carried?.OpenClause == true;
         if (!continuing && !MayHoldAnImport(line, FirstNonSpace(line))) return ImportsOnLine.Nothing;
 
         // Prose cut away, so a `using` behind a `//` imports nothing and a trailing note is not read
@@ -1192,8 +1207,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         // rule, not the lexical answer: StateAt still says Unknown there. Walked from Unknown
         // instead, the cursor knew nowhere code ended and answered 0, and every import a build read
         // past the nesting bound came back empty (#240).
-        var from = position is TextPosition text && text.Owner == this ? position : _start;
-        var cursor = new LineCursor(this, from, line, frames);
+        var cursor = new LineCursor(this, Own(position) ?? _start, line, frames);
         // One walk of the line, and the answer read off it. Asked per character instead — which is
         // what this did first — a minified bundle cost a call per character of a line several
         // million characters long, for a question the walk answers on its way past.
