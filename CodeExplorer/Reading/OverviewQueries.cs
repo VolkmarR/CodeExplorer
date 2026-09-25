@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 using CodeExplorer.Language;
 using DuckDB.NET.Data;
@@ -321,8 +322,10 @@ internal static class OverviewQueries
                 Math.Max(start.ToUnixTimeSeconds(), since),
                 Math.Min(NextPeriod(start, period).ToUnixTimeSeconds(), until)));
         // Inlined rather than bound: integers this method computed, never input, and a VALUES list of
-        // parameters would be two per period for no gain.
-        string periodRows = string.Join(", ", periods.Select(p => $"({p.Since}, {p.Until})"));
+        // parameters would be two per period for no gain. Invariant, because a window before 1970 has
+        // negative bounds and a culture such as sv-SE writes their minus as U+2212, which SQL cannot parse.
+        string periodRows = string.Join(", ",
+            periods.Select(p => string.Create(CultureInfo.InvariantCulture, $"({p.Since}, {p.Until})")));
 
         var parameters = new List<DuckDBParameter> { new("since", since), new("until", until) };
         var conditions = CommitScope(scope, parameters);

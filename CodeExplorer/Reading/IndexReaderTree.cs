@@ -57,8 +57,8 @@ public sealed partial class IndexReader
     ///     in <paramref name="existing" /> or covering only files it already leaves out.
     /// </summary>
     public async Task<IReadOnlyList<ExcludedPathSuggestion>> SuggestExcludedPathsAsync(
-        IReadOnlyList<string> existing, CancellationToken cancellationToken) =>
-        await ExcludedPathSuggestions.SuggestAsync(Connection, await PathsAsync(cancellationToken), existing,
+        IReadOnlyList<string> existing, ILogger logger, CancellationToken cancellationToken) =>
+        await ExcludedPathSuggestions.SuggestAsync(Connection, await PathsAsync(cancellationToken), existing, logger,
             cancellationToken);
 
     /// <summary>
