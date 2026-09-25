@@ -209,14 +209,14 @@ public sealed partial class HistoryQueries
     private static async Task<IReadOnlyList<RecordedChange>> PathCommitsAsync(IndexReader index,
         string repositorySlug, string path, int limit, CancellationToken cancellationToken)
     {
-        await using var command = index.Connection.Query($"""
-                                                          SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
-                                                                 c.authored_at, c.subject
-                                                          FROM commit_files cf JOIN commits c USING (commit_id)
-                                                          WHERE c.repo_slug = $r AND cf.path = $p
-                                                          ORDER BY c.commit_id DESC
-                                                          LIMIT $limit
-                                                          """,
+        await using var command = index.Connection.Query("""
+                                                         SELECT c.sha, c.repo_slug, c.author_name, c.author_email,
+                                                                c.authored_at, c.subject
+                                                         FROM commit_files cf JOIN commits c USING (commit_id)
+                                                         WHERE c.repo_slug = $r AND cf.path = $p
+                                                         ORDER BY c.commit_id DESC
+                                                         LIMIT $limit
+                                                         """,
             [new DuckDBParameter("r", repositorySlug), new DuckDBParameter("p", path), new("limit", limit)]);
         return await ChangesAsync(command, cancellationToken);
     }
@@ -333,8 +333,7 @@ public sealed partial class HistoryQueries
         int limit, long skip, CancellationToken cancellationToken)
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
-        await using var command = index.Connection.Query(
-            LoggedStatement(scope, newestFirst: true), [.. parameters, new("limit", limit), new("skip", skip)]);
+        await using var command = LoggedQuery(index.Connection, scope, parameters, limit, skip, newestFirst: true);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var commits = new List<LoggedCommit>();
         while (await reader.ReadAsync(cancellationToken)) commits.Add(Logged(reader));
@@ -351,17 +350,17 @@ public sealed partial class HistoryQueries
     private static async Task<LoggedCommit?> OneLoggedAsync(IndexReader index, string sha,
         CancellationToken cancellationToken)
     {
-        await using var command = index.Connection.Query(
-            LoggedStatement("WHERE sha = $sha", newestFirst: false),
-            [new DuckDBParameter("sha", sha), new("limit", 1), new("skip", 0)]);
+        await using var command = LoggedQuery(index.Connection, "WHERE sha = $sha", [new DuckDBParameter("sha", sha)],
+            1, 0, newestFirst: false);
         await using var reader = await command.ReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? Logged(reader) : null;
     }
 
     /// <summary>
-    ///     The statement for the logged commits that <paramref name="scope" /> and the bound
-    ///     <c>$limit</c> and <c>$skip</c> pick out of <c>commits</c>, ordered by <c>commit_id</c>, with the
-    ///     sums of what each one did. One
+    ///     The command for the logged commits that <paramref name="scope" />, <paramref name="limit" /> and
+    ///     <paramref name="skip" /> pick out of <c>commits</c>, ordered by <c>commit_id</c>, with the sums
+    ///     of what each one did. The page bounds are bound here rather than by each caller, so the
+    ///     statement and the parameters it names cannot come apart. One
     ///     statement rather than a copy per caller, because the page of the log and a commit's own page
     ///     must count the same way — two spellings would drift the first time one of them learned to
     ///     count something else. The direction is one flag for the same reason: the page is cut in one
@@ -371,11 +370,12 @@ public sealed partial class HistoryQueries
     ///     aggregate it follows. The sums are cast because DuckDB widens <c>sum</c> of an INTEGER to
     ///     HUGEINT, which the driver hands back as a BigInteger.
     /// </summary>
-    private static string LoggedStatement(string scope, bool newestFirst)
+    private static DuckDBCommand LoggedQuery(DuckDBConnection connection, string scope,
+        IEnumerable<DuckDBParameter> parameters, int limit, long skip, bool newestFirst)
     {
         // A literal chosen here, never caller text, so it is safe to inline.
         string order = newestFirst ? "DESC" : "ASC";
-        return $"""
+        return connection.Query($"""
          -- page holds the commits being listed and nothing else, so the join and the sums below
          -- are over its rows of commit_files alone.
          WITH page AS (SELECT * FROM commits {scope} ORDER BY commit_id {order} LIMIT $limit OFFSET $skip)
@@ -387,7 +387,7 @@ public sealed partial class HistoryQueries
          GROUP BY c.commit_id, c.sha, c.repo_slug, c.author_name, c.author_email, c.authored_at,
                   c.subject, c.body
          ORDER BY c.commit_id {order}
-         """;
+         """, [.. parameters, new("limit", limit), new("skip", skip)]);
     }
 
     private static LoggedCommit Logged(DbDataReader reader) =>
