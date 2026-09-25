@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
+using ModelContextProtocol;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer.Refresh;
@@ -30,7 +31,9 @@ public enum RefreshState
 ///     What the status endpoint answers with, polled by the web UI and by whatever drives the cron
 ///     (ADR-0004: no SignalR, no SSE). It lives in memory, so a replica that scaled to zero comes back
 ///     reporting <see cref="RefreshState.NeverRun" />; when the last refresh finished is durable and
-///     is read from the index itself, on the project page beside this.
+///     is read from the index itself, on the project page beside this. Its <c>Error</c> is a sentence
+///     written for its reader and never an exception's own message, which can name a path on the
+///     server's disk (#262).
 /// </summary>
 public sealed record RefreshStatus(
     string Project,
@@ -214,11 +217,22 @@ public sealed class RefreshService(
         {
             // Safe to swallow, and the only safe thing to do: this is the top of a background task, so
             // an escaping exception would be an unobserved one and the operator would see a refresh
-            // that never ends. The message is what the status endpoint reports instead.
+            // that never ends. The status reports it instead, and the log keeps it whole.
             logger.LogError(ex, "Refresh of project {Project} failed", project.Slug);
-            Fail(ex.Message);
+            Fail(ex is McpException or ExplainedFailureException
+                ? ex.Message
+                : Unexplained(project.Slug, Status(project.Slug).Phase));
         }
     }
+
+    /// <summary>
+    ///     What the status says of a failure whose message was not written for its reader: .NET's and
+    ///     DuckDB's name the files they could not write, and whoever reads the status cannot reach the
+    ///     server's disk (#262). The phase is the last one the refresh reported, so the sentence stays
+    ///     true as the steps change; the log has the rest.
+    /// </summary>
+    private static string Unexplained(string slug, string phase) =>
+        $"The refresh of project '{slug}' failed in the phase \"{phase}\". The operator log has the details.";
 
     /// <summary>
     ///     The refusal for a refresh that would not fit, or null when it fits. One method, because the

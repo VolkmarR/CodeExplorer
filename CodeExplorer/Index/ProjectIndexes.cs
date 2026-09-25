@@ -603,7 +603,7 @@ public sealed partial class ProjectIndexes : IDisposable
             // checkpointed by a DETACH that found the database still in use — and moving the file
             // without it would put an index missing its tail in place. Refused rather than moved with
             // it: nothing opens a log under a name other than the one it was written beside.
-            if (File.Exists(path + ".wal")) throw new InvalidOperationException(refusal);
+            if (File.Exists(path + ".wal")) throw new ExplainedFailureException(refusal);
             await DetachAsync(connection, slug, cancellationToken);
             // One overwriting move, never delete-then-move: a move that fails after the old file was
             // deleted would leave the project with no index at all, and the caller's cleanup would then
@@ -644,7 +644,7 @@ public sealed partial class ProjectIndexes : IDisposable
         catch (DuckDBException ex) when (!cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning(ex, "The finished index of project {Project} could not be written to its file", slug);
-            throw new InvalidOperationException(refusal, ex);
+            throw new ExplainedFailureException(refusal, ex);
         }
     }
 

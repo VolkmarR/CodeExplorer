@@ -483,7 +483,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         cancellationToken.ThrowIfCancellationRequested();
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return;
-        throw new InvalidOperationException(
+        throw new ExplainedFailureException(
             $"Attribution of '{reader.GetString(1)}' in repository '{reader.GetString(0)}' has runs that "
             + $"overlap at line {reader.GetInt32(2)}. The replay produces disjoint runs, so the history "
             + "carried into this build is not one it wrote. Rebuild the project from scratch to discard it.");
