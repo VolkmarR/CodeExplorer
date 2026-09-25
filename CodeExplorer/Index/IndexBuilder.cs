@@ -29,7 +29,9 @@ public sealed class IndexBuilder(
     ///     vendored bundles far more often than source, and one such file adds enough lines to swamp
     ///     BM25 ranking and grep output for the whole project. The file still appears in <c>files</c> with
     ///     the reason, so a tree listing and a search can tell the agent about it. A project of large
-    ///     hand-written sources raises the setting rather than losing them.
+    ///     hand-written sources raises the setting rather than losing them. It bounds what a refresh
+    ///     inflates as well, so it is tested before the binary check and a binary above it is skipped
+    ///     for its size.
     /// </summary>
     private const long _defaultMaxFileBytes = 25 * 1024 * 1024;
 
