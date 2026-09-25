@@ -405,8 +405,9 @@ internal static class OverviewQueries
             var prefix = new List<string>();
             for (int depth = 0; depth < _couplingDepth; depth++)
             {
-                var inside = repository.Where(r => r.Dirs.Length > depth && StartsWith(r.Dirs, prefix)).ToList();
-                var largest = inside.GroupBy(r => r.Dirs[depth], StringComparer.Ordinal)
+                var largest = repository
+                    .Where(r => r.Dirs.Length > depth && r.Dirs.Take(depth).SequenceEqual(prefix))
+                    .GroupBy(r => r.Dirs[depth], StringComparer.Ordinal)
                     .Select(g => (Folder: g.Key, Files: g.Sum(r => r.Files),
                         Subfolders: g.Where(r => r.Dirs.Length > depth + 1)
                             .Select(r => r.Dirs[depth + 1]).Distinct(StringComparer.Ordinal).Count()))
@@ -420,22 +421,6 @@ internal static class OverviewQueries
         }
 
         return prefixes;
-
-        static bool StartsWith(string[] dirs, List<string> prefix) =>
-            prefix.Select((segment, i) => dirs[i] == segment).All(same => same);
-    }
-
-    /// <summary>
-    ///     Narrows a query on <c>commits c</c> to a window, compared in epoch seconds and inclusive at
-    ///     both ends as the churn section compares it (<see cref="IndexQueries.ChurnScope" />). Nothing
-    ///     where the window is null.
-    /// </summary>
-    private static void InWindow(HistoryWindow? window, List<string> conditions, List<DuckDBParameter> parameters)
-    {
-        if (window is null) return;
-        parameters.Add(new DuckDBParameter("window_since", window.Since.ToUnixTimeSeconds()));
-        parameters.Add(new DuckDBParameter("window_until", window.Until.ToUnixTimeSeconds()));
-        conditions.Add("epoch(c.authored_at) BETWEEN $window_since AND $window_until");
     }
 
     /// <summary>A bar per day up to a month of window, per week up to half a year, and per month beyond.</summary>
@@ -957,7 +942,7 @@ internal static class OverviewQueries
     {
         var parameters = new List<DuckDBParameter>();
         var conditions = CommitScope(scope, parameters);
-        InWindow(window, conditions, parameters);
+        if (window is not null) IndexQueries.InWindow(window, conditions, parameters);
         if (scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters) is { } excluded)
             // A commit counts while it touched one file the page still shows. One that recorded no
             // files at all is kept too: there is nothing in it to exclude, and dropping it would count
@@ -1013,7 +998,7 @@ internal static class OverviewQueries
     {
         var parameters = new List<DuckDBParameter>();
         var conditions = CommitScope(scope, parameters);
-        InWindow(window, conditions, parameters);
+        if (window is not null) IndexQueries.InWindow(window, conditions, parameters);
         conditions.Add(scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters)!);
         return (int)await connection.CountAsync($"""
                                                  SELECT count(*) FROM (
