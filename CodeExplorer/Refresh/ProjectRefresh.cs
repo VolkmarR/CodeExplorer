@@ -35,7 +35,7 @@ public sealed class ProjectRefresh(
         // build over, and one counted before it has already taken the project out of the control
         // database, which the check that follows sees. A refresh that outlived a delete used to put the
         // deleted project's index and durable copy back (GHSA-253f-grfp-cqq7).
-        long discards = indexes.Discards(project.Slug);
+        long discards = indexes.DiscardCount(project.Slug);
         // Re-read and not taken from the caller: a queued refresh can have been waiting while the
         // operator deleted the project, or deleted it and created another under the slug, whose record
         // is the one to build.
@@ -45,6 +45,9 @@ public sealed class ProjectRefresh(
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         var opened = new List<OpenedRepository>();
         var skipped = new List<string>();
+        var condition = new PublishCondition(discards,
+            async token => await control.FindAsync(project.Slug, token) is not null);
+        bool refused = false;
         try
         {
             // Inside the try, so a fetch that ends the refresh — cancellation above all — still closes
@@ -79,13 +82,16 @@ public sealed class ProjectRefresh(
                     // disposes it and again on the DETACH inside the swap. Both land after StoreStep is
                     // reported, outside the step-3 window #91 is about, so its half-second is billed to
                     // the store rather than to nothing.
-                    published = await indexes.PublishShadowAsync(shadow, discards, report, cancellationToken);
+                    published = await indexes.PublishShadowAsync(shadow, condition, report, cancellationToken);
                 }
 
                 // Thrown inside the try, so the catch below removes the shadow the publish refused.
                 if (!published)
+                {
+                    refused = true;
                     throw new InvalidOperationException(Deleted(project,
                         "while its refresh was running, so nothing the refresh built was kept"));
+                }
             }
             catch
             {
@@ -103,6 +109,32 @@ public sealed class ProjectRefresh(
         finally
         {
             foreach (var open in opened) open.LocalCopy.Dispose();
+            // After the copies are closed, which on Windows is what lets them be removed.
+            if (refused) await RemoveClonesOfDeletedAsync(project.Slug);
+        }
+    }
+
+    /// <summary>
+    ///     Removes the local copies of a project deleted under a running refresh, once the refresh has
+    ///     closed them. The delete removed them too, but a fetch that ran after it cloned them again, and
+    ///     a copy is fetched from its own <c>origin</c>: left behind, a project created later under the
+    ///     slug, with a repository of the same slug, would index the deleted project's remote
+    ///     (GHSA-253f-grfp-cqq7). No refresh of a new project under the slug can be running meanwhile,
+    ///     because the service takes one refresh per slug at a time.
+    /// </summary>
+    private async Task RemoveClonesOfDeletedAsync(string slug)
+    {
+        try
+        {
+            // Not the refresh's token: this is cleanup after the refresh ended, cancelled or not.
+            await clones.RemoveAsync(slug, null, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Safe to swallow: the refresh is already failing with the reason that matters — the project
+            // is gone — and an escaping exception here would replace it. The log line is how a copy left
+            // behind is noticed.
+            logger.LogWarning(ex, "The local copies of deleted project {Project} could not be removed", slug);
         }
     }
 
