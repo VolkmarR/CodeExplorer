@@ -574,11 +574,10 @@ internal sealed partial class FileTools(
 
             // A number too large for an int is refused as this entry's answer: thrown, it failed the whole
             // call and every well-formed entry beside it (#233).
-            bool fits = int.TryParse(range.Groups["a"].Value, CultureInfo.InvariantCulture, out int first);
             int end = 0;
-            if (range.Groups["b"].Success)
-                fits &= int.TryParse(range.Groups["b"].Value, CultureInfo.InvariantCulture, out end);
-            if (!fits)
+            if (!int.TryParse(range.Groups["a"].Value, CultureInfo.InvariantCulture, out int first)
+                || (range.Groups["b"].Success
+                    && !int.TryParse(range.Groups["b"].Value, CultureInfo.InvariantCulture, out end)))
                 return Refused(trimmed,
                     $"\"{trimmed}\" names a line past {int.MaxValue}, which no file has. Write the range in the file's own line numbers, as grep reports them.");
 

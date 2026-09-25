@@ -88,14 +88,13 @@ public sealed partial class IndexReader
     ///     qualified path, which is unique, so a row cannot sit on two pages or fall between them.
     ///     The page is cut here rather than by the caller, so that the clamped limit is the one the offset
     ///     is counted in: an offset in the asked size over pages of the clamped one skipped rows (#233).
-    ///     The offset is a <c>long</c> because the page is clamped only from below.
     /// </summary>
     public async Task<GlobResult> GlobAsync(string glob, int limit, int page,
         CancellationToken cancellationToken)
     {
         limit = Math.Clamp(limit, 1, MaxFiles);
         page = Math.Max(page, 1);
-        long skip = (page - 1L) * limit;
+        long skip = Paging.Skip(page, limit);
         var parameters = new List<DuckDBParameter> { new("g", glob.ToLowerInvariant()) };
         string scope = "";
         if (Repository is not null)
