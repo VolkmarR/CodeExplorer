@@ -7,7 +7,14 @@ import { tooltip } from '@tanstack/charts/tooltip'
 import type { ChangePeriod, OverviewFileChanges, PeriodChanges } from '@/features/projects/api'
 import { barScale, fileChangeTotals } from '@/features/projects/fileChanges'
 import { NO_HISTORY } from '@/features/projects/noHistory'
-import { formatCount } from '@/lib/format'
+import {
+  formatCount,
+  formatUtcDate,
+  formatUtcDay,
+  formatUtcMonth,
+  formatUtcMonthName,
+  utcDayParts,
+} from '@/lib/format'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 const title = <CardTitle>Files added and deleted</CardTitle>
@@ -155,24 +162,6 @@ function PeriodChart({ changes }: { changes: OverviewFileChanges }) {
   )
 }
 
-const dayFormat = new Intl.DateTimeFormat('en-US', {
-  day: 'numeric',
-  month: 'short',
-  timeZone: 'UTC',
-})
-const fullDayFormat = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' })
-const shortMonthFormat = new Intl.DateTimeFormat('en-US', { month: 'short', timeZone: 'UTC' })
-const monthFormat = new Intl.DateTimeFormat('en-US', {
-  month: 'long',
-  timeZone: 'UTC',
-  year: 'numeric',
-})
-
-/** A period's start as a date. The server sends a calendar day in UTC, so it is read as one. */
-function startOf(p: PeriodChanges | string) {
-  return new Date(`${typeof p === 'string' ? p : p.start}T00:00:00Z`)
-}
-
 /** Month names read comfortably under up to this many monthly bars; beyond, only the years do. */
 const NAMED_MONTHS = 14
 
@@ -182,36 +171,26 @@ const NAMED_MONTHS = 14
  * there are few of them and by year at each January where there are many.
  */
 function axisTicks(periods: PeriodChanges[], period: ChangePeriod) {
-  const at = (keep: (date: Date, i: number) => boolean) =>
-    periods.flatMap((p, i) => (keep(startOf(p), i) ? [p.start] : []))
+  const at = (keep: (day: ReturnType<typeof utcDayParts>, i: number) => boolean) =>
+    periods.flatMap((p, i) => (keep(utcDayParts(p.start), i) ? [p.start] : []))
   switch (period) {
     case 'Day':
-      return {
-        values: at((d) => d.getUTCDay() === 1),
-        format: (s: string) => dayFormat.format(startOf(s)),
-      }
+      return { values: at((d) => d.monday), format: formatUtcDay }
     case 'Week':
-      return {
-        values: at((d, i) => i === 0 || d.getUTCDate() <= 7),
-        format: (s: string) => shortMonthFormat.format(startOf(s)),
-      }
+      return { values: at((d, i) => i === 0 || d.date <= 7), format: formatUtcMonthName }
     case 'Month':
       return periods.length <= NAMED_MONTHS
-        ? {
-            values: periods.map((p) => p.start),
-            format: (s: string) => shortMonthFormat.format(startOf(s)),
-          }
-        : { values: at((d) => d.getUTCMonth() === 0), format: (s: string) => s.slice(0, 4) }
+        ? { values: periods.map((p) => p.start), format: formatUtcMonthName }
+        : { values: at((d) => d.month === 0), format: (day: string) => day.slice(0, 4) }
   }
 }
 
 function describePeriod(p: PeriodChanges, period: ChangePeriod) {
-  const date = startOf(p)
   const when =
     period === 'Day'
-      ? fullDayFormat.format(date)
+      ? formatUtcDate(p.start)
       : period === 'Week'
-        ? `Week of ${fullDayFormat.format(date)}`
-        : monthFormat.format(date)
+        ? `Week of ${formatUtcDate(p.start)}`
+        : formatUtcMonth(p.start)
   return `${when}: +${formatCount(p.added)} added, −${formatCount(p.deleted)} deleted, ${formatCount(p.renamed)} renamed`
 }

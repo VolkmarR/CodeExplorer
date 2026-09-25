@@ -87,21 +87,17 @@ export function spreadPoints(points: PlotPoint[], size: PlotSize): SpreadPoint[]
       for (let j = i + 1; j < spread.length; j++) {
         const a = spread[i]
         const b = spread[j]
-        let dx = b.px - a.px
-        let dy = b.py - a.py
-        let distance = Math.hypot(dx, dy)
+        const distance = Math.hypot(b.px - a.px, b.py - a.py)
         if (distance >= clearance) continue
-        if (distance === 0) {
-          dx = Math.cos(j * GOLDEN_ANGLE)
-          dy = Math.sin(j * GOLDEN_ANGLE)
-          distance = 1
-        }
-        // A hair past the clearance, so that rounding cannot leave a pair touching forever.
-        const push = (clearance - Math.hypot(b.px - a.px, b.py - a.py)) / 2 + 0.01
-        a.px = clamp(a.px - (push * dx) / distance, width)
-        a.py = clamp(a.py - (push * dy) / distance, height)
-        b.px = clamp(b.px + (push * dx) / distance, width)
-        b.py = clamp(b.py + (push * dy) / distance, height)
+        // The unit vector from a to b; points in the very same place leave along the golden angle.
+        const ux = distance === 0 ? Math.cos(j * GOLDEN_ANGLE) : (b.px - a.px) / distance
+        const uy = distance === 0 ? Math.sin(j * GOLDEN_ANGLE) : (b.py - a.py) / distance
+        // Half the overlap each, and a hair more, so that rounding cannot leave a pair touching forever.
+        const push = (clearance - distance) / 2 + 0.01
+        a.px = clamp(a.px - push * ux, width)
+        a.py = clamp(a.py - push * uy, height)
+        b.px = clamp(b.px + push * ux, width)
+        b.py = clamp(b.py + push * uy, height)
         moved = true
       }
     if (!moved) break

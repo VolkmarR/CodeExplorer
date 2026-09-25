@@ -27,15 +27,45 @@ export function formatDate(value: string): string {
   return new Date(value).toLocaleDateString()
 }
 
-const monthFormat = new Intl.DateTimeFormat(undefined, {
-  month: 'short',
-  timeZone: 'UTC',
-  year: 'numeric',
-})
+/**
+ * Calendar days the server cut in UTC, `yyyy-mm-dd`, such as the start of a chart's bar. Read and
+ * formatted in UTC, so a day is the same day wherever the browser is.
+ */
+function utcDay(day: string): Date {
+  return new Date(`${day}T00:00:00Z`)
+}
 
-/** A calendar month the server cut in UTC, such as a bucket of a monthly chart; `month` is 1 to 12. */
-export function formatMonth(year: number, month: number): string {
-  return monthFormat.format(Date.UTC(year, month - 1, 1))
+const utcFormats = {
+  date: new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }),
+  day: new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' }),
+  month: new Intl.DateTimeFormat(undefined, { month: 'short', timeZone: 'UTC', year: 'numeric' }),
+  monthName: new Intl.DateTimeFormat(undefined, { month: 'short', timeZone: 'UTC' }),
+}
+
+/** A UTC day in full, as a bar's tooltip names it. */
+export function formatUtcDate(day: string): string {
+  return utcFormats.date.format(utcDay(day))
+}
+
+/** A UTC day without its year, for an axis whose years are read elsewhere. */
+export function formatUtcDay(day: string): string {
+  return utcFormats.day.format(utcDay(day))
+}
+
+/** The month a UTC day is in, with its year. */
+export function formatUtcMonth(day: string): string {
+  return utcFormats.month.format(utcDay(day))
+}
+
+/** The name of the month a UTC day is in, for an axis. */
+export function formatUtcMonthName(day: string): string {
+  return utcFormats.monthName.format(utcDay(day))
+}
+
+/** Whether a UTC day is a Monday, and its day of the month and month (0 to 11), for choosing ticks. */
+export function utcDayParts(day: string): { monday: boolean; date: number; month: number } {
+  const date = utcDay(day)
+  return { date: date.getUTCDate(), monday: date.getUTCDay() === 1, month: date.getUTCMonth() }
 }
 
 /** Seven characters, what git itself abbreviates to and what a reader compares against a commit list. */
