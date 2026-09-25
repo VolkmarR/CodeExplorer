@@ -330,6 +330,38 @@ public sealed class RefreshTests : IDisposable
     }
 
     [Fact]
+    public async Task A_remote_whose_head_is_detached_keeps_serving_the_branch_the_clone_has()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        // A detached HEAD is advertised as a commit id, which names no reference: before #260 looking
+        // it up as one threw, and every refresh of the repository failed.
+        TestHost.DetachHead(_host.FixtureGitPath("one"), _host.HeadOf("one"));
+
+        // Twice, because the refresh that keeps the clone's branch must leave it as the next one needs it.
+        await _host.RefreshAsync("alpha");
+        var summary = await _host.RefreshAsync("alpha");
+
+        Assert.Equal(1, summary.Files);
+        Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    [Fact]
+    public async Task A_remote_whose_head_is_detached_still_delivers_new_commits_on_its_branch()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        string before = _host.HeadOf("one");
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+        // Detached at the older commit, so a refresh that followed the detached HEAD would miss the new
+        // file: the clone's HEAD follows its branch, and the branch has moved on.
+        TestHost.DetachHead(_host.FixtureGitPath("one"), before);
+
+        var summary = await _host.RefreshAsync("alpha");
+
+        Assert.Equal(2, summary.Files);
+        Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    [Fact]
     public async Task A_remote_that_really_has_no_commits_is_still_reported_as_empty()
     {
         await _host.CreateProjectAsync("alpha");

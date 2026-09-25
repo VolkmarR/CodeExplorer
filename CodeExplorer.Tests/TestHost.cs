@@ -385,6 +385,13 @@ public sealed class TestHost : IDisposable
     public static void BreakHead(string gitDirectory, string branch) =>
         File.WriteAllText(Path.Combine(gitDirectory, "HEAD"), $"ref: refs/heads/{branch}\n");
 
+    /// <summary>
+    ///     Detaches a repository's HEAD at a commit, so a fixture advertises HEAD as a commit id rather
+    ///     than as a symbolic reference naming a branch (#260).
+    /// </summary>
+    public static void DetachHead(string gitDirectory, string sha) =>
+        File.WriteAllText(Path.Combine(gitDirectory, "HEAD"), sha + "\n");
+
     /// <summary>The bare clone of one repository, for a test that has to look at it or break it.</summary>
     public string ClonePath(string project, string repository) =>
         Path.Combine(DataDirectory, "clones", project, repository + ".git");
