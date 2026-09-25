@@ -351,16 +351,16 @@ public sealed class GitClones(
     ///     exception is not attached as InnerException, so nothing beyond this text is serialised.
     /// </summary>
     private McpException TransferFailed(string verb, ProjectRepository repository, Exception ex,
-        TransferWatch watch) =>
-        watch.Stalled
-            ? new McpException(
-                $"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: the remote stopped "
-                + $"responding and sent nothing for {_stallSeconds} seconds. Ask the operator to check that the "
-                + $"remote is reachable and up, then try again; {TransferStallLimit.Setting} raises the limit for "
-                + "a remote that is slow to start sending.")
-            : new McpException(
-                $"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: {ex.Message.TrimEnd('.')}. "
-                + "Ask the operator to check the URL and the stored credential for this repository, then try again.");
+        TransferWatch watch)
+    {
+        string reason = watch.Stalled
+            ? $"the remote stopped responding and sent nothing for {_stallSeconds} seconds. Ask the operator to "
+              + $"check that the remote is reachable and up, then try again; {TransferStallLimit.Setting} raises "
+              + "the limit for a remote that is slow to start sending."
+            : $"{ex.Message.TrimEnd('.')}. Ask the operator to check the URL and the stored credential for this "
+              + "repository, then try again.";
+        return new McpException($"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: {reason}");
+    }
 
     /// <summary>
     ///     When a transfer last heard from its remote. This, and not the exception, is how a stall is
@@ -375,14 +375,16 @@ public sealed class GitClones(
         // libgit2 starts its wait after the callback that stamped this returns, so a real timeout is
         // always at least the limit away from it; the tenth off absorbs the two clocks disagreeing.
         private readonly TimeSpan _threshold = limit * 0.9;
+        // Plain, not volatile: libgit2 calls back on the thread running the transfer, which is the
+        // thread that reads Stalled once the transfer has thrown.
         private long _lastHeard = Stopwatch.GetTimestamp();
 
-        public bool Stalled => Stopwatch.GetElapsedTime(Volatile.Read(ref _lastHeard)) >= _threshold;
+        public bool Stalled => Stopwatch.GetElapsedTime(_lastHeard) >= _threshold;
 
         /// <summary>Stamps the remote as heard from, and answers libgit2 whether to carry on.</summary>
         public bool Heard(CancellationToken cancellationToken)
         {
-            Volatile.Write(ref _lastHeard, Stopwatch.GetTimestamp());
+            _lastHeard = Stopwatch.GetTimestamp();
             return !cancellationToken.IsCancellationRequested;
         }
     }
