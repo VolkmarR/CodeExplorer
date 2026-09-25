@@ -438,6 +438,62 @@ public sealed class HistoryTests : IDisposable
     }
 
     /// <summary>
+    ///     A repository whose fetch fails is skipped for one refresh, not removed from the project, so its
+    ///     history is carried over untouched (#228). Pruning it would make the next successful refresh
+    ///     re-walk it from the root and hand out new commit ids for commits the index already held.
+    /// </summary>
+    [Fact]
+    public async Task A_repository_that_fails_to_fetch_keeps_its_history()
+    {
+        await IndexTwoRepositoryProjectAsync();
+        const string commits =
+            "SELECT commit_id::VARCHAR || ' ' || sha FROM commits WHERE repo_slug = 'two' ORDER BY commit_id";
+        const string attribution =
+            """
+            SELECT path || ':' || start_line || '-' || end_line || ' ' || commit_id FROM attribution
+            WHERE repo_slug = 'two' ORDER BY path, start_line
+            """;
+        var commitsBefore = await _host.ScalarsAsync("gamma", commits);
+        var attributionBefore = await _host.ScalarsAsync("gamma", attribution);
+        Assert.NotEmpty(commitsBefore);
+        Assert.NotEmpty(attributionBefore);
+        // The remote is gone, which from here is what a network blip or a timeout looks like too.
+        _host.RemoveGitRepository("two");
+
+        var summary = await _host.RefreshAsync("gamma");
+
+        Assert.Contains(summary.Skipped, reason => reason.Contains("two", StringComparison.Ordinal));
+        Assert.Equal(commitsBefore, await _host.ScalarsAsync("gamma", commits));
+        Assert.Equal(attributionBefore, await _host.ScalarsAsync("gamma", attribution));
+    }
+
+    /// <summary>
+    ///     The other side of keeping a skipped repository's history: one the operator removed from the
+    ///     project is gone for good, so its history goes with it — and a slug reused later for another
+    ///     remote starts from nothing instead of inheriting the old one's commits.
+    /// </summary>
+    [Fact]
+    public async Task A_repository_removed_from_the_project_has_its_history_pruned()
+    {
+        await IndexTwoRepositoryProjectAsync();
+        using (var http = _host.CreateClient())
+        using (var response = await http.DeleteAsync("/api/projects/gamma/repositories/two", TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+
+        await _host.RefreshAsync("gamma");
+
+        Assert.Equal(["0 0 0"], await _host.ScalarsAsync("gamma",
+            """
+            SELECT (SELECT count(*) FROM commits WHERE repo_slug = 'two') || ' '
+                || (SELECT count(*) FROM commit_files JOIN commits USING (commit_id) WHERE repo_slug = 'two') || ' '
+                || (SELECT count(*) FROM attribution WHERE repo_slug = 'two')
+            """));
+        // The half that says the refresh did not prune everything: the repository still configured kept its own.
+        Assert.Equal(["Add the validator", "Tighten the check"],
+            await _host.ScalarsAsync("gamma", "SELECT subject FROM commits ORDER BY commit_id"));
+    }
+
+    /// <summary>
     ///     A file deleted and added again is two spans of file-level history and one file at HEAD. The
     ///     replay forgets the path on the deletion, so the lines that come back are the re-adding
     ///     commit's and not the original author's — the deletion is not a rename and nothing followed

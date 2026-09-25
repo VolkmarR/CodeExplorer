@@ -41,11 +41,16 @@ public sealed class IndexBuilder(
     /// </summary>
     /// <param name="shadow">The index to write into, created by the caller and disposed by it.</param>
     /// <param name="repositories">The clones to read, in the order their repositories are to be numbered.</param>
+    /// <param name="configured">
+    ///     Every repository the project has, including those that could not be opened this time: a
+    ///     skipped repository is missing from the files until it opens again, but keeps its history.
+    /// </param>
     /// <param name="singleRepository">How this project names its files (ADR-0006), recorded in the index.</param>
     /// <param name="report">How far the build has got, for the status an operator polls.</param>
     /// <param name="cancellationToken">Checked between files, which is the granularity of the walk.</param>
     public async Task<IndexSummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
-        bool singleRepository, Action<RefreshProgress> report, CancellationToken cancellationToken)
+        IReadOnlyList<ProjectRepository> configured, bool singleRepository, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
     {
         // Every build is recorded here and nowhere else: a second caller gets the same span and the
         // same metrics by calling this, which is the only way to fill an index at all.
@@ -69,7 +74,7 @@ public sealed class IndexBuilder(
         // After the files, because attribution is joined onto them and a file row is what says which
         // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished
         // and an index that is live with no history would be one nothing ever goes back to fill in.
-        await history.FillAsync(shadow, repositories, report, cancellationToken);
+        await history.FillAsync(shadow, repositories, configured, report, cancellationToken);
         // After the history, because the overview ranks it, and before CompleteAsync for the same
         // reason the history runs before it: an index that went live without an overview is one
         // nothing would ever go back and fill in.
