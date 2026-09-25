@@ -267,6 +267,124 @@ public sealed class HistoryTests : IDisposable
         var attributed = await _host.ScalarsAsync("alpha",
             "SELECT DISTINCT c.subject FROM lines l JOIN commits c USING (commit_id)");
         Assert.Equal(["Start over"], attributed);
+        // And the discarded line is gone from the history too, or every history read double-counts.
+        Assert.Equal(["Start over"], await _host.ScalarsAsync("alpha", "SELECT subject FROM commits"));
+    }
+
+    /// <summary>
+    ///     A remote reset onto a commit already recorded — <c>reset --hard HEAD~2</c> and a force push —
+    ///     leaves nothing new to walk, so a build that only appended would keep the two dropped commits
+    ///     and the attribution of the tip they left. The newest recorded commit is no longer on HEAD's
+    ///     line, which is what triggers the re-import.
+    /// </summary>
+    [Fact]
+    public async Task A_remote_reset_onto_a_recorded_commit_re_imports_the_history_up_to_it()
+    {
+        await IndexTwoCommitProjectAsync();
+        string kept = _host.HeadOf("one");
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond-changed\nthird-changed\n" },
+            "Change the third line", "Linus", "linus@example.invalid", 2);
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "zeroth\nfirst\nsecond-changed\nthird-changed\n" },
+            "Add a line on top", "Linus", "linus@example.invalid", 3);
+        await _host.RefreshAsync("alpha");
+        _host.ResetGitRepository("one", kept);
+
+        await _host.RefreshAsync("alpha");
+
+        Assert.Equal(["Add the validator", "Tighten the check"],
+            await _host.ScalarsAsync("alpha", "SELECT subject FROM commits ORDER BY commit_id"));
+        Assert.Equal(["Add the validator", "Tighten the check", "Add the validator"], await _host.ScalarsAsync(
+            "alpha", "SELECT c.subject FROM lines l JOIN commits c USING (commit_id) ORDER BY l.line_number"));
+        await AssertAttributionIsWhatAFreshBuildWritesAsync("alpha");
+    }
+
+    /// <summary>
+    ///     A rewrite that shares an ancestor with the recorded history — A-B-C force-pushed as A-B'-C'.
+    ///     The walk stops at A, which is recorded, so a build that only appended would replay B' and C'
+    ///     onto the state C left and keep B and C in the history beside them.
+    /// </summary>
+    [Fact]
+    public async Task A_rewrite_below_the_recorded_tip_re_imports_the_history()
+    {
+        string source = _host.CreateEmptyGitRepository("one");
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/Check.cs"] = "a\nb\nc\n" },
+            "A", "Ada", "ada@example.invalid", 0);
+        string ancestor = _host.HeadOf("one");
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/Check.cs"] = "a\nb\nc\nd\n" },
+            "B", "Grace", "grace@example.invalid", 1);
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/Check.cs"] = "a\nb\nc\nd\ne\n" },
+            "C", "Grace", "grace@example.invalid", 2);
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "one", source);
+        await _host.RefreshAsync("alpha");
+
+        _host.ResetGitRepository("one", ancestor);
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/Check.cs"] = "z\na\nb\nc\n" },
+            "B'", "Linus", "linus@example.invalid", 3);
+        _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/Check.cs"] = "z\na\nb-changed\nc\n" },
+            "C'", "Linus", "linus@example.invalid", 4);
+        await _host.RefreshAsync("alpha");
+
+        Assert.Equal(["A", "B'", "C'"],
+            await _host.ScalarsAsync("alpha", "SELECT subject FROM commits ORDER BY commit_id"));
+        Assert.Equal(["B'", "A", "C'", "A"], await _host.ScalarsAsync(
+            "alpha", "SELECT c.subject FROM lines l JOIN commits c USING (commit_id) ORDER BY l.line_number"));
+        await AssertAttributionIsWhatAFreshBuildWritesAsync("alpha");
+    }
+
+    /// <summary>
+    ///     The remote's default branch switched to a line that shares nothing with the recorded one. The
+    ///     walk meets no recorded commit at all and runs to the new root; the old line's commits must
+    ///     not survive beside it.
+    /// </summary>
+    [Fact]
+    public async Task A_default_branch_switched_to_an_unrelated_line_re_imports_that_line()
+    {
+        await IndexTwoCommitProjectAsync();
+        using (var repository = new Repository(_host.FixturePath("one")))
+        {
+            var author = new Signature("Rewriter", "rewriter@example.invalid", DateTimeOffset.UnixEpoch.AddMinutes(5));
+            var blob = repository.ObjectDatabase.CreateBlob(new MemoryStream("other\nlines\n"u8.ToArray()));
+            var tree = repository.ObjectDatabase.CreateTree(
+                new TreeDefinition().Add("src/Other.cs", blob, Mode.NonExecutableFile));
+            var root = repository.ObjectDatabase.CreateCommit(author, author, "Start the trunk", tree, [], false);
+            Commands.Checkout(repository, repository.CreateBranch("trunk", root));
+        }
+
+        await _host.RefreshAsync("alpha");
+
+        Assert.Equal(["Start the trunk"], await _host.ScalarsAsync("alpha", "SELECT subject FROM commits"));
+        Assert.Equal(["src/Other.cs Start the trunk", "src/Other.cs Start the trunk"], await _host.ScalarsAsync(
+            "alpha",
+            """
+            SELECT f.path || ' ' || c.subject FROM lines l JOIN files f USING (file_id)
+            JOIN commits c USING (commit_id) ORDER BY l.line_number
+            """));
+        await AssertAttributionIsWhatAFreshBuildWritesAsync("alpha");
+    }
+
+    /// <summary>
+    ///     The other side of the re-import: a fast-forward reaches the newest recorded commit and walks
+    ///     only what is past it (#175). Asserted on the ids of the commits already recorded, which a
+    ///     re-import would delete and hand out again above the other repository's.
+    /// </summary>
+    [Fact]
+    public async Task A_fast_forward_appends_the_new_commits_and_keeps_the_recorded_ones()
+    {
+        await IndexTwoRepositoryProjectAsync();
+        const string sql = "SELECT commit_id::VARCHAR || ' ' || subject FROM commits WHERE repo_slug = 'one' ORDER BY commit_id";
+        var before = await _host.ScalarsAsync("gamma", sql);
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond-changed\nlast\n" },
+            "Rename the third line", "Linus", "linus@example.invalid", 4);
+
+        await _host.RefreshAsync("gamma");
+
+        var after = await _host.ScalarsAsync("gamma", sql);
+        Assert.Equal(before, after[..^1]);
+        Assert.EndsWith(" Rename the third line", after[^1], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -525,13 +643,35 @@ public sealed class HistoryTests : IDisposable
     public async Task A_live_index_of_this_schema_is_still_carried_over()
     {
         await IndexTwoCommitProjectAsync();
+        // Id 0, below every real one: a ghost planted as the newest commit would be one HEAD's line no
+        // longer holds, which is a rewrite, and a rewrite re-imports instead of carrying over.
         await _host.ExecuteAsync("alpha",
-            "INSERT INTO commits VALUES (9999, 'one', 'deadbeef', 'Ghost', 'ghost@example.invalid', "
+            "INSERT INTO commits VALUES (0, 'one', 'deadbeef', 'Ghost', 'ghost@example.invalid', "
             + "now(), 'Carried over from this schema', '')");
         await _host.RefreshAsync("alpha");
 
         var subjects = await _host.ScalarsAsync("alpha", "SELECT subject FROM commits ORDER BY commit_id");
         Assert.Contains("Carried over from this schema", subjects);
+    }
+
+    /// <summary>
+    ///     Compares the attribution against a walk from the root, forced by declaring the index an older
+    ///     schema so nothing is carried over. By SHA, because the ids of a re-import may differ.
+    /// </summary>
+    private async Task AssertAttributionIsWhatAFreshBuildWritesAsync(string project)
+    {
+        const string sql =
+            """
+            SELECT a.path || ':' || a.start_line || '-' || a.end_line || ' ' || c.sha
+            FROM attribution a JOIN commits c USING (commit_id) ORDER BY a.path, a.start_line
+            """;
+        var refreshed = await _host.ScalarsAsync(project, sql);
+        Assert.NotEmpty(refreshed);
+
+        await _host.ExecuteAsync(project, "UPDATE index_info SET schema_version = schema_version - 1");
+        await _host.RefreshAsync(project);
+
+        Assert.Equal(await _host.ScalarsAsync(project, sql), refreshed);
     }
 
     private async Task IndexTwoCommitProjectAsync()
