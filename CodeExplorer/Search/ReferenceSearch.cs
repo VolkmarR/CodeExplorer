@@ -155,7 +155,10 @@ public sealed class ReferenceSearch(IndexReaders readers)
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
 
-        var matchParameters = new List<DuckDBParameter> { new("q", pattern) };
+        var matchParameters = new List<DuckDBParameter>
+        {
+            new("q", pattern), new("occurrence", SymbolText.OccurrencePattern(symbol))
+        };
         string literally = SearchQuery.Literally(symbol, matchParameters);
         // What a match is, spelled once for the scan and for the coverage count, so the two cannot drift.
         string matches = $"{literally} AND regexp_matches(l.content, $q, '')";
@@ -190,15 +193,17 @@ public sealed class ReferenceSearch(IndexReaders readers)
         // zero counts, the way grep's page-past-the-end does.
         string sql = $"""
                       WITH {hits}
-                      -- `occurrences` runs the pattern a second time over the hit lines, which the
+                      -- `occurrences` runs a pattern a second time over the hit lines, which the
                       -- first pass has already narrowed the table down to: a line naming the symbol
                       -- twice is two references, so counting rows would undercount the project total
                       -- the reply prints beside the sample. Measured on a 516 MB index it adds about
                       -- 10 ms to a 51 ms scan of 151,000 matching lines (#119) — cheap because it
-                      -- extracts from `hits` and never from `lines`.
+                      -- extracts from `hits` and never from `lines`. Not $q, whose end boundary eats
+                      -- the character the next occurrence starts on: a candidate counts when the word
+                      -- character it captured after itself is none (SymbolText.OccurrencePattern).
                       per_file AS (
                           SELECT file_id, qualified_path, extension, count(*) AS n,
-                                 sum(len(regexp_extract_all(content, $q, 0))) AS occurrences
+                                 sum(len(list_filter(regexp_extract_all(content, $occurrence, 1), v -> v = ''))) AS occurrences
                           FROM hits GROUP BY ALL),
                       totals AS (
                           SELECT count(*) AS total_files, coalesce(sum(n), 0) AS total_lines,

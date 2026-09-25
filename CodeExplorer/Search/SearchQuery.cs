@@ -38,7 +38,7 @@ internal static class SearchQuery
     }
 
     /// <summary>
-    ///     The exact-substring test that goes in front of a symbol's <c>\b…\b</c> pattern. A line the
+    ///     The exact-substring test that goes in front of a symbol's whole-word pattern. A line the
     ///     pattern matches contains the symbol literally — that is all the pattern is, between word
     ///     boundaries — so this excludes nothing and DuckDB pushes it into the scan of <c>lines</c>,
     ///     where the regular expression cannot go. On Radix it halves both symbol searches:

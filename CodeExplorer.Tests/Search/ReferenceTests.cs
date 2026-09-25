@@ -572,6 +572,48 @@ public sealed class ReferenceTests : IDisposable
         Assert.DoesNotContain("no language profile covers", clean);
     }
 
+    /// <summary>
+    ///     A name that starts or ends with a letter outside ASCII (#235). RE2's <c>\b</c> is ASCII-only,
+    ///     so a boundary built from it found nothing beside <c>Ä</c> or <c>ü</c>, and a boundary
+    ///     inside <c>fooÄGröße</c> it did find: the word class is spelled out instead.
+    /// </summary>
+    [Fact]
+    public async Task A_name_with_letters_outside_ascii_is_found_on_its_own_boundaries()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("umlaut", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Lager.cs"] = """
+                                   class Lager
+                                   {
+                                       void Run()
+                                       {
+                                           Merke(Größe, Änderung);
+                                           Merke(ÜberGröße, Änderungen);
+                                           Merke(Änderung,Änderung);
+                                       }
+                                   }
+
+                                   """
+            }
+        });
+        await using var client = await _host.ConnectAsync("umlaut");
+
+        string size = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Größe" });
+        Assert.Contains("\"Größe\" in 1 file: 1 reference,", size);
+        Assert.Contains("Merke(Größe, Änderung);", size);
+        Assert.DoesNotContain("ÜberGröße", size);
+
+        // Three on the lines, two of them one comma apart: a boundary that consumes the comma must not
+        // swallow the second.
+        string change = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Änderung" });
+        Assert.Contains("\"Änderung\" in 1 file: 3 references,", change);
+        Assert.Contains("Merke(Änderung,Änderung);", change);
+        Assert.DoesNotContain("Änderungen", change);
+    }
+
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation()
     {

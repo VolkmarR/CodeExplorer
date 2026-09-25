@@ -155,6 +155,34 @@ public sealed class MatchListTests : IDisposable
         Assert.Contains("Closed", text);
     }
 
+    /// <summary>
+    ///     Whole words bounded by letters outside ASCII (#235), and counted where two sit one character
+    ///     apart: the boundary consumes that character, and neither neighbour may lose it.
+    /// </summary>
+    [Fact]
+    public async Task Whole_words_are_bounded_by_letters_outside_ascii_and_counted_side_by_side()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("umlaut", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Words.cs"] = "Ändern(bar,bar);\nvar x = fooÄbar + Status.Offen;\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("umlaut");
+
+        string words = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "bar|Ändern", ["wholeWord"] = true });
+        Assert.Contains("2 distinct values from 3 matches in 1 file", words);
+        Assert.Contains("    2      1  bar", words);
+        Assert.Contains("    1      1  Ändern", words);
+
+        string grouped = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = "Status\\.(\\w+)", ["group"] = 1, ["wholeWord"] = true });
+        Assert.Contains("Offen", grouped);
+    }
+
     [Fact]
     public async Task A_missing_capture_group_is_named_rather_than_answered_with_nothing()
     {

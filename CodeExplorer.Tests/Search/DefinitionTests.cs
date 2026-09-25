@@ -256,6 +256,38 @@ public sealed class DefinitionTests : IDisposable
         Assert.Contains("assign Status(value as string)", status);
     }
 
+    /// <summary>
+    ///     A member named with a letter outside ASCII (#235), which German and Italian X# code is full of.
+    ///     The declaration shapes the engine narrows candidates with read a name as RE2's ASCII-only
+    ///     <c>\w</c>, so <c>Größe</c> was never a candidate line and the member was never declared.
+    /// </summary>
+    [Fact]
+    public async Task A_member_named_with_letters_outside_ascii_is_declared()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("umlaut", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Lager.cs"] = "public class Lager\n{\n    public int Größe;\n}\n",
+                ["src/Lager.prg"] = """
+                                    class Regal
+                                    	method Größe() as int
+                                    		return 1
+                                    	end method
+                                    end class
+
+                                    """
+            }
+        });
+        await using var client = await _host.ConnectAsync("umlaut");
+
+        string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Größe" });
+        Assert.Contains("\"Größe\" is declared in 2 places.", text);
+        Assert.Contains("public int Größe;", text);
+        Assert.Contains("method Größe() as int", text);
+    }
+
     [Fact]
     public async Task A_symbol_with_no_recognised_declaration_is_pointed_at_the_search_instead()
     {
