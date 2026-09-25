@@ -369,7 +369,7 @@ public sealed partial class ControlDatabase : IDisposable
                 return (AddRepositoryOutcome.LocalNotAllowed, null);
         }
 
-        if (!string.IsNullOrEmpty(credential) && RepositoryUrl.SendsCredentialInClear(url))
+        if (RepositoryUrl.SendsCredentialInClear(url, !string.IsNullOrEmpty(credential)))
             return (AddRepositoryOutcome.ClearTextCredential, null);
 
         var repository = new ProjectRepository(projectSlug, slug, url.Trim(),

@@ -24,13 +24,9 @@ public sealed class ClearTextCredentialTests : IDisposable
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Theory]
+    // The URL shapes are RepositoryUrlTests'; these are the ones that also pass Classify on the way in.
     [InlineData("http://example.invalid/repo.git")]
-    [InlineData("HTTP://example.invalid/repo.git")]
-    [InlineData(" http://example.invalid/repo.git ")]
     [InlineData("git://example.invalid/repo.git")]
-    [InlineData("GIT://example.invalid/repo.git")]
-    [InlineData("http:example.invalid/repo.git")]
-    // Not a URI .NET can parse, and read as scp-style by the classifier, which libgit2 does not agree with.
     [InlineData("http://example invalid/repo.git")]
     public async Task A_credential_for_an_unencrypted_url_is_refused(string url)
     {
@@ -62,8 +58,10 @@ public sealed class ClearTextCredentialTests : IDisposable
     /// <summary>
     ///     A repository stored with a credential before the API refused the pair is skipped with the same
     ///     sentence, and libgit2 is never asked: the remote is a loopback listener that would answer every
-    ///     request with a basic-auth challenge, and it is never so much as connected to. Whether its local
-    ///     copy already exists — the refresh would fetch — or not yet — it would clone.
+    ///     request with a basic-auth challenge, and it is never so much as connected to. Covers the fetch
+    ///     path (a local copy exists) and the clone path (none does yet).
+    ///     The challenge is what makes the red run end: without the fix libgit2 replays the credential
+    ///     against it and gives up, where a silent listener would hold the refresh for the stall limit.
     /// </summary>
     [Theory]
     [InlineData(true)]

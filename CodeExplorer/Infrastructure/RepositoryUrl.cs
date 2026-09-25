@@ -72,19 +72,16 @@ public static partial class RepositoryUrl
         configuration.GetValue<bool>(AllowLocalSetting);
 
     /// <summary>
-    ///     Whether a credential for this URL would cross the network unencrypted. libgit2 hands it to an
-    ///     <c>http://</c> remote as basic auth, readable by anyone on the path; <c>git://</c> is just as
-    ///     unencrypted and has no authentication of its own, so a credential stored for it has no use that
-    ///     is safe, and refusing it keeps the rule to the one the decision states: a credential is stored
-    ///     only beside an encrypted transport. A local path or <c>file://</c> URL never reaches the
-    ///     network, so its credential is not in question here (GHSA-4f8q-c6jj-fr44).
+    ///     Whether a credential would cross the network unencrypted: libgit2 hands it to an <c>http://</c>
+    ///     remote as basic auth, and <c>git://</c> is just as unencrypted (GHSA-4f8q-c6jj-fr44). The API and
+    ///     the refresh both ask this, so the pair refused on the way in is the pair skipped on the way out.
     ///     A prefix and not <see cref="Uri" />, because libgit2 picks its transport by prefix: a URL .NET
     ///     cannot parse, such as one with a space in the host, reads as scp-style to <see cref="Classify" />
-    ///     and is still an http URL to libgit2. <c>http:</c> without the slashes is caught too; libgit2 would
-    ///     read it as scp-style ssh, so refusing it costs nothing that is safe.
+    ///     and is still an http URL to libgit2.
     /// </summary>
-    public static bool SendsCredentialInClear(string? url)
+    public static bool SendsCredentialInClear(string? url, bool hasCredential)
     {
+        if (!hasCredential) return false;
         string trimmed = url?.Trim() ?? "";
         return trimmed.StartsWith("http:", StringComparison.OrdinalIgnoreCase)
                || trimmed.StartsWith("git://", StringComparison.OrdinalIgnoreCase);

@@ -35,4 +35,24 @@ public sealed class RepositoryUrlTests
     [InlineData("", RepositoryUrlKind.Invalid)]
     public void Repository_urls_are_classified_and_secrets_in_them_refused(string url, RepositoryUrlKind expected) =>
         Assert.Equal(expected, RepositoryUrl.Classify(url));
+
+    /// <summary>A credential beside these would be sent unencrypted, or kept for a transport that has none (GHSA-4f8q-c6jj-fr44).</summary>
+    [Theory]
+    [InlineData("http://example.invalid/repo.git", true)]
+    [InlineData("HTTP://example.invalid/repo.git", true)]
+    [InlineData(" http://example.invalid/repo.git ", true)]
+    [InlineData("http:example.invalid/repo.git", true)]
+    // Not a URI .NET can parse, and read as scp-style by Classify, which libgit2 does not agree with.
+    [InlineData("http://example invalid/repo.git", true)]
+    [InlineData("git://example.invalid/repo.git", true)]
+    [InlineData("GIT://example.invalid/repo.git", true)]
+    [InlineData("https://example.invalid/repo.git", false)]
+    [InlineData("ssh://git@example.invalid/repo.git", false)]
+    [InlineData("git@example.invalid:org/repo.git", false)]
+    [InlineData("file:///srv/repo", false)]
+    public void A_credential_is_sent_in_clear_only_over_http_and_git(string url, bool expected)
+    {
+        Assert.Equal(expected, RepositoryUrl.SendsCredentialInClear(url, hasCredential: true));
+        Assert.False(RepositoryUrl.SendsCredentialInClear(url, hasCredential: false));
+    }
 }
