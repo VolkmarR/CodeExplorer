@@ -19,6 +19,12 @@ public sealed class RequestOriginTests
         string? origin = null) =>
         SendAsync(host, new HttpRequestMessage(HttpMethod.Get, path), hostHeader, origin);
 
+    private static Task<HttpStatusCode> PostAsync(TestHost host, string path, string origin, string json = "{}") =>
+        SendAsync(host,
+            new HttpRequestMessage(HttpMethod.Post, path)
+                { Content = new StringContent(json, Encoding.UTF8, "application/json") },
+            origin: origin);
+
     private static async Task<HttpStatusCode> SendAsync(TestHost host, HttpRequestMessage message,
         string? hostHeader = null, string? origin = null)
     {
@@ -68,12 +74,15 @@ public sealed class RequestOriginTests
     public async Task A_foreign_origin_is_refused_on_the_api_and_the_mcp_endpoint(string path)
     {
         using var host = new TestHost(SearchEngine.Substring);
+        await host.CreateProjectAsync("open");
 
-        Assert.Equal(HttpStatusCode.Forbidden, await GetAsync(host, path, origin: "http://attacker.example"));
-        // Same host, other port: the Vite dev server, which is why its proxy rewrites the header.
-        Assert.Equal(HttpStatusCode.Forbidden, await GetAsync(host, path, origin: "http://localhost:5173"));
+        // POST, because it is the verb both endpoints answer and the one a cross-origin page sends
+        // without a preflight.
+        Assert.Equal(HttpStatusCode.Forbidden, await PostAsync(host, path, "http://attacker.example"));
+        // Same host, other port: the Vite dev server, which is why its proxy removes the header.
+        Assert.Equal(HttpStatusCode.Forbidden, await PostAsync(host, path, "http://localhost:5173"));
         // What a sandboxed frame or a file sends.
-        Assert.Equal(HttpStatusCode.Forbidden, await GetAsync(host, path, origin: "null"));
+        Assert.Equal(HttpStatusCode.Forbidden, await PostAsync(host, path, "null"));
     }
 
     [Fact]
@@ -81,11 +90,8 @@ public sealed class RequestOriginTests
     {
         using var host = new TestHost(SearchEngine.Substring);
 
-        var create = new HttpRequestMessage(HttpMethod.Post, "/api/projects")
-        {
-            Content = new StringContent("""{"slug":"planted","name":"Planted"}""", Encoding.UTF8, "application/json")
-        };
-        Assert.Equal(HttpStatusCode.Forbidden, await SendAsync(host, create, origin: "http://attacker.example"));
+        Assert.Equal(HttpStatusCode.Forbidden, await PostAsync(host, "/api/projects", "http://attacker.example",
+            """{"slug":"planted","name":"Planted"}"""));
 
         using var http = host.CreateClient();
         Assert.DoesNotContain("planted", await http.GetStringAsync("/api/projects", Ct), StringComparison.Ordinal);
