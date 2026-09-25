@@ -461,6 +461,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // the only groups a rewrite can name without counting the caller's are 0 and 1.
         // WithoutMarkedCopies then drops the copy of group 1 each one repeats.
         string ids = string.Join(",", pageFiles.Select(f => f.FileId.ToString(CultureInfo.InvariantCulture)));
+        // The tokens form already has the match as group 1, so it counts and marks alike; the plain
+        // pattern is grouped for marking, through Re2 so a \Q it leaves open cannot quote the ')'.
         var marking = wholeWord
             ? counting
             : new DuckDBParameter("grouped", Re2.Grouped(query));
