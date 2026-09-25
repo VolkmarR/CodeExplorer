@@ -132,6 +132,7 @@ public sealed class MatchList(IndexReaders readers)
 
         try
         {
+            await Re2.CompileAsync(connection, query, cancellationToken);
             var matches = new List<DistinctMatch>();
             int totalDistinct = 0;
             long totalMatches = 0;

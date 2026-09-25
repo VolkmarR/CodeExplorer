@@ -142,6 +142,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         var bounds = Bounds.From(request);
         try
         {
+            if (regex) await Re2.CompileAsync(connection, query, cancellationToken);
             return request.Multiline
                 ? await SearchMultilineAsync(connection, request, query, bounds, cancellationToken)
                 : await SearchLinesAsync(index, request, query, regex, bounds, cancellationToken);
@@ -394,12 +395,12 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // document the whole-word test has already found a match in; the plain pattern's extract is
         // empty exactly where there is none, and needs no test in front of it.
         bool wholeWord = request.WholeWord;
-        var marking = wholeWord
+        var counting = wholeWord
             ? new DuckDBParameter("tokens", Re2.WholeWordTokens(query))
             : new DuckDBParameter("q", query);
         List<DuckDBParameter> matchParameters = wholeWord
-            ? [new("q", Re2.WholeWord(query)), marking, new("flags", flags)]
-            : [marking, new("flags", flags)];
+            ? [new("q", Re2.WholeWord(query)), counting, new("flags", flags)]
+            : [counting, new("flags", flags)];
         string matchCount = wholeWord
             ? """
               CASE WHEN regexp_matches(content, $q, $flags)
@@ -460,9 +461,12 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // the only groups a rewrite can name without counting the caller's are 0 and 1.
         // WithoutMarkedCopies then drops the copy of group 1 each one repeats.
         string ids = string.Join(",", pageFiles.Select(f => f.FileId.ToString(CultureInfo.InvariantCulture)));
+        var marking = wholeWord
+            ? counting
+            : new DuckDBParameter("grouped", Re2.Grouped(query));
         string rewrite = wholeWord
             ? @"$tokens, chr(1) || '\1' || chr(2) || '\0'"
-            : @"'(' || $q || ')', chr(1) || '\1' || chr(2)";
+            : @"$grouped, chr(1) || '\1' || chr(2)";
         var marked = new Dictionary<long, string>();
         await using (var command = connection.Query($"""
                                                      {Documents($" AND f.file_id IN ({ids})")}
