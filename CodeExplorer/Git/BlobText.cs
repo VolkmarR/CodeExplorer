@@ -22,8 +22,10 @@ internal static class BlobText
     /// <summary>
     ///     The encodings a byte order mark can name, longest mark first so the UTF-32 LE mark is not
     ///     read as UTF-16 LE's followed by a NUL. The same set, in the same order, that the
-    ///     <see cref="StreamReader" /> behind libgit2's decoding detected, so a file with a mark decodes
-    ///     exactly as it did before.
+    ///     <see cref="StreamReader" /> behind libgit2's decoding detected. Today only the UTF-8 mark
+    ///     reaches here from a build: libgit2 calls a blob with any other mark binary, and the build
+    ///     skips it first. The others stay so that the decoder, asked directly, never reads a UTF-16
+    ///     file as Windows-1252.
     /// </summary>
     private static readonly Encoding[] Marked =
     [

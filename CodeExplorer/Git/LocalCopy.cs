@@ -61,8 +61,9 @@ public sealed class CommittedFile
 
     /// <summary>
     ///     The whole content decoded as text, the way <see cref="BlobText" /> decides. Call it once; there
-    ///     is no cache behind it. The bytes are read once and decoded from that one buffer, because
-    ///     trying UTF-8 through a second read would inflate the blob a second time.
+    ///     is no cache behind it. The UTF-8 check and the decode share one buffer, because trying UTF-8
+    ///     through a read of its own would inflate the blob once more than <see cref="IsBinary" />
+    ///     already does.
     /// </summary>
     public string Text()
     {
