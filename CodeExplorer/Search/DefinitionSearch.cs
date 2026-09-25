@@ -134,8 +134,8 @@ public sealed class DefinitionSearch(IndexReaders readers)
                                                        AND regexp_matches(l.content, $q, ''){fileFilter}
                                                        AND ({declarationShapes})
                                                      ORDER BY f.qualified_path, l.line_number
-                                                     LIMIT {MaxCandidates + 1}
-                                                     """, parameters))
+                                                     LIMIT $limit
+                                                     """, [.. parameters, new("limit", MaxCandidates + 1)]))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))

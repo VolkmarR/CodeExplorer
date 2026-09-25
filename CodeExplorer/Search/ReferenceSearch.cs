@@ -213,13 +213,13 @@ public sealed class ReferenceSearch(IndexReaders readers)
                       page_files AS (
                           SELECT file_id, qualified_path, extension FROM per_file
                           ORDER BY n DESC, qualified_path
-                          LIMIT {maxFiles}),
+                          LIMIT $max_files),
                       kept AS (
                           SELECT file_id, qualified_path, extension, line_number, content FROM (
                               SELECT h.file_id, p.qualified_path, p.extension, h.line_number, h.content,
                                      row_number() OVER (PARTITION BY h.file_id ORDER BY h.line_number) AS rn
                               FROM hits h JOIN page_files p USING (file_id))
-                          WHERE rn <= {MaxLinesPerFile})
+                          WHERE rn <= $max_lines)
                       SELECT t.total_files, t.total_lines, t.total_occurrences{everyFile},
                              k.file_id, k.qualified_path, k.extension, k.line_number, k.content
                       FROM totals t LEFT JOIN kept k ON true
@@ -231,7 +231,11 @@ public sealed class ReferenceSearch(IndexReaders readers)
         long totalLines = 0;
         long totalOccurrences = 0;
         int? withoutFilters = null;
-        await using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
+        await using (var command = connection.Query(sql,
+                         [
+                             .. matchParameters, .. fileParameters, new("max_files", maxFiles),
+                             new("max_lines", MaxLinesPerFile)
+                         ]))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))

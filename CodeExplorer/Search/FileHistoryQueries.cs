@@ -379,12 +379,12 @@ public sealed partial class HistoryQueries
     private static async Task<IReadOnlyList<string>> ShasAsync(IndexReader index, string prefix, int ceiling,
         CancellationToken cancellationToken)
     {
-        await using var command = index.Connection.Query($"""
-                                                          SELECT DISTINCT sha FROM commits
-                                                          WHERE starts_with(sha, $p)
-                                                          ORDER BY sha
-                                                          LIMIT {ceiling}
-                                                          """, [new DuckDBParameter("p", prefix)]);
+        await using var command = index.Connection.Query("""
+                                                         SELECT DISTINCT sha FROM commits
+                                                         WHERE starts_with(sha, $p)
+                                                         ORDER BY sha
+                                                         LIMIT $limit
+                                                         """, [new DuckDBParameter("p", prefix), new("limit", ceiling)]);
         await using var reader = await command.ReaderAsync(cancellationToken);
         var shas = new List<string>();
         while (await reader.ReadAsync(cancellationToken)) shas.Add(reader.Text("sha"));

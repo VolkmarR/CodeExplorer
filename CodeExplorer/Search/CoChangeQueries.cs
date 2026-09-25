@@ -179,7 +179,8 @@ public sealed partial class HistoryQueries
             new("since", window.Since.ToUnixTimeSeconds()),
             new("until", window.Until.ToUnixTimeSeconds()),
             new("r", repositorySlug),
-            new("c", maxCommitPaths)
+            new("c", maxCommitPaths),
+            new("limit", limit)
         };
         string anchored = string.Join(", ", BindPaths(parameters, anchorPaths));
 
@@ -239,11 +240,7 @@ public sealed partial class HistoryQueries
                                                               -- Spelled out rather than ordered by the alias, for
                                                               -- the reason IndexQueries spells its ORDER BY out.
                                                               ORDER BY count(*) DESC, t.path
-                                                              -- Inlined and not parameterised: it is an int the
-                                                              -- module has already clamped to a range, so there is
-                                                              -- nothing to escape, and the churn ranking inlines
-                                                              -- its own the same way.
-                                                              LIMIT {limit})
+                                                              LIMIT $limit)
                                                           -- LEFT JOIN ON TRUE so the counts survive an empty
                                                           -- ranking: a file that moves alone still has to say how
                                                           -- many commits it was looked at over. The cross join

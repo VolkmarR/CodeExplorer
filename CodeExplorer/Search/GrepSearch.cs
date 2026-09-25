@@ -243,7 +243,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
                          page_files AS (
                              SELECT file_id, qualified_path, n FROM per_file
                              ORDER BY n DESC, qualified_path
-                             LIMIT {bounds.PageSize} OFFSET {bounds.Skip})
+                             LIMIT $page_size OFFSET $skip)
                          """;
 
         // The lines the answer shows: the kept ones and their context window, grouped so that
@@ -263,7 +263,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
                           bool_or(k.line_number = l.line_number) AS is_match
                    FROM kept k
                    JOIN lines l ON l.file_id = k.file_id
-                               AND l.line_number BETWEEN k.line_number - {bounds.Context} AND k.line_number + {bounds.Context}
+                               AND l.line_number BETWEEN k.line_number - $context AND k.line_number + $context
                    GROUP BY ALL)
                """;
 
@@ -286,7 +286,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
                        SELECT h.file_id, h.line_number{Carried("h.")},
                               row_number() OVER (PARTITION BY h.file_id ORDER BY h.line_number) AS rn
                        FROM hits h JOIN page_files p USING (file_id))
-                   WHERE rn <= {bounds.MaxLinesPerFile}),
+                   WHERE rn <= $max_lines),
                {Shown()},
                page_lines AS (
                    SELECT p.qualified_path, p.n, s.line_number, s.content, s.is_match{History(request)}
@@ -300,7 +300,14 @@ public sealed partial class GrepSearch(IndexReaders readers)
         var files = new List<GrepFile>();
         int totalFiles = 0;
         long totalLines = 0;
-        await using (var command = connection.Query(sql, [.. matchParameters, .. fileParameters]))
+        // The bounds are bound whether or not this shape reads them: DuckDB.NET skips a named parameter
+        // the statement does not use, and one list is easier to read than one per shape.
+        await using (var command = connection.Query(sql,
+                         [
+                             .. matchParameters, .. fileParameters, new("page_size", bounds.PageSize),
+                             new("skip", bounds.Skip), new("context", bounds.Context),
+                             new("max_lines", bounds.MaxLinesPerFile)
+                         ]))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             string? currentPath = null;
