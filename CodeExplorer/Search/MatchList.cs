@@ -90,6 +90,7 @@ public sealed class MatchList(IndexReaders readers)
                 "The pattern is empty. Pass an RE2 pattern with parentheses around the part you want, "
                 + "such as \"PackageReference Include=\\\"([^\\\"]+)\\\"\" with group=1.");
         if (Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
+        query = Re2.WithQuoteClosed(query);
 
         if (request.Group is < 0 or > MaxGroup)
             return new Problem(
@@ -123,13 +124,13 @@ public sealed class MatchList(IndexReaders readers)
 
         try
         {
-            await Re2.CompileAsync(connection, query, cancellationToken);
-
-            // Counted once the pattern is known to compile, since a pattern that does not has no
-            // groups to count. Checked here rather than left to the engine: DuckDB reports a missing
-            // group as an invalid argument, which reads as a broken pattern and sends the caller off
-            // fixing a parenthesis that was never wrong.
+            // Checked here rather than left to the engine: DuckDB reports a missing group as an invalid
+            // argument, which reads as a broken pattern and sends the caller off fixing a parenthesis
+            // that was never wrong. A pattern that does not compile has no groups to count, so it is
+            // compiled alone before the count refuses, and before a whole-word wrapping balances it.
             int groups = Re2.CaptureGroups(query);
+            if (request.WholeWord || request.Group > groups)
+                await Re2.CompileAsync(connection, query, cancellationToken);
             if (request.Group > groups)
                 return new Problem(
                     $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
