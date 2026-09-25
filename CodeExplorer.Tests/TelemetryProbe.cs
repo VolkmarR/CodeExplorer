@@ -81,8 +81,16 @@ public sealed class TelemetryProbe : IDisposable
     {
         var copy = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var tag in tags) copy[tag.Key] = tag.Value;
-        lock (_sync) _measurementList.Add(new Measurement(instrument.Name, value, copy));
+        var measurement = new Measurement(instrument.Name, value, copy);
+        lock (_sync) _measurementList.Add(measurement);
+        if (Equals(copy.GetValueOrDefault(Telemetry.ProjectTag), _slug)) OnMeasured?.Invoke(measurement);
     }
+
+    /// <summary>
+    ///     Called as this probe's project records a measurement, on the recording thread: for a test that
+    ///     has to act at that moment, such as cancelling a read once its lease was granted.
+    /// </summary>
+    public Action<Measurement>? OnMeasured { get; init; }
 
     /// <summary>What this probe's project recorded on one instrument.</summary>
     public IReadOnlyList<Measurement> For(string instrument) =>

@@ -137,22 +137,22 @@ public sealed class IndexReaders(ProjectIndexes indexes)
         using var lease = restore
             ? await indexes.OpenAsync(projectSlug, cancellationToken)
             : await indexes.PeekAsync(projectSlug, cancellationToken);
-        return lease is null ? null : await BreakingOnFailureAsync(lease, () => ReadStatusAsync(lease, cancellationToken));
-    }
+        if (lease is null) return null;
 
-    private static async Task<IndexStatus?> ReadStatusAsync(IndexLease lease, CancellationToken cancellationToken)
-    {
-        // epoch() for the reason ReaderColumns.EpochInstant gives.
-        await using var command = lease.Connection.Query(
-            "SELECT epoch(built_at) AS built_seconds, fts_indexed, single_repository FROM index_info", []);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken)) return null;
+        return await BreakingOnFailureAsync<IndexStatus?>(lease, async () =>
+        {
+            // epoch() for the reason ReaderColumns.EpochInstant gives.
+            await using var command = lease.Connection.Query(
+                "SELECT epoch(built_at) AS built_seconds, fts_indexed, single_repository FROM index_info", []);
+            await using var reader = await command.ReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken)) return null;
 
-        var builtAt = reader.EpochInstant("built_seconds");
-        bool ftsIndexed = reader.Flag("fts_indexed");
-        bool singleRepository = reader.Flag("single_repository");
-        return new IndexStatus(builtAt, ftsIndexed, singleRepository,
-            await IndexReader.ReadRepositoriesAsync(lease.Connection, cancellationToken));
+            var builtAt = reader.EpochInstant("built_seconds");
+            bool ftsIndexed = reader.Flag("fts_indexed");
+            bool singleRepository = reader.Flag("single_repository");
+            return new IndexStatus(builtAt, ftsIndexed, singleRepository,
+                await IndexReader.ReadRepositoriesAsync(lease.Connection, cancellationToken));
+        });
     }
 
     /// <summary>

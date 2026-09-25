@@ -46,7 +46,7 @@ public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded,
     ///     Says this connection must not be handed to anyone else: the work on it threw or was
     ///     cancelled, and a statement that ended that way can leave a result part-read behind it. Every
     ///     connection used to be closed after one call, so pooling is what makes this need saying, and
-    ///     <see cref="IndexReaders.OverIndexAsync{T}" /> is the one seam that says it.
+    ///     <see cref="IndexReaders" /> says it for every lease it opens, in one helper.
     /// </summary>
     public void Broken() => _broken = true;
 
@@ -853,7 +853,7 @@ public sealed partial class ProjectIndexes : IDisposable
         // generation and emptied the pool, and the connection it had just condemned was added after it,
         // bound to a catalog about to be detached (#241). Held for a push or a pop, never for I/O.
         private readonly Lock _sync = new();
-        private readonly Stack<DuckDBConnection> _idle = new();
+        private Stack<DuckDBConnection> _idle = new();
         private int _generation;
 
         /// <summary>
@@ -889,12 +889,12 @@ public sealed partial class ProjectIndexes : IDisposable
         /// </summary>
         public void Discard()
         {
-            DuckDBConnection[] idle;
+            Stack<DuckDBConnection> idle;
             lock (_sync)
             {
                 _generation++;
-                idle = [.. _idle];
-                _idle.Clear();
+                idle = _idle;
+                _idle = new Stack<DuckDBConnection>();
             }
 
             // Closed outside the lock: nothing can return one of these now, and a close is I/O.

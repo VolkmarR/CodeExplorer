@@ -422,12 +422,7 @@ public sealed class RefreshTests : IDisposable
         string objects = Path.Combine(clone, "objects");
         using (var repository = new LibGit2Sharp.Repository(clone))
             repository.ObjectDatabase.Pack(new LibGit2Sharp.PackBuilderOptions(Path.Combine(objects, "pack")));
-        foreach (string loose in Directory.EnumerateDirectories(objects, "??"))
-        {
-            // libgit2 writes objects read-only, and Directory.Delete refuses a read-only file.
-            foreach (string file in Directory.EnumerateFiles(loose)) File.SetAttributes(file, FileAttributes.Normal);
-            Directory.Delete(loose, true);
-        }
+        foreach (string loose in Directory.EnumerateDirectories(objects, "??")) TestHost.DeleteTree(loose);
     }
 
     /// <summary>
