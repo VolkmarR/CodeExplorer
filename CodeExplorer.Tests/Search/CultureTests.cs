@@ -15,16 +15,17 @@ namespace CodeExplorer.Tests;
 ///     different number. Each read is asked through its service on the test's own thread, because the
 ///     in-process server does not carry the test's culture over, and asked for a page past the first
 ///     and a cap below the total, so the paging and capping numbers are in the statement.
+///     A guard rather than a reproduction: no tool lets a caller make these numbers negative, and a
+///     positive integer is spelled the same in every culture .NET ships, so the old statements passed
+///     this too. What it holds is the bound form: a site that goes back to formatting a number, and
+///     one day formats a negative one, fails here.
 /// </summary>
-public sealed class CultureTests : IDisposable
+public sealed class CultureTests
 {
-    private readonly TestHost _host = new(SearchEngine.Substring);
-
-    public void Dispose() => _host.Dispose();
-
-    private async Task FixtureAsync()
+    private static async Task<TestHost> IndexedAsync(SearchEngine engine)
     {
-        await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        var host = new TestHost(engine);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
         {
             ["one"] = new()
             {
@@ -35,44 +36,73 @@ public sealed class CultureTests : IDisposable
             }
         });
         for (int i = 1; i <= 5; i++)
-            _host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { [$"src/E{i}.cs"] = "needle\n" },
-                $"Commit {i}", "Ada", "ada@example.invalid", i);
-        await _host.RefreshAsync("alpha");
+            host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { [$"src/E{i}.cs"] = "needle\n" },
+                $"Commit {i}", i % 2 == 0 ? "Ada" : "Bob", i % 2 == 0 ? "ada@example.invalid" : "bob@example.invalid",
+                i);
+        await host.RefreshAsync("alpha");
+        return host;
     }
 
     [Fact]
-    public async Task Git_log_paging_answers_the_same_under_a_culture_with_its_own_minus_sign()
+    public async Task Git_log_paging_and_the_authors_cap_answer_the_same_under_a_culture_with_its_own_minus_sign()
     {
-        await FixtureAsync();
-        var history = _host.Services.GetRequiredService<HistoryQueries>();
+        using var host = await IndexedAsync(SearchEngine.Substring);
+        var history = host.Services.GetRequiredService<HistoryQueries>();
 
-        var (invariant, swedish) = await UnderBothCulturesAsync(token =>
+        var (invariantLog, swedishLog) = await UnderBothCulturesAsync(token =>
             history.LogAsync("alpha", new LogRequest(null, 2, 2), token));
+        var (invariantAuthors, swedishAuthors) = await UnderBothCulturesAsync(token =>
+            history.AuthorsAsync("alpha", new AuthorsRequest(null, 1), token));
 
-        Assert.Contains("Commit 3", invariant, StringComparison.Ordinal);
-        Assert.DoesNotContain("Commit 5", invariant, StringComparison.Ordinal);
-        Assert.Equal(invariant, swedish);
+        Assert.Contains("Commit 3", invariantLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("Commit 5", invariantLog, StringComparison.Ordinal);
+        Assert.Contains("example.invalid", invariantAuthors, StringComparison.Ordinal);
+        Assert.Equal(invariantLog, swedishLog);
+        Assert.Equal(invariantAuthors, swedishAuthors);
+    }
+
+    /// <summary>Over both engines, because they build the match differently and share the paging around it.</summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task Grep_paging_context_and_line_cap_answer_the_same_under_a_culture_with_its_own_minus_sign(
+        SearchEngine engine)
+    {
+        using var host = await IndexedAsync(engine);
+        var grep = host.Services.GetRequiredService<GrepSearch>();
+
+        // With context and without it, because the two read the window through different statements.
+        foreach (int context in new[] { 0, 1 })
+        {
+            var (invariant, swedish) = await UnderBothCulturesAsync(token =>
+                grep.SearchAsync("alpha",
+                    new GrepRequest("needle", Context: context, MaxLinesPerFile: 2, Page: 2, PageSize: 1), token));
+
+            Assert.Contains("needle", invariant, StringComparison.Ordinal);
+            Assert.Equal(invariant, swedish);
+        }
     }
 
     [Fact]
-    public async Task Grep_paging_context_and_line_cap_answer_the_same_under_a_culture_with_its_own_minus_sign()
+    public async Task A_capped_match_list_answers_the_same_under_a_culture_with_its_own_minus_sign()
     {
-        await FixtureAsync();
-        var grep = _host.Services.GetRequiredService<GrepSearch>();
+        using var host = await IndexedAsync(SearchEngine.Substring);
+        var matches = host.Services.GetRequiredService<MatchList>();
 
         var (invariant, swedish) = await UnderBothCulturesAsync(token =>
-            grep.SearchAsync("alpha",
-                new GrepRequest("needle", Context: 1, MaxLinesPerFile: 2, Page: 2, PageSize: 1), token));
+            matches.ListAsync("alpha",
+                new MatchListRequest("needle (\\w+)", new FileFilter(null, null, null, null), Group: 1, Limit: 2),
+                token));
 
-        Assert.Contains("needle", invariant, StringComparison.Ordinal);
+        Assert.Contains("one", invariant, StringComparison.Ordinal);
         Assert.Equal(invariant, swedish);
     }
 
     [Fact]
     public async Task Glob_paging_and_tree_depth_answer_the_same_under_a_culture_with_its_own_minus_sign()
     {
-        await FixtureAsync();
-        var files = _host.Services.GetRequiredService<FileQueries>();
+        using var host = await IndexedAsync(SearchEngine.Substring);
+        var files = host.Services.GetRequiredService<FileQueries>();
 
         var (invariantGlob, swedishGlob) = await UnderBothCulturesAsync(token =>
             files.GlobAsync("alpha", new GlobRequest("**/*.cs", null, 2, 2), token));
