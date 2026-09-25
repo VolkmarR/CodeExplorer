@@ -59,8 +59,18 @@ public sealed class CommittedFile
     /// </summary>
     public bool IsBinary => _blob.IsBinary;
 
-    /// <summary>The whole content decoded as text. Call it once; there is no cache behind it.</summary>
-    public string Text() => _blob.GetContentText();
+    /// <summary>
+    ///     The whole content decoded as text, the way <see cref="BlobText" /> decides. Call it once; there
+    ///     is no cache behind it. The bytes are read once and decoded from that one buffer, because
+    ///     trying UTF-8 through a second read would inflate the blob a second time.
+    /// </summary>
+    public string Text()
+    {
+        using var stream = _blob.GetContentStream();
+        var content = new byte[Size];
+        stream.ReadExactly(content);
+        return BlobText.Decode(content);
+    }
 }
 
 /// <summary>

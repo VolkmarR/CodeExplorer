@@ -291,6 +291,27 @@ public sealed class TestHost : IDisposable
         Commit(CreateEmptyGitRepository(name), files);
 
     /// <summary>
+    ///     The same with each file's bytes written as given, for a test about how content is decoded:
+    ///     the string overload always writes UTF-8, so it cannot commit a Windows-1252 or UTF-16 file.
+    /// </summary>
+    public string CreateGitRepository(string name, Dictionary<string, byte[]> files)
+    {
+        string path = CreateEmptyGitRepository(name);
+        using var repo = new Repository(path);
+        foreach ((string relative, byte[] content) in files)
+        {
+            string full = Path.Combine(path, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllBytes(full, content);
+            Commands.Stage(repo, relative);
+        }
+
+        var author = new Signature("Test", "test@example.invalid", DateTimeOffset.UnixEpoch);
+        repo.Commit("fixture", author, author);
+        return path;
+    }
+
+    /// <summary>
     ///     An initialised repository with no commits: a remote that really is empty, as opposed to a
     ///     clone whose HEAD lost the branch it named. The two look alike from HEAD's tip and must not
     ///     be reported alike.
@@ -427,7 +448,7 @@ public sealed class TestHost : IDisposable
         return path;
     }
 
-    /// <summary>Where <see cref="CreateGitRepository" /> put the fixture with this name.</summary>
+    /// <summary>Where <see cref="CreateGitRepository(string, Dictionary{string, string})" /> put the fixture with this name.</summary>
     public string FixturePath(string name) => Path.Combine(_root, "fixtures", name);
 
     /// <summary>Deletes a fixture, which is what a remote that was removed or renamed looks like from here.</summary>
