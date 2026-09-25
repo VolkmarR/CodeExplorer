@@ -297,21 +297,18 @@ public sealed class GrepTests : IDisposable
     }
 
     /// <summary>
-    ///     The largest page a caller can spell is still just a page past the end (#233). Its offset,
-    ///     page times page size, does not fit an <c>int</c>: wrapped, it went negative, which DuckDB
-    ///     refused as an error and the multiline scan read as page 1 labelled page 2147483647.
-    /// </summary>
-    /// <summary>
     ///     The literal prefilter must never drop a file that matches (#234). Each pattern once fed the
     ///     filter a literal the match does not contain — the digits of <c>\x41</c>, the class name of
     ///     <c>\pL</c>, the <c>]</c> ending a <c>[:digit:]</c>, a newline no single line can hold — and
     ///     the unfiltered recount went through the same filter, so the miss looked like a real one.
+    ///     One engine is enough: the multiline scan never reads the full-text index.
     /// </summary>
     [Theory]
     [InlineData("\\x41BC")]
     [InlineData("\\pLfoo")]
     [InlineData("[[:digit:]]x")]
     [InlineData("foo,\n  bar")]
+    [InlineData("foo,\\\n  bar")]
     public async Task Multiline_prefilter_keeps_every_file_that_matches(string query)
     {
         _host = new TestHost(SearchEngine.Substring);
@@ -327,6 +324,11 @@ public sealed class GrepTests : IDisposable
         Assert.Contains("one/src/Fixture.cs  -  1 match", text);
     }
 
+    /// <summary>
+    ///     The largest page a caller can spell is still just a page past the end (#233). Its offset,
+    ///     page times page size, does not fit an <c>int</c>: wrapped, it went negative, which DuckDB
+    ///     refused as an error and the multiline scan read as page 1 labelled page 2147483647.
+    /// </summary>
     [Theory]
     [InlineData(SearchEngine.Fts, false)]
     [InlineData(SearchEngine.Substring, false)]
@@ -365,6 +367,8 @@ public sealed class GrepTests : IDisposable
     [InlineData("[^]a]bc", "bc")]
     [InlineData("[\\]x]yz", "yz")]
     [InlineData("foo,\n  bar", "  bar")]
+    [InlineData("foo,\\\n  bar", "  bar")]
+    [InlineData("ab😀?", "ab")]
     [InlineData("[abc", null)]
     public void Required_literal_is_sound(string pattern, string? expected) =>
         Assert.Equal(expected, Search.GrepSearch.RequiredLiteral(pattern));
