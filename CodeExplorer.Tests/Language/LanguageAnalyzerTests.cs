@@ -323,11 +323,12 @@ public sealed class LanguageAnalyzerTests
     [Theory]
     // At the top level a leading `*` is a multiplication or a generator method, and a `/* */`
     // continuation line is always inside the comment the scan already carries (#240).
-    [InlineData("cs", "    * quantity;", "quantity")]
-    [InlineData("ts", "  *entries() {", "entries")]
-    [InlineData("js", "  *entries() {", "entries")]
-    public void A_leading_star_outside_a_comment_is_code(string extension, string line, string symbol) =>
-        Assert.NotEqual(ReferenceKind.Comment, Kind(extension, line, symbol));
+    [InlineData("cs", "    * quantity;", "quantity", ReferenceKind.Other)]
+    [InlineData("ts", "  *entries() {", "entries", ReferenceKind.Call)]
+    [InlineData("js", "  *entries() {", "entries", ReferenceKind.Call)]
+    public void A_leading_star_outside_a_comment_is_code(string extension, string line, string symbol,
+        ReferenceKind expected) =>
+        Assert.Equal(expected, Kind(extension, line, symbol));
 
     [Fact]
     public void A_leading_star_is_still_a_comment_where_the_language_writes_one()
