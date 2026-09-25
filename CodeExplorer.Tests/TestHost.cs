@@ -11,6 +11,7 @@ using LibGit2Sharp;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -94,9 +95,16 @@ public sealed class TestHost : IDisposable
     /// </summary>
     public IServiceProvider Services => Factory.Services;
 
+    /// <summary>
+    ///     What the server logged, across restarts, for a test whose subject is a line only the operator
+    ///     reads: a detail kept out of a caller-facing message still has to reach someone.
+    /// </summary>
+    public LogProbe Logs { get; } = new();
+
     private WebApplicationFactory<Program> Build() =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
+            builder.ConfigureServices(services => services.AddSingleton<ILoggerProvider>(Logs));
             builder.UseSetting("Storage:DataDirectory", DataDirectory);
             builder.UseSetting("Storage:DurableDirectory", DurableDirectory);
             builder.UseSetting("Index:SearchEngine", _engine.ToString());
@@ -421,8 +429,11 @@ public sealed class TestHost : IDisposable
     /// <summary>Deletes a fixture, which is what a remote that was removed or renamed looks like from here.</summary>
     public void RemoveGitRepository(string name) => DeleteTree(FixturePath(name));
 
-    /// <summary>What the host was pointed at. The layout under it is named by the members above.</summary>
-    private string DataDirectory => Path.Combine(_root, "data");
+    /// <summary>
+    ///     What the host was pointed at. The layout under it is named by the members above; it is public
+    ///     for a test asserting that a message a caller reads does not disclose it.
+    /// </summary>
+    public string DataDirectory => Path.Combine(_root, "data");
 
     /// <param name="slug">The project's slug, which is also its display name unless <paramref name="name" /> says otherwise.</param>
     /// <param name="singleRepository">Declares the project single-repository (ADR-0006).</param>
