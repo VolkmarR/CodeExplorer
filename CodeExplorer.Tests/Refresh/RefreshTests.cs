@@ -159,6 +159,8 @@ public sealed class RefreshTests : IDisposable
             // and DuckDB's own fault switch makes every checkpoint stop short of emptying a log. An open
             // transaction does not do it: DuckDB 1.5 checkpoints committed rows past a reader and past
             // an uncommitted writer alike, so this is the only way found to keep a log beside the shadow.
+            // The switch also makes the checkpoint itself fail, so both reasons to refuse hold at once;
+            // DuckDB offers no state where a checkpoint succeeds and a log survives it.
             await straggler.ExecuteAsync("CREATE TABLE \"alpha$shadow\".main.straggler AS SELECT 1 AS one", Ct);
             await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
         }
