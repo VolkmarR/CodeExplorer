@@ -296,6 +296,27 @@ public sealed class GrepTests : IDisposable
         Assert.DoesNotContain("No matches", text);
     }
 
+    /// <summary>
+    ///     The largest page a caller can spell is still just a page past the end (#233). Its offset,
+    ///     page times page size, does not fit an <c>int</c>: wrapped, it went negative, which DuckDB
+    ///     refused as an error and the multiline scan read as page 1 labelled page 2147483647.
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts, false)]
+    [InlineData(SearchEngine.Substring, false)]
+    [InlineData(SearchEngine.Substring, true)]
+    public async Task The_largest_page_is_a_page_past_the_end_and_not_an_error(SearchEngine engine, bool multiline)
+    {
+        await using var client = await StartAsync(engine);
+
+        string text = await GrepAsync(client, new Dictionary<string, object?>
+            { ["query"] = "needle", ["multiline"] = multiline, ["page"] = int.MaxValue, ["pageSize"] = 100 });
+
+        Assert.Contains("3 files match in total", text);
+        Assert.Contains($"Page {int.MaxValue} is past the end; the last page is 1.", text);
+        Assert.DoesNotContain("one/src/Orders.cs", text);
+    }
+
     [Theory]
     [InlineData("Update\\([^)]*Status\\s*=", "Update(")]
     [InlineData("abc|def", null)]

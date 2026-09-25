@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Reading;
 using CodeExplorer.Search;
@@ -183,6 +184,26 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
     }
 
     /// <summary>
+    ///     A line number too large for an <c>int</c> is a refusal of its own entry (#233). It threw from
+    ///     the parse instead, and the whole call failed with the well-formed entries beside it.
+    /// </summary>
+    [Fact]
+    public async Task Read_file_refuses_a_line_number_too_large_for_its_entry_alone()
+    {
+        await using var client = await StartAsync();
+
+        string reply = await ReadAsync(client, "one/src/Orders.cs:99999999999", "two/lib/index.ts:1-5",
+            "one/src/Orders.cs:2-99999999999", "one/src/Orders.cs:١٢");
+
+        // Arabic-Indic digits are not a range: the entry is a path, and a path with no file is a miss.
+        Assert.Contains("one/src/Orders.cs:١٢", reply);
+        Assert.Contains("\"one/src/Orders.cs:99999999999\" names a line past 2147483647", reply);
+        Assert.Contains("\"one/src/Orders.cs:2-99999999999\" names a line past 2147483647", reply);
+        Assert.Contains("1  export function needle() {}", reply);
+        Assert.DoesNotContain("class Orders", reply);
+    }
+
+    /// <summary>
     ///     The mistake three agents in the Edilverso evaluation made: a path prefixed with the slug the
     ///     project is known by, in a project that names its files without one. It parses as a directory,
     ///     misses, and the miss then names the repository the agent thought it was addressing — which
@@ -345,6 +366,39 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
         Assert.Contains("10 files matching \"radix/src/g0/f000*\":\n", small);
         Assert.DoesNotContain("crosses directory separators", small);
         Assert.DoesNotContain("narrow the glob", small);
+    }
+
+    /// <summary>
+    ///     A page size past <see cref="IndexReader.MaxFiles" /> pages by the size a page actually holds
+    ///     (#233). The offset was the asked size and the page the clamped one, so page 2 of 5000 started
+    ///     at row 5001 of a 2100-row match and rows 2001 to 2100 could not be reached at all.
+    /// </summary>
+    [Fact]
+    public async Task Browsing_past_the_page_size_ceiling_reaches_every_file_exactly_once()
+    {
+        using var http = _host.CreateClient();
+        var seen = new List<string>();
+        for (int page = 1; page <= 3; page++)
+        {
+            var listing = await http.GetFromJsonAsync<FileListResponse>(
+                $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=5000&page={page}",
+                TestContext.Current.CancellationToken);
+            Assert.NotNull(listing);
+            Assert.Equal(2100, listing.Total);
+            Assert.Equal(2000, listing.PageSize);
+            seen.AddRange(listing.Files.Select(f => f.QualifiedPath));
+        }
+
+        Assert.Equal(2100, seen.Count);
+        Assert.Equal(2100, seen.Distinct(StringComparer.Ordinal).Count());
+
+        // The largest page is past the end like any other, not an offset wrapped negative.
+        var last = await http.GetFromJsonAsync<FileListResponse>(
+            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=5000&page={int.MaxValue}",
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(last);
+        Assert.Equal(2100, last.Total);
+        Assert.Empty(last.Files);
     }
 
     [Fact]

@@ -126,6 +126,8 @@ public sealed partial class HistoryQueries
 
             bool hasHistory = await HasHistoryAsync(index, token);
             int limit = Math.Clamp(request.Limit, 1, _maxCommits);
+            // Clamped only from below, so the offset below is a long: a large page times the limit wraps
+            // an int negative, which DuckDB refuses as an error instead of answering an empty page (#233).
             int page = Math.Max(1, request.Page);
             string? scope = index.Repository?.Slug;
             // Who the filter matched is read before the page is, so that a page which comes back empty
@@ -143,7 +145,7 @@ public sealed partial class HistoryQueries
                 ? await MatchedAsync(index, scope, asked, path, token)
                 : null;
             var commits = hasHistory && author?.Addresses != 0
-                ? await CommitsAsync(index, scope, asked, mentions, path, limit, (page - 1) * limit, token)
+                ? await CommitsAsync(index, scope, asked, mentions, path, limit, (page - 1L) * limit, token)
                 : [];
             return new LogAnswer(hasHistory, index.Repository, page, limit, commits, author, mentions, path);
         }, cancellationToken), (LogAnswer answer) => new Telemetry.Measured(answer.Commits.Count, 0));
@@ -174,10 +176,11 @@ public sealed partial class HistoryQueries
         Telemetry.Search(slug, _engine, () => readers.OverIndexAsync(slug, request.Repository, async (index, token) =>
         {
             int pageSize = Math.Clamp(request.PageSize, 1, _maxCommits);
+            // A long offset, for the reason LogAsync gives.
             int page = Math.Max(1, request.Page);
             string? scope = index.Repository?.Slug;
             long total = await CommitCountAsync(index, scope, token);
-            var commits = await LoggedAsync(index, scope, pageSize, (page - 1) * pageSize, token);
+            var commits = await LoggedAsync(index, scope, pageSize, (page - 1L) * pageSize, token);
             return new ChangeLogAnswer(total, page, pageSize, commits);
         }, cancellationToken), (ChangeLogAnswer answer) => new Telemetry.Measured(answer.Commits.Count, 0));
 
@@ -187,7 +190,7 @@ public sealed partial class HistoryQueries
     ///     an author date does not (ADR-0007).
     /// </summary>
     private static async Task<IReadOnlyList<RecordedChange>> CommitsAsync(IndexReader index, string? repositorySlug,
-        string? author, string? message, PathScope? path, int limit, int skip, CancellationToken cancellationToken)
+        string? author, string? message, PathScope? path, int limit, long skip, CancellationToken cancellationToken)
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug, author, message,
             path?.RepositorySlug, path?.PathInRepository);
@@ -330,7 +333,7 @@ public sealed partial class HistoryQueries
     ///     Ordered by <c>commit_id</c> for the reason <see cref="CommitsAsync" /> gives.
     /// </summary>
     private static async Task<IReadOnlyList<LoggedCommit>> LoggedAsync(IndexReader index, string? repositorySlug,
-        int limit, int skip, CancellationToken cancellationToken)
+        int limit, long skip, CancellationToken cancellationToken)
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
         await using var command = index.Connection.Query(
@@ -370,7 +373,7 @@ public sealed partial class HistoryQueries
     ///     aggregate it follows. The sums are cast because DuckDB widens <c>sum</c> of an INTEGER to
     ///     HUGEINT, which the driver hands back as a BigInteger.
     /// </summary>
-    private static string LoggedStatement(string scope, int limit, int skip, bool newestFirst)
+    private static string LoggedStatement(string scope, int limit, long skip, bool newestFirst)
     {
         // A literal chosen here and two integers, never caller text, so all three are safe to inline.
         string order = newestFirst ? "DESC" : "ASC";

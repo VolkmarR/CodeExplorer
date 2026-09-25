@@ -362,6 +362,22 @@ public sealed class SearchEndpointTests
     }
 
     /// <summary>
+    ///     The largest page a caller can spell is an empty page that still counts the log (#233), not a
+    ///     500: page times page size wrapped an <c>int</c> negative and DuckDB refused the offset.
+    /// </summary>
+    [Fact]
+    public async Task The_change_log_answers_the_largest_page_as_an_empty_page()
+    {
+        using var host = await ProjectAsync(SearchEngine.Substring);
+
+        var page = await GetAsync<ChangeLogAnswer>(host, $"/api/projects/alpha/commits?page={int.MaxValue}&pageSize=50");
+
+        Assert.Equal(2, page.Total);
+        Assert.Equal(int.MaxValue, page.Page);
+        Assert.Empty(page.Commits);
+    }
+
+    /// <summary>
     ///     The commit page's own read: one commit by SHA, without paging the log to find it. It answers
     ///     the same record the log listed — same sums, same body — because the page and the row it was
     ///     linked from must not disagree, and a SHA the index does not hold is the repository's usual

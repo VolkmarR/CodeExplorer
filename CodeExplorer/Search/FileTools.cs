@@ -547,10 +547,11 @@ internal sealed partial class FileTools(
 
     // "file.cs:1:60" would otherwise parse as the file "file.cs:1" read from line 60, a real-looking
     // "no indexed file" answer to a typo; it is caught before the range is read.
-    [GeneratedRegex(@"^(?<path>.+?):(?<a>\d+):(?<b>\d+)$")]
+    // [0-9] rather than \d, which .NET matches for any Unicode digit that int.Parse then refuses (#233).
+    [GeneratedRegex(@"^(?<path>.+?):(?<a>[0-9]+):(?<b>[0-9]+)$")]
     private static partial Regex ColonRange();
 
-    [GeneratedRegex(@"^(?<path>.+?):(?<a>\d+)(?:-(?<b>\d+))?$")]
+    [GeneratedRegex(@"^(?<path>.+?):(?<a>[0-9]+)(?:-(?<b>[0-9]+))?$")]
     private static partial Regex Range();
 
     /// <summary>
@@ -569,14 +570,23 @@ internal sealed partial class FileTools(
                     + $"\"{colon.Groups["path"].Value}:{colon.Groups["a"].Value}-{colon.Groups["b"].Value}\".");
 
             if (Range().Match(trimmed) is not { Success: true } range)
-                return new ReadTarget(trimmed, startLine, startLine + maxLines - 1, false);
+                return new ReadTarget(trimmed, startLine, Last(startLine, maxLines), false);
 
-            int start = Math.Max(1, int.Parse(range.Groups["a"].Value, CultureInfo.InvariantCulture));
+            // A number too large for an int is refused as this entry's answer: thrown, it failed the whole
+            // call and every well-formed entry beside it (#233).
+            bool fits = int.TryParse(range.Groups["a"].Value, CultureInfo.InvariantCulture, out int first);
+            int end = 0;
+            if (range.Groups["b"].Success)
+                fits &= int.TryParse(range.Groups["b"].Value, CultureInfo.InvariantCulture, out end);
+            if (!fits)
+                return Refused(trimmed,
+                    $"\"{trimmed}\" names a line past {int.MaxValue}, which no file has. Write the range in the file's own line numbers, as grep reports them.");
+
+            int start = Math.Max(1, first);
             if (!range.Groups["b"].Success)
                 // "path:120" reads maxLines from there; "path:120-180" reads exactly that window.
-                return new ReadTarget(range.Groups["path"].Value, start, start + maxLines - 1, false);
+                return new ReadTarget(range.Groups["path"].Value, start, Last(start, maxLines), false);
 
-            int end = int.Parse(range.Groups["b"].Value, CultureInfo.InvariantCulture);
             if (end < start)
                 return Refused(trimmed,
                     $"\"{trimmed}\" ends before it starts. Write the range as first-last: \"{range.Groups["path"].Value}:{end}-{start}\".");
@@ -584,5 +594,11 @@ internal sealed partial class FileTools(
         }
 
         private static ReadTarget Refused(string path, string problem) => new(path, 0, 0, false, problem);
+
+        /// <summary>
+        ///     The last line of a window of <paramref name="lines" /> from <paramref name="start" />, held at
+        ///     <see cref="int.MaxValue" />: a start near it would otherwise wrap the end negative.
+        /// </summary>
+        private static int Last(int start, int lines) => (int)Math.Min(start + (long)lines - 1, int.MaxValue);
     }
 }
