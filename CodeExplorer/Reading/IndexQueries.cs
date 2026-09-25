@@ -340,6 +340,21 @@ internal static class IndexQueries
     }
 
     /// <summary>
+    ///     Narrows a query on <c>commits c</c> to a window, inclusive at both ends, binding
+    ///     <c>$since</c> and <c>$until</c>. The one place a window becomes SQL, so every section that
+    ///     answers for a window counts the same commits.
+    /// </summary>
+    internal static void InWindow(HistoryWindow window, List<string> conditions, List<DuckDBParameter> parameters)
+    {
+        // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
+        // ReaderColumns.EpochInstant gives: it keeps the comparison off the session time zone, and it
+        // keeps a DateTimeOffset out of the driver's parameter mapping entirely.
+        parameters.Add(new DuckDBParameter("since", window.Since.ToUnixTimeSeconds()));
+        parameters.Add(new DuckDBParameter("until", window.Until.ToUnixTimeSeconds()));
+        conditions.Add("epoch(c.authored_at) BETWEEN $since AND $until");
+    }
+
+    /// <summary>
     ///     The window and the scope both rankings of churn count over, as conditions over
     ///     <c>commit_files cf</c> joined to <c>commits c</c>. Written once because the file ranking and
     ///     the directory rollup answer the same question at two grains, and a scope that meant
@@ -350,15 +365,9 @@ internal static class IndexQueries
     internal static (List<string> Conditions, List<DuckDBParameter> Parameters) ChurnScope(ProjectPaths paths,
         HistoryWindow window, string? repositorySlug, string? directoryInRepository, ChurnFilters filters)
     {
-        // The window is compared in epoch seconds rather than as a timestamp parameter, for the reason
-        // ReaderColumns.EpochInstant gives: it keeps the comparison off the session time zone, and it
-        // keeps a DateTimeOffset out of the driver's parameter mapping entirely.
-        var parameters = new List<DuckDBParameter>
-        {
-            new("since", window.Since.ToUnixTimeSeconds()),
-            new("until", window.Until.ToUnixTimeSeconds())
-        };
-        var conditions = new List<string> { "epoch(c.authored_at) BETWEEN $since AND $until" };
+        var parameters = new List<DuckDBParameter>();
+        var conditions = new List<string>();
+        InWindow(window, conditions, parameters);
         if (repositorySlug is not null)
         {
             conditions.Add("c.repo_slug = $r");
