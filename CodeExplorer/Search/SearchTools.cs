@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text;
 using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using ModelContextProtocol.Server;
 
 namespace CodeExplorer.Search;
@@ -40,7 +41,7 @@ internal sealed partial class SearchTools(
         [Description("Match case exactly. Default false.")]
         bool caseSensitive = false,
         [Description("""
-                     Only search files whose qualified path matches. Comma-separated terms are OR-ed, so "main/src/Api,main/src/Domain" searches both in one call. A term with * or ? is a glob over the whole qualified path (* crosses directory separators); otherwise it is a plain substring. Case-insensitive.
+                     Only search files whose qualified path matches. Comma-separated terms are OR-ed, so "main/src/Api,main/src/Domain" searches both in one call. A term with * or ? is a glob over the whole qualified path (* crosses directory separators); otherwise it is a plain substring. Case-insensitive. At most 32 terms, each at most 256 characters.
                      """)]
         string? path = null,
         [Description("""
@@ -180,11 +181,11 @@ internal sealed partial class SearchTools(
                 }
 
                 // A page of one is read whatever the file's size, and this is the page that file is on.
-                long alone = ((long)(result.Page - 1) * result.PageSize) + i + 1;
+                long pageOfOne = Paging.Skip(result.Page, result.PageSize) + i + 1;
                 text.Append(CultureInfo.InvariantCulture,
                     $"\n{file.QualifiedPath}  -  {file.MatchCount} {ToolReply.Plural(file.MatchCount, "match", "matches")}\n"
-                    + $"  ... lines not shown: a multiline page reads at most {GrepSearch.MaxMultilinePageBytes / (1024 * 1024)} MiB of file content, and the files above used it. "
-                    + $"Call grep with pageSize=1 and page={alone} to see this file's lines.\n");
+                    + $"  ... lines not shown: a multiline page reads at most {GrepSearch.MaxMultilinePageMiB} MiB of file content, and the files above used it. "
+                    + $"Call grep with pageSize=1 and page={pageOfOne} to see this file's lines.\n");
             }
         }
 

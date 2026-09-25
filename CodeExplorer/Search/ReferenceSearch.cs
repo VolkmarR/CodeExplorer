@@ -137,6 +137,7 @@ public sealed class ReferenceSearch(IndexReaders readers)
         CancellationToken cancellationToken)
     {
         string symbol = request.Symbol.Trim();
+        if (request.Filter.Refusal is { } refused) return new Problem(refused);
         if (SearchQuery.Unusable(symbol, "find_references") is { } unusable) return new Problem(unusable);
 
         return await readers.OverIndexAsync(slug, request.Filter.Repository,

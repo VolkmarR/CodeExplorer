@@ -17,6 +17,14 @@ namespace CodeExplorer.Reading;
 public static class GlobRegex
 {
     /// <summary>
+    ///     The longest glob a caller may pass. RE2 is linear, but in the pattern as well as the path, and
+    ///     a pattern it compiles is held in memory for the statement: a qualified path worth matching is a
+    ///     few segments deep, and past this it is a path pasted by mistake or a pattern built to be large.
+    ///     The same ceiling the overview's excluded paths have (<see cref="ExcludedPaths.MaxLength" />).
+    /// </summary>
+    public const int MaxLength = ExcludedPaths.MaxLength;
+
+    /// <summary>
     ///     <paramref name="glob" /> as RE2, unanchored: a caller matches it whole with
     ///     <c>regexp_full_match</c> or wraps it in <c>^…$</c>.
     /// </summary>
@@ -70,14 +78,9 @@ public static class GlobRegex
         {
             if (glob[i] != '[' || ClassEnd(glob, i) is not (var end and > 0)) continue;
             string members = glob[(i + 1)..end];
-            if (members.StartsWith('!')) members = members[1..];
-            for (int j = 0; j + 2 < members.Length; j++)
-                if (members[j + 1] == '-')
-                {
-                    if (members[j] > members[j + 2]) return members.Substring(j, 3);
-                    j += 2;
-                }
-
+            foreach ((char low, char high) in Members(members.StartsWith('!') ? members[1..] : members))
+                if (low > high)
+                    return $"{low}-{high}";
             i = end;
         }
 
@@ -91,26 +94,39 @@ public static class GlobRegex
     private static void Class(StringBuilder regex, string members)
     {
         bool negated = members.StartsWith('!');
-        if (negated) members = members[1..];
-
         var set = new StringBuilder();
-        for (int j = 0; j < members.Length; j++)
+        foreach ((char low, char high) in Members(negated ? members[1..] : members))
         {
-            if (j + 2 < members.Length && members[j + 1] == '-')
-            {
-                // Reversed, no character is within it, which is how GLOB compares one: it adds nothing.
-                if (members[j] <= members[j + 2])
-                    set.Append(Escaped(members[j], true)).Append('-').Append(Escaped(members[j + 2], true));
-                j += 2;
-            }
-            else
-                set.Append(Escaped(members[j], true));
+            // Reversed, no character is within it, which is how GLOB compares one: it adds nothing.
+            // Every caller refuses one first (ReversedRange); dropped here as well so that one which
+            // did not gets GLOB's answer rather than an RE2 compile error.
+            if (low > high) continue;
+            set.Append(Escaped(low, true));
+            if (high != low) set.Append('-').Append(Escaped(high, true));
         }
 
         // A class left with no members matches no character, or every one when negated. RE2 has no
         // empty class to write, so each is spelled as the set it is.
         if (set.Length == 0) regex.Append(negated ? @"[\x{0}-\x{10FFFF}]" : @"[^\x{0}-\x{10FFFF}]");
         else regex.Append(negated ? "[^" : "[").Append(set).Append(']');
+    }
+
+    /// <summary>
+    ///     A class's members as GLOB reads them, a single character being a range of one: a <c>-</c>
+    ///     between two characters makes a range, and one at either end is a member.
+    /// </summary>
+    private static IEnumerable<(char Low, char High)> Members(string members)
+    {
+        for (int j = 0; j < members.Length; j++)
+        {
+            if (j + 2 < members.Length && members[j + 1] == '-')
+            {
+                yield return (members[j], members[j + 2]);
+                j += 2;
+            }
+            else
+                yield return (members[j], members[j]);
+        }
     }
 
     /// <summary>How many stars run from <paramref name="start" />, so a run is read as the one it means.</summary>

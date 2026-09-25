@@ -25,6 +25,12 @@ public sealed record FileFilter(
         !string.IsNullOrWhiteSpace(Exclude) || !string.IsNullOrWhiteSpace(Extension);
 
     /// <summary>
+    ///     Why the path terms cannot be run as written, or null (<see cref="PathTerms.Refusal" />). Asked
+    ///     by every search before it opens the index, so a malformed filter is a sentence and not a miss.
+    /// </summary>
+    public string? Refusal => PathTerms.Refusal(Path, "path") ?? PathTerms.Refusal(Exclude, "exclude");
+
+    /// <summary>
     ///     The filters as a <c>WHERE</c> tail against the <c>files</c> alias <c>f</c>, starting with
     ///     <c>AND</c> so it appends to a condition the caller already has. Path terms are OR-ed (one
     ///     call over several folders), exclude terms AND-ed, both against the lower-cased qualified

@@ -103,6 +103,16 @@ public sealed class FileQueries(IndexReaders readers)
     public const int MaxLinesPerRead = 100_000;
 
     /// <summary>
+    ///     The most text one read may load once a window has been read, in characters: a line budget
+    ///     alone is a hundred entries over one minified file, each a single line of up to
+    ///     <c>Index:MaxFileBytes</c>. Once the windows read reach this, the rest are not read. The first
+    ///     window always is, so a file view still opens a file larger than this; what one read holds is
+    ///     therefore this, or one window, whichever is larger. Sixteen million characters is a hundred
+    ///     thousand lines of ordinary source with room to spare, so the line budget bites first there.
+    /// </summary>
+    public const int MaxCharactersPerRead = 16_000_000;
+
+    /// <summary>
     ///     The most windows one read may ask for. Each is a locate and a read of the index, and the reply
     ///     budget is shared between them, so past a hundred every window is a few lines long and the call
     ///     is better split (GHSA-v284-9964-6mjr).
@@ -138,7 +148,9 @@ public sealed class FileQueries(IndexReaders readers)
         return readers.OverIndexAsync(slug, null, async (index, token) =>
         {
             var reads = new List<FileRead>(request.Windows.Count);
+            // What is left of the line budget, which the character budget also spends to zero.
             int budget = MaxLinesPerRead;
+            long characters = 0;
             // Per request, because the tool invites several windows into one file and each was locating
             // it and reading its history again (#180). The lease holds the index still, so a remembered
             // answer is the answer. Keyed by the path exactly as written, because a miss quotes that
@@ -152,7 +164,7 @@ public sealed class FileQueries(IndexReaders readers)
                 if (budget == 0)
                 {
                     reads.Add(new FileRead(window, null, new Problem(
-                        $"'{window.Path}' was not read: the entries before it already read {MaxLinesPerRead} lines, the most one call reads. Read it in a call of its own."),
+                        $"'{window.Path}' was not read: the entries before it already read as much as one call reads ({MaxLinesPerRead} lines, or {MaxCharactersPerRead / 1_000_000} million characters). Read it in a call of its own."),
                         [], null));
                     continue;
                 }
@@ -174,6 +186,8 @@ public sealed class FileQueries(IndexReaders readers)
                     ? await index.LinesAsync(file.FileId, start, end, token)
                     : [];
                 budget -= lines.Count;
+                characters += lines.Sum(line => (long)line.Length);
+                if (characters >= MaxCharactersPerRead) budget = 0;
                 // Carried on the read and not fetched separately: they are columns on the row the read
                 // already has in hand, so a second request would be one for data this one was holding.
                 FileCommits? history = null;
@@ -274,6 +288,8 @@ public sealed class FileQueries(IndexReaders readers)
     {
         if (glob.Length == 0)
             return "The glob is empty. Pass a pattern such as \"*.cs\" or \"main/src/*Handler.cs\".";
+        if (glob.Length > GlobRegex.MaxLength)
+            return $"A glob may be at most {GlobRegex.MaxLength} characters; '{glob[..40]}…' is longer. A path is a few segments; match the name part with *.";
         if (glob.Contains('{') || glob.Contains('}'))
             return $"Brace expansion is not supported, so \"{glob}\" matches nothing. Use one call per alternative, "
                    // "*.cs" and not "**/*.cs": `*` crosses separators, so the leading "**/" adds nothing
