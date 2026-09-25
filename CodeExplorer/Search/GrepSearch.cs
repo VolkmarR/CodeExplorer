@@ -390,13 +390,21 @@ public sealed partial class GrepSearch(IndexReaders readers)
         string flags = request.CaseSensitive ? "s" : "si";
         // Whole words are counted and marked from their tokenising form, whose group 1 is the match
         // (Re2.WholeWordTokens): the whole-word test alone loses a match one character from the last.
+        // The tokens form yields an entry for every word of a document, so it is extracted only from a
+        // document the whole-word test has already found a match in; the plain pattern's extract is
+        // empty exactly where there is none, and needs no test in front of it.
         bool wholeWord = request.WholeWord;
-        var tokens = new DuckDBParameter("tokens", Re2.WholeWordTokens(query));
+        var marking = wholeWord
+            ? new DuckDBParameter("tokens", Re2.WholeWordTokens(query))
+            : new DuckDBParameter("q", query);
         List<DuckDBParameter> matchParameters = wholeWord
-            ? [new("q", Re2.WholeWord(query)), tokens, new("flags", flags)]
-            : [new("q", query), new("flags", flags)];
+            ? [new("q", Re2.WholeWord(query)), marking, new("flags", flags)]
+            : [marking, new("flags", flags)];
         string matchCount = wholeWord
-            ? "len(list_filter(regexp_extract_all(content, $tokens, 1, $flags), v -> v <> ''))"
+            ? """
+              CASE WHEN regexp_matches(content, $q, $flags)
+                   THEN len(list_filter(regexp_extract_all(content, $tokens, 1, $flags), v -> v <> '')) ELSE 0 END
+              """
             : "len(regexp_extract_all(content, $q, 0, $flags))";
         string literalFilter = "";
         if (RequiredLiteral(query) is { } literal)
@@ -452,17 +460,17 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // the only groups a rewrite can name without counting the caller's are 0 and 1.
         // WithoutMarkedCopies then drops the copy of group 1 each one repeats.
         string ids = string.Join(",", pageFiles.Select(f => f.FileId.ToString(CultureInfo.InvariantCulture)));
-        string marking = wholeWord
+        string rewrite = wholeWord
             ? @"$tokens, chr(1) || '\1' || chr(2) || '\0'"
             : @"'(' || $q || ')', chr(1) || '\1' || chr(2)";
         var marked = new Dictionary<long, string>();
         await using (var command = connection.Query($"""
                                                      {Documents($" AND f.file_id IN ({ids})")}
                                                      SELECT file_id,
-                                                            regexp_replace(content, {marking}, $gflags) AS marked
+                                                            regexp_replace(content, {rewrite}, $gflags) AS marked
                                                      FROM docs
                                                      """,
-                         [wholeWord ? tokens : new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
+                         [marking, new DuckDBParameter("gflags", flags + "g")]))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
