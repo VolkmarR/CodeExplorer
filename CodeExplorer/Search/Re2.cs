@@ -90,6 +90,66 @@ internal static class Re2
         return groups;
     }
 
+    /// <summary>
+    ///     The index of the last character of the escape starting at <paramref name="start" />, in RE2's
+    ///     forms: <c>\xHH</c>, <c>\x{...}</c>, <c>\pX</c>, <c>\p{...}</c>, <c>\Q...\E</c>, up to three octal
+    ///     digits, or a single character. A malformed tail runs to the end, which RE2 rejects anyway.
+    /// </summary>
+    public static int EscapeEnd(string pattern, int start)
+    {
+        int last = pattern.Length - 1;
+        int i = start + 1;
+        if (i > last) return last;
+        switch (pattern[i])
+        {
+            case 'x' or 'p' or 'P' when i < last && pattern[i + 1] == '{':
+                int close = pattern.IndexOf('}', i);
+                return close < 0 ? last : close;
+            case 'x':
+                return Math.Min(i + 2, last);
+            case 'p' or 'P':
+                return Math.Min(i + 1, last);
+            case 'Q':
+                int end = pattern.IndexOf("\\E", i, StringComparison.Ordinal);
+                return end < 0 ? last : end + 1;
+            case >= '0' and <= '7':
+                while (i < last && i - start < 3 && pattern[i + 1] is >= '0' and <= '7') i++;
+                return i;
+            default:
+                return i;
+        }
+    }
+
+    /// <summary>
+    ///     The index of the <c>]</c> closing the class opened at <paramref name="start" />, or -1. A
+    ///     <c>]</c> right after <c>[</c> or <c>[^</c> is a member, as are escapes and <c>[:name:]</c>.
+    /// </summary>
+    public static int ClassEnd(string pattern, int start)
+    {
+        int i = start + 1;
+        if (i < pattern.Length && pattern[i] == '^') i++;
+        if (i < pattern.Length && pattern[i] == ']') i++;
+        while (i < pattern.Length)
+        {
+            switch (pattern[i])
+            {
+                case ']':
+                    return i;
+                case '\\':
+                    i = EscapeEnd(pattern, i);
+                    break;
+                case '[' when i + 1 < pattern.Length && pattern[i + 1] == ':':
+                    int close = pattern.IndexOf(":]", i + 2, StringComparison.Ordinal);
+                    if (close >= 0) i = close + 1;
+                    break;
+            }
+
+            i++;
+        }
+
+        return -1;
+    }
+
     private static string FirstLine(string text)
     {
         int newline = text.IndexOf('\n');
