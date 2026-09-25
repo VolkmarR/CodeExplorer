@@ -76,12 +76,11 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     private readonly string _scratch =
         Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "scratch");
 
-    // One gate per project, so a fetch, a store and a remove of it never overlap (#229). A store replaces the
-    // tables one at a time in the order a fetch reads them, so the two overlapping could fetch the
-    // older index_info and then a mix of both generations behind it — a set that passes every check a
-    // fetch makes, because each table is present and the version matches. Per project, like the writer
-    // gates in ProjectIndexes, so one project's upload does not hold up another's restore. Kept for the
-    // life of the process for the reason those are: the count is bounded by the control database.
+    // One gate per project, so a fetch, a store and a remove of it never overlap (#229). A store replaces
+    // the tables in the order a fetch reads them, so an overlap could read the older index_info and then
+    // a mix of both generations — a set every check a fetch makes would pass. Per project and kept for
+    // the life of the process, like the writer gates in ProjectIndexes and for the same reasons. In
+    // process only: across two replicas the #187 ordering in StoreAsync is still the only guard.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -92,26 +91,30 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     in place and two generations behind them (#187). Removing <see cref="_indexInfo" /> first and
     ///     writing it last makes that state a copy without it, which a fetch already reads as none: the
     ///     next refresh rebuilds from git rather than carrying history forward from a mixed set.
-    ///     A fetch of the same project waits for it, and it for a fetch: see <see cref="_gates" />.
+    ///     Every table is exported before anything is stored, so the gate a fetch waits on (see
+    ///     <see cref="_gates" />) is held for the transfer alone and not for the export of <c>lines</c>.
     /// </summary>
     public async Task StoreAsync(DuckDBConnection connection, string slug, CancellationToken cancellationToken)
     {
-        using var held = await HoldAsync(slug, cancellationToken);
         using var recording = Telemetry.DurableCopy(slug, Telemetry.StoreOperation);
         string scratch = Scratch(slug);
         try
         {
-            await store.RemoveOneAsync(Name(slug, _indexInfo), cancellationToken);
             foreach (string table in _tables)
-            {
-                string local = Path.Combine(scratch, table + ".parquet");
                 // ZSTD over the default SNAPPY: the transfer and the blob bill are what this is paying
                 // for, and line content compresses far enough that the extra CPU is repaid on the way
                 // back too.
                 await connection.ExecuteAsync(
-                    $"COPY (SELECT * FROM {table}) TO {IndexQuery.Literal(local)} (FORMAT parquet, COMPRESSION zstd)",
+                    $"COPY (SELECT * FROM {table}) TO {IndexQuery.Literal(Path.Combine(scratch, table + ".parquet"))} "
+                    + "(FORMAT parquet, COMPRESSION zstd)",
                     cancellationToken);
-                await store.StoreAsync(Name(slug, table), local, cancellationToken);
+
+            using (await HoldAsync(slug, cancellationToken))
+            {
+                await store.RemoveOneAsync(Name(slug, _indexInfo), cancellationToken);
+                foreach (string table in _tables)
+                    await store.StoreAsync(Name(slug, table), Path.Combine(scratch, table + ".parquet"),
+                        cancellationToken);
             }
 
             recording.Moved();
