@@ -848,12 +848,13 @@ public sealed partial class ProjectIndexes : IDisposable
         /// </summary>
         private const int _maxIdle = 4;
 
-        private readonly ConcurrentBag<DuckDBConnection> _idle = [];
+        // One lock over the generation and the idle stack, because the check and the add in Return
+        // have to be one step against Discard: lock-free, a Discard landing between them bumped the
+        // generation and emptied the pool, and the connection it had just condemned was added after it,
+        // bound to a catalog about to be detached (#241). Held for a push or a pop, never for I/O.
+        private readonly Lock _sync = new();
+        private readonly Stack<DuckDBConnection> _idle = new();
         private int _generation;
-
-        // Counted rather than asked of the bag: ConcurrentBag.Count walks its per-thread queues and
-        // takes their locks, and this is read on the way out of every lease.
-        private int _idleCount;
 
         /// <summary>
         ///     An idle connection and the generation it belongs to, read together so that what is
@@ -861,22 +862,25 @@ public sealed partial class ProjectIndexes : IDisposable
         /// </summary>
         public DuckDBConnection? Rent(out int generation)
         {
-            generation = Volatile.Read(ref _generation);
-            if (!_idle.TryTake(out var connection)) return null;
-            Interlocked.Decrement(ref _idleCount);
-            return connection;
+            lock (_sync)
+            {
+                generation = _generation;
+                return _idle.TryPop(out var connection) ? connection : null;
+            }
         }
 
         public void Return(DuckDBConnection connection, int generation)
         {
-            if (generation != Volatile.Read(ref _generation) || Volatile.Read(ref _idleCount) >= _maxIdle)
+            lock (_sync)
             {
-                connection.Dispose();
-                return;
+                if (generation == _generation && _idle.Count < _maxIdle)
+                {
+                    _idle.Push(connection);
+                    return;
+                }
             }
 
-            Interlocked.Increment(ref _idleCount);
-            _idle.Add(connection);
+            connection.Dispose();
         }
 
         /// <summary>
@@ -885,12 +889,16 @@ public sealed partial class ProjectIndexes : IDisposable
         /// </summary>
         public void Discard()
         {
-            Interlocked.Increment(ref _generation);
-            while (_idle.TryTake(out var connection))
+            DuckDBConnection[] idle;
+            lock (_sync)
             {
-                Interlocked.Decrement(ref _idleCount);
-                connection.Dispose();
+                _generation++;
+                idle = [.. _idle];
+                _idle.Clear();
             }
+
+            // Closed outside the lock: nothing can return one of these now, and a close is I/O.
+            foreach (var connection in idle) connection.Dispose();
         }
     }
 

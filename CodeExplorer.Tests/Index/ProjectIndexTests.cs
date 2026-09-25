@@ -372,6 +372,45 @@ public sealed class ProjectIndexTests : IDisposable
                 await host.ScalarsAsync("alpha", "SELECT qualified_path FROM files ORDER BY qualified_path"));
     }
 
+    /// <summary>
+    ///     A status read cancelled after its lease was granted must close the connection rather than
+    ///     pool it: the statement it abandoned can leave a result part-read behind, which the next
+    ///     borrower would inherit (#241). The cancel is fired from the lease's own measurement, the one
+    ///     moment between the lease being granted and the first statement on it, so no timing decides it.
+    /// </summary>
+    [Fact]
+    public async Task A_status_read_cancelled_mid_read_does_not_pool_its_connection()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("status-cancel", Repository("class A;\n"));
+        // One lease handed back, so the pool holds exactly this connection for the status read to borrow.
+        System.Data.Common.DbConnection pooled;
+        using (var lease = await host.Indexes.OpenAsync("status-cancel", Ct))
+            pooled = lease!.Connection;
+
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        using var listener = new System.Diagnostics.Metrics.MeterListener();
+        listener.InstrumentPublished = (instrument, meters) =>
+        {
+            if (instrument.Meter.Name == Telemetry.ServiceName) meters.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+                if (tag is { Key: Telemetry.ProjectTag, Value: "status-cancel" })
+                    cancel.Cancel();
+        });
+        listener.Start();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            host.Services.GetRequiredService<IndexReaders>().StatusAsync("status-cancel", true, cancel.Token));
+        listener.Dispose();
+
+        using var next = await host.Indexes.OpenAsync("status-cancel", Ct);
+        Assert.NotSame(pooled, next!.Connection);
+        Assert.Equal(System.Data.ConnectionState.Closed, pooled.State);
+    }
+
     private static Dictionary<string, Dictionary<string, string>> Repository(string content) =>
         new() { ["one"] = new() { ["a.cs"] = content } };
 

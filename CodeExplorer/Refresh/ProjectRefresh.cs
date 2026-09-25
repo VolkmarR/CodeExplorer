@@ -104,25 +104,37 @@ public sealed class ProjectRefresh(
         var opened = new List<OpenedRepository>();
         var skipped = new List<string>();
         int fetched = 0;
-        foreach (var repository in repositories)
+        try
         {
-            // Reported before the fetch, and counted as done after: an operator watching wants to know
-            // which repository is being transferred now, not which one finished last.
-            report(new RefreshProgress(RefreshProgress.FetchStep, _totalSteps, $"Fetching '{repository.Slug}'", fetched++,
-                repositories.Count));
-            try
+            foreach (var repository in repositories)
             {
-                // Empty and LFS are decided behind the open (CloneOpen); a refusal holds nothing to dispose.
-                var open = await clones.OpenRefreshedAsync(repository, cancellationToken);
-                if (open is CloneOpen.Refused refused) skipped.Add(refused.Explanation);
-                else opened.Add(new OpenedRepository(repository, ((CloneOpen.Opened)open).Copy));
+                // Reported before the fetch, and counted as done after: an operator watching wants to know
+                // which repository is being transferred now, not which one finished last.
+                report(new RefreshProgress(RefreshProgress.FetchStep, _totalSteps, $"Fetching '{repository.Slug}'",
+                    fetched++, repositories.Count));
+                try
+                {
+                    // Empty and LFS are decided behind the open (CloneOpen); a refusal holds nothing to dispose.
+                    var open = await clones.OpenRefreshedAsync(repository, cancellationToken);
+                    if (open is CloneOpen.Refused refused) skipped.Add(refused.Explanation);
+                    else opened.Add(new OpenedRepository(repository, ((CloneOpen.Opened)open).Copy));
+                }
+                catch (McpException ex)
+                {
+                    // Safe to swallow: the reason is reported in the summary in place of the repository,
+                    // and the other repositories still get indexed. A local copy libgit2 cannot open
+                    // arrives here too, already an McpException naming the repository (#232).
+                    skipped.Add(ex.Message);
+                }
             }
-            catch (McpException ex)
-            {
-                // Safe to swallow: the reason is reported in the summary in place of the repository,
-                // and the other repositories still get indexed.
-                skipped.Add(ex.Message);
-            }
+        }
+        catch
+        {
+            // Anything else — cancellation above all — ends the refresh before the caller owns the copies
+            // opened so far, so they are released here. Left open, their pack files stay held, and on
+            // Windows a later removal of the repository fails on them (#241).
+            foreach (var open in opened) open.LocalCopy.Dispose();
+            throw;
         }
 
         // The open copies are the caller's from here: it owns them for as long as the ingest reads them.

@@ -130,6 +130,21 @@ public sealed class IndexReaders(ProjectIndexes indexes)
             : await indexes.PeekAsync(projectSlug, cancellationToken);
         if (lease is null) return null;
 
+        try
+        {
+            return await ReadStatusAsync(lease, cancellationToken);
+        }
+        catch
+        {
+            // Not pooled, for the reason OverIndexAsync gives: a status read the operator's page
+            // abandoned is as likely to leave a statement part-read as a search an agent cancelled (#241).
+            lease.Broken();
+            throw;
+        }
+    }
+
+    private static async Task<IndexStatus?> ReadStatusAsync(IndexLease lease, CancellationToken cancellationToken)
+    {
         // epoch() for the reason ReaderColumns.EpochInstant gives.
         await using var command = lease.Connection.Query(
             "SELECT epoch(built_at) AS built_seconds, fts_indexed, single_repository FROM index_info", []);

@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using CodeExplorer.Control;
+using CodeExplorer.Git;
 using CodeExplorer.Index;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
@@ -354,6 +356,90 @@ public sealed class RefreshTests : IDisposable
         Assert.Contains("repository 'one'", error, StringComparison.Ordinal);
         Assert.DoesNotContain(_host.DataDirectory, error.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase);
         _host.Logs.Only(LogLevel.Warning, localCopy);
+    }
+
+    /// <summary>
+    ///     A local copy whose object store is corrupt is one repository that cannot be read, not a
+    ///     project that cannot be refreshed: the others are indexed and it is named as skipped, and the
+    ///     copy opened before it is released afterwards (#241).
+    /// </summary>
+    [Fact]
+    public async Task A_corrupt_local_copy_is_skipped_and_the_copies_opened_before_it_are_released()
+    {
+        await ThreeRepositoriesAsync();
+        foreach (string file in Directory.EnumerateFiles(Path.Combine(_host.ClonePath("alpha", "two"), "objects"), "*",
+                     SearchOption.AllDirectories))
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+            await File.WriteAllTextAsync(file, "not a git object", Ct);
+        }
+
+        var summary = await _host.RefreshAsync("alpha");
+
+        Assert.Equal(2, summary.Repositories);
+        Assert.Contains(summary.Skipped, reason => reason.Contains("'two'", StringComparison.Ordinal));
+        await AssertReleasedAsync("one");
+    }
+
+    /// <summary>
+    ///     A refresh cancelled while it fetches the second repository still releases the copy it had
+    ///     already opened for the first. The cancel propagates — it is not a repository to skip — and
+    ///     before #241 it escaped past the dispose, leaving the pack file of the first copy open, which
+    ///     on Windows is what makes a later removal of that copy fail.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_cancelled_mid_fetch_releases_the_copies_it_had_opened()
+    {
+        await ThreeRepositoriesAsync();
+        var project = (await _host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct))!;
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+
+        // Driven directly rather than through the endpoint, so the cancel lands at a known point: the
+        // report that the second fetch is starting, after the first copy was opened.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _host.Services.GetRequiredService<ProjectRefresh>().RunAsync(project, progress =>
+            {
+                if (progress.Phase == "Fetching 'two'") cancel.Cancel();
+            }, cancel.Token));
+
+        await AssertReleasedAsync("one");
+    }
+
+    /// <summary>
+    ///     Project alpha indexed from three repositories, with the local copy of the first packed. A
+    ///     clone of a fixture on the same disk copies its objects loose, and libgit2 closes a loose
+    ///     object once read; a pack is what an open copy keeps a handle on, so without it a leaked copy
+    ///     would be invisible.
+    /// </summary>
+    private async Task ThreeRepositoriesAsync()
+    {
+        await _host.IndexedProjectAsync("alpha",
+            new() { ["one"] = Fixture("one")["one"], ["two"] = Fixture("two")["two"], ["three"] = Fixture("three")["three"] });
+
+        string clone = _host.ClonePath("alpha", "one");
+        string objects = Path.Combine(clone, "objects");
+        using (var repository = new LibGit2Sharp.Repository(clone))
+            repository.ObjectDatabase.Pack(new LibGit2Sharp.PackBuilderOptions(Path.Combine(objects, "pack")));
+        foreach (string loose in Directory.EnumerateDirectories(objects, "??"))
+        {
+            // libgit2 writes objects read-only, and Directory.Delete refuses a read-only file.
+            foreach (string file in Directory.EnumerateFiles(loose)) File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(loose, true);
+        }
+    }
+
+    /// <summary>
+    ///     Asserts nothing holds a file of one local copy open, then removes it. Only Windows refuses
+    ///     the exclusive open while libgit2 holds a pack, so elsewhere this proves only the removal.
+    /// </summary>
+    private async Task AssertReleasedAsync(string repository)
+    {
+        foreach (string file in Directory.EnumerateFiles(_host.ClonePath("alpha", repository), "*",
+                     SearchOption.AllDirectories))
+            using (new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None)) { }
+
+        await _host.Services.GetRequiredService<GitClones>().RemoveAsync("alpha", repository, Ct);
+        Assert.False(Directory.Exists(_host.ClonePath("alpha", repository)));
     }
 
     /// <summary>Requests a refresh of project alpha, waits for it, and answers the error it failed with.</summary>
