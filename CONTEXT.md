@@ -201,6 +201,13 @@ changed", the one thing history must never say by accident. Counted back from th
 commit it answers with the last thirty days there were, and says which dates those are.
 _Avoid_: Range, period, since, time frame
 
+**History Scope**:
+Which commits, which changes and which files at HEAD a question covers: its window, its repository,
+its directory or path, its filter terms, its author and message filters and — on the operator's overview page only — the excluded paths.
+Every question over history is asked within one, so that what a card shows and what it says it
+left out are counted over the same slice. A path scope (see _History_) is one kind of history scope.
+_Avoid_: Filter, criteria, where clause
+
 **Qualified Path**:
 How every file in a project is named: its repository, then its path within that repository. A
 project is therefore one flat namespace, and two repositories may each contain `src/index.ts`
