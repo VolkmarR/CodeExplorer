@@ -325,11 +325,14 @@ public sealed class GitClones(
             if (!advertised.Any(r => r.CanonicalName.StartsWith("refs/heads/", StringComparison.Ordinal)))
                 return;
 
-            // The remote advertises HEAD as a symbolic reference naming the branch it defaults to.
+            // The remote advertises HEAD as a symbolic reference naming the branch it defaults to, or,
+            // when its HEAD is detached, as the commit id it is at. A commit id names no reference and
+            // is not looked up as one: libgit2 throws on it rather than answering null (#260), and
+            // following it would serve a commit that is on no branch.
             string? branch = advertised.FirstOrDefault(r => r.CanonicalName == "HEAD")?.TargetIdentifier;
+            if (branch is not null && !branch.StartsWith("refs/", StringComparison.Ordinal)) branch = null;
 
-            // The refspec just fetched every remote branch, so the target is here unless the remote's
-            // HEAD is detached, where TargetIdentifier is a commit id and names no reference.
+            // The refspec just fetched every remote branch, so a branch the remote defaults to is here.
             if (branch is not null && clone.Refs[branch] is not null)
             {
                 if (clone.Refs.Head.TargetIdentifier != branch) clone.Refs.UpdateTarget(clone.Refs.Head, branch);
