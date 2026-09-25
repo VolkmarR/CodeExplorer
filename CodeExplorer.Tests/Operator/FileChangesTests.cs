@@ -102,6 +102,7 @@ public sealed class FileChangesTests : IDisposable
         // the test's own thread, because the in-process server does not carry the test's culture over.
         using var lease = await _host.OpenIndexAsync("alpha");
         var window = await IndexQueries.WindowAsync(lease.Connection, 365, null, TestContext.Current.CancellationToken);
+        Assert.True(window?.Since < DateTimeOffset.UnixEpoch);
         var culture = CultureInfo.CurrentCulture;
         CultureInfo.CurrentCulture = new CultureInfo("sv-SE");
         try

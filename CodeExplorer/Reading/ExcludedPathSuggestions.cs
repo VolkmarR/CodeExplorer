@@ -130,10 +130,10 @@ internal static class ExcludedPathSuggestions
     ///     pattern is left alone rather than half understood. So is one RE2 refuses: the repository wrote
     ///     it and nothing checked it, so it is skipped rather than failing every suggestion with it.
     /// </summary>
-    private static async Task<List<(string, SuggestionRule, string)>> GitAttributesAsync(
+    private static async Task<List<(string Pattern, SuggestionRule Rule, string Reason)>> GitAttributesAsync(
         DuckDBConnection connection, ILogger logger, CancellationToken cancellationToken)
     {
-        var patterns = new List<(string Glob, SuggestionRule, string Reason)>();
+        var declared = new List<(string Pattern, SuggestionRule Rule, string Reason)>();
         await using (var command = connection.Query("""
                                                     SELECT f.qualified_path, f.name, l.content
                                                     FROM files f JOIN lines l USING (file_id)
@@ -142,17 +142,18 @@ internal static class ExcludedPathSuggestions
                                                     """, []))
         await using (var reader = await command.ReaderAsync(cancellationToken))
             while (await reader.ReadAsync(cancellationToken))
-                if (Declared(reader.Text("qualified_path"), reader.Text("name"), reader.Text("content")) is { } declared)
-                    patterns.Add(declared);
+                if (Declared(reader.Text("qualified_path"), reader.Text("name"), reader.Text("content")) is { } line)
+                    declared.Add(line);
 
-        var compiled = new List<(string, SuggestionRule, string)>(patterns.Count);
-        foreach (var pattern in patterns)
+        // Checked once the reader is closed, since each check is a statement of its own on this connection.
+        var compiled = new List<(string Pattern, SuggestionRule Rule, string Reason)>(declared.Count);
+        foreach (var candidate in declared)
         {
-            if (await ExcludedPaths.RefusedAsync(connection, pattern.Glob, cancellationToken) is not { } refused)
-                compiled.Add(pattern);
+            if (await ExcludedPaths.RefusedAsync(connection, candidate.Pattern, cancellationToken) is not { } refused)
+                compiled.Add(candidate);
             else if (logger.IsEnabled(LogLevel.Debug))
-                logger.LogDebug("Skipped the suggestion {Pattern} from {Reason}: {Refused}", pattern.Glob,
-                    pattern.Reason, refused);
+                logger.LogDebug("Skipped the suggestion {Pattern} from {Reason}: {Refused}", candidate.Pattern,
+                    candidate.Reason, refused);
         }
 
         return compiled;
@@ -162,7 +163,7 @@ internal static class ExcludedPathSuggestions
     ///     The glob one line of the <c>.gitattributes</c> at <paramref name="file" /> marks generated or
     ///     vendored, with its reason, or null where the line marks nothing.
     /// </summary>
-    private static (string Glob, SuggestionRule, string Reason)? Declared(string file, string name, string content)
+    private static (string Pattern, SuggestionRule Rule, string Reason)? Declared(string file, string name, string content)
     {
         string[] tokens = content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (tokens.Length < 2 || tokens[0].StartsWith('#') || tokens[0].StartsWith('!')
