@@ -345,14 +345,11 @@ public sealed partial class ProjectIndexes : IDisposable
     }
 
     /// <summary>
-    ///     Puts the project's file on disk from its durable copy when the disk has none, and answers
-    ///     whether there is a file now. An open does it lazily, and a refresh does it before anything
-    ///     else: its disk check sizes the shadow from the live file, and its carry-over copies history
-    ///     from it, so a refresh on a wiped disk that skipped this sized a shadow as if the project were
-    ///     empty and re-walked all of history the durable copy already held (#229).
+    ///     Puts the project's file on disk from its durable copy when the disk has none. The check
+    ///     outside the writer gate is the fast path; <see cref="RestoreAsync" /> asks again inside it.
     /// </summary>
-    public Task<bool> RestoreIfAbsentAsync(string slug, CancellationToken cancellationToken) =>
-        HasIndex(slug) ? Task.FromResult(true) : RestoreAsync(slug, cancellationToken);
+    public Task RestoreIfAbsentAsync(string slug, CancellationToken cancellationToken) =>
+        HasIndex(slug) ? Task.CompletedTask : RestoreAsync(slug, cancellationToken);
 
     /// <summary>
     ///     Rebuilds a project's file from its durable copy, and answers whether there was one. The
@@ -417,10 +414,9 @@ public sealed partial class ProjectIndexes : IDisposable
     /// </summary>
     public async Task<ShadowIndex> CreateShadowAsync(string slug, CancellationToken cancellationToken)
     {
-        // Restored first when the disk has no file, which on a replica that scales to zero is the
-        // ordinary state of a refresh the cron starts before any agent has connected: the carry-over
-        // below copies from the live file, and used to find none and re-walk all of history (#229).
-        // A refresh has restored already by now; this makes it a property of every shadow instead.
+        // The carry-over below copies from the live file, so a wiped disk would otherwise re-walk all
+        // of history the durable copy holds (#229). A refresh has restored by now; this keeps it a
+        // property of every shadow rather than of one caller.
         await RestoreIfAbsentAsync(slug, cancellationToken);
 
         var connection = await ConnectAsync(cancellationToken);
