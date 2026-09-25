@@ -66,7 +66,7 @@ public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded,
 /// <summary>
 ///     The shadow index a refresh fills (CONTEXT.md): a connection already <c>USE</c>ing the shadow
 ///     file, and the catalog name an appender targets. It is a second file next to the live one, so
-///     the live index keeps answering queries until <see cref="ProjectIndexes.SwapShadowAsync" />.
+///     the live index keeps answering queries until <see cref="ProjectIndexes.PublishShadowAsync" />.
 /// </summary>
 public sealed class ShadowIndex(DuckDBConnection connection, string catalog, string slug, bool fullTextLoaded)
     : IDisposable
@@ -374,13 +374,11 @@ public sealed partial class ProjectIndexes : IDisposable
     /// </summary>
     private async Task<bool> RestoreAsync(string slug, CancellationToken cancellationToken)
     {
-        var gate = WriterGateFor(slug);
         // Held from here to the end, not just around the file work: a swap that started while this was
         // downloading would otherwise install the newer index and have the move below overwrite it with
         // the older durable copy. Holding the writer gate across the whole restore is what makes the
         // recheck below decisive rather than a guess about what happens next.
-        await gate.WaitAsync(cancellationToken);
-        try
+        using (await HoldWriterAsync(slug, cancellationToken))
         {
             // Another caller may have restored it, or a refresh may have swapped one in, while this one
             // waited. Either way there is now an index and nothing to restore.
@@ -399,31 +397,19 @@ public sealed partial class ProjectIndexes : IDisposable
                 await _durable.LoadAsync(connection, copy, FtsAvailable, cancellationToken);
             }
 
-            // ReplaceFileAsync and not WithoutReadersAsync: the writer gate is already held, and taking
-            // it twice would deadlock on a semaphore that is deliberately not reentrant.
-            await ReplaceFileAsync(slug, "the restored index was put in place anyway", async connection =>
-            {
-                await DetachAsync(connection, catalog, cancellationToken);
-                await DetachAsync(connection, slug, cancellationToken);
-                File.Move(path, FilePath(slug), true);
-                File.Delete(FilePath(slug) + ".wal");
-                File.Delete(path + ".wal");
-            }, cancellationToken);
+            await ReplaceFileAsync(slug, "the restored index was put in place anyway",
+                MoveIntoPlace(slug, catalog, path, cancellationToken), cancellationToken);
 
             if (_logger.IsEnabled(LogLevel.Information))
                 _logger.LogInformation("Restored project {Project} from its durable copy", slug);
             return true;
-        }
-        finally
-        {
-            gate.Release();
         }
     }
 
     /// <summary>
     ///     Creates the shadow index a refresh fills: a second file beside the live one, attached under
     ///     its own catalog and returned with the tables created. The live index is untouched and keeps
-    ///     answering every query until <see cref="SwapShadowAsync" /> (CONTEXT.md, ADR-0003).
+    ///     answering every query until <see cref="PublishShadowAsync" /> (CONTEXT.md, ADR-0003).
     /// </summary>
     public async Task<ShadowIndex> CreateShadowAsync(string slug, CancellationToken cancellationToken)
     {
@@ -529,16 +515,6 @@ public sealed partial class ProjectIndexes : IDisposable
     public bool SchemaOutdated(string slug) => _readable.TryGetValue(slug, out bool current) && !current;
 
     /// <summary>
-    ///     Makes the finished shadow index the live one: waits for in-flight queries to finish with a
-    ///     hard timeout, detaches both catalogs, replaces the file and lets the next caller attach it.
-    ///     New callers arriving mid-swap wait rather than see a project with no index, so a search
-    ///     answers completely from the old index or completely from the new one and never from neither.
-    ///     The shadow's own connection must be disposed first; the file cannot be moved while open.
-    /// </summary>
-    public Task SwapShadowAsync(string slug, CancellationToken cancellationToken) =>
-        WithoutReadersAsync(slug, _swapTimedOut, SwapWork(slug, cancellationToken), cancellationToken);
-
-    /// <summary>
     ///     How many times the project's index has been discarded on this replica. A refresh reads it
     ///     before it reads anything else about the project and hands it to
     ///     <see cref="PublishShadowAsync" /> in a <see cref="PublishCondition" />, which is how a build
@@ -552,11 +528,11 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     gate, unless <paramref name="condition" /> says the project is gone. False is that case:
     ///     nothing was stored or swapped, and the shadow is the caller's to discard.
     ///     The check and the two writes are one hold of the gate because a delete is the other writer:
-    ///     checked before the gate, a delete landing between the check and the store would have its
-    ///     durable copy and its file put back by a build of a project that no longer exists, and a
-    ///     project created later under the slug would open them.
-    ///     The shadow is disposed here, between the two: the store exports from its connection, and the
-    ///     file cannot be moved over the live one while that connection holds it open.
+    ///     checked outside it, a delete landing in between would have its index put back.
+    ///     The swap waits for in-flight queries with a hard timeout; callers arriving mid-swap wait
+    ///     rather than see a project with no index, so a search answers completely from the old index
+    ///     or completely from the new one. The shadow is disposed between the store, which exports from
+    ///     its connection, and the swap, which cannot move the file while that connection holds it.
     /// </summary>
     /// <param name="shadow">The filled shadow index. Disposed by this call once it has been stored.</param>
     /// <param name="condition">What the project must still be for the build to be kept.</param>
@@ -566,15 +542,9 @@ public sealed partial class ProjectIndexes : IDisposable
         Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
         string slug = shadow.Slug;
-        var gate = WriterGateFor(slug);
-        await gate.WaitAsync(cancellationToken);
-        try
+        using (await HoldWriterAsync(slug, cancellationToken))
         {
-            // Both questions, because each misses a delete the other sees. The count misses one whose
-            // discard never got the gate — its request cancelled after the control database forgot the
-            // project. The control database misses a delete followed by a create under the same slug.
-            if (DiscardCount(slug) != condition.Discards || !await condition.ProjectExists(cancellationToken))
-                return false;
+            if (!await StillHoldsAsync(slug, condition, cancellationToken)) return false;
 
             // Exported from the shadow rather than from the live index after the swap, which is what
             // the tables about to be swapped in are. Doing it here means the export needs no second
@@ -585,36 +555,42 @@ public sealed partial class ProjectIndexes : IDisposable
 
             report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.TotalStepCount,
                 RefreshProgress.SwapPhase));
-            // ReplaceFileAsync and not SwapShadowAsync: the writer gate is already held, and it is not
-            // reentrant.
-            await ReplaceFileAsync(slug, _swapTimedOut, SwapWork(slug, cancellationToken), cancellationToken);
+            await ReplaceFileAsync(slug, "the new index was swapped in anyway",
+                MoveIntoPlace(slug, ShadowCatalog(slug), ShadowPath(slug), cancellationToken), cancellationToken);
             return true;
-        }
-        finally
-        {
-            gate.Release();
         }
     }
 
-    private const string _swapTimedOut = "the new index was swapped in anyway";
+    /// <summary>
+    ///     Whether the project is still the one a refresh began on. Both questions, because each misses a
+    ///     delete the other sees: the count misses one whose discard never got the writer gate, and the
+    ///     control database misses a delete followed by a create under the same slug.
+    /// </summary>
+    public async Task<bool> StillHoldsAsync(string slug, PublishCondition condition,
+        CancellationToken cancellationToken) =>
+        DiscardCount(slug) == condition.Discards && await condition.ProjectExists(cancellationToken);
 
-    /// <summary>The file work of a swap, run with the gate shut by whichever caller holds the writer gate.</summary>
-    private Func<DuckDBConnection, Task> SwapWork(string slug, CancellationToken cancellationToken) =>
+    /// <summary>
+    ///     The file work of a swap and of a restore: a finished file, attached under its own catalog, made
+    ///     the project's live one. Run with the gate shut, by a caller holding the writer gate.
+    /// </summary>
+    private Func<DuckDBConnection, Task> MoveIntoPlace(string slug, string catalog, string path,
+        CancellationToken cancellationToken) =>
         async connection =>
         {
             // Both catalogs go first: DETACH is what closes the file handles, and neither file can be
             // deleted or moved while the instance holds one.
-            await DetachAsync(connection, ShadowCatalog(slug), cancellationToken);
+            await DetachAsync(connection, catalog, cancellationToken);
             await DetachAsync(connection, slug, cancellationToken);
             // One overwriting move, never delete-then-move: a move that fails after the old file was
             // deleted would leave the project with no index at all, and the caller's cleanup would then
-            // take the shadow too. Overwrite replaces the file or leaves it exactly as it was.
-            File.Move(ShadowPath(slug), FilePath(slug), true);
+            // take the new file too. Overwrite replaces the file or leaves it exactly as it was.
+            File.Move(path, FilePath(slug), true);
             // A clean DETACH checkpoints and removes the WAL, so both of these are for the case where it
-            // did not: a stale live WAL would replay the old tail over the new file, and a stale shadow
-            // WAL is bytes nothing will read again.
+            // did not: a stale live WAL would replay the old tail over the new file, and a stale WAL of
+            // the moved file is bytes nothing will read again.
             File.Delete(FilePath(slug) + ".wal");
-            File.Delete(ShadowPath(slug) + ".wal");
+            File.Delete(path + ".wal");
         };
 
     /// <summary>
@@ -645,9 +621,7 @@ public sealed partial class ProjectIndexes : IDisposable
         // open, a warm-up that listed the project before the delete — found no file, took the gate and
         // loaded the copy that had not been removed yet, putting the deleted project back
         // (GHSA-253f-grfp-cqq7).
-        var gate = WriterGateFor(slug);
-        await gate.WaitAsync(cancellationToken);
-        try
+        using (await HoldWriterAsync(slug, cancellationToken))
         {
             // Counted before anything is removed, so a refresh waiting on the gate to publish sees it
             // whether or not the rest of this completes.
@@ -669,16 +643,29 @@ public sealed partial class ProjectIndexes : IDisposable
             // durable copy outliving the disk is wrong.
             await _durable.RemoveAsync(slug, cancellationToken);
         }
-        finally
-        {
-            gate.Release();
-        }
     }
 
     /// <summary>
-    ///     Runs work that replaces a project's file, with as few readers holding it as the drain can
-    ///     manage, taking the writer gate for the file work alone. A publish and a discard take the gate
-    ///     themselves, because each has more than the file work to do under it.
+    ///     Waits for the project's writer gate and holds it until disposed. Every caller holds it across
+    ///     more than the file work: a restore from the download onwards, so that nothing swaps a newer
+    ///     index in underneath the older one it is about to move into place; a publish across the check
+    ///     and the durable store; a discard across the durable copy's removal.
+    /// </summary>
+    private async Task<WriterHold> HoldWriterAsync(string slug, CancellationToken cancellationToken)
+    {
+        var gate = WriterGateFor(slug);
+        await gate.WaitAsync(cancellationToken);
+        return new WriterHold(gate);
+    }
+
+    private readonly struct WriterHold(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
+
+    /// <summary>
+    ///     Runs work that replaces or removes a project's file, with as few readers holding it as the
+    ///     drain can manage, by a caller already holding the project's writer gate.
     ///     The drain deliberately leaves the gate open: a search arriving while a rebuild is waiting
     ///     must be answered from the old index, which is the whole promise, not held for however long
     ///     the drain runs. Only the file work itself shuts the gate, and that is a detach and a move.
@@ -690,27 +677,6 @@ public sealed partial class ProjectIndexes : IDisposable
     /// <param name="timedOut">Logged when the drain gave up; it says what happened anyway.</param>
     /// <param name="work">Given a connection of its own, run with the gate shut.</param>
     /// <param name="cancellationToken">Cancels the drain wait and the connection.</param>
-    private async Task WithoutReadersAsync(string slug, string timedOut,
-        Func<DuckDBConnection, Task> work, CancellationToken cancellationToken)
-    {
-        await WriterGateFor(slug).WaitAsync(cancellationToken);
-        try
-        {
-            await ReplaceFileAsync(slug, timedOut, work, cancellationToken);
-        }
-        finally
-        {
-            WriterGateFor(slug).Release();
-        }
-    }
-
-    /// <summary>
-    ///     The drain, the shut gate and the file work, with the project's writer gate assumed to be held
-    ///     already. Separate from <see cref="WithoutReadersAsync" /> for the callers that hold that gate
-    ///     across more than the file work: a restore from the download onwards, so that nothing swaps a
-    ///     newer index in underneath the older one it is about to move into place; a publish across the
-    ///     check and the durable store; a discard across the durable copy's removal.
-    /// </summary>
     private async Task ReplaceFileAsync(string slug, string timedOut,
         Func<DuckDBConnection, Task> work, CancellationToken cancellationToken)
     {

@@ -580,10 +580,16 @@ public sealed class TestHost : IDisposable
         var shadow = await Indexes.CreateShadowAsync(project, Ct);
         await Services.GetRequiredService<OverviewBuilder>().FillAsync(shadow, false, Ct);
         await shadow.CompleteAsync(false, _ => { }, Ct);
-        // Before the swap: the file cannot be moved while the shadow's connection holds it open.
-        shadow.Dispose();
-        await Indexes.SwapShadowAsync(project, Ct);
+        await PublishAsync(shadow);
     }
+
+    /// <summary>
+    ///     Stores and swaps in a shadow a test filled by hand, the way a refresh publishes one, for a
+    ///     project nothing is deleting.
+    /// </summary>
+    public async Task PublishAsync(ShadowIndex shadow) =>
+        Assert.True(await Indexes.PublishShadowAsync(shadow,
+            new PublishCondition(Indexes.DiscardCount(shadow.Slug), _ => Task.FromResult(true)), _ => { }, Ct));
 
     /// <summary>Replaces a project's excluded-paths setting (#216), asserting the server took it.</summary>
     public async Task SetExcludedPathsAsync(string project, string[] patterns)

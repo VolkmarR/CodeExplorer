@@ -206,8 +206,8 @@ public sealed class ProjectOverview(
 
     /// <summary>
     ///     Removes a project everywhere. The control database goes first, so nothing can start a clone
-    ///     or a build against a project that is on its way out; a refresh already running relies on that
-    ///     order too, since it counts discards before it looks the project up. A project already gone from the control
+    ///     or a build against a project that is on its way out; a running refresh relies on the order
+    ///     too, since it counts discards before it looks the project up. A project already gone from the control
     ///     database — two operators deleting at once — still has its index and copies removed, which is
     ///     what the second one asked for too.
     /// </summary>
@@ -216,8 +216,8 @@ public sealed class ProjectOverview(
         await control.DeleteProjectAsync(project.Slug, cancellationToken);
         // Not the caller's token from here on: the project is already gone from the control database,
         // so a delete abandoned now would leave its index and durable copy behind for a project created
-        // later under the slug to open (GHSA-253f-grfp-cqq7). The discard waits at most for a refresh's
-        // publish and the drain, both bounded.
+        // later under the slug to open (GHSA-253f-grfp-cqq7). The discard may wait for a refresh's
+        // durable store and for the drain.
         await readers.DiscardAsync(project.Slug, CancellationToken.None);
         await clones.RemoveAsync(project.Slug, null, CancellationToken.None);
     }
