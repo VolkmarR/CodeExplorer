@@ -168,7 +168,9 @@ az containerapp update -g $RG -n $APP --set-env-vars \
 Container Apps' ingress speaks HTTPS to the world and plain HTTP to the container, and the app does
 not call `UseForwardedHeaders` itself. Without `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` the
 framework builds absolute URLs from the scheme it actually sees, so the sign-in redirect goes out as
-`http://…/signin-oidc` and Entra refuses it. Set it before you test sign-in, and treat a failing
+`http://…/signin-oidc` and Entra refuses it. The same scheme decides the server's own origin, so
+without the setting every write from the UI, whose `Origin` is `https://…`, is refused with a 403
+(GHSA-qxhv-3r9w-q8h4). Set it before you test sign-in, and treat a failing
 sign-in with a working API as this until proven otherwise. This is the one item in this guide that
 neither the tests nor the repo exercise, so confirm it against your own deployment rather than
 trusting the paragraph.
