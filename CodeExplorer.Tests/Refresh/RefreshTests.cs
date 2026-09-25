@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
+using CodeExplorer.Operator;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.DependencyInjection;
@@ -405,6 +406,50 @@ public sealed class RefreshTests : IDisposable
             }, cancel.Token));
 
         await AssertReleasedAsync("one");
+    }
+
+    /// <summary>
+    ///     A project deleted while its refresh is between the ingest and the swap
+    ///     (GHSA-253f-grfp-cqq7). The refresh checked that the project existed only before it started, so
+    ///     it went on to store a durable copy and swap its shadow in, and a project later created under
+    ///     the same slug opened the deleted one's files. The refresh is held in the report that the store
+    ///     is starting — the shadow is built and nothing has been stored — while the delete runs to
+    ///     completion. A blocking wait in the callback, because the report is synchronous by design and
+    ///     is the one point a test can stop a refresh at.
+    /// </summary>
+    [Fact]
+    public async Task A_project_deleted_mid_refresh_gets_neither_its_index_nor_its_durable_copy_back()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        var project = (await _host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct))!;
+        var reachedStore = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var resume = new ManualResetEventSlim();
+
+        var refreshing = Task.Run(() => _host.Services.GetRequiredService<ProjectRefresh>().RunAsync(project,
+            progress =>
+            {
+                if (progress.Phase != RefreshProgress.StorePhase) return;
+                reachedStore.TrySetResult();
+                resume.Wait(Ct);
+            }, Ct), Ct);
+
+        await reachedStore.Task.WaitAsync(Ct);
+        using (var http = _host.CreateClient())
+        using (var deleted = await http.DeleteAsync("/api/projects/alpha", Ct))
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        resume.Set();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => refreshing);
+        Assert.Contains("deleted", error.Message);
+        Assert.False(File.Exists(_host.IndexFile("alpha")));
+        Assert.False(Directory.Exists(_host.DurableIndexDirectory("alpha")));
+
+        // The slug reused: the new project has never been built, and must not open the old one's files.
+        await _host.CreateProjectAsync("alpha");
+        using var reader = _host.CreateClient();
+        var detail = await reader.GetFromJsonAsync<ProjectDetail>("/api/projects/alpha", Ct);
+        Assert.Null(detail!.Index.BuiltAt);
+        Assert.False(File.Exists(_host.IndexFile("alpha")));
     }
 
     /// <summary>

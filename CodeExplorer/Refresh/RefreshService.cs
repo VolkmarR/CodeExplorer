@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json.Serialization;
-using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
@@ -73,7 +72,6 @@ public sealed record RefreshRequest(RefreshStatus Status, RefreshRefusal? Refuse
 ///     <see cref="ProjectRefresh" />; this owns when it may start and what an operator can see of it.
 /// </summary>
 public sealed class RefreshService(
-    ControlDatabase control,
     ProjectRefresh refresh,
     ProjectIndexes indexes,
     GitClones clones,
@@ -189,13 +187,8 @@ public sealed class RefreshService(
 
         try
         {
-            // Re-read: a queued refresh can have been waiting while the operator deleted the project,
-            // and rebuilding one that no longer exists would put its index file back.
-            if (await control.FindAsync(project.Slug, cancellationToken) is null)
-            {
-                Fail($"Project '{project.Slug}' was deleted before its refresh could start.");
-                return;
-            }
+            // Whether a queued project was deleted meanwhile is ProjectRefresh's question, asked where
+            // it is tied to the publish (GHSA-253f-grfp-cqq7); a check here would go stale before the swap.
 
             // Reported before the restore rather than after the check, so a restore that takes minutes
             // shows as a refresh running and not as one still waiting for the slot.
