@@ -407,6 +407,14 @@ public sealed partial class ProjectIndexes : IDisposable
     /// </summary>
     public async Task<ShadowIndex> CreateShadowAsync(string slug, CancellationToken cancellationToken)
     {
+        // Restored first when the disk has no file, which on a replica that scales to zero is the
+        // ordinary state of a refresh the cron starts before any agent has connected. The carry-over
+        // used to skip straight past it, so the build re-walked the whole history the durable copy
+        // already held and handed every commit a new id (#229). Through the restore every open uses,
+        // so it holds the same writer gate and a reader arriving meanwhile waits for it rather than
+        // loading the same copy a second time.
+        if (!HasIndex(slug)) await RestoreAsync(slug, cancellationToken);
+
         var connection = await ConnectAsync(cancellationToken);
         try
         {

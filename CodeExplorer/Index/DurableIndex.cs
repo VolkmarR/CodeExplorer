@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
@@ -75,6 +76,14 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     private readonly string _scratch =
         Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "scratch");
 
+    // One gate per project, so a fetch never reads while a store writes (#229). A store replaces the
+    // tables one at a time in the order a fetch reads them, so the two overlapping could fetch the
+    // older index_info and then a mix of both generations behind it — a set that passes every check a
+    // fetch makes, because each table is present and the version matches. Per project, like the writer
+    // gates in ProjectIndexes, so one project's upload does not hold up another's restore. Kept for the
+    // life of the process for the reason those are: the count is bounded by the control database.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
+
     /// <summary>
     ///     Writes a project's durable copy: every table to a local Parquet file, then each file to the
     ///     store under the project's own prefix. The connection is already bound to the project with
@@ -83,8 +92,23 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     in place and two generations behind them (#187). Removing <see cref="_indexInfo" /> first and
     ///     writing it last makes that state a copy without it, which a fetch already reads as none: the
     ///     next refresh rebuilds from git rather than carrying history forward from a mixed set.
+    ///     A fetch of the same project waits for it, and it for a fetch: see <see cref="_gates" />.
     /// </summary>
     public async Task StoreAsync(DuckDBConnection connection, string slug, CancellationToken cancellationToken)
+    {
+        var gate = GateFor(slug);
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            await StoreUngatedAsync(connection, slug, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task StoreUngatedAsync(DuckDBConnection connection, string slug, CancellationToken cancellationToken)
     {
         using var recording = Telemetry.DurableCopy(slug, Telemetry.StoreOperation);
         string scratch = Scratch(slug);
@@ -120,6 +144,20 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     an answer of null has recorded itself already.
     /// </summary>
     public async Task<DurableCopy?> FetchAsync(string slug, CancellationToken cancellationToken)
+    {
+        var gate = GateFor(slug);
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await FetchUngatedAsync(slug, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<DurableCopy?> FetchUngatedAsync(string slug, CancellationToken cancellationToken)
     {
         // Started here and not in LoadAsync, so the measurement covers the transfer — which on a cold
         // wake is most of what a restore costs — and not only the insert that follows it.
@@ -241,6 +279,12 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         Directory.CreateDirectory(directory);
         return directory;
     }
+
+    /// <summary>
+    ///     The gate that keeps a project's fetch and store apart, created on first use. A semaphore that
+    ///     loses the <c>GetOrAdd</c> race was never waited on, so dropping it undisposed holds nothing.
+    /// </summary>
+    private SemaphoreSlim GateFor(string slug) => _gates.GetOrAdd(slug, _ => new SemaphoreSlim(1, 1));
 
     /// <summary>Every project under its own prefix, which is what makes one project's copy removable on its own.</summary>
     private static string Name(string slug, string table) => $"indexes/{slug}/{table}.parquet";
