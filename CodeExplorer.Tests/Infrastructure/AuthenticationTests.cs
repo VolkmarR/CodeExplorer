@@ -3,7 +3,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -230,6 +234,52 @@ public sealed class AuthenticationTests
         using var offsite =
             await http.GetAsync($"{Authentication.SignInPath}?returnUrl=https%3A%2F%2Felsewhere.invalid", Ct);
         Assert.DoesNotContain("elsewhere.invalid", offsite.Headers.Location!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("/\t/evil.invalid")]
+    [InlineData("/\n/evil.invalid")]
+    [InlineData("/\r/evil.invalid")]
+    [InlineData("/\t\\evil.invalid")]
+    [InlineData("/projects\n/x")]
+    [InlineData("/projects\u007F")]
+    [InlineData("//evil.invalid")]
+    [InlineData("/\\evil.invalid")]
+    [InlineData("https://evil.invalid")]
+    [InlineData("\\\\evil.invalid")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void A_return_url_that_a_browser_could_follow_off_this_server_becomes_the_home_page(string? returnUrl) =>
+        // The control characters are the ones that matter: a browser's URL parser strips tab and
+        // newline, so "/<TAB>/evil" is followed as "//evil", a protocol-relative URL to another host.
+        Assert.Equal("/", Authentication.LocalReturnUrl(returnUrl));
+
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/projects/acme?x=1")]
+    [InlineData("/projects/acme#tree")]
+    public void A_local_return_url_is_kept_as_it_was(string returnUrl) =>
+        Assert.Equal(returnUrl, Authentication.LocalReturnUrl(returnUrl));
+
+    [Theory]
+    [InlineData("/%09/evil.invalid", "/")]
+    [InlineData("/%0A/evil.invalid", "/")]
+    [InlineData("%2Fprojects%2Facme%3Fx%3D1", "/projects/acme?x=1")]
+    public async Task The_page_a_sign_in_comes_back_to_is_the_checked_one(string query, string expected)
+    {
+        // Through the endpoint rather than the method alone, because "%09" is what the phishing link
+        // carries and the query binder decodes it to a tab before the check sees it. The page to come
+        // back to travels to the tenant inside the protected state, so it is read back from there.
+        using var host = new TestHost(SearchEngine.Substring, authenticated: true);
+        using var http = host.CreateClient();
+
+        using var challenge = await http.GetAsync($"{Authentication.SignInPath}?returnUrl={query}", Ct);
+
+        var authorize = QueryHelpers.ParseQuery(challenge.Headers.Location!.Query);
+        var options = host.Services.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>()
+            .Get(OpenIdConnectDefaults.AuthenticationScheme);
+        var properties = options.StateDataFormat.Unprotect(authorize["state"]);
+        Assert.Equal(expected, properties!.RedirectUri);
     }
 
     [Fact]
