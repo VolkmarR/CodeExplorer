@@ -29,9 +29,8 @@ public sealed class IndexBuilder(
     ///     vendored bundles far more often than source, and one such file adds enough lines to swamp
     ///     BM25 ranking and grep output for the whole project. The file still appears in <c>files</c> with
     ///     the reason, so a tree listing and a search can tell the agent about it. A project of large
-    ///     hand-written sources raises the setting rather than losing them. It bounds what a refresh
-    ///     inflates as well, so it is tested before the binary check and a binary above it is skipped
-    ///     for its size.
+    ///     hand-written sources raises the setting rather than losing them. A binary above it is
+    ///     skipped for its size as well.
     /// </summary>
     private const long _defaultMaxFileBytes = 25 * 1024 * 1024;
 
@@ -130,10 +129,8 @@ public sealed class IndexBuilder(
                         $"Reading '{repository.Slug}' into the shadow index", fileCount, entries.Count));
                 fileId++;
                 fileCount++;
-                // Size first: it is read off the object header, while IsBinary inflates the whole blob.
-                // The other order inflated a committed 3 GB dump on every refresh only to call it
-                // binary, the load Index:MaxFileBytes exists to bound (#230). A binary over the limit
-                // is therefore reported as too large, which it is.
+                // Size first: it is read off the object header, while IsBinary inflates the whole blob,
+                // so the other order inflated every oversized binary on every refresh (#230).
                 string? skipReason = entry.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" :
                     entry.IsBinary ? "binary" : null;
                 var text = skipReason is null ? SplitLines(entry.Text()) : [];
