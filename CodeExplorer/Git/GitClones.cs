@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using CodeExplorer.Infrastructure;
 using LibGit2Sharp;
@@ -42,6 +43,9 @@ public sealed class GitClones(
 
     private readonly string _cloneRoot = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones");
     private readonly IDataProtector _protector = dataProtection.CreateProtector(KeyRing.CredentialPurpose);
+
+    // Set when the one class that talks to a remote is built, which is before its first transfer.
+    private readonly int _stallSeconds = TransferStallLimit.Apply(configuration);
 
     /// <summary>
     ///     Opens the repository with its local copy brought up to date: a fetch when it is already
@@ -182,7 +186,7 @@ public sealed class GitClones(
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         var options = new CloneOptions { IsBare = true };
-        Configure(options.FetchOptions, repository, cancellationToken);
+        var watch = Configure(options.FetchOptions, repository, cancellationToken);
 
         // The credential is deliberately absent from this line and every other log line.
         if (logger.IsEnabled(LogLevel.Information))
@@ -196,12 +200,7 @@ public sealed class GitClones(
         {
             Delete(path);
             cancellationToken.ThrowIfCancellationRequested();
-            // The URL carries no password (RepositoryUrl refuses one), and the token only ever reached
-            // libgit2 through CredentialsProvider, so neither the URL nor libgit2's message can hold it.
-            // The exception is not attached as InnerException, so nothing beyond this text is serialised.
-            throw new McpException(
-                $"Cloning repository '{repository.Slug}' from '{repository.Url}' failed: {ex.Message.TrimEnd('.')}. "
-                + "Ask the operator to check the URL and the stored credential for this repository, then try again.");
+            throw TransferFailed("Cloning", repository, ex, watch);
         }
     }
 
@@ -219,7 +218,7 @@ public sealed class GitClones(
         // upstream must go, or the index keeps serving a branch that no longer exists. That takes the
         // branch HEAD names with it when the default was renamed, which is why AlignHead runs after.
         var options = new FetchOptions { Prune = true };
-        Configure(options, repository, cancellationToken);
+        var watch = Configure(options, repository, cancellationToken);
 
         if (logger.IsEnabled(LogLevel.Information))
             logger.LogInformation("Fetching repository {Repository} of project {Project}",
@@ -234,11 +233,8 @@ public sealed class GitClones(
             cancellationToken.ThrowIfCancellationRequested();
             // The clone is left in place: it still holds the commits of the last successful fetch, so
             // a refresh that cannot reach the remote reports the repository and indexes nothing newer,
-            // rather than losing what is already there. Neither the URL nor libgit2's message can
-            // carry the credential, for the reason Clone gives.
-            throw new McpException(
-                $"Fetching repository '{repository.Slug}' from '{repository.Url}' failed: {ex.Message.TrimEnd('.')}. "
-                + "Ask the operator to check the URL and the stored credential for this repository, then try again.");
+            // rather than losing what is already there.
+            throw TransferFailed("Fetching", repository, ex, watch);
         }
 
         AlignHead(clone, repository, cancellationToken);
@@ -297,7 +293,8 @@ public sealed class GitClones(
     {
         // Checked here and nowhere inside: ListRemoteReferences takes no FetchOptions, so there is no
         // OnTransferProgress to hang a cancellation on the way Fetch does. The advertisement is one
-        // round-trip with no transfer behind it, so the window this leaves open is the short one.
+        // round-trip with no transfer behind it, and the stall limit bounds it like any other wait on
+        // the remote, so the window this leaves open is the short one.
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
@@ -328,11 +325,61 @@ public sealed class GitClones(
     ///     commits and trees without the blobs. A clone is therefore its repository's whole object
     ///     store, and the free-space gate in <c>RefreshService</c> is what stands between that and the
     ///     ephemeral disk.
+    ///     Both progress callbacks are watched, the remote's own messages as well as the objects,
+    ///     because either is the remote still talking; a failure after neither has fired for the stall
+    ///     limit is the limit running out.
     /// </summary>
-    private void Configure(FetchOptions options, ProjectRepository repository, CancellationToken cancellationToken)
+    private TransferWatch Configure(FetchOptions options, ProjectRepository repository,
+        CancellationToken cancellationToken)
     {
-        options.OnTransferProgress = _ => !cancellationToken.IsCancellationRequested;
+        var watch = new TransferWatch(TimeSpan.FromSeconds(_stallSeconds));
+        options.OnTransferProgress = _ => watch.Heard(cancellationToken);
+        options.OnProgress = _ => watch.Heard(cancellationToken);
         options.CredentialsProvider = Credentials(repository);
+        return watch;
+    }
+
+    /// <summary>
+    ///     The sentence a failed clone or fetch is reported with. A remote that went quiet for the stall
+    ///     limit is told apart from one that answered with an error, because the two are fixed in
+    ///     different places: a quiet one is down or overloaded, an erroring one usually has the wrong URL
+    ///     or credential.
+    ///     The URL carries no password (RepositoryUrl refuses one), and the token only ever reached
+    ///     libgit2 through CredentialsProvider, so neither the URL nor libgit2's message can hold it. The
+    ///     exception is not attached as InnerException, so nothing beyond this text is serialised.
+    /// </summary>
+    private McpException TransferFailed(string verb, ProjectRepository repository, Exception ex,
+        TransferWatch watch) =>
+        watch.Stalled
+            ? new McpException(
+                $"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: the remote stopped "
+                + $"responding and sent nothing for {_stallSeconds} seconds. Ask the operator to check that the "
+                + $"remote is reachable and up, then try again; {TransferStallLimit.Setting} raises the limit for "
+                + "a remote that is slow to start sending.")
+            : new McpException(
+                $"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: {ex.Message.TrimEnd('.')}. "
+                + "Ask the operator to check the URL and the stored credential for this repository, then try again.");
+
+    /// <summary>
+    ///     When a transfer last heard from its remote. This, and not the exception, is how a stall is
+    ///     recognised: LibGit2Sharp drops libgit2's error code, so a timeout arrives as a plain
+    ///     <see cref="LibGit2SharpException" /> whose message is the operating system's, in its language.
+    /// </summary>
+    private sealed class TransferWatch(TimeSpan limit)
+    {
+        // libgit2 starts its wait after the callback that stamped this returns, so a real timeout is
+        // always at least the limit away from it; the tenth off absorbs the two clocks disagreeing.
+        private readonly TimeSpan _threshold = limit * 0.9;
+        private long _lastHeard = Stopwatch.GetTimestamp();
+
+        public bool Stalled => Stopwatch.GetElapsedTime(Volatile.Read(ref _lastHeard)) >= _threshold;
+
+        /// <summary>Stamps the remote as heard from, and answers libgit2 whether to carry on.</summary>
+        public bool Heard(CancellationToken cancellationToken)
+        {
+            Volatile.Write(ref _lastHeard, Stopwatch.GetTimestamp());
+            return !cancellationToken.IsCancellationRequested;
+        }
     }
 
     /// <summary>
