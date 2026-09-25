@@ -297,6 +297,48 @@ public sealed class LanguageAnalyzerTests
         Assert.Equal([ReferenceKind.StringLiteral], KindsIn(extension, file, "advance"));
 
     [Fact]
+    public void A_raw_literal_is_closed_only_by_as_many_quotes_as_opened_it()
+    {
+        // A raw literal opened with four quotes may hold three, which is why it was written with four
+        // (#240). Closed at the first `"""`, the rest of the literal was read as code.
+        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.StringLiteral, ReferenceKind.Call],
+            KindsIn("cs", "var s = \"\"\"\"\n  \"\"\" advance(1)\n  advance(2)\n  \"\"\"\";\nadvance(3);", "advance"));
+        // And a closer longer than the one it needs does not end a shorter literal early.
+        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.Call],
+            KindsIn("cs", "var s = \"\"\"\"\"\n  \"\"\"\" advance(1)\n  \"\"\"\"\";\nadvance(2);", "advance"));
+    }
+
+    [Fact]
+    public void A_CSharp_char_literal_is_not_the_start_of_a_string()
+    {
+        // `'"'` is one character, and without a char literal its quote opened a string that ran to the
+        // end of the line and turned the call after it into a mention (#240).
+        Assert.Equal(ReferenceKind.Call, Kind("cs", "if (c == '\"') return ParseQuoted(reader);", "ParseQuoted"));
+        Assert.Equal(ReferenceKind.Call, Kind("cs", "if (c == '\\'') return ParseQuoted(reader);", "ParseQuoted"));
+        // It closes on its own line: a stray apostrophe does not carry to the next.
+        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.Call],
+            KindsIn("cs", "x = 'advance(1)\nadvance(2);", "advance"));
+    }
+
+    [Theory]
+    // At the top level a leading `*` is a multiplication or a generator method, and a `/* */`
+    // continuation line is always inside the comment the scan already carries (#240).
+    [InlineData("cs", "    * quantity;", "quantity")]
+    [InlineData("ts", "  *entries() {", "entries")]
+    [InlineData("js", "  *entries() {", "entries")]
+    public void A_leading_star_outside_a_comment_is_code(string extension, string line, string symbol) =>
+        Assert.NotEqual(ReferenceKind.Comment, Kind(extension, line, symbol));
+
+    [Fact]
+    public void A_leading_star_is_still_a_comment_where_the_language_writes_one()
+    {
+        // xBase writes a whole-line comment with a leading `*`, and the doc block's continuation stays
+        // prose because the block around it is carried.
+        Assert.Equal(ReferenceKind.Comment, Kind("prg", "* advance the order", "advance"));
+        Assert.Equal([ReferenceKind.Comment], KindsIn("cs", "/**\n * advance(1)\n */", "advance"));
+    }
+
+    [Fact]
     public void An_interpolated_literal_that_spans_lines_is_text_around_its_holes()
     {
         // Both halves on one file: the text of a raw interpolated literal is a mention on its second
@@ -626,6 +668,29 @@ public sealed class LanguageAnalyzerTests
         Assert.Equal([("System.Text", ImportShape.Module)], Imports("cs", "using System.Text; // for the builder"));
         Assert.Empty(Imports("cs", "// using System.Text;"));
     }
+
+    [Fact]
+    public void A_line_read_without_the_lines_above_it_still_names_its_imports()
+    {
+        // The interface promises an answer from the line alone for a caller that has not walked the
+        // file (#240). A build hands one on once nesting outruns the scan, and every `using` below that
+        // point was silently dropped.
+        var analyzer = Languages.Default.For("cs");
+        Assert.Equal(["System.Text"],
+            analyzer.ImportsOn(FilePosition.Unknown, "using System.Text;").Value.Imports.Select(n => n.Name));
+        // Read on its own, the line still cuts its own comment away.
+        Assert.Equal(["System.Text"],
+            analyzer.ImportsOn(FilePosition.Unknown, "using System.Text; // for the builder").Value.Imports
+                .Select(n => n.Name));
+    }
+
+    [Fact]
+    public void A_unit_on_the_continuation_of_a_uses_clause_is_an_import_reference() =>
+        // The build already read `Vcl.Dialogs` as an import off the open clause; find_references read
+        // only the line's own opener and reported the same name as a member access (#240).
+        // The `;` closes it, and the unit used on the line after is code again.
+        Assert.Equal([ReferenceKind.Import, ReferenceKind.TypeUse],
+            KindsIn("pas", "uses\n  Vcl.Forms, Vcl.Dialogs;\nDialogs.Show;", "Dialogs"));
 
     private static (string Name, ImportShape Shape)[] Imports(string extension, string line)
     {

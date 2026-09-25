@@ -416,8 +416,11 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     hole, at the literal the hole was opened in, which is what says how the hole ends.
     ///     <see cref="Depth" /> counts the braces nested inside a hole, so that the <c>}</c> of a
     ///     collection expression in it does not end it.
+    ///     <see cref="Extra" /> is how many more times than its form's own opener a literal that
+    ///     <see cref="StringDelimiter.Extends" /> repeated the opener's last character, and so how many
+    ///     more its closer needs: a C# raw literal opened with four quotes is one past the form's three.
     /// </summary>
-    private readonly record struct Frame(int Index, int Depth, bool Hole);
+    private readonly record struct Frame(int Index, int Depth, bool Hole, int Extra = 0);
 
     /// <summary>
     ///     What earlier lines of one file left open, as this analyser records it. It names the analyser
@@ -641,8 +644,10 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
             int opened = _analyzer.OpenerAt(_line, _at);
             if (opened >= 0)
             {
-                Push(opened, false);
-                _at += _analyzer._forms[opened].Form.Open.Length;
+                var form = _analyzer._forms[opened].Form;
+                int extra = form.Extends ? RunOf(_line, _at + form.Open.Length, form.Open[^1]) : 0;
+                Push(opened, false, extra);
+                _at += form.Open.Length + extra;
                 return;
             }
 
@@ -708,7 +713,10 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
                 return;
             }
 
-            if (At(_line, _at, open.Close))
+            // A literal opened with more than its form's quotes is closed only by as many: a shorter run
+            // inside it is text, which is what it was opened with more of them to hold.
+            if (At(_line, _at, open.Close)
+                && (frame.Extra == 0 || RunOf(_line, _at + open.Close.Length, open.Close[^1]) >= frame.Extra))
             {
                 // A doubled delimiter stands for itself and does not close the literal.
                 if (open.Escape == StringEscape.Doubled && At(_line, _at + open.Close.Length, open.Close))
@@ -718,14 +726,14 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
                 }
 
                 _depth--;
-                _at += open.Close.Length;
+                _at += open.Close.Length + frame.Extra;
                 return;
             }
 
             _at++;
         }
 
-        private void Push(int index, bool hole)
+        private void Push(int index, bool hole, int extra = 0)
         {
             if (_depth == _frames.Length)
             {
@@ -736,8 +744,16 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
             // Where the line stops being code, recorded as the walk passes it rather than found by a
             // second walk asking per character: a block comment opening here is prose from here on.
             if (!hole && _analyzer._forms[index].Prose && _at < _commentOpensAt) _commentOpensAt = _at;
-            _frames[_depth++] = new Frame(index, 0, hole);
+            _frames[_depth++] = new Frame(index, 0, hole, extra);
         }
+    }
+
+    /// <summary>How many times this character stands in a row from <paramref name="from" /> on.</summary>
+    private static int RunOf(string line, int from, char c)
+    {
+        int at = from;
+        while (at < line.Length && line[at] == c) at++;
+        return at - from;
     }
 
     /// <summary>
@@ -949,7 +965,10 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
             if (state == Lexical.Code && !lineClassified)
             {
                 lineClassified = true;
-                import = IsImportLine(line);
+                // A line inside a clause that opened further up is an import line too, which is what
+                // the build already read it as: the second line of a Delphi `uses` holds no opener.
+                import = IsImportLine(line)
+                         || (position is TextPosition { OpenClause: true } open && open.Owner == this);
                 typeDeclared = TypeOn(line);
             }
 
@@ -1169,7 +1188,12 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     private int CodeEnd(FilePosition position, string line)
     {
         Span<Frame> frames = stackalloc Frame[_maxNesting];
-        var cursor = new LineCursor(this, position, line, frames);
+        // A position this analyser did not make — Unknown among them — is a caller asking about the
+        // line alone, so the line is walked as though nothing were open above it. Walked from Unknown
+        // instead, the cursor knew nowhere code ended and answered 0, and every import a build read
+        // past the nesting bound came back empty (#240).
+        var from = position is TextPosition text && text.Owner == this ? position : _start;
+        var cursor = new LineCursor(this, from, line, frames);
         // One walk of the line, and the answer read off it. Asked per character instead — which is
         // what this did first — a minified bundle cost a call per character of a line several
         // million characters long, for a question the walk answers on its way past.
