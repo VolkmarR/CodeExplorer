@@ -17,7 +17,6 @@ public sealed class ProjectRefresh(
     ControlDatabase control,
     GitClones clones,
     IndexBuilder builder,
-    DurableIndex durable,
     ProjectIndexes indexes,
     ILogger<ProjectRefresh> logger)
 {
@@ -32,6 +31,17 @@ public sealed class ProjectRefresh(
     public async Task<IndexSummary> RunAsync(Project project, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
+        // Read before the project is: a delete counted after this is one the publish below refuses to
+        // build over, and one counted before it has already taken the project out of the control
+        // database, which the check that follows sees. A refresh that outlived a delete used to put the
+        // deleted project's index and durable copy back (GHSA-253f-grfp-cqq7).
+        long discards = indexes.Discards(project.Slug);
+        // Re-read and not taken from the caller: a queued refresh can have been waiting while the
+        // operator deleted the project, or deleted it and created another under the slug, whose record
+        // is the one to build.
+        project = await control.FindAsync(project.Slug, cancellationToken)
+                  ?? throw new InvalidOperationException(Deleted(project, "before its refresh could start"));
+
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         var opened = new List<OpenedRepository>();
         var skipped = new List<string>();
@@ -56,28 +66,26 @@ public sealed class ProjectRefresh(
             try
             {
                 report(new RefreshProgress(RefreshProgress.IngestStep, _totalSteps, RefreshProgress.IngestPhase));
-                // Scoped so the shadow connection is closed before the swap: the file cannot be moved
-                // over the live one while the instance still holds it open.
+                bool published;
                 using (var shadow = await indexes.CreateShadowAsync(project.Slug, cancellationToken))
                 {
                     summary = await builder.FillAsync(shadow, opened, repositories, project.SingleRepository,
                         report, cancellationToken);
+                    // Reported before the publish waits on the writer gate, so a wait behind a restore of
+                    // the same project is billed to the store it is holding up.
                     report(new RefreshProgress(RefreshProgress.StoreStep, _totalSteps, RefreshProgress.StorePhase));
-                    // Exported from the shadow rather than from the live index after the swap, which is
-                    // what the tables about to be swapped in are. Doing it here means the export needs
-                    // no second attach of the live catalog — one that would quietly re-bind a connection
-                    // ADR-0003 says the swap must strand — and a store that is unreachable discards the
-                    // shadow and leaves the old index serving, like any other failure of a build.
-                    await durable.StoreAsync(shadow.Connection, project.Slug, cancellationToken);
+                    // No phase names the flush to disk because there is no separable call to name: the
+                    // server issues no explicit CHECKPOINT, so the shadow flushes when the publish
+                    // disposes it and again on the DETACH inside the swap. Both land after StoreStep is
+                    // reported, outside the step-3 window #91 is about, so its half-second is billed to
+                    // the store rather than to nothing.
+                    published = await indexes.PublishShadowAsync(shadow, discards, report, cancellationToken);
                 }
-                // No phase names the flush to disk because there is no separable call to name: the
-                // server issues no explicit CHECKPOINT, so the shadow flushes when the using above
-                // disposes it and again on the DETACH inside the swap. Both land after StoreStep is
-                // reported, outside the step-3 window #91 is about, so its half-second is billed to
-                // the store rather than to nothing.
 
-                report(new RefreshProgress(RefreshProgress.SwapStep, _totalSteps, RefreshProgress.SwapPhase));
-                await indexes.SwapShadowAsync(project.Slug, cancellationToken);
+                // Thrown inside the try, so the catch below removes the shadow the publish refused.
+                if (!published)
+                    throw new InvalidOperationException(Deleted(project,
+                        "while its refresh was running, so nothing the refresh built was kept"));
             }
             catch
             {
@@ -97,6 +105,12 @@ public sealed class ProjectRefresh(
             foreach (var open in opened) open.LocalCopy.Dispose();
         }
     }
+
+    /// <summary>
+    ///     Why a refresh of a deleted project ended without an index, for the status an operator reads.
+    ///     InvalidOperationException carries it, for the reason the no-repository failure above says.
+    /// </summary>
+    private static string Deleted(Project project, string when) => $"Project '{project.Slug}' was deleted {when}.";
 
     /// <summary>
     ///     Brings every local copy up to date and opens it, before the index is touched: a fetch that

@@ -182,6 +182,10 @@ public sealed partial class ProjectIndexes : IDisposable
     // large index must not hold up a swap of a small one.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _writerGates = new(StringComparer.Ordinal);
 
+    // How many times each project's index has been discarded, written only under its writer gate. See
+    // Discards; kept for the life of the process like the gates, and bounded the same way.
+    private readonly ConcurrentDictionary<string, long> _discards = new(StringComparer.Ordinal);
+
     // One gate per project, kept for the life of the process: the count is bounded by the control
     // database, and a gate holds nothing but a reader count.
     private readonly ConcurrentDictionary<string, SwapGate> _swapGates = new(StringComparer.Ordinal);
@@ -523,24 +527,82 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     The shadow's own connection must be disposed first; the file cannot be moved while open.
     /// </summary>
     public Task SwapShadowAsync(string slug, CancellationToken cancellationToken) =>
-        WithoutReadersAsync(slug,
-            "the new index was swapped in anyway",
-            async connection =>
-            {
-                // Both catalogs go first: DETACH is what closes the file handles, and neither file can
-                // be deleted or moved while the instance holds one.
-                await DetachAsync(connection, ShadowCatalog(slug), cancellationToken);
-                await DetachAsync(connection, slug, cancellationToken);
-                // One overwriting move, never delete-then-move: a move that fails after the old file was
-                // deleted would leave the project with no index at all, and the caller's cleanup would
-                // then take the shadow too. Overwrite replaces the file or leaves it exactly as it was.
-                File.Move(ShadowPath(slug), FilePath(slug), true);
-                // A clean DETACH checkpoints and removes the WAL, so both of these are for the case
-                // where it did not: a stale live WAL would replay the old tail over the new file, and a
-                // stale shadow WAL is bytes nothing will read again.
-                File.Delete(FilePath(slug) + ".wal");
-                File.Delete(ShadowPath(slug) + ".wal");
-            }, cancellationToken);
+        WithoutReadersAsync(slug, _swapTimedOut, SwapWork(slug, cancellationToken), cancellationToken);
+
+    /// <summary>
+    ///     How many times the project's index has been discarded on this replica. A refresh reads it
+    ///     before it reads anything else about the project and hands it to
+    ///     <see cref="PublishShadowAsync" />, which is how a build that outlived a delete learns of it
+    ///     even when the slug has since been reused (GHSA-253f-grfp-cqq7). In memory, because so is the
+    ///     refresh it guards: a restart ends both.
+    /// </summary>
+    public long Discards(string slug) => _discards.GetValueOrDefault(slug);
+
+    /// <summary>
+    ///     Stores the finished shadow's durable copy and swaps it in, both under the project's writer
+    ///     gate, unless the project was discarded since the refresh read <paramref name="discards" />.
+    ///     False is that case: nothing was stored or swapped, and the shadow is the caller's to discard.
+    ///     The check and the two writes are one hold of the gate because a delete is the other writer:
+    ///     checked before the gate, a delete landing between the check and the store would have its
+    ///     durable copy and its file put back by a build of a project that no longer exists, and a
+    ///     project created later under the slug would open them.
+    ///     The shadow is disposed here, between the two: the store exports from its connection, and the
+    ///     file cannot be moved over the live one while that connection holds it open.
+    /// </summary>
+    /// <param name="shadow">The filled shadow index. Disposed by this call once it has been stored.</param>
+    /// <param name="discards">What <see cref="Discards" /> answered when the refresh began.</param>
+    /// <param name="report">Told when the swap starts, which is the one phase this call begins.</param>
+    /// <param name="cancellationToken">Threaded through the gate, the store and the swap.</param>
+    public async Task<bool> PublishShadowAsync(ShadowIndex shadow, long discards, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
+    {
+        string slug = shadow.Slug;
+        var gate = WriterGateFor(slug);
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (Discards(slug) != discards) return false;
+
+            // Exported from the shadow rather than from the live index after the swap, which is what
+            // the tables about to be swapped in are. Doing it here means the export needs no second
+            // attach of the live catalog — one that would quietly re-bind a connection ADR-0003 says the
+            // swap must strand — and a store that is unreachable leaves the old index serving.
+            await _durable.StoreAsync(shadow.Connection, slug, cancellationToken);
+            shadow.Dispose();
+
+            report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.TotalStepCount,
+                RefreshProgress.SwapPhase));
+            // ReplaceFileAsync and not SwapShadowAsync: the writer gate is already held, and it is not
+            // reentrant.
+            await ReplaceFileAsync(slug, _swapTimedOut, SwapWork(slug, cancellationToken), cancellationToken);
+            return true;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private const string _swapTimedOut = "the new index was swapped in anyway";
+
+    /// <summary>The file work of a swap, run with the gate shut by whichever caller holds the writer gate.</summary>
+    private Func<DuckDBConnection, Task> SwapWork(string slug, CancellationToken cancellationToken) =>
+        async connection =>
+        {
+            // Both catalogs go first: DETACH is what closes the file handles, and neither file can be
+            // deleted or moved while the instance holds one.
+            await DetachAsync(connection, ShadowCatalog(slug), cancellationToken);
+            await DetachAsync(connection, slug, cancellationToken);
+            // One overwriting move, never delete-then-move: a move that fails after the old file was
+            // deleted would leave the project with no index at all, and the caller's cleanup would then
+            // take the shadow too. Overwrite replaces the file or leaves it exactly as it was.
+            File.Move(ShadowPath(slug), FilePath(slug), true);
+            // A clean DETACH checkpoints and removes the WAL, so both of these are for the case where it
+            // did not: a stale live WAL would replay the old tail over the new file, and a stale shadow
+            // WAL is bytes nothing will read again.
+            File.Delete(FilePath(slug) + ".wal");
+            File.Delete(ShadowPath(slug) + ".wal");
+        };
 
     /// <summary>
     ///     Removes the shadow file after a refresh failed part-way. The live index is untouched and
@@ -565,29 +627,45 @@ public sealed partial class ProjectIndexes : IDisposable
     /// </summary>
     public async Task DiscardAsync(string slug, CancellationToken cancellationToken)
     {
-        await WithoutReadersAsync(slug,
-            "the project was deleted anyway",
-            async connection =>
+        // The whole discard is one hold of the writer gate, the durable copy included. Released after
+        // the file and before the copy, as it once was, a restore waiting on the gate — an agent's first
+        // open, a warm-up that listed the project before the delete — found no file, took the gate and
+        // loaded the copy that had not been removed yet, putting the deleted project back
+        // (GHSA-253f-grfp-cqq7).
+        var gate = WriterGateFor(slug);
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            // Counted before anything is removed, so a refresh waiting on the gate to publish sees it
+            // whether or not the rest of this completes.
+            _discards.AddOrUpdate(slug, 1, (_, count) => count + 1);
+
+            await ReplaceFileAsync(slug, "the project was deleted anyway", async connection =>
             {
                 await DetachAsync(connection, slug, cancellationToken);
                 DeleteIndexFile(FilePath(slug));
             }, cancellationToken);
 
-        // The pool goes too, and not only its connections: the swap above already closed those, and
-        // this is the one thing here a project can be finished with. Its gate stays, because a gate
-        // holds a reader count somebody may still be waiting on; a pool holds nothing once emptied.
-        if (_pools.TryRemove(slug, out var pool)) pool.Discard();
+            // The pool goes too, and not only its connections: the swap above already closed those, and
+            // this is the one thing here a project can be finished with. Its gate stays, because a gate
+            // holds a reader count somebody may still be waiting on; a pool holds nothing once emptied.
+            if (_pools.TryRemove(slug, out var pool)) pool.Discard();
 
-        // The durable copy goes with it. Left behind, it would restore a deleted project's files the
-        // first time someone connected to a project that reused the slug — the one case where the
-        // durable copy outliving the disk is wrong.
-        await _durable.RemoveAsync(slug, cancellationToken);
+            // The durable copy goes with it. Left behind, it would restore a deleted project's files the
+            // first time someone connected to a project that reused the slug — the one case where the
+            // durable copy outliving the disk is wrong.
+            await _durable.RemoveAsync(slug, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>
-    ///     Runs work that replaces or removes a project's file, with as few readers holding it as the
-    ///     drain can manage. Both callers need exactly this — a swap and a delete differ only in what
-    ///     they do to the file once the readers are out.
+    ///     Runs work that replaces a project's file, with as few readers holding it as the drain can
+    ///     manage, taking the writer gate for the file work alone. A publish and a discard take the gate
+    ///     themselves, because each has more than the file work to do under it.
     ///     The drain deliberately leaves the gate open: a search arriving while a rebuild is waiting
     ///     must be answered from the old index, which is the whole promise, not held for however long
     ///     the drain runs. Only the file work itself shuts the gate, and that is a detach and a move.
