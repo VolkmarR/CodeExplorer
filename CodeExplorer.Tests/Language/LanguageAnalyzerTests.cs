@@ -176,6 +176,59 @@ public sealed class LanguageAnalyzerTests
         Assert.Equal(symbol, Declares(extension, line).Value?.Member);
     }
 
+    /// <summary>
+    ///     Whether the candidate predicate for one symbol keeps this line. Read with .NET's regex, which
+    ///     reads the RE2 syntax these shapes are written in the same way; the engine's reading is
+    ///     covered end-to-end in <see cref="DefinitionTests" />.
+    /// </summary>
+    private static bool IsCandidateFor(string extension, string symbol, string line) =>
+        Languages.Default.For(extension).DeclarationCandidatesFor(symbol) is CandidateLines.Re2Pattern shape
+        && System.Text.RegularExpressions.Regex.IsMatch(line, shape.Pattern);
+
+    /// <summary>
+    ///     #239: the candidate predicate for one name loses no line that declares it, in every shape —
+    ///     the C-family member, the keyword and its qualifier, the type keyword, Delphi's preceding
+    ///     type name and xBase's <c>define</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("cs", "    public void Advance(int n)")]
+    [InlineData("cs", "public partial class OrderService : IService")]
+    [InlineData("cs", "    public Dictionary<string, int> Counts { get; }")]
+    [InlineData("prg", "method Advance(n as int) as void")]
+    [InlineData("prg", "define FSEDIT_GET := 11")]
+    [InlineData("pas", "procedure TCustomer.Save;")]
+    [InlineData("pas", "  TCustomer = class(TObject)")]
+    [InlineData("pkb", "CREATE OR REPLACE PROCEDURE Advance(n number) IS")]
+    [InlineData("pks", "create package body app.orders as")]
+    [InlineData("ts", "export const enum Direction {")]
+    public void The_candidates_for_a_name_keep_every_line_that_declares_it(string extension, string line)
+    {
+        var declared = Declares(extension, line).Value;
+        Assert.NotNull(declared);
+        foreach (string? name in new[] { declared.Type, declared.Member })
+            if (name is not null)
+                Assert.True(IsCandidateFor(extension, name, line), $"{name} on: {line}");
+    }
+
+    /// <summary>
+    ///     #239: a line shaped like a declaration of another name, which only mentions this one, is
+    ///     not a candidate for it — the lines that used to fill the candidate cap.
+    /// </summary>
+    [Theory]
+    [InlineData("cs", "    public void Run(OrderService s) { }", "OrderService")]
+    [InlineData("cs", "    public OrderService Create()", "OrderService")]
+    [InlineData("cs", "public class Report : OrderService", "OrderService")]
+    [InlineData("cs", "public class OrderServiceFactory", "OrderService")]
+    [InlineData("pas", "procedure Save(Customer: TCustomer);", "TCustomer")]
+    public void A_line_that_only_mentions_the_name_is_not_a_candidate_for_it(string extension, string line,
+        string symbol)
+    {
+        // Still a candidate for what it does declare, so the narrowing is by name and not by shape.
+        Assert.True(Languages.Default.For(extension).DeclarationCandidates is CandidateLines.Re2Pattern shape
+                    && System.Text.RegularExpressions.Regex.IsMatch(line, shape.Pattern));
+        Assert.False(IsCandidateFor(extension, symbol, line));
+    }
+
     [Fact]
     public void A_wrapped_boolean_clause_is_not_a_declaration() =>
         // `or` on its own would make the continuation line of any WHERE clause a declaration, and

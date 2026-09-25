@@ -76,6 +76,7 @@ internal sealed partial class SearchTools
                 $"{ToolReply.PartlyHiddenByFilters(result.FilesNamingItWithoutFilters.Value - result.FilesNamingIt)} ");
         text.Append(CultureInfo.InvariantCulture,
             $"This reads the declaration forms it knows, so a form it does not know is a miss and not proof there is none — the symbol may also be declared in a language this indexes without profiling, or generated rather than written. Run find_references(symbol=\"{symbol}\") and read its DECLARATIONS section, or grep for it.");
+        if (result.CandidatesCapped) text.Append('\n').Append(_capNote);
         // Which of those two a miss actually is, where the index can say: "a language this indexes
         // without profiling" is a possibility in the sentence above and a fact here, named with the
         // files it applies to (#126) — and beside it the files nothing was read from at all (#129).
@@ -98,6 +99,14 @@ internal sealed partial class SearchTools
         + "so it is silent about those files rather than negative about them: grep the name "
         + "there, or read one of them to see how the language declares things.";
 
+    /// <summary>
+    ///     What reaching the candidate cap costs (#239), on the found answer and the empty one alike:
+    ///     the lines past the cap were never placed, so a declaration among them is missing from both,
+    ///     and an empty answer that did not say so would read as "nothing declares this".
+    /// </summary>
+    private static readonly string _capNote = string.Create(CultureInfo.InvariantCulture,
+        $"NOTE: more than {DefinitionSearch.MaxCandidates} candidate lines were shaped like a declaration of this name and only the first {DefinitionSearch.MaxCandidates} were read, so this answer may be incomplete. Narrow with path, ext or repo.");
+
     private static string FormatDefinitions(string symbol, DefinitionResult result)
     {
         var text = new StringBuilder();
@@ -107,6 +116,7 @@ internal sealed partial class SearchTools
             ? string.Create(CultureInfo.InvariantCulture,
                 $"; showing the first {result.Sites.Count}. The name is declared too often to enumerate — narrow with repo/path/ext/exclude.\n")
             : ".\n");
+        if (result.CandidatesCapped) text.Append(_capNote).Append('\n');
 
         // Above the sites, where a reply that found something is most likely to be read as the whole
         // of what there is: an answer of three declarations can still be missing the one written in a

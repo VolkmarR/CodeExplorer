@@ -42,6 +42,9 @@ public sealed record DefinitionSite(
 ///     declare no declaration shapes, whose files no branch of the query asked for at all (#129). It
 ///     is carried whether or not sites were found: a declaration the scan could not see is missing
 ///     from a full answer exactly as silently as from an empty one.
+///     <see cref="CandidatesCapped" /> is whether more than <see cref="DefinitionSearch.MaxCandidates" />
+///     lines were shaped like a declaration of the name, so that the lines past the cap were never
+///     placed and <see cref="TotalSites" /> — or an empty answer — is a floor rather than a count (#239).
 /// </summary>
 public sealed record DefinitionResult(
     IReadOnlyList<DefinitionSite> Sites,
@@ -49,7 +52,8 @@ public sealed record DefinitionResult(
     bool Separated,
     int FilesNamingIt,
     int? FilesNamingItWithoutFilters,
-    IReadOnlyList<UncoveredFiles> Uncovered) : Outcome;
+    IReadOnlyList<UncoveredFiles> Uncovered,
+    bool CandidatesCapped) : Outcome;
 
 /// <summary>
 ///     Where a symbol is declared (#54), answered in one call instead of a reference search read past
@@ -77,12 +81,13 @@ public sealed class DefinitionSearch(IndexReaders readers)
     public const int MaxSites = 50;
 
     /// <summary>
-    ///     How many candidate lines are read before they are placed. A candidate is already a line that
-    ///     names the symbol <em>and</em> is shaped like a declaration, so this is generous by an order
-    ///     of magnitude for anything but a name shared across a whole code base — where the sites the
-    ///     cap cost would have been thrown away by <see cref="MaxSites" /> regardless.
+    ///     How many candidate lines are read before they are placed. A candidate is already a line
+    ///     shaped like a declaration <em>of the symbol</em> — the shape names it where the language
+    ///     puts the declared name (#239) — so this is generous by an order of magnitude for anything
+    ///     but a name shared across a whole code base. Reaching it is said in the reply, because the
+    ///     lines past it sort after the ones read and one of them may be the declaration wanted.
     /// </summary>
-    private const int _maxCandidates = 1_000;
+    public const int MaxCandidates = 1_000;
 
     /// <summary>
     ///     Every definition search goes through here, which is what makes this the one place such a
@@ -116,7 +121,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
         string literally = SearchQuery.Literally(symbol, parameters);
         // Read once and handed to both the shapes and the coverage note, which ask about the same list.
         var extensions = await ScopeCoverage.ExtensionsAsync(connection, cancellationToken);
-        var shapes = Shapes(extensions, parameters);
+        var shapes = Shapes(extensions, symbol, parameters);
         string declarationShapes = shapes.Sql;
         string fileFilter = filter.Sql(parameters);
 
@@ -129,7 +134,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
                                                        AND regexp_matches(l.content, $q, ''){fileFilter}
                                                        AND ({declarationShapes})
                                                      ORDER BY f.qualified_path, l.line_number
-                                                     LIMIT {_maxCandidates}
+                                                     LIMIT {MaxCandidates + 1}
                                                      """, parameters))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
@@ -138,6 +143,11 @@ public sealed class DefinitionSearch(IndexReaders readers)
                     Languages.Default.For(reader.Text("extension")), reader.Int32("line_number"),
                     reader.Text("content")));
         }
+
+        // One past the cap was asked for, so that reaching it is told apart from landing on it
+        // exactly; the extra line is dropped, because the cap is the promise and not the query.
+        bool capped = candidates.Count > MaxCandidates;
+        if (capped) candidates.RemoveAt(MaxCandidates);
 
         // The lines above each candidate, so that a `procedure Foo;` inside a commented-out block is
         // not a declaration and one below a Delphi `implementation` is known to be the body.
@@ -211,7 +221,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
             cancellationToken);
 
         return new DefinitionResult([.. ranked.Take(MaxSites)], ranked.Count, separated, naming,
-            namingWithoutFilters, uncovered);
+            namingWithoutFilters, uncovered, capped);
     }
 
     /// <summary>One line the engine offered, before the file's language says what it declares.</summary>
@@ -237,15 +247,17 @@ public sealed class DefinitionSearch(IndexReaders readers)
     ///     The extensions that contributed no branch come back beside the clause, because this is the
     ///     one place that knows them and a reply owes them a sentence: a file no branch asked for is
     ///     not a file that was searched and held nothing (#129).
+    ///     Each branch is the analyser's shapes for this one symbol, so a line shaped like a
+    ///     declaration of another name that merely mentions this one is no candidate (#239).
     /// </summary>
     private static (string Sql, IReadOnlyList<string> Unreadable) Shapes(IReadOnlyList<string> extensions,
-        List<DuckDBParameter> parameters)
+        string symbol, List<DuckDBParameter> parameters)
     {
         var branches = new List<string>();
         var unreadable = new List<string>();
         foreach (var language in extensions.GroupBy(Languages.Default.For))
         {
-            if (SearchQuery.Narrowing(language.Key.DeclarationCandidates, $"d{parameters.Count}", parameters)
+            if (SearchQuery.Narrowing(language.Key.DeclarationCandidatesFor(symbol), $"d{parameters.Count}", parameters)
                 is not { } narrowing)
             {
                 unreadable.AddRange(language);
