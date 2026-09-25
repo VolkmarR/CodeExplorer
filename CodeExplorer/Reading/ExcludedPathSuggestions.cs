@@ -77,28 +77,39 @@ internal static class ExcludedPathSuggestions
     {
         var accepted = new List<ExcludedPathSuggestion>();
         var candidates = new List<(string Pattern, SuggestionRule Rule, string Reason)>();
-        candidates.AddRange(await GitAttributesAsync(connection, logger, cancellationToken));
+        candidates.AddRange(await GitAttributesAsync(connection, cancellationToken));
         candidates.AddRange(_wellKnown.Select(p => (p, SuggestionRule.WellKnownName, "A well-known generated name")));
         foreach (var candidate in candidates)
-            await OfferAsync(connection, existing, accepted, candidate, cancellationToken);
+            await OfferAsync(connection, existing, accepted, candidate, logger, cancellationToken);
 
         // Last, and read after the others are accepted, so a bump they already cover is not proposed.
         foreach (var candidate in await HistoryAsync(connection, paths, Covering(existing, accepted), cancellationToken))
-            await OfferAsync(connection, existing, accepted, candidate, cancellationToken);
+            await OfferAsync(connection, existing, accepted, candidate, logger, cancellationToken);
         return accepted;
     }
 
     /// <summary>
     ///     Adds <paramref name="candidate" /> where it is not already written and matches a file at HEAD
     ///     nothing before it leaves out. The count shown is every file it matches, covered or not,
-    ///     because that is what the pattern will exclude once saved.
+    ///     because that is what the pattern will exclude once saved. A <c>.gitattributes</c> pattern is
+    ///     compiled first: the repository wrote it and nothing checked it, and one RE2 refuses, such as
+    ///     <c>[z-a].txt</c>, is skipped rather than failing every suggestion with it (#243). The other
+    ///     rules write their own patterns, which compile.
     /// </summary>
     private static async Task OfferAsync(DuckDBConnection connection, IReadOnlyList<string> existing,
         List<ExcludedPathSuggestion> accepted, (string Pattern, SuggestionRule Rule, string Reason) candidate,
-        CancellationToken cancellationToken)
+        ILogger logger, CancellationToken cancellationToken)
     {
         var covering = Covering(existing, accepted);
         if (covering.Patterns.Contains(candidate.Pattern, StringComparer.OrdinalIgnoreCase)) return;
+        if (candidate.Rule == SuggestionRule.GitAttributes
+            && await ExcludedPaths.RefusedAsync(connection, candidate.Pattern, cancellationToken) is { } refused)
+        {
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Skipped the suggestion {Pattern} from {Reason}: {Refused}", candidate.Pattern,
+                    candidate.Reason, refused);
+            return;
+        }
 
         var parameters = new List<DuckDBParameter>();
         string matching = new ExcludedPaths([candidate.Pattern]).Matching("qualified_path", "p", parameters)!;
@@ -127,36 +138,23 @@ internal static class ExcludedPathSuggestions
     ///     slash at any depth below the file's folder and one with a slash relative to it, so the first
     ///     becomes <c>folder/**/pattern</c> and the second <c>folder/pattern</c>. An attribute unset
     ///     (<c>-</c>), unspecified (<c>!</c>) or set to false marks nothing, and a negated or quoted
-    ///     pattern is left alone rather than half understood. So is one RE2 refuses: the repository wrote
-    ///     it and nothing checked it, so it is skipped rather than failing every suggestion with it.
+    ///     pattern is left alone rather than half understood.
     /// </summary>
     private static async Task<List<(string Pattern, SuggestionRule Rule, string Reason)>> GitAttributesAsync(
-        DuckDBConnection connection, ILogger logger, CancellationToken cancellationToken)
+        DuckDBConnection connection, CancellationToken cancellationToken)
     {
+        await using var command = connection.Query("""
+                                                   SELECT f.qualified_path, f.name, l.content
+                                                   FROM files f JOIN lines l USING (file_id)
+                                                   WHERE lower(f.name) = '.gitattributes' AND f.skip_reason IS NULL
+                                                   ORDER BY f.qualified_path, l.line_number
+                                                   """, []);
+        await using var reader = await command.ReaderAsync(cancellationToken);
         var declared = new List<(string Pattern, SuggestionRule Rule, string Reason)>();
-        await using (var command = connection.Query("""
-                                                    SELECT f.qualified_path, f.name, l.content
-                                                    FROM files f JOIN lines l USING (file_id)
-                                                    WHERE lower(f.name) = '.gitattributes' AND f.skip_reason IS NULL
-                                                    ORDER BY f.qualified_path, l.line_number
-                                                    """, []))
-        await using (var reader = await command.ReaderAsync(cancellationToken))
-            while (await reader.ReadAsync(cancellationToken))
-                if (Declared(reader.Text("qualified_path"), reader.Text("name"), reader.Text("content")) is { } line)
-                    declared.Add(line);
-
-        // Checked once the reader is closed, since each check is a statement of its own on this connection.
-        var compiled = new List<(string Pattern, SuggestionRule Rule, string Reason)>(declared.Count);
-        foreach (var candidate in declared)
-        {
-            if (await ExcludedPaths.RefusedAsync(connection, candidate.Pattern, cancellationToken) is not { } refused)
-                compiled.Add(candidate);
-            else if (logger.IsEnabled(LogLevel.Debug))
-                logger.LogDebug("Skipped the suggestion {Pattern} from {Reason}: {Refused}", candidate.Pattern,
-                    candidate.Reason, refused);
-        }
-
-        return compiled;
+        while (await reader.ReadAsync(cancellationToken))
+            if (Declared(reader.Text("qualified_path"), reader.Text("name"), reader.Text("content")) is { } line)
+                declared.Add(line);
+        return declared;
     }
 
     /// <summary>
