@@ -399,6 +399,15 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
         Assert.NotNull(last);
         Assert.Equal(2100, last.Total);
         Assert.Empty(last.Files);
+
+        // A page size of zero is a page of one, so page 2 is the second row and not the first again.
+        string OnlyPath(FileListResponse? l) => Assert.Single(Assert.IsType<FileListResponse>(l).Files).QualifiedPath;
+        var zeroFirst = await http.GetFromJsonAsync<FileListResponse>(
+            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=0&page=1", TestContext.Current.CancellationToken);
+        var zeroSecond = await http.GetFromJsonAsync<FileListResponse>(
+            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=0&page=2", TestContext.Current.CancellationToken);
+        Assert.Equal(seen[0], OnlyPath(zeroFirst));
+        Assert.Equal(seen[1], OnlyPath(zeroSecond));
     }
 
     [Fact]
