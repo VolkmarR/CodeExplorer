@@ -398,7 +398,9 @@ public sealed partial class ProjectIndexes : IDisposable
             }
 
             await ReplaceFileAsync(slug, "the restored index was put in place anyway",
-                MoveIntoPlace(slug, catalog, path, cancellationToken), cancellationToken);
+                MoveIntoPlace(slug, catalog, path, "restored index",
+                    "Nothing was restored; the next read of the project tries again.", cancellationToken),
+                cancellationToken);
 
             if (_logger.IsEnabled(LogLevel.Information))
                 _logger.LogInformation("Restored project {Project} from its durable copy", slug);
@@ -556,7 +558,9 @@ public sealed partial class ProjectIndexes : IDisposable
             report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.TotalStepCount,
                 RefreshProgress.SwapPhase));
             await ReplaceFileAsync(slug, "the new index was swapped in anyway",
-                MoveIntoPlace(slug, ShadowCatalog(slug), ShadowPath(slug), cancellationToken), cancellationToken);
+                MoveIntoPlace(slug, ShadowCatalog(slug), ShadowPath(slug), "new index",
+                    "The index that was serving still is; refresh the project to try again.", cancellationToken),
+                cancellationToken);
             return true;
         }
     }
@@ -574,24 +578,61 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     The file work of a swap and of a restore: a finished file, attached under its own catalog, made
     ///     the project's live one. Run with the gate shut, by a caller holding the writer gate.
     /// </summary>
+    /// <param name="slug">The project whose live file is replaced.</param>
+    /// <param name="catalog">The catalog the finished file is attached under.</param>
+    /// <param name="path">The finished file.</param>
+    /// <param name="replacement">What the file is, as the refusal names it: "new index", "restored index".</param>
+    /// <param name="remedy">The refusal's last sentence: what still serves, and what tries again.</param>
+    /// <param name="cancellationToken">Threaded through the checkpoint and both detaches.</param>
     private Func<DuckDBConnection, Task> MoveIntoPlace(string slug, string catalog, string path,
-        CancellationToken cancellationToken) =>
+        string replacement, string remedy, CancellationToken cancellationToken) =>
         async connection =>
         {
-            // Both catalogs go first: DETACH is what closes the file handles, and neither file can be
-            // deleted or moved while the instance holds one.
+            bool checkpointed = await CheckpointAsync(connection, slug, catalog, cancellationToken);
+            // Both catalogs go before the move: DETACH is what closes the file handles, and neither file
+            // can be deleted or moved while the instance holds one. The new one first, so a refusal
+            // below leaves the live catalog attached and serving.
             await DetachAsync(connection, catalog, cancellationToken);
+            // A log still here holds rows the file does not, and moving the file without it would put
+            // an index missing its tail in place. Refused rather than moved with it: nothing opens a
+            // log under a name other than the one it was written beside. A failed checkpoint is refused
+            // too, log or not: DuckDB invalidates the database it failed on, so the file is not trusted.
+            if (!checkpointed || File.Exists(path + ".wal"))
+                throw new InvalidOperationException(
+                    $"The {replacement} of project '{slug}' was not put in place, because part of it had not "
+                    + $"been written to its file yet. {remedy}");
             await DetachAsync(connection, slug, cancellationToken);
             // One overwriting move, never delete-then-move: a move that fails after the old file was
             // deleted would leave the project with no index at all, and the caller's cleanup would then
             // take the new file too. Overwrite replaces the file or leaves it exactly as it was.
             File.Move(path, FilePath(slug), true);
-            // A clean DETACH checkpoints and removes the WAL, so both of these are for the case where it
-            // did not: a stale live WAL would replay the old tail over the new file, and a stale WAL of
-            // the moved file is bytes nothing will read again.
+            // The old live file's log, left by a DETACH that did not checkpoint it: it belongs to the
+            // file just replaced, and would replay that file's tail over the new one.
             File.Delete(FilePath(slug) + ".wal");
-            File.Delete(path + ".wal");
         };
+
+    /// <summary>
+    ///     Writes everything committed to a finished file into the file itself, and answers whether that
+    ///     worked. Explicit rather than trusted to the DETACH: a DETACH checkpoints only when nothing else
+    ///     is using the database, and one that did not leaves committed rows of the new file — the
+    ///     <c>index_info</c> row a build writes last among them — in a log beside it (#242).
+    /// </summary>
+    private async Task<bool> CheckpointAsync(DuckDBConnection connection, string slug, string catalog,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await connection.ExecuteAsync($"CHECKPOINT {Quote(catalog)}", cancellationToken);
+            return true;
+        }
+        catch (DuckDBException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Safe to swallow: the caller refuses the move on a false answer with a sentence of its own,
+            // and DuckDB's message, which names the file, belongs in the log rather than in the status.
+            _logger.LogWarning(ex, "The finished index of project {Project} could not be checkpointed", slug);
+            return false;
+        }
+    }
 
     /// <summary>
     ///     Removes the shadow file after a refresh failed part-way. The live index is untouched and

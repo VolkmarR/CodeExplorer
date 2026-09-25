@@ -4,6 +4,7 @@ using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
 using CodeExplorer.Operator;
+using CodeExplorer.Reading;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.DependencyInjection;
@@ -122,6 +123,59 @@ public sealed class RefreshTests : IDisposable
         command.CommandText = "SELECT count(*) FROM files";
         var failure = await Assert.ThrowsAsync<DuckDBException>(() => command.ExecuteScalarAsync(Ct));
         Assert.Contains("alpha", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_swapped_in_index_holds_every_row_the_shadow_committed_after_a_restart()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+        await _host.RefreshAsync("alpha");
+
+        // Nothing left in a log beside the file: what the shadow committed is in the file itself.
+        Assert.False(File.Exists(_host.IndexFile("alpha") + ".wal"));
+
+        // A restart drops the instance, so what is read next comes from the file on disk alone. The
+        // index_info row a build writes last is what an index missing its tail loses first (#242).
+        _host.Restart();
+        Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+        Assert.Single(await _host.ScalarsAsync("alpha", "SELECT CAST(schema_version AS VARCHAR) FROM index_info"));
+    }
+
+    [Fact]
+    public async Task A_swap_is_refused_when_the_shadow_still_has_a_write_ahead_log()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+
+        using var straggler = await _host.OpenIndexInstanceAsync();
+        using (await _host.OpenIndexAsync("alpha"))
+        {
+            using (var response = await _host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            await WaitForSwapAsync(_host, "alpha");
+
+            // The shadow is finished and waiting to be swapped in. A committed write puts rows in its log,
+            // and DuckDB's own fault switch makes every checkpoint stop short of emptying a log. An open
+            // transaction does not do it: DuckDB 1.5 checkpoints committed rows past a reader and past
+            // an uncommitted writer alike, so this is the only way found to keep a log beside the shadow.
+            await straggler.ExecuteAsync("CREATE TABLE \"alpha$shadow\".main.straggler AS SELECT 1 AS one", Ct);
+            await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
+        }
+
+        await _host.WaitForRefreshesAsync();
+        // Instance-wide, so it goes before anything else here checkpoints the live index.
+        await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
+
+        var status = await _host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.NotNull(status.Error);
+        Assert.Contains("'alpha'", status.Error, StringComparison.Ordinal);
+        Assert.Contains("not put in place", status.Error, StringComparison.Ordinal);
+        // A sentence for the operator, not DuckDB's own words or a path on the server's disk.
+        Assert.DoesNotContain(_host.DataDirectory, status.Error, StringComparison.OrdinalIgnoreCase);
+        // The old index is the one still serving.
+        Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
     }
 
     [Fact]
