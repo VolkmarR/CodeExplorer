@@ -28,6 +28,8 @@ public sealed class ClearTextCredentialTests : IDisposable
     [InlineData("HTTP://example.invalid/repo.git")]
     [InlineData(" http://example.invalid/repo.git ")]
     [InlineData("git://example.invalid/repo.git")]
+    [InlineData("GIT://example.invalid/repo.git")]
+    [InlineData("http:example.invalid/repo.git")]
     // Not a URI .NET can parse, and read as scp-style by the classifier, which libgit2 does not agree with.
     [InlineData("http://example invalid/repo.git")]
     public async Task A_credential_for_an_unencrypted_url_is_refused(string url)
@@ -60,10 +62,13 @@ public sealed class ClearTextCredentialTests : IDisposable
     /// <summary>
     ///     A repository stored with a credential before the API refused the pair is skipped with the same
     ///     sentence, and libgit2 is never asked: the remote is a loopback listener that would answer every
-    ///     request with a basic-auth challenge, and it is never so much as connected to.
+    ///     request with a basic-auth challenge, and it is never so much as connected to. Whether its local
+    ///     copy already exists — the refresh would fetch — or not yet — it would clone.
     /// </summary>
-    [Fact]
-    public async Task A_stored_http_repository_with_a_credential_is_skipped_and_never_contacted()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_stored_http_repository_with_a_credential_is_skipped_and_never_contacted(bool clonedBefore)
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -91,8 +96,13 @@ public sealed class ClearTextCredentialTests : IDisposable
         await _host.CreateProjectAsync("alpha");
         await _host.AddRepositoryAsync("alpha", "healthy",
             _host.CreateGitRepository("healthy", new Dictionary<string, string> { ["a.cs"] = "class A {}" }));
+        // A local repository, whose transport never asks for the credential, makes a copy to fetch into.
+        await _host.AddRepositoryAsync("alpha", "plain", clonedBefore
+            ? _host.CreateGitRepository("plain", new Dictionary<string, string> { ["b.cs"] = "class B {}" })
+            : "https://example.invalid/plain.git", Secret);
+        if (clonedBefore) await _host.RefreshAsync("alpha");
         // Stored the way a server that predates the refusal stored it: the credential beside an http URL.
-        await _host.AddRepositoryAsync("alpha", "plain", "https://example.invalid/plain.git", Secret);
+        // Safe to inline: the value is the test's own loopback URL, built from a port number.
         await _host.ExecuteOnControlDatabaseAsync($"UPDATE repositories SET url = '{remote}' WHERE slug = 'plain'");
 
         var summary = await _host.RefreshAsync("alpha");
@@ -104,6 +114,7 @@ public sealed class ClearTextCredentialTests : IDisposable
         Assert.Contains(Refusal, skipped);
         Assert.DoesNotContain(Secret, skipped);
         Assert.Equal(0, connections);
-        Assert.False(Directory.Exists(_host.ClonePath("alpha", "plain")));
+        // Refused before libgit2 was asked: a copy that was never made is not made now.
+        if (!clonedBefore) Assert.False(Directory.Exists(_host.ClonePath("alpha", "plain")));
     }
 }

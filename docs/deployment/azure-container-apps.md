@@ -282,4 +282,4 @@ a foreign `Origin` on `/api` and the MCP endpoints, so a replica missing
 The first with GHSA-4f8q-c6jj-fr44 refuses a credential beside an `http://` or `git://` URL, which
 would send it in clear text, and there is no setting to allow it: a repository stored with that pair
 is reported as skipped by every refresh, and its token never sent, until it is deleted and added
-again under its https URL.
+again under its https or ssh URL.
