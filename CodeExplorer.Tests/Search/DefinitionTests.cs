@@ -1,4 +1,5 @@
 using CodeExplorer.Index;
+using CodeExplorer.Search;
 using ModelContextProtocol.Client;
 using Xunit;
 
@@ -527,7 +528,7 @@ public sealed class DefinitionTests : IDisposable
     public async Task Lines_that_only_mention_the_name_do_not_crowd_out_its_declaration(SearchEngine engine)
     {
         _host = new TestHost(engine);
-        string uses = string.Concat(Enumerable.Range(0, 1100)
+        string uses = string.Concat(Enumerable.Range(0, DefinitionSearch.MaxCandidates + 100)
             .Select(i => $"    public void Run{i}(OrderService s) {{ }}\n"));
         await _host.IndexedProjectAsync("crowd", new Dictionary<string, Dictionary<string, string>>
         {
@@ -556,7 +557,7 @@ public sealed class DefinitionTests : IDisposable
     public async Task A_search_that_reaches_the_candidate_cap_says_so(SearchEngine engine)
     {
         _host = new TestHost(engine);
-        string overloads = string.Concat(Enumerable.Range(0, 1001)
+        string overloads = string.Concat(Enumerable.Range(0, DefinitionSearch.MaxCandidates + 1)
             .Select(i => $"    public void Advance(int n{i}) {{ }}\n"));
         await _host.IndexedProjectAsync("capped", new Dictionary<string, Dictionary<string, string>>
         {
@@ -566,7 +567,7 @@ public sealed class DefinitionTests : IDisposable
 
         string text = await FindAsync(client, new Dictionary<string, object?> { ["symbol"] = "Advance" });
 
-        Assert.Contains("more than 1000 candidate lines", text);
+        Assert.Contains($"more than {DefinitionSearch.MaxCandidates} candidate lines", text);
         Assert.Contains("may be incomplete", text);
     }
 
