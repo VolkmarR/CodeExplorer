@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using CodeExplorer.Index;
+using CodeExplorer.Reading;
 using CodeExplorer.Search;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
 using Xunit;
 
@@ -49,21 +51,56 @@ public sealed class CallLimitsTests(CallLimitsFixture fixture) : IClassFixture<C
         Assert.Contains($"No indexed file matches \"{Backtracking}\"", glob, StringComparison.Ordinal);
 
         string included = await CallAsync(client, "grep",
-            new Dictionary<string, object?> { ["query"] = "Needle", ["path"] = Backtracking });
+            new Dictionary<string, object?> { ["query"] = "Needle", ["regex"] = true, ["path"] = Backtracking });
         Assert.Contains("No matches", included, StringComparison.Ordinal);
 
         string excluded = await CallAsync(client, "grep",
-            new Dictionary<string, object?> { ["query"] = "Needle", ["exclude"] = Backtracking });
+            new Dictionary<string, object?> { ["query"] = "Needle", ["regex"] = true, ["exclude"] = Backtracking });
         Assert.Contains(CallLimitsFixture.LongPath, excluded, StringComparison.Ordinal);
 
-        // A reversed range matches no character, as GLOB compares one, and negated it matches any:
-        // RE2 refuses the range itself, so it must never reach RE2 as written.
-        string reversed = await CallAsync(client, "grep",
-            new Dictionary<string, object?> { ["query"] = "Needle", ["path"] = "*[z-a]*" });
-        Assert.Contains("No matches", reversed, StringComparison.Ordinal);
-        string negated = await CallAsync(client, "grep",
-            new Dictionary<string, object?> { ["query"] = "Needle", ["path"] = "*/[!z-a]rders.cs" });
-        Assert.Contains("one/src/Orders.cs", negated, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A path term is refused, as a sentence naming the argument, where it is malformed or larger
+    ///     than a filter anyone writes: a reversed range (which GLOB matches nothing with, so it would
+    ///     read as a search that found nothing), a term past the length limit, or too many terms.
+    ///     The queries are regex so that the answer does not depend on the search engine.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MalformedTerms))]
+    public async Task A_malformed_or_oversized_path_term_is_refused_by_name(string argument, string term,
+        string refusal)
+    {
+        await using var client = await _host.ConnectAsync(CallLimitsFixture.Alpha);
+
+        string reply = await CallAsync(client, "grep",
+            new Dictionary<string, object?> { ["query"] = "Needle", ["regex"] = true, [argument] = term });
+
+        Assert.Contains(refusal, reply, StringComparison.Ordinal);
+        Assert.Contains($"`{argument}`", reply, StringComparison.Ordinal);
+        Assert.DoesNotContain("No matches", reply, StringComparison.Ordinal);
+    }
+
+    public static TheoryData<string, string, string> MalformedTerms => new()
+    {
+        { "path", "*[z-a]*", "has the range [z-a], which runs backwards" },
+        { "exclude", "*/[!z-a]rders.cs", "has the range [z-a], which runs backwards" },
+        { "path", "*" + new string('a', GlobRegex.MaxLength), $"may be at most {GlobRegex.MaxLength} characters" },
+        {
+            "exclude", string.Join(",", Enumerable.Range(0, PathTerms.MaxTerms + 1).Select(i => $"/d{i}/")),
+            $"takes at most {PathTerms.MaxTerms} comma-separated terms"
+        }
+    };
+
+    [Fact]
+    public async Task A_glob_past_the_length_limit_is_refused_by_name()
+    {
+        await using var client = await _host.ConnectAsync(CallLimitsFixture.Alpha);
+
+        string reply = await CallAsync(client, "glob",
+            new Dictionary<string, object?> { ["glob"] = new string('?', GlobRegex.MaxLength + 1) });
+
+        Assert.Contains($"A glob may be at most {GlobRegex.MaxLength} characters", reply, StringComparison.Ordinal);
     }
 
     /// <summary>What a GLOB means is kept by the linear matcher: classes, negation, `?` and case.</summary>
@@ -129,9 +166,46 @@ public sealed class CallLimitsTests(CallLimitsFixture fixture) : IClassFixture<C
 
         Assert.Contains($"one call reads at most {FileQueries.MaxLinesPerRead} lines", reply, StringComparison.Ordinal);
         Assert.Contains($"(lines 1-{rest} of {CallLimitsFixture.BigLines})", reply, StringComparison.Ordinal);
-        Assert.Contains($"'one/README.md' was not read: the entries before it already read {FileQueries.MaxLinesPerRead} lines",
+        Assert.Contains($"'one/README.md' was not read: the entries before it already read as much as one call reads",
             reply, StringComparison.Ordinal);
         Assert.DoesNotContain("readme", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     Lines are not the only measure: a hundred entries over one minified file are a hundred lines
+    ///     of megabytes each. Once the windows read reach the character budget the rest are not read.
+    ///     Each file here is fifty lines of a hundred thousand characters, so four reach it and the fifth entry is not read.
+    /// </summary>
+    [Fact]
+    public async Task Read_file_stops_at_its_character_budget_however_few_the_lines()
+    {
+        await using var client = await _host.ConnectAsync(CallLimitsFixture.Large);
+
+        string reply = await CallAsync(client, "read_file",
+            new Dictionary<string, object?> { ["paths"] = _wideWindows });
+
+        Assert.Contains("'large/b.txt' was not read", reply, StringComparison.Ordinal);
+        Assert.Contains($"{FileQueries.MaxCharactersPerRead / 1_000_000} million characters", reply,
+            StringComparison.Ordinal);
+        Assert.Contains("large/b.txt  -", reply, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     One multiline match can span a whole file, so the lines it marks are capped too. Asked of the
+    ///     search rather than the tool, because the reply cap would hide the difference.
+    /// </summary>
+    [Fact]
+    public async Task A_multiline_match_spanning_the_file_marks_no_more_lines_than_the_cap()
+    {
+        var grep = _host.Services.GetRequiredService<GrepSearch>();
+
+        var outcome = await grep.SearchAsync(CallLimitsFixture.Alpha,
+            new GrepRequest("(?s)x.*", Path: "*big.txt", Multiline: true, Context: GrepSearch.MaxContext,
+                MaxLinesPerFile: GrepSearch.MaxLinesPerFile), TestContext.Current.CancellationToken);
+
+        var file = Assert.Single(Assert.IsType<GrepResult>(outcome).Files);
+        Assert.Equal(GrepSearch.MaxMultilineLinesShown, file.Lines.Count);
+        Assert.True(CallLimitsFixture.BigLines > GrepSearch.MaxMultilineLinesShown);
     }
 
     /// <summary>
@@ -153,7 +227,7 @@ public sealed class CallLimitsTests(CallLimitsFixture fixture) : IClassFixture<C
         // One file read and marked, two listed without their lines.
         Assert.Equal(1, Regex.Count(reply, @"^\s*1: Needle", RegexOptions.Multiline));
         Assert.Equal(2, Regex.Count(reply,
-            $"lines not shown: a multiline page reads at most {GrepSearch.MaxMultilinePageBytes / (1024 * 1024)} MiB"));
+            $"lines not shown: a multiline page reads at most {GrepSearch.MaxMultilinePageMiB} MiB"));
         Assert.Contains("pageSize=1 and page=2", reply, StringComparison.Ordinal);
         Assert.Contains("pageSize=1 and page=3", reply, StringComparison.Ordinal);
     }
@@ -175,12 +249,18 @@ public sealed class CallLimitsTests(CallLimitsFixture fixture) : IClassFixture<C
             string.Create(CultureInfo.InvariantCulture,
                 $"at most {FileQueries.MaxWindows} entries and reads at most {FileQueries.MaxLinesPerRead:N0} lines"),
             Described("read_file"), StringComparison.Ordinal);
+        Assert.Contains($"{FileQueries.MaxCharactersPerRead / 1_000_000} million characters", Described("read_file"),
+            StringComparison.Ordinal);
+        Assert.Contains($"At most {PathTerms.MaxTerms} terms, each at most {GlobRegex.MaxLength} characters",
+            Described("grep"), StringComparison.Ordinal);
         Assert.Contains($"1-{FileQueries.MaxTreeDepth}", Described("list_tree"), StringComparison.Ordinal);
-        Assert.Contains($"at most {GrepSearch.MaxMultilinePageBytes / (1024 * 1024)} MiB of file content",
+        Assert.Contains($"at most {GrepSearch.MaxMultilinePageMiB} MiB of file content",
             Described("grep"), StringComparison.Ordinal);
     }
 
     private static readonly string[] _overBudget = ["one/big.txt:1-60000", "one/big.txt:1-60000", "one/README.md"];
+
+    private static readonly string[] _wideWindows = ["large/a.txt", "large/b.txt", "large/c.txt", "large/a.txt", "large/b.txt:1-2"];
 
     private const string Backtracking = "*?*?*?*?*?*?*?*?*?*?*?*?~";
 
@@ -199,10 +279,10 @@ public sealed class CallLimitsFixture : IAsyncLifetime
 {
     public const string Alpha = "alpha";
 
-    /// <summary>Long enough that a glob backtracking at each star is billions of steps against it.</summary>
     /// <summary>More than half of <see cref="FileQueries.MaxLinesPerRead" />, so two windows over it overrun the budget.</summary>
     public const int BigLines = 60_000;
 
+    /// <summary>Long enough that a glob backtracking at each star is billions of steps against it.</summary>
     public const string LongPath = "one/src/deeply/nested/folder/with/a/long/name/NeedleHolder.cs";
 
     /// <summary>Three files each past half of <see cref="GrepSearch.MaxMultilinePageBytes" />, all matching one multiline pattern.</summary>

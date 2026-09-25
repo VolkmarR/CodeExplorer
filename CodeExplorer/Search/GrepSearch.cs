@@ -116,7 +116,18 @@ public sealed partial class GrepSearch(IndexReaders readers)
     ///     MiB is a hundred ordinary source files many times over. The page's first file is read
     ///     whatever its size, so a file larger than this still shows its matches on a page of its own.
     /// </summary>
-    public const long MaxMultilinePageBytes = 8L * 1024 * 1024;
+    public const int MaxMultilinePageMiB = 8;
+
+    /// <summary>
+    ///     The most lines one file's multiline matches may mark and show. <see cref="MaxLinesPerFile" />
+    ///     counts matches, and one match can span the whole file — <c>(?s).*</c> does — so without this
+    ///     it marked and returned every line (GHSA-v284-9964-6mjr). It is the most single-line mode can
+    ///     ever show for a file: every match a line of its own, with the widest context either side.
+    /// </summary>
+    public const int MaxMultilineLinesShown = MaxLinesPerFile * ((2 * MaxContext) + 1);
+
+    /// <summary><see cref="MaxMultilinePageMiB" /> in bytes, which is what file sizes are compared in.</summary>
+    public const long MaxMultilinePageBytes = MaxMultilinePageMiB * 1024L * 1024;
 
     /// <summary>
     ///     Wrapped around every multiline match by <c>regexp_replace</c> so the exact boundaries come
@@ -145,6 +156,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         if (query.Length == 0)
             return new Problem("The query is empty. Pass the text or RE2 pattern to search for.");
 
+        if (request.Filter.Refusal is { } refused) return new Problem(refused);
         bool regex = request.Regex || request.Multiline;
         if (regex && Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
         if (regex) query = Re2.WithQuoteClosed(query);
@@ -586,7 +598,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         var lineStarts = new List<int> { 0 };
         var matched = new HashSet<int>();
         var shown = new SortedSet<int>();
-        int matchesSeen = 0, matchStartLine = 0, matchStartIndex = 0;
+        int matchesSeen = 0, matchesShown = 0, matchStartLine = 0, matchStartIndex = 0;
         for (int index = 0; index < marked.Length; index++)
             switch (marked[index])
             {
@@ -598,11 +610,15 @@ public sealed partial class GrepSearch(IndexReaders readers)
                     // Nothing between the markers, not even a newline: an empty match.
                     if (index == matchStartIndex + 1) break;
                     int line = lineStarts.Count;
-                    if (matchesSeen < bounds.MaxLinesPerFile)
+                    if (matchesSeen < bounds.MaxLinesPerFile && shown.Count < MaxMultilineLinesShown)
                     {
-                        for (int i = matchStartLine; i <= line; i++) matched.Add(i);
-                        for (int i = Math.Max(1, matchStartLine - bounds.Context); i <= line + bounds.Context; i++)
+                        // A match may span the whole file — `(?s).*` does — so the lines it marks are
+                        // capped as well as the matches (GHSA-v284-9964-6mjr).
+                        for (int i = matchStartLine; i <= line && matched.Count < MaxMultilineLinesShown; i++) matched.Add(i);
+                        for (int i = Math.Max(1, matchStartLine - bounds.Context);
+                             i <= line + bounds.Context && shown.Count < MaxMultilineLinesShown; i++)
                             shown.Add(i);
+                        matchesShown++;
                     }
 
                     matchesSeen++;
@@ -614,7 +630,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
 
         return (
             [.. shown.Where(i => i <= lineStarts.Count).Select(i => new GrepLine(i, LineText(i), matched.Contains(i)))],
-            Math.Min(matchesSeen, bounds.MaxLinesPerFile));
+            matchesShown);
 
         string LineText(int line)
         {

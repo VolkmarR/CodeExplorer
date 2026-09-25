@@ -205,7 +205,9 @@ public sealed partial class HistoryQueries
     ///     — and three of the four steps above would be making it falsely.
     /// </summary>
     public Task<Outcome> ChurnAsync(string slug, ChurnRequest request, CancellationToken cancellationToken) =>
-        Telemetry.Search(slug, _engine, () => readers.OverDirectoryAsync(slug, request.Directory,
+        Telemetry.Search(slug, _engine, () => request.Filters.Refusal is { } refused
+            ? Task.FromResult<Outcome>(new Problem(refused))
+            : readers.OverDirectoryAsync(slug, request.Directory,
             async (index, directory, token) =>
             {
                 bool hasHistory = await HasHistoryAsync(index, token);

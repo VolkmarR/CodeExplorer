@@ -216,9 +216,10 @@ refresh until it is deleted and added again under its https or ssh URL.
 
 The work one MCP call can ask for is bounded, and none of the bounds is a setting
 (GHSA-v284-9964-6mjr): `list_tree` depth at most 64, `read_file` at most 100 entries and 100,000
-lines across them, and a `multiline` grep page at most 8 MiB of file content beyond its first file.
-Globs keep SQL `GLOB`'s meaning but run as RE2, so a pattern full of stars no longer holds one of the
-pool's cores for minutes. The multiline budget is independent of `Index:MaxFileBytes`: a file larger
+lines or 16 million characters across them, and a `multiline` grep page at most 8 MiB of file content
+beyond its first file. Globs keep SQL `GLOB`'s meaning but run as RE2, so a pattern full of stars no
+longer holds one of the pool's cores for minutes; a glob or path term is at most 256 characters and an
+argument at most 32 terms. The multiline budget is independent of `Index:MaxFileBytes`: a file larger
 than 8 MiB is still shown, on a page of its own.
 
 `Storage:DurableDirectory` is optional and the second disk above is a suggestion, not a requirement —
@@ -326,5 +327,5 @@ work.
 | A refresh skips a repository as "a local path or file URL"       | `Control:AllowLocalRepositories` is off, which it is by default, and has been since GHSA-5373-pppr-q3q9 for repositories stored before it. Point the repository at its remote, or section 5. |
 | A refresh skips a repository because "a credential is only sent over https or ssh" | It was stored with a credential beside an `http://` or `git://` URL, which is refused since GHSA-4f8q-c6jj-fr44. Delete it and add it again under its https or ssh URL, section 5. |
 | A refresh skips a repository because "the remote stopped responding" | The remote sent nothing for `Git:TransferStallSeconds`. Check the remote first; raise the setting only for one slow to start a pack. |
-| An agent is told "depth may be at most 64", "One read takes at most 100 entries" or "was not read: the entries before it already read 100000 lines" | The per-call limits since GHSA-v284-9964-6mjr, section 5. They are not settings; the reply says how to split the call. |
+| An agent is told "depth may be at most 64", "One read takes at most 100 entries", "was not read: the entries before it already read as much as one call reads" or "may be at most 256 characters" | The per-call limits since GHSA-v284-9964-6mjr, section 5. They are not settings; the reply says how to split the call. |
 | A multiline grep lists a file with "lines not shown" | The page spent its 8 MiB multiline read budget on the files above it (GHSA-v284-9964-6mjr). The reply names the `pageSize=1` page that shows that file. |

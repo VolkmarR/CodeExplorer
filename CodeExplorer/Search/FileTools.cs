@@ -64,7 +64,7 @@ internal sealed partial class FileTools(
                  - An entry without a range uses startLine and maxLines, which apply to every such entry.
                  - If you only need to know what surrounds a grep hit, grep with context=N is cheaper than reading the file at all.
                  - Output is capped and the budget is shared between the entries, so asking for many windows gives you less of each. When one is cut short the reply says what to pass to continue.
-                 - One call takes at most 100 entries and reads at most 100,000 lines across them; an entry past that line budget is cut short or not read, and says so.
+                 - One call takes at most 100 entries and reads at most 100,000 lines, or 16 million characters, across them; an entry past that budget is cut short or not read, and says so.
                  - A file that exists but was not indexed (binary, oversized) is reported with the reason instead of its content.
                  """)]
     public async Task<string> ReadFile(

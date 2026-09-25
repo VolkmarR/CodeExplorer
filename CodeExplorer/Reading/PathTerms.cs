@@ -25,6 +25,13 @@ public sealed record ChurnFilters(string? Extensions = null, string? Exclude = n
     /// </summary>
     public bool Any =>
         PathTerms.Split(Extensions).Count > 0 || PathTerms.Split(Exclude).Count > 0 || Excluded?.Any == true;
+
+    /// <summary>
+    ///     Why the caller's filters cannot be run as written, or null (<see cref="PathTerms.Refusal" />).
+    ///     <see cref="Excluded" /> is not asked: the overview page's patterns were refused when saved.
+    /// </summary>
+    public string? Refusal =>
+        PathTerms.Refusal(Extensions, "extensions") ?? PathTerms.Refusal(Exclude, "exclude");
 }
 
 /// <summary>
@@ -40,6 +47,36 @@ public sealed record ChurnFilters(string? Extensions = null, string? Exclude = n
 /// </summary>
 public static class PathTerms
 {
+    /// <summary>
+    ///     The most terms one argument may hold. Each is a match over every candidate path, so the count
+    ///     is work the caller sizes (GHSA-v284-9964-6mjr); a filter an agent writes by hand is a handful
+    ///     of folders, and thirty-two is several screens of them.
+    /// </summary>
+    public const int MaxTerms = 32;
+
+    /// <summary>
+    ///     Why an argument cannot be matched as written, or null where it can: too many terms, a term
+    ///     past <see cref="GlobRegex.MaxLength" />, or a reversed range such as <c>[z-a]</c>, which GLOB
+    ///     matches nothing with and which would otherwise read as a filter that found no file.
+    /// </summary>
+    /// <param name="terms">The caller's argument, in the syntax this class defines.</param>
+    /// <param name="argument">What the caller called it, so the sentence names the one to fix.</param>
+    public static string? Refusal(string? terms, string argument)
+    {
+        var split = Split(terms);
+        if (split.Count > MaxTerms)
+            return $"`{argument}` takes at most {MaxTerms} comma-separated terms, and this one has {split.Count}. Widen a term with * instead of listing more.";
+        foreach (string term in split)
+        {
+            if (term.Length > GlobRegex.MaxLength)
+                return $"A `{argument}` term may be at most {GlobRegex.MaxLength} characters; '{term[..40]}…' is longer.";
+            if (GlobRegex.ReversedRange(term) is { } reversed)
+                return $"The `{argument}` term \"{term}\" has the range [{reversed}], which runs backwards, so no character falls in it and the term matches nothing. Write it low to high.";
+        }
+
+        return null;
+    }
+
     /// <summary>
     ///     The terms of one argument, normalised: separators forward, case down, blanks dropped. An
     ///     empty or absent argument is no terms, which is no filtering rather than a filter matching

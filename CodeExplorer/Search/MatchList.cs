@@ -89,6 +89,7 @@ public sealed class MatchList(IndexReaders readers)
             return new Problem(
                 "The pattern is empty. Pass an RE2 pattern with parentheses around the part you want, "
                 + "such as \"PackageReference Include=\\\"([^\\\"]+)\\\"\" with group=1.");
+        if (request.Filter.Refusal is { } refused) return new Problem(refused);
         if (Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
         query = Re2.WithQuoteClosed(query);
 

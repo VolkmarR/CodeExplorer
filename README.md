@@ -76,12 +76,14 @@ refuse with a 403 a request whose `Origin` header is present and is not the serv
 what stops a page on another site from writing to the server without reading the answer.
 
 One MCP call cannot size the server's work without a bound (GHSA-v284-9964-6mjr). `list_tree` takes
-a depth of at most 64. `read_file` takes at most 100 entries and reads at most 100,000 lines across
-them, explicit ranges included; an entry past that budget is cut short or not read, and says so. A
-`multiline` grep page reads at most 8 MiB of file content to mark its matches: its first file is read
-whatever its size, and a later file that does not fit is listed with its count and the page to ask
-for. Globs — `glob`, and every `path`, `exclude` and extension term — keep SQL `GLOB`'s meaning but
-run as RE2, so they cannot backtrack; `glob` refuses a reversed range such as `[z-a]`. None of these
+a depth of at most 64. `read_file` takes at most 100 entries and reads at most 100,000 lines, or 16
+million characters, across them, explicit ranges included; an entry past that budget is cut short or
+not read, and says so. A `multiline` grep page reads at most 8 MiB of file content to mark its
+matches: its first file is read whatever its size, and a later file that does not fit is listed with
+its count and the page to ask for. A multiline file shows at most 4,200 lines, the most single-line
+mode can show for one file. Globs — `glob`, and every `path`, `exclude` and extension term — keep SQL `GLOB`'s meaning but
+run as RE2, so they cannot backtrack. A glob or term is at most 256 characters, an argument at most
+32 terms, and a reversed range such as `[z-a]` is refused rather than matching nothing. None of these
 is a setting.
 
 The Azure half of that is not covered by the tests — they assert that a configured deployment gets a
