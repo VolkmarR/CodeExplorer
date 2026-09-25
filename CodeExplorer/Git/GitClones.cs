@@ -199,7 +199,7 @@ public sealed class GitClones(
         catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
         {
             // Judged before the delete, whose time would otherwise count as the remote's silence.
-            var failure = TransferFailed("Cloning", repository, ex, watch);
+            var failure = TransferFailed("Cloning", repository, path, ex, watch);
             Delete(path);
             cancellationToken.ThrowIfCancellationRequested();
             throw failure;
@@ -236,7 +236,7 @@ public sealed class GitClones(
             // The clone is left in place: it still holds the commits of the last successful fetch, so
             // a refresh that cannot reach the remote reports the repository and indexes nothing newer,
             // rather than losing what is already there.
-            throw TransferFailed("Fetching", repository, ex, watch);
+            throw TransferFailed("Fetching", repository, path, ex, watch);
         }
 
         AlignHead(clone, repository, cancellationToken);
@@ -277,11 +277,21 @@ public sealed class GitClones(
         // resolves to nothing is a local copy the operator has to hear about, because the indexer
         // would otherwise report the remote as empty when the remote is fine.
         if (clone.Head.Tip is not null) return;
+
+        // The path is for the operator, who can reach the disk, and so it goes to the log only. The
+        // message reaches whoever reads the refresh status, who cannot, and to whom a path discloses
+        // nothing useful but the server's layout (#232); removing the repository deletes its local
+        // copy, which is the way out that goes through the product.
+        if (logger.IsEnabled(LogLevel.Warning))
+            logger.LogWarning("The local copy of repository {Repository} of project {Project} at {Path} has a "
+                              + "HEAD naming no branch it holds, and the remote's default branch could not be read "
+                              + "to repair it", repository.Slug, repository.ProjectSlug, clone.Info.Path);
         throw new McpException(
             $"The local copy of repository '{repository.Slug}' has a HEAD naming "
             + $"'{clone.Refs.Head.TargetIdentifier}', which is no branch it holds, and the default branch of "
             + $"'{repository.Url}' could not be read to repair it. Ask the operator to retry the refresh, "
-            + $"or to delete the clone at '{clone.Info.Path}' so the next refresh makes a fresh one.");
+            + $"or to remove repository '{repository.Slug}' from project '{repository.ProjectSlug}' and add it "
+            + "again, which discards the local copy so the next refresh makes a fresh one.");
     }
 
     /// <summary>
@@ -349,17 +359,36 @@ public sealed class GitClones(
     ///     The URL carries no password (RepositoryUrl refuses one), and the token only ever reached
     ///     libgit2 through CredentialsProvider, so neither the URL nor libgit2's message can hold it. The
     ///     exception is not attached as InnerException, so nothing beyond this text is serialised.
+    ///     libgit2's message can hold the clone's path, though, when the failure was on this side: it
+    ///     names the directory it could not write. That path is replaced before the message leaves, and
+    ///     logged whole for the operator, who is the one reader able to reach it (#232).
     /// </summary>
-    private McpException TransferFailed(string verb, ProjectRepository repository, Exception ex,
+    private McpException TransferFailed(string verb, ProjectRepository repository, string path, Exception ex,
         TransferWatch watch)
     {
         string reason = watch.Stalled
             ? $"the remote stopped responding and sent nothing for {_stallSeconds} seconds. Ask the operator to "
               + $"check that the remote is reachable and up, then try again; {TransferStallLimit.Setting} raises "
               + "the limit for a remote that is slow to start sending."
-            : $"{ex.Message.TrimEnd('.')}. Ask the operator to check the URL and the stored credential for this "
-              + "repository, then try again.";
+            : $"{WithoutPath(ex.Message, path).TrimEnd('.')}. Ask the operator to check the URL and the stored "
+              + "credential for this repository, then try again.";
+        if (logger.IsEnabled(LogLevel.Warning))
+            logger.LogWarning(ex, "{Verb} repository {Repository} of project {Project} into {Path} failed", verb,
+                repository.Slug, repository.ProjectSlug, path);
         return new McpException($"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: {reason}");
+    }
+
+    /// <summary>
+    ///     The message with the clone's path written as "the local copy". Both separators, because
+    ///     libgit2 writes forward slashes on Windows where .NET wrote back slashes, and the full path
+    ///     as well as the configured one, because libgit2 resolves a relative data directory.
+    /// </summary>
+    private static string WithoutPath(string message, string path)
+    {
+        string full = Path.GetFullPath(path);
+        foreach (string form in new[] { full, full.Replace('\\', '/'), path, path.Replace('\\', '/') })
+            message = message.Replace(form, "the local copy", StringComparison.OrdinalIgnoreCase);
+        return message;
     }
 
     /// <summary>

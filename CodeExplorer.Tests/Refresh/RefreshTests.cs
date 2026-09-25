@@ -4,6 +4,7 @@ using CodeExplorer.Index;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -293,7 +294,7 @@ public sealed class RefreshTests : IDisposable
     }
 
     [Fact]
-    public async Task A_default_branch_that_cannot_be_resolved_names_the_local_copy_and_the_way_out()
+    public async Task A_default_branch_that_cannot_be_resolved_names_the_repository_and_the_way_out()
     {
         await _host.IndexedProjectAsync("alpha", Fixture());
         // A remote that has branches but whose own HEAD names none of them: nothing can be followed,
@@ -312,9 +313,41 @@ public sealed class RefreshTests : IDisposable
         // which one is wrong and what the operator can do about it.
         Assert.DoesNotContain("has no commits yet", status.Error, StringComparison.Ordinal);
         Assert.Contains("local copy", status.Error, StringComparison.Ordinal);
-        Assert.Contains(_host.ClonePath("alpha", "one"), status.Error, StringComparison.Ordinal);
+        // The way out is one the reader can take through the product: whoever reads the status cannot
+        // reach the server's disk, and a path there only discloses its layout (#232). The path goes
+        // to the log, which the operator who can reach the disk does read.
+        Assert.Contains("remove repository 'one' from project 'alpha'", status.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, status.Error, StringComparison.OrdinalIgnoreCase);
+        _host.Logs.Only(LogLevel.Warning, _host.ClonePath("alpha", "one"));
         // The old index is still serving, as it is for any other refresh that could read nothing.
         Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    /// <summary>
+    ///     A clone that fails on the server's own disk is reported in libgit2's words, and libgit2 names
+    ///     the directory it could not write. The reader of the status cannot reach that disk, so the
+    ///     message says which repository failed and the log keeps where (#232).
+    /// </summary>
+    [Fact]
+    public async Task A_clone_that_fails_on_the_local_disk_names_the_repository_and_not_the_path()
+    {
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "one", _host.CreateGitRepository("one", Fixture()["one"]));
+        // A file where the clone directory goes: libgit2 refuses to clone over it, and says where.
+        string clone = _host.ClonePath("alpha", "one");
+        Directory.CreateDirectory(Path.GetDirectoryName(clone)!);
+        await File.WriteAllTextAsync(clone, "", Ct);
+
+        using (var response = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await _host.WaitForRefreshesAsync();
+
+        var status = await _host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.NotNull(status.Error);
+        Assert.Contains("Cloning repository 'one'", status.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, status.Error.Replace('/', '\\'),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
