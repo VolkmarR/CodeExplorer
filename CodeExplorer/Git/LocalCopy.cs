@@ -53,9 +53,9 @@ public sealed class CommittedFile
     public long Size { get; }
 
     /// <summary>
-    ///     libgit2's call, made the way git makes it: a NUL in the first bytes. It is the one inflation
-    ///     a skipped file costs, and left to libgit2 because a heuristic of our own would change which
-    ///     files are skipped.
+    ///     libgit2's call, made the way git makes it: a NUL in the first bytes. It inflates the whole
+    ///     blob, so ask it only of a file <see cref="Size" /> has not already ruled out; it is left to
+    ///     libgit2 because a heuristic of our own would change which files are skipped.
     /// </summary>
     public bool IsBinary => _blob.IsBinary;
 
