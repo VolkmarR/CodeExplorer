@@ -118,7 +118,8 @@ public sealed class MatchList(IndexReaders readers)
 
         // A whole word is tested with one form and extracted from another (Re2.WholeWordTokens), whose
         // group 1 is the caller's whole match and so whose group n + 1 is the caller's group n. Every
-        // stretch between matches comes back as an empty value, which the grouping drops like any other.
+        // stretch between matches comes back as an empty value — one per word on the line — so empty
+        // values are dropped before unnest rather than after, where each would have been a row.
         var matchParameters = new List<DuckDBParameter>
         {
             new("q", request.WholeWord ? Re2.WholeWord(query) : query),
@@ -144,7 +145,7 @@ public sealed class MatchList(IndexReaders readers)
             await using (var command = connection.Query($"""
                                                          WITH extracted AS (
                                                              SELECT l.file_id,
-                                                                    unnest(regexp_extract_all(l.content, $extract, {group}, $flags)) AS value
+                                                                    unnest(list_filter(regexp_extract_all(l.content, $extract, {group}, $flags), v -> v <> '')) AS value
                                                              FROM lines l JOIN files f USING (file_id)
                                                              WHERE regexp_matches(l.content, $q, $flags){fileFilter}),
                                                          grouped AS (

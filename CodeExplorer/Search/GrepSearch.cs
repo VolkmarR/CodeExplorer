@@ -391,12 +391,10 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // Whole words are counted and marked from their tokenising form, whose group 1 is the match
         // (Re2.WholeWordTokens): the whole-word test alone loses a match one character from the last.
         bool wholeWord = request.WholeWord;
-        var matchParameters = new List<DuckDBParameter>
-        {
-            new("q", wholeWord ? Re2.WholeWord(query) : query),
-            new("tokens", Re2.WholeWordTokens(query)),
-            new("flags", flags)
-        };
+        var tokens = new DuckDBParameter("tokens", Re2.WholeWordTokens(query));
+        List<DuckDBParameter> matchParameters = wholeWord
+            ? [new("q", Re2.WholeWord(query)), tokens, new("flags", flags)]
+            : [new("q", query), new("flags", flags)];
         string matchCount = wholeWord
             ? "len(list_filter(regexp_extract_all(content, $tokens, 1, $flags), v -> v <> ''))"
             : "len(regexp_extract_all(content, $q, 0, $flags))";
@@ -464,8 +462,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
                                                             regexp_replace(content, {marking}, $gflags) AS marked
                                                      FROM docs
                                                      """,
-                         [new DuckDBParameter("q", query), new DuckDBParameter("tokens", Re2.WholeWordTokens(query)),
-                             new DuckDBParameter("gflags", flags + "g")]))
+                         [wholeWord ? tokens : new DuckDBParameter("q", query), new DuckDBParameter("gflags", flags + "g")]))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
