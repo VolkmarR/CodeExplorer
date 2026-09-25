@@ -89,6 +89,26 @@ public sealed class ProjectIndexTests : IDisposable
         Assert.Equal(["26214432"], bytes);
     }
 
+    /// <summary>
+    ///     The size is read from the object header and the binary test inflates the whole blob, so a
+    ///     file over the limit is refused by its size before its content is looked at: a committed
+    ///     database dump must not be inflated on every refresh only to be called binary (#230). The
+    ///     reason it gets is the observable half of that order — it is skipped for size either way.
+    /// </summary>
+    [Fact]
+    public async Task An_oversized_binary_is_skipped_for_its_size()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["main"] = new() { ["backup.bak"] = "\0\0" + new string('x', 25 * 1024 * 1024) }
+        });
+
+        var files = await host.ScalarsAsync("alpha",
+            "SELECT path || '|' || size_bytes || '|' || coalesce(skip_reason, '') FROM files");
+        Assert.Equal(["backup.bak|26214402|larger than 25 MiB"], files);
+    }
+
     [Fact]
     public async Task A_refresh_reports_what_it_indexed()
     {

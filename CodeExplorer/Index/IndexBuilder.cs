@@ -128,8 +128,12 @@ public sealed class IndexBuilder(
                         $"Reading '{repository.Slug}' into the shadow index", fileCount, entries.Count));
                 fileId++;
                 fileCount++;
-                string? skipReason = entry.IsBinary ? "binary" :
-                    entry.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" : null;
+                // Size first: it is read off the object header, while IsBinary inflates the whole blob.
+                // The other order inflated a committed 3 GB dump on every refresh only to call it
+                // binary, the load Index:MaxFileBytes exists to bound (#230). A binary over the limit
+                // is therefore reported as too large, which it is.
+                string? skipReason = entry.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" :
+                    entry.IsBinary ? "binary" : null;
                 var text = skipReason is null ? SplitLines(entry.Text()) : [];
                 for (int i = 0; i < text.Count; i++)
                     lines.CreateRow().AppendValue(++lineId).AppendValue(fileId).AppendValue(i + 1).AppendValue(text[i])
