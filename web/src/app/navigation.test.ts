@@ -1,5 +1,5 @@
 import { expect, test } from 'vite-plus/test'
-import { activeView, pageTrail } from '@/app/navigation'
+import { activeView, childViews, pageTrail } from '@/app/navigation'
 
 /**
  * The sidebar is the only navigation there is, so an item that fails to light leaves the reader
@@ -13,6 +13,13 @@ test('each view is lit from its own path', () => {
   expect(activeView('/projects/acslib/churn')).toBe('churn')
   expect(activeView('/projects/acslib/files')).toBe('files')
   expect(activeView('/projects/acslib/settings')).toBe('settings')
+  expect(activeView('/projects/acslib/activity')).toBe('activity')
+  expect(activeView('/projects/acslib/risk')).toBe('risk')
+})
+
+test('the overview lists its other two pages beneath it, and nothing else does', () => {
+  expect(childViews('overview').map((item) => item.view)).toEqual(['activity', 'risk'])
+  expect(childViews('files')).toEqual([])
 })
 
 test('reading a file lights Files, which is the view it was reached from', () => {

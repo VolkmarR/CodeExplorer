@@ -45,7 +45,7 @@ public sealed partial class IndexReader
         LiveOverviewAsync(int days, ExcludedPaths excluded, int maxCommitPaths, CancellationToken cancellationToken)
     {
         var paths = await PathsAsync(cancellationToken);
-        var scope = new OverviewScope(days, Repository?.Slug, excluded);
+        var scope = new OverviewScope(days, Repository?.Slug, excluded, AuthorsInWindow: true);
         var (overview, left) = await OverviewQueries.ComputeAsync(Connection, paths, scope, cancellationToken);
         return (overview, left,
             await OverviewQueries.CardsAsync(Connection, paths, scope, overview.Churn.Window(), maxCommitPaths,

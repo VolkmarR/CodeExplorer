@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using CodeExplorer.Language;
 using DuckDB.NET.Data;
 
@@ -11,7 +12,16 @@ namespace CodeExplorer.Reading;
 /// <param name="Days">How far back the churn ranking reaches from the newest recorded commit.</param>
 /// <param name="RepositorySlug">One repository, or null for every one in the project.</param>
 /// <param name="Excluded">The paths no section counts, ranks or lists.</param>
-public sealed record OverviewScope(int Days, string? RepositorySlug, ExcludedPaths Excluded)
+/// <param name="AuthorsInWindow">
+///     Whether Most commits counts the window's commits rather than the whole imported history. The page
+///     sets it, so that every card under its filter bar answers for the same window; the stored row does
+///     not, because an agent asking who knows the code wants everyone who ever wrote it.
+/// </param>
+public sealed record OverviewScope(
+    int Days,
+    string? RepositorySlug,
+    ExcludedPaths Excluded,
+    bool AuthorsInWindow = false)
 {
     /// <summary>The whole project over the default window with nothing left out: the stored row's scope.</summary>
     public static readonly OverviewScope Stored = new(HistoryWindow.DefaultDays, null, ExcludedPaths.None);
@@ -21,13 +31,14 @@ public sealed record OverviewScope(int Days, string? RepositorySlug, ExcludedPat
 ///     How many files the excluded paths kept out of each kind of section, so that a short section
 ///     cannot pass for a small project or a quiet one (CODING_STANDARDS, Errors). Three numbers and not
 ///     one, because the sections read three different sets: the files at HEAD, the files a window's
-///     commits touched, and the files any commit ever touched.
+///     commits touched, and the files the commits Most commits counts touched.
 /// </summary>
 /// <param name="Files">Files at HEAD left out of Languages, Top level and Largest files.</param>
 /// <param name="ChangedFiles">Paths the window's commits touched that Most changed left out.</param>
 /// <param name="CommittedFiles">
-///     Paths any imported commit touched that Most commits left out. A commit is dropped from an
-///     author's count only where every file it touched was excluded.
+///     Paths that Most commits left out, over the commits it counts: the window's where
+///     <see cref="OverviewScope.AuthorsInWindow" /> is set, every imported one otherwise. A commit is
+///     dropped from an author's count only where every file it touched was excluded.
 /// </param>
 public sealed record OverviewExcluded(int Files, int ChangedFiles, int CommittedFiles);
 
@@ -88,32 +99,51 @@ public sealed record OverviewCards(
     OverviewFolderCoupling FolderCoupling,
     OverviewFileChanges FileChanges);
 
-/// <summary>One calendar month of the Files added and deleted card, in UTC.</summary>
-/// <param name="Year">The year.</param>
-/// <param name="Month">The month, 1 to 12.</param>
-/// <param name="Added">Files the month's commits added.</param>
+/// <summary>How long one bar of the Files added and deleted card is, chosen from the window's length.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ChangePeriod>))]
+public enum ChangePeriod
+{
+    /// <summary>A UTC calendar day.</summary>
+    Day,
+
+    /// <summary>A week from Monday, in UTC.</summary>
+    Week,
+
+    /// <summary>A UTC calendar month.</summary>
+    Month
+}
+
+/// <summary>One bar of the Files added and deleted card.</summary>
+/// <param name="Start">
+///     The day the period starts on. The first and last periods are clipped to the window, so they can
+///     hold fewer days than the others.
+/// </param>
+/// <param name="Added">Files the period's commits added.</param>
 /// <param name="Deleted">Files they deleted.</param>
 /// <param name="Renamed">
 ///     Files git detected as moved, counted apart from both: a move neither grows nor shrinks the code.
 /// </param>
-public sealed record MonthChanges(int Year, int Month, int Added, int Deleted, int Renamed);
+public sealed record PeriodChanges(DateOnly Start, int Added, int Deleted, int Renamed);
 
 /// <summary>
 ///     The Files added and deleted card (#214): the page's alone like <see cref="OverviewHotspots" />.
 /// </summary>
-/// <param name="Months">
-///     Oldest first, ending at the month of the newest commit in the scope, a month without commits an
-///     explicit zero; empty where the scope holds no history. The true counts: capping an outlier is the
-///     card's to do.
+/// <param name="Period">How long each of <paramref name="Periods" /> is.</param>
+/// <param name="Periods">
+///     Oldest first, covering the churn section's window, a period without commits an explicit zero;
+///     empty where the scope holds no history. The true counts: capping an outlier is the card's to do.
 /// </param>
-public sealed record OverviewFileChanges(IReadOnlyList<MonthChanges> Months);
+public sealed record OverviewFileChanges(ChangePeriod Period, IReadOnlyList<PeriodChanges> Periods);
 
-/// <summary>A top-level folder of one repository and the commits in the window that touched it.</summary>
+/// <summary>
+///     A folder of one repository the coupling chart pairs, and the commits in the window that touched
+///     it: a top-level folder, or a child of the folder that holds nearly all of the repository.
+/// </summary>
 /// <param name="Folder">The folder's name, its first path segment in the repository.</param>
 /// <param name="Commits">Distinct commits under the ceiling that touched anything beneath it.</param>
 public sealed record FolderCommits(string Folder, int Commits);
 
-/// <summary>Two top-level folders of one repository that the same commits touched.</summary>
+/// <summary>Two folders of one repository that the same commits touched.</summary>
 /// <param name="First">The folder that sorts first by name.</param>
 /// <param name="Second">The other.</param>
 /// <param name="Commits">Distinct commits that touched something under both.</param>
@@ -124,8 +154,8 @@ public sealed record FolderPair(string First, string Second, int Commits);
 ///     (CONTEXT.md, Co-Change).
 /// </summary>
 /// <param name="RepositorySlug">The repository.</param>
-/// <param name="Commits">Distinct commits under the ceiling that touched one of its top-level folders.</param>
-/// <param name="Folders">Its busiest top-level folders, most commits first, capped.</param>
+/// <param name="Commits">Distinct commits under the ceiling that touched one of its folders.</param>
+/// <param name="Folders">Its busiest folders, most commits first, capped.</param>
 /// <param name="Pairs">The pairs among <paramref name="Folders" /> that share a commit, strongest first.</param>
 public sealed record RepositoryCoupling(
     string RepositorySlug, int Commits, IReadOnlyList<FolderCommits> Folders, IReadOnlyList<FolderPair> Pairs);
@@ -194,17 +224,18 @@ internal static class OverviewQueries
     private const int _authoredFilesShown = 10;
 
     /// <summary>
-    ///     Top-level folders per repository on the co-change heatmap. Twelve is 66 cells in the upper
+    ///     Folders per repository on the co-change heatmap. Twelve is 66 cells in the upper
     ///     triangle, about what a card can label legibly; the quieter folders are the ones least likely
     ///     to couple anything.
     /// </summary>
     private const int _coupledFoldersShown = 12;
 
     /// <summary>
-    ///     Months on the Files added and deleted card: two years, long enough to tell a trend from one
-    ///     busy quarter, short enough that a bar per month stays readable on a card.
+    ///     The longest window drawn a bar per day, and the longest drawn a bar per week: about a month of
+    ///     days and half a year of weeks, so the card holds 20 to 40 bars at the windows offered, and a
+    ///     longer window is months.
     /// </summary>
-    private const int _fileChangeMonths = 24;
+    private const int _dailyUpTo = 31, _weeklyUpTo = 186;
 
     /// <summary>
     ///     Every section over one scope, and how many files the scope's exclusions kept out of them —
@@ -230,7 +261,8 @@ internal static class OverviewQueries
             : new OverviewChurn(window.Days, window.Since, window.Until,
                 await IndexQueries.RankAsync(connection, paths, window, scope.RepositorySlug, null, filters,
                     _churnFilesShown, cancellationToken));
-        var authors = await AuthorsAsync(connection, paths, scope, cancellationToken);
+        var authorsWindow = scope.AuthorsInWindow ? window : null;
+        var authors = await AuthorsAsync(connection, paths, scope, authorsWindow, cancellationToken);
         var overview = new IndexOverview(languages, others, tree, otherFolders, largest, churn, authors);
         if (!scope.Excluded.Any) return (overview, null);
 
@@ -240,7 +272,7 @@ internal static class OverviewQueries
                 ? 0
                 : await IndexQueries.HiddenAsync(connection, paths, window, scope.RepositorySlug, null, filters,
                     cancellationToken),
-            await ExcludedCommittedAsync(connection, paths, scope, cancellationToken)));
+            await ExcludedCommittedAsync(connection, paths, scope, authorsWindow, cancellationToken)));
     }
 
     /// <summary>The page's own cards, over its scope.</summary>
@@ -255,78 +287,186 @@ internal static class OverviewQueries
         new(await HotspotsAsync(connection, paths, scope, window, cancellationToken),
             await AuthorsPerFileAsync(connection, scope, cancellationToken),
             await FolderCouplingAsync(connection, paths, scope, window, maxCommitPaths, cancellationToken),
-            await FileChangesAsync(connection, paths, scope, window?.Until, cancellationToken));
+            await FileChangesAsync(connection, paths, scope, window, cancellationToken));
 
     /// <summary>
-    ///     Files added, deleted and renamed per calendar month over the <see cref="_fileChangeMonths" />
-    ///     months ending at the newest commit in the scope (#214), whatever the page's window: whether a
-    ///     codebase grows is a longer question than what moves now. The months are cut in C# as UTC epoch
-    ///     seconds and compared the way the window is (<see cref="IndexQueries.ChurnScope" />), so a
-    ///     commit near midnight lands in one month whatever the session's time zone. A move that also
-    ///     changed more than half of a file is outside git's rename detection and counts here as a delete and an add.
+    ///     Files added, deleted and renamed over the churn section's window (#214), a bar per day, week
+    ///     or month by the window's length (<see cref="PeriodOf" />). The periods are calendar ones cut in
+    ///     C# as UTC epoch seconds, the first and last clipped to the window and compared the way the
+    ///     window is (<see cref="IndexQueries.ChurnScope" />), so the bars add up to the window's own
+    ///     changes and a commit near midnight lands in one period whatever the session's time zone. A
+    ///     move that also changed more than half of a file is outside git's rename detection and counts
+    ///     here as a delete and an add.
     /// </summary>
     /// <param name="connection">Bound to the live index.</param>
     /// <param name="paths">How this project names its files (ADR-0006), for the excluded paths.</param>
-    /// <param name="scope">The page's repository and excluded paths; its window does not reach this card.</param>
-    /// <param name="newest">
-    ///     The newest commit in the scope, the anchor of the churn section's window and of nothing else
-    ///     of it; null where there is no history.
-    /// </param>
+    /// <param name="scope">The page's repository and excluded paths.</param>
+    /// <param name="window">The churn section's window; null where there is no history.</param>
     /// <param name="cancellationToken">Threaded through the statement.</param>
     public static async Task<OverviewFileChanges> FileChangesAsync(DuckDBConnection connection,
-        ProjectPaths paths, OverviewScope scope, DateTimeOffset? newest, CancellationToken cancellationToken)
+        ProjectPaths paths, OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
     {
-        if (newest is not { } anchor) return new OverviewFileChanges([]);
+        if (window is null) return new OverviewFileChanges(ChangePeriod.Month, []);
 
-        anchor = anchor.ToUniversalTime();
-        var last = new DateTimeOffset(anchor.Year, anchor.Month, 1, 0, 0, 0, TimeSpan.Zero);
-        var starts = Enumerable.Range(0, _fileChangeMonths + 1)
-            .Select(i => last.AddMonths(i - _fileChangeMonths + 1)).ToList();
+        var period = PeriodOf(window.Days);
+        long since = window.Since.ToUnixTimeSeconds();
+        // One past the newest second, because the window's BETWEEN includes its end and a period's
+        // upper bound is exclusive.
+        long until = window.Until.ToUnixTimeSeconds() + 1;
+        var periods = new List<(DateOnly Start, long Since, long Until)>();
+        for (var start = PeriodStart(window.Since.UtcDateTime, period);
+             start.ToUnixTimeSeconds() < until;
+             start = NextPeriod(start, period))
+            periods.Add((DateOnly.FromDateTime(start.UtcDateTime),
+                Math.Max(start.ToUnixTimeSeconds(), since),
+                Math.Min(NextPeriod(start, period).ToUnixTimeSeconds(), until)));
         // Inlined rather than bound: integers this method computed, never input, and a VALUES list of
-        // parameters would be four per month for no gain.
-        string monthRows = string.Join(", ", Enumerable.Range(0, _fileChangeMonths)
-            .Select(i => $"({starts[i].Year}, {starts[i].Month}, {starts[i].ToUnixTimeSeconds()}, " +
-                         $"{starts[i + 1].ToUnixTimeSeconds()})"));
+        // parameters would be two per period for no gain.
+        string periodRows = string.Join(", ", periods.Select(p => $"({p.Since}, {p.Until})"));
 
-        var parameters = new List<DuckDBParameter>
-        {
-            new("since", starts[0].ToUnixTimeSeconds()), new("until", starts[^1].ToUnixTimeSeconds())
-        };
+        var parameters = new List<DuckDBParameter> { new("since", since), new("until", until) };
         var conditions = CommitScope(scope, parameters);
-        // The join onto months would cut the span by itself; filtered here as well so that the join
-        // sees only the span's rows and not the whole history.
+        // The join onto the periods would cut the span by itself; filtered here as well so that the join
+        // sees only the window's rows and not the whole history.
         conditions.Add("epoch(c.authored_at) >= $since AND epoch(c.authored_at) < $until");
         conditions.Add("cf.change_kind IN ('added', 'deleted', 'renamed')");
         if (scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters) is { } excluded)
             conditions.Add($"NOT {excluded}");
 
         await using var command = connection.Query($"""
-                                                    WITH months(year, month, since, until) AS (VALUES {monthRows}),
+                                                    WITH periods(since, until) AS (VALUES {periodRows}),
                                                     changes AS (
                                                         SELECT epoch(c.authored_at) AS at, cf.change_kind
                                                         FROM commit_files cf JOIN commits c USING (commit_id)
                                                         {Where(conditions)})
-                                                    SELECT m.year, m.month,
-                                                           count(*) FILTER (WHERE change_kind = 'added')::INTEGER AS added,
+                                                    SELECT count(*) FILTER (WHERE change_kind = 'added')::INTEGER AS added,
                                                            count(*) FILTER (WHERE change_kind = 'deleted')::INTEGER AS deleted,
                                                            count(*) FILTER (WHERE change_kind = 'renamed')::INTEGER AS renamed
-                                                    FROM months m
-                                                    LEFT JOIN changes ch ON ch.at >= m.since AND ch.at < m.until
-                                                    GROUP BY m.year, m.month
-                                                    ORDER BY m.year, m.month
+                                                    FROM periods p
+                                                    LEFT JOIN changes ch ON ch.at >= p.since AND ch.at < p.until
+                                                    GROUP BY p.since
+                                                    ORDER BY p.since
                                                     """, parameters);
         await using var reader = await command.ReaderAsync(cancellationToken);
-        var result = new List<MonthChanges>(_fileChangeMonths);
+        // One row per period in the same order, so each row takes its start from the list it was cut from.
+        var result = new List<PeriodChanges>(periods.Count);
         while (await reader.ReadAsync(cancellationToken))
-            result.Add(new MonthChanges(reader.Int32("year"), reader.Int32("month"), reader.Int32("added"),
+            result.Add(new PeriodChanges(periods[result.Count].Start, reader.Int32("added"),
                 reader.Int32("deleted"), reader.Int32("renamed")));
 
-        return new OverviewFileChanges(result);
+        return new OverviewFileChanges(period, result);
     }
 
     /// <summary>
-    ///     The pairs of top-level folders, within one repository, that the window's commits keep touching
-    ///     together (#213). A pair counts distinct commits, so one commit touching forty files in a folder
+    ///     The share of a repository's files at HEAD one folder has to hold before the coupling chart
+    ///     looks inside it instead: a folder with nearly everything in it pairs with every other folder
+    ///     and says nothing, as <c>src/</c> does where it holds the whole solution.
+    /// </summary>
+    private const double _dominantShare = 0.8;
+
+    /// <summary>How many levels the coupling chart descends at most, so a deep single chain stops somewhere.</summary>
+    private const int _couplingDepth = 3;
+
+    /// <summary>
+    ///     Per repository, the folder the coupling chart pairs the children of: empty where no folder
+    ///     dominates, <c>src</c> where it holds the solution, <c>src/app</c> where that holds nearly all of
+    ///     it in turn. Read from the files at HEAD rather than the window's commits, so the grouping is the
+    ///     repository's layout and does not change with the window. A folder is descended into only where
+    ///     it holds <see cref="_dominantShare" /> of the repository's files and has two subfolders or more
+    ///     to show in its place.
+    /// </summary>
+    private static async Task<Dictionary<string, string>> CouplingPrefixesAsync(DuckDBConnection connection,
+        OverviewScope scope, CancellationToken cancellationToken)
+    {
+        var parameters = new List<DuckDBParameter>();
+        string where = Where(FileScope(scope, parameters));
+        // A file's folders, down to the deepest level looked at: its path without the file name,
+        // at most _couplingDepth segments. Root files have none and count only towards the total.
+        await using var command = connection.Query($"""
+                                                    WITH split AS (
+                                                        SELECT repo_id, string_split(path, '/') AS parts
+                                                        FROM files {where})
+                                                    SELECT r.slug AS repo_slug,
+                                                           list_slice(parts, 1, least(len(parts) - 1, {_couplingDepth})) AS dirs,
+                                                           count(*)::INTEGER AS files
+                                                    FROM split JOIN repositories r USING (repo_id)
+                                                    GROUP BY ALL
+                                                    """, parameters);
+        await using var reader = await command.ReaderAsync(cancellationToken);
+        var rows = new List<(string Slug, string[] Dirs, int Files)>();
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add((reader.Text("repo_slug"), reader.GetFieldValue<List<string>>(1).ToArray(),
+                reader.Int32("files")));
+
+        var prefixes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var repository in rows.GroupBy(r => r.Slug, StringComparer.Ordinal))
+        {
+            int total = repository.Sum(r => r.Files);
+            var prefix = new List<string>();
+            for (int depth = 0; depth < _couplingDepth; depth++)
+            {
+                var inside = repository.Where(r => r.Dirs.Length > depth && StartsWith(r.Dirs, prefix)).ToList();
+                var largest = inside.GroupBy(r => r.Dirs[depth], StringComparer.Ordinal)
+                    .Select(g => (Folder: g.Key, Files: g.Sum(r => r.Files),
+                        Subfolders: g.Where(r => r.Dirs.Length > depth + 1)
+                            .Select(r => r.Dirs[depth + 1]).Distinct(StringComparer.Ordinal).Count()))
+                    .OrderByDescending(f => f.Files).FirstOrDefault();
+                if (largest.Folder is null || largest.Files < _dominantShare * total || largest.Subfolders < 2)
+                    break;
+                prefix.Add(largest.Folder);
+            }
+
+            if (prefix.Count > 0) prefixes[repository.Key] = string.Join('/', prefix);
+        }
+
+        return prefixes;
+
+        static bool StartsWith(string[] dirs, List<string> prefix) =>
+            prefix.Select((segment, i) => dirs[i] == segment).All(same => same);
+    }
+
+    /// <summary>
+    ///     Narrows a query on <c>commits c</c> to a window, compared in epoch seconds and inclusive at
+    ///     both ends as the churn section compares it (<see cref="IndexQueries.ChurnScope" />). Nothing
+    ///     where the window is null.
+    /// </summary>
+    private static void InWindow(HistoryWindow? window, List<string> conditions, List<DuckDBParameter> parameters)
+    {
+        if (window is null) return;
+        parameters.Add(new DuckDBParameter("window_since", window.Since.ToUnixTimeSeconds()));
+        parameters.Add(new DuckDBParameter("window_until", window.Until.ToUnixTimeSeconds()));
+        conditions.Add("epoch(c.authored_at) BETWEEN $window_since AND $window_until");
+    }
+
+    /// <summary>A bar per day up to a month of window, per week up to half a year, and per month beyond.</summary>
+    internal static ChangePeriod PeriodOf(int days) =>
+        days <= _dailyUpTo ? ChangePeriod.Day : days <= _weeklyUpTo ? ChangePeriod.Week : ChangePeriod.Month;
+
+    /// <summary>The start of the calendar period holding <paramref name="at" />, in UTC.</summary>
+    private static DateTimeOffset PeriodStart(DateTime at, ChangePeriod period)
+    {
+        var day = new DateTimeOffset(at.Year, at.Month, at.Day, 0, 0, 0, TimeSpan.Zero);
+        return period switch
+        {
+            ChangePeriod.Day => day,
+            // Monday, the ISO week's first day: DayOfWeek counts from Sunday.
+            ChangePeriod.Week => day.AddDays(-(((int)day.DayOfWeek + 6) % 7)),
+            _ => new DateTimeOffset(at.Year, at.Month, 1, 0, 0, 0, TimeSpan.Zero)
+        };
+    }
+
+    private static DateTimeOffset NextPeriod(DateTimeOffset start, ChangePeriod period) => period switch
+    {
+        ChangePeriod.Day => start.AddDays(1),
+        ChangePeriod.Week => start.AddDays(7),
+        _ => start.AddMonths(1)
+    };
+
+    /// <summary>
+    ///     The pairs of folders, within one repository, that the window's commits keep touching together
+    ///     (#213): the top-level folders, except that a folder holding nearly the whole repository is
+    ///     replaced by its children (<see cref="CouplingPrefixesAsync" />), because it pairs with
+    ///     everything and says nothing. A pair counts distinct commits, so one commit touching forty files in a folder
     ///     counts once, the Churn rule for directories. A commit that touched more paths than the ceiling
     ///     is left out, as the co-change tool leaves it out, and counted. The ceiling is measured on every
     ///     path the commit touched, before the exclusions, so it means what it means there; the excluded
@@ -345,9 +485,20 @@ internal static class OverviewQueries
     {
         if (window is null) return new OverviewFolderCoupling([], maxCommitPaths, 0);
 
+        var prefixes = await CouplingPrefixesAsync(connection, scope, cancellationToken);
         var (inWindow, parameters) =
             IndexQueries.ChurnScope(paths, window, scope.RepositorySlug, null, ChurnFilters.None);
         parameters.Add(new DuckDBParameter("mc", maxCommitPaths));
+        // Bound, not inlined: the prefixes are folder names out of the repositories.
+        var prefixRows = prefixes.Select((p, i) =>
+        {
+            parameters.Add(new DuckDBParameter($"ps{i}", p.Key));
+            parameters.Add(new DuckDBParameter($"pp{i}", p.Value));
+            return $"($ps{i}, $pp{i})";
+        }).ToList();
+        string prefixTable = prefixRows.Count == 0
+            ? "SELECT NULL::VARCHAR AS repo_slug, NULL::VARCHAR AS prefix WHERE false"
+            : $"SELECT * FROM (VALUES {string.Join(", ", prefixRows)}) AS v(repo_slug, prefix)";
         // A file at the repository root is in no top-level folder, so it pairs with nothing.
         var kept = new List<string> { "s.paired", "contains(w.path, '/')" };
         // The qualified path is carried only where an exclusion reads it.
@@ -368,11 +519,26 @@ internal static class OverviewQueries
                                                     sized AS (
                                                         SELECT commit_id, count(*) <= $mc AS paired
                                                         FROM in_window GROUP BY commit_id),
-                                                    folders AS (
-                                                        SELECT DISTINCT w.repo_slug, w.commit_id,
-                                                               split_part(w.path, '/', 1) AS folder
+                                                    prefixes AS ({prefixTable}),
+                                                    -- A file's folder is its top-level one, or under a
+                                                    -- repository's prefix the child of the prefix it is in.
+                                                    -- A file directly in the prefix is in no child, so like
+                                                    -- a root file it pairs with nothing.
+                                                    placed AS (
+                                                        SELECT w.repo_slug, w.commit_id,
+                                                               CASE WHEN p.prefix IS NULL
+                                                                         OR NOT starts_with(w.path, p.prefix || '/')
+                                                                    THEN split_part(w.path, '/', 1)
+                                                                    WHEN contains(substr(w.path, length(p.prefix) + 2), '/')
+                                                                    THEN p.prefix || '/' ||
+                                                                         split_part(substr(w.path, length(p.prefix) + 2), '/', 1)
+                                                               END AS folder
                                                         FROM in_window w JOIN sized s USING (commit_id)
+                                                        LEFT JOIN prefixes p ON p.repo_slug = w.repo_slug
                                                         WHERE {string.Join(" AND ", kept)}),
+                                                    folders AS (
+                                                        SELECT DISTINCT repo_slug, commit_id, folder
+                                                        FROM placed WHERE folder IS NOT NULL),
                                                     per_folder AS (
                                                         SELECT repo_slug, folder, count(*)::INTEGER AS commits,
                                                                row_number() OVER (PARTITION BY repo_slug
@@ -779,17 +945,19 @@ internal static class OverviewQueries
     }
 
     /// <summary>
-    ///     Who has touched the project most, over the whole imported history rather than the churn
-    ///     window: "who knows this code" is a longer question than "what is moving now". Grouped by
-    ///     email, which is the identity git records; the name is taken from the most recent commit,
-    ///     because a person who changed how they spell their name would otherwise appear under whichever
-    ///     spelling sorted first.
+    ///     Who has touched the project most: over the whole imported history for the stored row, where
+    ///     "who knows this code" is a longer question than "what is moving now", and over the window on
+    ///     the page (<see cref="OverviewScope.AuthorsInWindow" />). Grouped by email, which is the identity
+    ///     git records; the name is taken from the most recent commit, because a person who changed how
+    ///     they spell their name would otherwise appear under whichever spelling sorted first. A null
+    ///     window is the whole imported history.
     /// </summary>
     private static async Task<IReadOnlyList<OverviewAuthor>> AuthorsAsync(DuckDBConnection connection,
-        ProjectPaths paths, OverviewScope scope, CancellationToken cancellationToken)
+        ProjectPaths paths, OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
         var conditions = CommitScope(scope, parameters);
+        InWindow(window, conditions, parameters);
         if (scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters) is { } excluded)
             // A commit counts while it touched one file the page still shows. One that recorded no
             // files at all is kept too: there is nothing in it to exclude, and dropping it would count
@@ -837,13 +1005,15 @@ internal static class OverviewQueries
 
     /// <summary>
     ///     The distinct paths any commit in the scope touched that the exclusions match: what the author
-    ///     ranking no longer counts. Over the whole imported history, like the ranking itself.
+    ///     ranking no longer counts. Over the same commits as the ranking itself: its window, or the
+    ///     whole imported history where that is null.
     /// </summary>
     private static async Task<int> ExcludedCommittedAsync(DuckDBConnection connection, ProjectPaths paths,
-        OverviewScope scope, CancellationToken cancellationToken)
+        OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
         var conditions = CommitScope(scope, parameters);
+        InWindow(window, conditions, parameters);
         conditions.Add(scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters)!);
         return (int)await connection.CountAsync($"""
                                                  SELECT count(*) FROM (

@@ -5,8 +5,8 @@ import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
- * Who has touched the project most, over the whole imported history rather than the churn window —
- * so the filter bar's window does not reach it, and the card says which span it covers.
+ * Who has touched the project most over the filter bar's window, as every card on the Activity page
+ * counts. The stored overview an agent reads counts the whole imported history instead.
  */
 export function AuthorsCard({
   project,
@@ -31,8 +31,8 @@ export function AuthorsCard({
             {/* Said once, at the top, rather than per row: it is a caveat about the whole list, and
                 attribution is who touched the code last and never who wrote it (CONTEXT.md). */}
             <p className="pb-2 text-xs text-muted-foreground">
-              Over the whole imported history. Who to ask about a file, never who wrote it &mdash; a
-              reformat is a change and it becomes the answer.
+              Commits in the window. Who to ask about a file, never who wrote it &mdash; a reformat
+              is a change and it becomes the answer.
             </p>
             {overview.authors.map((author) => (
               <div key={author.email} className="flex min-w-0 items-baseline gap-3">
@@ -53,7 +53,7 @@ export function AuthorsCard({
             <ExcludedNote
               project={project}
               files={excluded}
-              what="the history (a commit still counts while it touched one file shown)"
+              what="the window's commits (a commit still counts while it touched one file shown)"
             />
           </>
         )}

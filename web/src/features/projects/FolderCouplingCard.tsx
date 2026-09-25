@@ -4,8 +4,12 @@ import type {
   RepositoryCoupling,
 } from '@/features/projects/api'
 import { featuredRepository, pairShare, sharedCommits } from '@/features/projects/folderCoupling'
+import { useMemo } from 'react'
+import { cell, defineChart } from '@tanstack/charts'
+import { Chart } from '@tanstack/charts/react'
+import { scaleBand } from '@tanstack/charts/scales/band'
+import { tooltip } from '@tanstack/charts/tooltip'
 import { formatCount, formatPercent } from '@/lib/format'
-import { cn } from '@/lib/utils'
 import { NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -15,8 +19,9 @@ const PAIRS_SHOWN = 3
 const title = <CardTitle>Folders that change together</CardTitle>
 
 /**
- * The pairs of top-level folders, within one repository, that the same commits keep touching (#213):
- * boundaries that are eroding. A heatmap for the repository selected in the filter bar, or the busiest
+ * The pairs of folders, within one repository, that the same commits keep touching (#213): boundaries
+ * that are eroding. The top-level folders, or where one holds nearly everything, as `src/` does around
+ * a whole solution, its children in its place. A heatmap for the repository selected in the filter bar, or the busiest
  * one, and the strongest pairs of the others. Whether there is history at all is read off Most
  * changed's section, as the other history cards read it.
  */
@@ -55,13 +60,14 @@ export function FolderCouplingCard({
       <CardContent>
         {!featured || featured.pairs.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No commit in the window touched two top-level folders of one repository.
+            No commit in the window touched two folders of one repository.
           </p>
         ) : (
           <>
             <p className="pb-3 text-xs text-muted-foreground">
-              Top-level folders the same commits touched, darker for more shared commits. One commit
-              counts once however many files it touched in a folder.
+              Folders the same commits touched, darker for more shared commits. A folder holding
+              nearly the whole repository is shown by its subfolders. One commit counts once however
+              many files it touched in a folder.
             </p>
             <Heatmap repository={featured} />
             <ol className="mt-3 divide-y rounded-lg border bg-card font-mono text-xs">
@@ -114,65 +120,89 @@ export function FolderCouplingCard({
   )
 }
 
-/** Heatmap shades, lightest first; a cell takes the one its share of the strongest pair reaches. */
-const SHADES = ['bg-primary/20', 'bg-primary/40', 'bg-primary/60', 'bg-primary/80', 'bg-primary']
+/**
+ * Heatmap shades by step: none shared first, then lightest to darkest. A cell takes the step its
+ * share of the strongest pair reaches.
+ */
+const SHADES = [
+  'var(--muted)',
+  'color-mix(in oklch, var(--primary) 20%, transparent)',
+  'color-mix(in oklch, var(--primary) 40%, transparent)',
+  'color-mix(in oklch, var(--primary) 60%, transparent)',
+  'color-mix(in oklch, var(--primary) 80%, transparent)',
+  'var(--primary)',
+]
+
+/** The side of one cell, in pixels: the chart is sized from its folders rather than the card. */
+const CELL = 22
+
+/** Room for the folder names beside and under the cells, which are rotated below. */
+const MARGIN = { bottom: 84, left: 116 }
+
+/** A folder name short enough for its axis; the tooltip carries the whole of it. */
+function shortName(folder: string) {
+  return folder.length > 14 ? `${folder.slice(0, 13)}…` : folder
+}
 
 /** The upper triangle of shared commits, one row and column per folder, busiest first. */
 function Heatmap({ repository }: { repository: RepositoryCoupling }) {
-  const folders = repository.folders.map((f) => f.folder)
-  const strongest = Math.max(...repository.pairs.map((p) => p.commits))
+  const heatmap = useMemo(() => {
+    const folders = repository.folders.map((f) => f.folder)
+    const rows = folders.slice(0, -1)
+    const columns = folders.slice(1)
+    const strongest = Math.max(...repository.pairs.map((p) => p.commits))
+    const cells = rows.flatMap((row, i) =>
+      columns.slice(i).map((column) => {
+        const shared = sharedCommits(repository, row, column)
+        return {
+          column,
+          row,
+          shared,
+          shade: String(shared > 0 ? Math.ceil(((SHADES.length - 1) * shared) / strongest) : 0),
+        }
+      }),
+    )
+    const definition = defineChart({
+      marks: [
+        cell(cells, {
+          x: 'column',
+          y: 'row',
+          color: 'shade',
+          key: (c) => `${c.row}\u0000${c.column}`,
+          inset: 1,
+          radius: 2,
+        }),
+      ],
+      scales: {
+        x: {
+          scale: scaleBand().domain(columns),
+          axis: {
+            line: false,
+            ticks: { size: 0, format: shortName },
+            tickLabels: { rotate: -45, anchor: 'end' },
+          },
+        },
+        y: {
+          scale: scaleBand().domain(rows),
+          axis: { line: false, ticks: { size: 0, format: shortName } },
+        },
+      },
+      color: { domain: SHADES.map((_, i) => String(i)), range: SHADES },
+      margin: MARGIN,
+      tooltip,
+    })
+    return { definition, rows, columns }
+  }, [repository])
+
   return (
     <div className="overflow-x-auto">
-      <table
-        aria-label={`Shared commits between the top-level folders of ${repository.repositorySlug}`}
-        className="border-separate border-spacing-0.5 font-mono text-xs"
-      >
-        <thead>
-          <tr>
-            <th>
-              <span className="sr-only">Folder</span>
-            </th>
-            {folders.slice(1).map((folder) => (
-              <th key={folder} className="h-20 align-bottom font-normal text-muted-foreground">
-                <span className="inline-block max-w-20 -rotate-45 truncate">{folder}</span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {folders.slice(0, -1).map((row, i) => (
-            <tr key={row}>
-              <th className="max-w-28 truncate pr-1 text-right font-normal text-muted-foreground">
-                {row}
-              </th>
-              {folders.slice(1).map((column, j) => {
-                if (j < i)
-                  return (
-                    <td key={column}>
-                      <span className="sr-only">below the diagonal</span>
-                    </td>
-                  )
-                const shared = sharedCommits(repository, row, column)
-                const label = `${row} + ${column}: ${formatCount(shared)} commits`
-                return (
-                  <td
-                    key={column}
-                    className={cn(
-                      'size-5 rounded-xs',
-                      shared > 0
-                        ? SHADES[Math.ceil((SHADES.length * shared) / strongest) - 1]
-                        : 'bg-muted',
-                    )}
-                    title={label}
-                  >
-                    <span className="sr-only">{label}</span>
-                  </td>
-                )
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <Chart
+        definition={heatmap.definition}
+        width={MARGIN.left + CELL * heatmap.columns.length}
+        height={MARGIN.bottom + CELL * heatmap.rows.length}
+        className="font-mono text-xs text-muted-foreground"
+        ariaLabel={`Shared commits between the folders of ${repository.repositorySlug}`}
+      />
     </div>
   )
 }

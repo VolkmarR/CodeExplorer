@@ -172,6 +172,16 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* A chart's SVG takes focus on a click as well as on Tab, and the browser outlines both. Only
+     keyboard focus gets a ring, the app's own, because a click already shows where the reader is. */
+  svg.ts-chart:focus {
+    @apply outline-none;
+  }
+
+  svg.ts-chart:focus-visible {
+    @apply rounded-sm outline-2 outline-offset-2 outline-ring;
+  }
 }
 
 /* Token classes @tanstack/highlight emits. It ships markup and no colours, so the palette is here,

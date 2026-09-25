@@ -69,7 +69,9 @@ public sealed class LiveOverviewTests : IDisposable
         var detail = await _host.OverviewDetailAsync("alpha");
 
         // Compared as documents, so every section and every count is compared and not a sample of them:
-        // one set of statements computes both, and nothing filtered must mean nothing differs.
+        // one set of statements computes both, and nothing filtered must mean nothing differs. Every
+        // commit here is inside the default window, so Most commits, which the page counts over the
+        // window and the stored row over all history, agrees too.
         var stored = await _host.ScalarsAsync("alpha", "SELECT document FROM project_overview");
         Assert.Equal(Assert.Single(stored), Assert.IsType<IndexOverview>(detail.Overview).ToDocument());
         Assert.Equal(0, detail.ExcludedPatterns);
@@ -151,6 +153,24 @@ public sealed class LiveOverviewTests : IDisposable
         Assert.All(two.Churn.Files, f => Assert.Equal("two", f.RepositorySlug));
         Assert.Contains(two.Languages, l => l is { Name: "C#", Files: 1 });
         Assert.Contains(two.Authors, a => a.Email == "ada@example.invalid");
+    }
+
+    [Fact]
+    public async Task Most_commits_counts_the_window_on_the_page_and_all_history_in_the_stored_row()
+    {
+        await NoisyProjectAsync("alpha");
+        // Forty days after the fixture's commits, so a thirty-day window holds this one alone.
+        _host.CommitToGitRepositoryAs("two", new Dictionary<string, string> { ["lib/B.cs"] = "class B2;\n" },
+            "Later", "Grace", "grace@example.invalid", 40 * 24 * 60);
+        await _host.RefreshAsync("alpha");
+
+        var month = Assert.IsType<IndexOverview>((await _host.OverviewDetailAsync("alpha", "?days=30")).Overview);
+        var stored = IndexOverview.FromDocument(
+            Assert.Single(await _host.ScalarsAsync("alpha", "SELECT document FROM project_overview")));
+
+        Assert.Equal([("grace@example.invalid", 1)], month.Authors.Select(a => (a.Email, a.Commits)));
+        Assert.True(stored.Authors.Count > 1);
+        Assert.Contains(stored.Authors, a => a.Email == "grace@example.invalid");
     }
 
     [Fact]

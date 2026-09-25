@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vite-plus/test'
-import { plotHotspots } from '@/features/projects/hotspotPlot'
+import { plotHotspots, spreadPoints } from '@/features/projects/hotspotPlot'
 
 function file(lines: number, commits: number) {
   return { qualifiedPath: `f${lines}x${commits}`, commits, lines, score: lines * commits }
@@ -39,5 +39,57 @@ describe('plotHotspots', () => {
 
   test('draws an empty file at the left edge rather than off the plot', () => {
     expect(plotHotspots([file(0, 2), file(50, 1)]).points[0]?.x).toBe(0)
+  })
+})
+
+function at(rank: number, x: number, y: number) {
+  return { rank, x, y }
+}
+
+describe('spreadPoints', () => {
+  const plot = { height: 200, radius: 10, width: 400 }
+  /** The distance between two spread points, in the plot's pixels. */
+  const apart = (a: { shownX: number; shownY: number }, b: { shownX: number; shownY: number }) =>
+    Math.hypot((a.shownX - b.shownX) * plot.width, (a.shownY - b.shownY) * plot.height)
+
+  test('leaves points that do not touch where they are', () => {
+    const spread = spreadPoints([at(1, 0.1, 0.1), at(2, 0.9, 0.9)], plot)
+
+    expect(spread.map((p) => [p.shownX, p.shownY])).toEqual([
+      [0.1, 0.1],
+      [0.9, 0.9],
+    ])
+  })
+
+  test('pushes touching points apart until their dots no longer overlap', () => {
+    // Five files on one commit count, a few pixels apart: the radix project's shape.
+    const spread = spreadPoints(
+      [0.5, 0.51, 0.52, 0.53, 0.54].map((x, i) => at(i + 1, x, 0.2)),
+      plot,
+    )
+
+    for (const [i, a] of spread.entries())
+      for (const b of spread.slice(i + 1))
+        expect(apart(a, b)).toBeGreaterThanOrEqual(2 * plot.radius)
+  })
+
+  test('separates points at the very same place', () => {
+    const [a, b] = spreadPoints([at(1, 0.5, 0.5), at(2, 0.5, 0.5)], plot)
+
+    expect(apart(a!, b!)).toBeGreaterThanOrEqual(2 * plot.radius)
+  })
+
+  test('keeps the true position beside the shown one, and every dot inside the plot', () => {
+    const spread = spreadPoints([at(1, 0, 0), at(2, 0, 0), at(3, 0.01, 0)], plot)
+
+    expect(spread.map((p) => [p.x, p.y])).toEqual([
+      [0, 0],
+      [0, 0],
+      [0.01, 0],
+    ])
+    for (const p of spread) {
+      expect(p.shownX).toBeGreaterThanOrEqual(0)
+      expect(p.shownY).toBeGreaterThanOrEqual(0)
+    }
   })
 })

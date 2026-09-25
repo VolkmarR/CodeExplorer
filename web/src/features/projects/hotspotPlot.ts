@@ -50,6 +50,74 @@ export function plotHotspots(files: Hotspot[]): HotspotPlot {
   }
 }
 
+/** A point with where it is drawn, which differs from where it belongs only where dots would overlap. */
+export interface SpreadPoint extends PlotPoint {
+  shownX: number
+  shownY: number
+}
+
+/** The plot's inner size and the dots' radius, in pixels: overlap is a question of what the eye sees. */
+export interface PlotSize {
+  width: number
+  height: number
+  radius: number
+}
+
+/** Enough passes for ten dots in one heap; a crowd that has not settled by then is drawn as it stands. */
+const SPREAD_PASSES = 200
+
+/** The golden angle, in radians: dots in the very same place leave it in directions that never line up. */
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5))
+
+/**
+ * Where to draw each point so that no two dots overlap, moving each as little as it takes. Files of
+ * a similar size with the same number of commits land on one spot, and their numbers then read as
+ * one smudge. Each pass pushes every overlapping pair apart along the line between them, half each,
+ * until a pass moves nothing; the dots stay inside the plot. Points that already stand clear are
+ * left exactly where they are, so a plot without a crowd is drawn as before.
+ */
+export function spreadPoints(points: PlotPoint[], size: PlotSize): SpreadPoint[] {
+  const { width, height, radius } = size
+  const spread = points.map((p) => ({ px: p.x * width, py: p.y * height }))
+  const clearance = 2 * radius
+
+  for (let pass = 0; pass < SPREAD_PASSES; pass++) {
+    let moved = false
+    for (let i = 0; i < spread.length; i++)
+      for (let j = i + 1; j < spread.length; j++) {
+        const a = spread[i]
+        const b = spread[j]
+        let dx = b.px - a.px
+        let dy = b.py - a.py
+        let distance = Math.hypot(dx, dy)
+        if (distance >= clearance) continue
+        if (distance === 0) {
+          dx = Math.cos(j * GOLDEN_ANGLE)
+          dy = Math.sin(j * GOLDEN_ANGLE)
+          distance = 1
+        }
+        // A hair past the clearance, so that rounding cannot leave a pair touching forever.
+        const push = (clearance - Math.hypot(b.px - a.px, b.py - a.py)) / 2 + 0.01
+        a.px = clamp(a.px - (push * dx) / distance, width)
+        a.py = clamp(a.py - (push * dy) / distance, height)
+        b.px = clamp(b.px + (push * dx) / distance, width)
+        b.py = clamp(b.py + (push * dy) / distance, height)
+        moved = true
+      }
+    if (!moved) break
+  }
+
+  return points.map((p, i) => ({
+    ...p,
+    shownX: width === 0 ? p.x : spread[i].px / width,
+    shownY: height === 0 ? p.y : spread[i].py / height,
+  }))
+}
+
+function clamp(value: number, max: number) {
+  return Math.min(Math.max(value, 0), max)
+}
+
 /**
  * A file's lines as a power of ten. An empty file counts as one line and is drawn at the left edge:
  * it has no logarithm, and it is as small as a file gets.

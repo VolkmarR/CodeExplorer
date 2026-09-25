@@ -1,4 +1,13 @@
-import { Activity, BarChart3, Clock, FolderTree, Search, Settings } from 'lucide-react'
+import {
+  Activity,
+  BarChart3,
+  Clock,
+  Flame,
+  FolderTree,
+  Search,
+  Settings,
+  TrendingUp,
+} from 'lucide-react'
 import { treeSearch } from '@/lib/urls/browseParams'
 import { CHURN_DEFAULTS, churnSearch } from '@/lib/urls/churnParams'
 import { historySearch } from '@/lib/urls/historyParams'
@@ -25,6 +34,23 @@ export const PROJECT_VIEWS = [
     label: 'Overview',
     link: { to: '/projects/$project' },
     view: 'overview',
+    // The overview is three pages, and this one is the first of them. The sidebar lists all three
+    // under the Overview item, and this is the name its own page goes by there.
+    subLabel: 'Code',
+  },
+  {
+    Icon: TrendingUp,
+    label: 'Activity',
+    link: { to: '/projects/$project/activity' },
+    view: 'activity',
+    parent: 'overview',
+  },
+  {
+    Icon: Flame,
+    label: 'Risk',
+    link: { to: '/projects/$project/risk' },
+    view: 'risk',
+    parent: 'overview',
   },
   {
     Icon: FolderTree,
@@ -56,7 +82,24 @@ export const PROJECT_VIEWS = [
     link: { to: '/projects/$project/settings' },
     view: 'settings',
   },
-] as const satisfies readonly { Icon: typeof Activity; label: string; link: object; view: View }[]
+] as const satisfies readonly {
+  Icon: typeof Activity
+  label: string
+  link: object
+  view: View
+  /** The view this one is drawn under in the sidebar, rather than as an item of its own. */
+  parent?: View
+  /** What a view with pages under it is called among them. */
+  subLabel?: string
+}[]
+
+/** The views the sidebar draws as items of their own, in its order. */
+export const TOP_VIEWS = PROJECT_VIEWS.filter((item) => !('parent' in item))
+
+/** The views under another one, in the sidebar's order, for the item they are drawn beneath. */
+export function childViews(parent: View) {
+  return PROJECT_VIEWS.filter((item) => 'parent' in item && item.parent === parent)
+}
 
 /** What each view is called, for whatever has to name one without listing them all. */
 export const VIEW_NAMES: Record<View, string> = Object.fromEntries(

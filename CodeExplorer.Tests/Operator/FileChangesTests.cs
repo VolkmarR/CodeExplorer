@@ -5,10 +5,10 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     The overview page's Files added and deleted card (#214): 24 calendar months ending at the month of
-///     the newest recorded commit, each with the files added, deleted and renamed. Asserted against the
-///     JSON the browser receives, like the rest of the live overview. The fixtures' commits are dated in
-///     minutes past the epoch, so the months below are 1970's.
+///     The overview page's Files added and deleted card (#214): the files added, deleted and renamed over
+///     the page's window, a bar per day, week or month by the window's length. Asserted against the JSON
+///     the browser receives, like the rest of the live overview. The fixtures' commits are dated in
+///     minutes past the epoch, so the periods below are 1970's.
 /// </summary>
 public sealed class FileChangesTests : IDisposable
 {
@@ -19,10 +19,13 @@ public sealed class FileChangesTests : IDisposable
 
     public void Dispose() => _host.Dispose();
 
-    [Fact]
-    public async Task Months_count_adds_deletes_and_renames_apart_and_end_at_the_newest_commit()
+    /// <summary>
+    ///     Four changes, one per month from January to April 1970: the fixture's own commit at the epoch
+    ///     adds three files, a minute before February adds one, March deletes one and April moves one. The
+    ///     move is the newest commit, ten minutes into April, and every window ends there.
+    /// </summary>
+    private async Task ChangesInFourMonthsAsync()
     {
-        // The fixture's own commit, at the epoch, adds three files.
         await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
         {
             ["one"] = new() { ["A.cs"] = "alpha content\n", ["B.cs"] = "b\n", ["docs/D.md"] = "d\n" }
@@ -34,16 +37,59 @@ public sealed class FileChangesTests : IDisposable
         _host.MoveInGitRepositoryAs("one", new Dictionary<string, string> { ["A.cs"] = "src/A.cs" }, "Move",
             "Ada", "ada@example.invalid", _april + 10);
         await _host.RefreshAsync("alpha");
+    }
 
-        var months = (await FileChangesAsync("alpha")).Months;
+    [Fact]
+    public async Task A_year_is_drawn_by_month_and_counts_adds_deletes_and_renames_apart()
+    {
+        await ChangesInFourMonthsAsync();
 
-        Assert.Equal(24, months.Count);
-        Assert.Equal((1968, 5), (months[0].Year, months[0].Month));
+        var changes = await FileChangesAsync("alpha", "?days=365");
+
+        Assert.Equal(ChangePeriod.Month, changes.Period);
+        // April 1969, clipped to the window, through April 1970.
+        Assert.Equal(13, changes.Periods.Count);
+        Assert.Equal(new DateOnly(1969, 4, 1), changes.Periods[0].Start);
         Assert.Equal(
-            [new MonthChanges(1970, 1, 4, 0, 0), new MonthChanges(1970, 2, 0, 0, 0),
-                new MonthChanges(1970, 3, 0, 1, 0), new MonthChanges(1970, 4, 0, 0, 1)],
-            months.TakeLast(4));
-        Assert.All(months.SkipLast(4), m => Assert.Equal((0, 0, 0), (m.Added, m.Deleted, m.Renamed)));
+            [new PeriodChanges(new DateOnly(1970, 1, 1), 4, 0, 0),
+                new PeriodChanges(new DateOnly(1970, 2, 1), 0, 0, 0),
+                new PeriodChanges(new DateOnly(1970, 3, 1), 0, 1, 0),
+                new PeriodChanges(new DateOnly(1970, 4, 1), 0, 0, 1)],
+            changes.Periods.TakeLast(4));
+        Assert.All(changes.Periods.SkipLast(4), p => Assert.Equal((0, 0, 0), (p.Added, p.Deleted, p.Renamed)));
+    }
+
+    [Fact]
+    public async Task A_quarter_is_drawn_by_week_from_monday_and_leaves_out_what_is_before_the_window()
+    {
+        await ChangesInFourMonthsAsync();
+
+        // The default window: 90 days back from ten minutes into April is ten minutes into January, so
+        // the fixture's own commit at the epoch falls outside it.
+        var changes = await FileChangesAsync("alpha");
+
+        Assert.Equal(ChangePeriod.Week, changes.Period);
+        Assert.All(changes.Periods, p => Assert.Equal(DayOfWeek.Monday, p.Start.DayOfWeek));
+        // 1 January 1970 was a Thursday, so the first week starts on the Monday before it.
+        Assert.Equal(new DateOnly(1969, 12, 29), changes.Periods[0].Start);
+        Assert.Equal((1, 1, 1),
+            (changes.Periods.Sum(p => p.Added), changes.Periods.Sum(p => p.Deleted),
+                changes.Periods.Sum(p => p.Renamed)));
+    }
+
+    [Fact]
+    public async Task A_month_is_drawn_by_day()
+    {
+        await ChangesInFourMonthsAsync();
+
+        var changes = await FileChangesAsync("alpha", "?days=30");
+
+        Assert.Equal(ChangePeriod.Day, changes.Period);
+        // 2 March, clipped to the window, through 1 April: the delete on 1 March is outside it.
+        Assert.Equal(new DateOnly(1970, 3, 2), changes.Periods[0].Start);
+        Assert.Equal(new PeriodChanges(new DateOnly(1970, 4, 1), 0, 0, 1), changes.Periods[^1]);
+        Assert.Equal(31, changes.Periods.Count);
+        Assert.Equal(0, changes.Periods.Sum(p => p.Deleted));
     }
 
     [Fact]
@@ -55,16 +101,16 @@ public sealed class FileChangesTests : IDisposable
         });
         await _host.SetExcludedPathsAsync("alpha", ["one/docs/**"]);
 
-        Assert.Equal(1, (await FileChangesAsync("alpha")).Months[^1].Added);
-        Assert.Equal(2, (await FileChangesAsync("alpha", "?showExcluded=true")).Months[^1].Added);
+        Assert.Equal(1, (await FileChangesAsync("alpha")).Periods[^1].Added);
+        Assert.Equal(2, (await FileChangesAsync("alpha", "?showExcluded=true")).Periods[^1].Added);
     }
 
     [Fact]
-    public async Task A_project_with_no_history_has_no_months()
+    public async Task A_project_with_no_history_has_no_periods()
     {
         await _host.HistorylessProjectAsync("beta");
 
-        Assert.Empty((await FileChangesAsync("beta")).Months);
+        Assert.Empty((await FileChangesAsync("beta")).Periods);
     }
 
     private async Task<OverviewFileChanges> FileChangesAsync(string slug, string query = "") =>
