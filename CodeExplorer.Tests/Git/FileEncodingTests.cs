@@ -33,7 +33,7 @@ public sealed class FileEncodingTests : IDisposable
             {
                 ["src/Legacy.prg"] = Legacy,
                 ["src/Modern.prg"] = "// Größe, Maß und Übermaß\r\nlocal cText := \"naïve\"\n"u8.ToArray(),
-                // libgit2 calls any blob with a UTF-16 mark binary, and this change leaves that call alone.
+                // Still skipped as binary: see the byte order mark test below.
                 ["src/Wide.prg"] = [.. Encoding.Unicode.Preamble, .. Encoding.Unicode.GetBytes("// Größe\r\n")]
             }));
         await _host.RefreshAsync("alpha");
@@ -78,6 +78,6 @@ public sealed class FileEncodingTests : IDisposable
     /// <summary>What a UTF-8 decoder puts in place of a byte it cannot read.</summary>
     private const char ReplacementCharacter = (char)0xFFFD;
 
-    private static Task<string> ReadAsync(McpClient client, params string[] paths) =>
-        TestHost.CallAsync(client, "read_file", new Dictionary<string, object?> { ["paths"] = paths });
+    private static Task<string> ReadAsync(McpClient client, string path) =>
+        TestHost.CallAsync(client, "read_file", new Dictionary<string, object?> { ["paths"] = new[] { path } });
 }
