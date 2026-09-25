@@ -355,6 +355,8 @@ public static class Authentication
     ///     Control characters are refused anywhere in it, as ASP.NET Core's own <c>IsLocalUrl</c> does:
     ///     a browser's URL parser strips tab and newline, so <c>/&lt;TAB&gt;/evil</c> is followed as
     ///     <c>//evil</c>, and checking only the leading characters sees neither (GHSA-g2ch-php8-x3w9).
+    ///     Mirrored rather than called, because <c>IsLocalUrl</c> hangs off MVC's <c>IUrlHelper</c>,
+    ///     which a minimal-API handler has no instance of.
     /// </summary>
     internal static string LocalReturnUrl(string? returnUrl) =>
         returnUrl is not null
