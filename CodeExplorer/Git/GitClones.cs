@@ -198,9 +198,11 @@ public sealed class GitClones(
         }
         catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
         {
+            // Judged before the delete, whose time would otherwise count as the remote's silence.
+            var failure = TransferFailed("Cloning", repository, ex, watch);
             Delete(path);
             cancellationToken.ThrowIfCancellationRequested();
-            throw TransferFailed("Cloning", repository, ex, watch);
+            throw failure;
         }
     }
 
@@ -364,6 +366,9 @@ public sealed class GitClones(
     ///     When a transfer last heard from its remote. This, and not the exception, is how a stall is
     ///     recognised: LibGit2Sharp drops libgit2's error code, so a timeout arrives as a plain
     ///     <see cref="LibGit2SharpException" /> whose message is the operating system's, in its language.
+    ///     No callback fires during the reference discovery, so an error that ends a discovery which
+    ///     trickled for longer than the limit reads as a stall too; that is a remote slow enough to be
+    ///     reported as one.
     /// </summary>
     private sealed class TransferWatch(TimeSpan limit)
     {

@@ -193,6 +193,11 @@ the whole reasoning behind the setting (ADR-0004): it exists for a replica that 
 which is exactly what `AlwaysRunning` with no idle timeout produces. The app starts answering
 immediately and restores the projects behind it.
 
+`Git:TransferStallSeconds` — 300 by default — is how long a clone or fetch waits on a remote that has
+gone silent before the refresh skips that repository and says the remote stopped responding. It
+bounds each wait, not the transfer, so raise it only for a remote that is slow to start sending a
+large pack.
+
 `Storage:DurableDirectory` is optional and the second disk above is a suggestion, not a requirement —
 it defaults to `durable` under the data directory. Separating them is worth it precisely because they
 mean different things: one is working storage that can be rebuilt, the other is the copy that
