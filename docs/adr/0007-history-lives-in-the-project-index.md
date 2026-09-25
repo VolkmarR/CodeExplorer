@@ -59,7 +59,11 @@ Attribution answers the ownership question and is honest about the other one; th
   nothing about the index looking broken. `HistoryTests` rebuilds twice and asserts a known
   line still attributes to the same SHA; that test is the invariant. `commits.repo_slug` is there for
   the same reason: a `repo_id` is a position in the build's list and moves when a repository is added
-  or removed, which would repoint every carried-over commit at a different repository.
+  or removed, which would repoint every carried-over commit at a different repository. The same
+  reasoning decides whose history a build prunes. It prunes the repositories no longer configured,
+  not the ones that failed to open: a fetch that fails once skips the repository's files for that
+  refresh and keeps its history as it was. Otherwise the next refresh would re-walk it from the root
+  under new ids (#228).
 - **Attribution is replayed from the walk, not blamed per file.** The first version blamed every
   file at HEAD once, keyed by blob hash so an unchanged file was not blamed again. Measured on a
   real repository of 4,300 commits and 8,100 files, that was 1.4 s a file and between ninety minutes

@@ -29,14 +29,14 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     them by path, and a file row is what says which paths are at HEAD at all.
     /// </summary>
     /// <param name="shadow">The shadow being built, its connection already bound to it.</param>
-    /// <param name="repositories">The same opened copies the file walk read, in the same order.</param>
+    /// <param name="opened">The same opened copies the file walk read, in the same order.</param>
     /// <param name="configured">
     ///     Every repository the project has in the control database, opened or not. It decides whose
-    ///     history is kept; <paramref name="repositories" /> only decides whose history is walked.
+    ///     history is kept; <paramref name="opened" /> only decides whose history is walked.
     /// </param>
     /// <param name="report">How far the pass has got, for the status an operator polls.</param>
     /// <param name="cancellationToken">Checked per commit, which is where the time goes.</param>
-    public async Task<HistorySummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
+    public async Task<HistorySummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> opened,
         IReadOnlyList<ProjectRepository> configured, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
@@ -44,7 +44,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
 
         // The walk and the diffs are synchronous git calls, like the file walk: a worker thread keeps
         // them off the request thread and the token is checked inside.
-        var summary = await Task.Run(() => Fill(shadow, repositories, configured, report, cancellationToken),
+        var summary = await Task.Run(() => Fill(shadow, opened, configured, report, cancellationToken),
             cancellationToken);
 
         recording.Built(summary.Commits, summary.AttributedFiles);
@@ -55,7 +55,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         return summary;
     }
 
-    private HistorySummary Fill(ShadowIndex shadow, IReadOnlyList<OpenedRepository> repositories,
+    private HistorySummary Fill(ShadowIndex shadow, IReadOnlyList<OpenedRepository> opened,
         IReadOnlyList<ProjectRepository> configured, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
@@ -71,7 +71,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
 
         int appended = 0;
         long attributed = 0;
-        foreach (var (repository, copy) in repositories)
+        foreach (var (repository, copy) in opened)
         {
             var fresh = AppendCommits(shadow, repository.Slug, copy, report, cancellationToken);
             appended += fresh.Count;
