@@ -260,6 +260,12 @@ public sealed class GitClones(
             logger.LogInformation("Fetching repository {Repository} of project {Project}",
                 repository.Slug, repository.ProjectSlug);
         using var clone = new Repository(path);
+        // The fetch goes to the stored URL, never to whatever origin the folder on disk names: a folder
+        // a removal left behind (RemoveAsync says how) could have been cloned from a local path, and
+        // fetching its origin would read the server's disk past the check in OpenRefreshedAsync
+        // (GHSA-5373-pppr-q3q9).
+        if (clone.Network.Remotes["origin"]?.Url != repository.Url)
+            clone.Network.Remotes.Update("origin", origin => origin.Url = repository.Url);
         try
         {
             Commands.Fetch(clone, "origin", ["+refs/heads/*:refs/heads/*"], options, null);

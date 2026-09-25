@@ -90,4 +90,30 @@ public sealed class LocalRepositoryTests : IDisposable
         // Refused before libgit2 was asked: a copy that was never made is not made now.
         if (!clonedBefore) Assert.False(Directory.Exists(host.ClonePath("alpha", "main")));
     }
+
+    /// <summary>
+    ///     A local copy left on disk from a local repository, under a repository now stored with a
+    ///     remote URL, is fetched from that URL and not from the origin the folder still names. Fetching
+    ///     the folder's origin would read the server's disk past the refusal.
+    /// </summary>
+    [Fact]
+    public async Task A_leftover_local_copy_is_fetched_from_the_stored_url_and_not_its_own_origin()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "main",
+            host.CreateGitRepository("main", new Dictionary<string, string> { ["README.md"] = "hello" }));
+        await host.RefreshAsync("alpha");
+        await host.ExecuteOnControlDatabaseAsync(
+            "UPDATE repositories SET url = 'https://example.invalid/main.git' WHERE slug = 'main'");
+
+        host.RestartWithoutLocalRepositories();
+        using (var response = await host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await host.WaitForRefreshesAsync();
+
+        var status = await host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.Contains("example.invalid", Assert.IsType<string>(status.Error));
+    }
 }

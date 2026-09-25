@@ -18,6 +18,9 @@ An argument that scopes an answer to one is spelled `repo` on the MCP tool surfa
 on the HTTP API: one concept, and two surfaces whose callers are a model reading tool schemas and a
 web app nobody retypes. A new scoped tool or endpoint follows the surface it is on rather than
 choosing, and neither surface accepts both.
+A remote on the server's own disk, a path or a `file://` URL, is accepted only where
+`Control:AllowLocalRepositories` is on, which it is not by default. It is not a local copy, which
+is the clone CodeExplorer makes of every repository.
 _Avoid_: Source, codebase
 
 **Local copy**:
