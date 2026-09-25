@@ -58,6 +58,8 @@ internal static class ControlEndpoints
                     (AddRepositoryOutcome.InvalidSlug, _) => Results.BadRequest(
                         new { error = ControlDatabase.SlugRule }),
                     (AddRepositoryOutcome.InvalidUrl, _) => Results.BadRequest(new { error = RepositoryUrl.Rule }),
+                    (AddRepositoryOutcome.LocalNotAllowed, _) => Results.BadRequest(new
+                        { error = $"The repository was not added. {RepositoryUrl.LocalRefusal}" }),
                     (AddRepositoryOutcome.ProjectIsFull, _) => Results.Conflict(new
                     {
                         error =

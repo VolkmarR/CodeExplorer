@@ -5,7 +5,7 @@ namespace CodeExplorer.Git;
 /// <summary>
 ///     What opening a repository's local copy for a refresh came to. The three answers a fetched clone
 ///     can give are cases and not a null, a bool and a scan the caller has to run in the right order:
-///     <see cref="Opened" /> hands over the copy to read, and the two <see cref="Refused" /> cases carry
+///     <see cref="Opened" /> hands over the copy to read, and the <see cref="Refused" /> cases carry
 ///     the sentence the refresh reports in the repository's place. Nothing is open behind a refusal.
 /// </summary>
 public abstract record CloneOpen
@@ -23,6 +23,12 @@ public abstract record CloneOpen
 
     /// <summary>A <c>.gitattributes</c> in HEAD declares <c>filter=lfs</c>, which this server cannot read honestly.</summary>
     public sealed record UsesLfs(string Explanation) : Refused(Explanation);
+
+    /// <summary>
+    ///     A repository on the server's own disk while local repositories are switched off. Decided
+    ///     before libgit2 is asked, so nothing is cloned or fetched from it (GHSA-5373-pppr-q3q9).
+    /// </summary>
+    public sealed record LocalNotAllowed(string Explanation) : Refused(Explanation);
 }
 
 /// <summary>

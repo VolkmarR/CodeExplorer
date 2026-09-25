@@ -61,10 +61,15 @@ public sealed class TestHost : IDisposable
     ///     libgit2's and process-wide, so only a test that runs alone may set it (see
     ///     <c>StalledRemoteTests</c>).
     /// </param>
+    /// <param name="allowLocalRepositories">
+    ///     On everywhere but where the refusal is the subject, because every fixture is a repository on
+    ///     this disk; the shipped default is off (GHSA-5373-pppr-q3q9).
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
         bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
-        int? maxCommitPaths = null, int? transferStallSeconds = null)
+        int? maxCommitPaths = null, int? transferStallSeconds = null, bool allowLocalRepositories = true)
     {
+        _allowLocalRepositories = allowLocalRepositories;
         _engine = engine;
         _drainSeconds = drainSeconds;
         _minimumFreeBytes = minimumFreeBytes;
@@ -84,6 +89,7 @@ public sealed class TestHost : IDisposable
     private readonly string? _extensionDirectory;
     private readonly int? _maxCommitPaths;
     private readonly int? _transferStallSeconds;
+    private bool _allowLocalRepositories;
 
     /// <summary>
     ///     Private, so a test cannot build a client that bypasses <see cref="CreateClient" /> or reach a
@@ -123,6 +129,7 @@ public sealed class TestHost : IDisposable
             if (_transferStallSeconds is { } stall)
                 builder.UseSetting("Git:TransferStallSeconds", stall.ToString(CultureInfo.InvariantCulture));
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
+            if (_allowLocalRepositories) builder.UseSetting("Control:AllowLocalRepositories", "true");
             if (!_authenticated) return;
 
             foreach ((string key, string value) in Tenant.Configuration) builder.UseSetting(key, value);
@@ -141,6 +148,16 @@ public sealed class TestHost : IDisposable
     {
         Factory.Dispose();
         Factory = Build();
+    }
+
+    /// <summary>
+    ///     A restart with local repositories switched off: an operator closing the setting on a server
+    ///     that already stores some, whose repositories must stop being read.
+    /// </summary>
+    public void RestartWithoutLocalRepositories()
+    {
+        _allowLocalRepositories = false;
+        Restart();
     }
 
     /// <summary>

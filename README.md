@@ -55,6 +55,14 @@ The sign-in cookie is protected by the same Data Protection key ring as the cred
 is why it survives a restart only where that key ring does. A container without
 `Storage:BlobContainerUrl` signs every operator out on every stop.
 
+A repository is added by its http(s), ssh or git remote. A local path or `file://` URL is refused
+unless `Control:AllowLocalRepositories` is `true`, and it is off by default, on a developer machine
+too: a local repository is any repository the server's account can read, other projects' local
+copies under `Storage:DataDirectory` included, and whoever may add a repository would then read it
+through MCP — anyone in the tenant, or anyone who can reach the port when authentication is off.
+Switching the setting off again stops the refresh reading local repositories already stored; each is
+reported as skipped until it is pointed at a remote.
+
 The Azure half of that is not covered by the tests — they assert that a configured deployment gets a
 blob repository and a Key Vault encryptor, and nothing reaches an account. To check it for real:
 point both settings at a container and a key the signed-in identity may use, start the server, add a

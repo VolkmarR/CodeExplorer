@@ -24,6 +24,9 @@ public enum AddRepositoryOutcome
     NoProject,
     InvalidSlug,
     InvalidUrl,
+
+    /// <summary>A path or <c>file://</c> URL on a server that has local repositories switched off.</summary>
+    LocalNotAllowed,
     SlugTaken,
 
     /// <summary>The project was declared single-repository and already has its one (ADR-0006).</summary>
@@ -79,6 +82,9 @@ public sealed partial class ControlDatabase : IDisposable
     /// <summary>The file itself, which the backup snapshots beside and the restore writes.</summary>
     private readonly string _path;
 
+    /// <summary>Read once: the setting is a deployment's, not something that changes under a running server.</summary>
+    private readonly bool _localAllowed;
+
     private readonly IDataProtector _protector;
     private readonly DurableStore _store;
 
@@ -87,6 +93,7 @@ public sealed partial class ControlDatabase : IDisposable
     {
         _protector = dataProtection.CreateProtector(KeyRing.CredentialPurpose);
         _store = store;
+        _localAllowed = RepositoryUrl.LocalAllowed(configuration);
 
         // Absent configuration selects a local folder, so `dotnet run` needs no settings at all.
         string directory = configuration["Storage:DataDirectory"] ?? "data";
@@ -350,7 +357,13 @@ public sealed partial class ControlDatabase : IDisposable
 
         if (!IsValidSlug(slug)) return (AddRepositoryOutcome.InvalidSlug, null);
 
-        if (RepositoryUrl.Classify(url) == RepositoryUrlKind.Invalid) return (AddRepositoryOutcome.InvalidUrl, null);
+        switch (RepositoryUrl.Classify(url))
+        {
+            case RepositoryUrlKind.Invalid:
+                return (AddRepositoryOutcome.InvalidUrl, null);
+            case RepositoryUrlKind.Local when !_localAllowed:
+                return (AddRepositoryOutcome.LocalNotAllowed, null);
+        }
 
         var repository = new ProjectRepository(projectSlug, slug, url.Trim(),
             string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));

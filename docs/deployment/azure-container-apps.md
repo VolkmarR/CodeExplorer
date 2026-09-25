@@ -143,6 +143,7 @@ Environment variables, with `__` where a setting has a `:`.
 | `AzureAd__Scopes`             | `api://<client-id>/CodeExplorer.Access`                 | What a project's protected-resource document tells an MCP client to ask for. |
 | `Refresh__WarmUpOnStart`      | `false` under scale to zero, `true` at `minReplicas` 1  | See "Warm-up" below.                                     |
 | `Git__TransferStallSeconds`   | unset (300), or more for a remote slow to start a pack  | How long a clone or fetch waits on a silent remote before the repository is skipped. |
+| `Control__AllowLocalRepositories` | unset (`false`)                                     | Whether a local path or `file://` URL may be added as a repository. Leave it off: it lets whoever may add a repository read any repository on the replica's disk. |
 | `Telemetry__OtlpEndpoint`     | your collector, or unset                                | Unset exports nothing at all.                            |
 | `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | `true`                                          | See "Ingress terminates TLS" below.                      |
 

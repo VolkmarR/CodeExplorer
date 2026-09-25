@@ -198,6 +198,13 @@ gone silent before the refresh skips that repository and says the remote stopped
 bounds each wait, not the transfer, so raise it only for a remote that is slow to start sending a
 large pack.
 
+`Control:AllowLocalRepositories` — `false` by default — decides whether a repository may be a local
+path, a UNC share or a `file://` URL. Leave it off unless every caller who can add a repository may
+also read everything the application pool's identity can: with it on, any of them can have the server
+clone a repository from its own disk, another project's local copy under the data directory
+included, and read it through MCP. Switching it off again stops a refresh reading the local
+repositories already stored; each is reported as skipped.
+
 `Storage:DurableDirectory` is optional and the second disk above is a suggestion, not a requirement —
 it defaults to `durable` under the data directory. Separating them is worth it precisely because they
 mean different things: one is working storage that can be rebuilt, the other is the copy that
