@@ -412,37 +412,28 @@ public sealed class RefreshTests : IDisposable
     ///     A project deleted while its refresh is between the ingest and the swap
     ///     (GHSA-253f-grfp-cqq7). The refresh checked that the project existed only before it started, so
     ///     it went on to store a durable copy and swap its shadow in, and a project later created under
-    ///     the same slug opened the deleted one's files. The refresh is held in the report that the store
-    ///     is starting — the shadow is built and nothing has been stored — while the delete runs to
-    ///     completion. A blocking wait in the callback, because the report is synchronous by design and
-    ///     is the one point a test can stop a refresh at.
+    ///     the same slug opened the deleted one's files. The refresh is held in a report while the delete
+    ///     runs to completion: the one that the store is starting — the shadow is built and nothing has
+    ///     been stored — and the one before the fetch, after which the refresh clones again what the
+    ///     delete removed.
     /// </summary>
-    [Fact]
-    public async Task A_project_deleted_mid_refresh_gets_neither_its_index_nor_its_durable_copy_back()
+    [Theory]
+    [InlineData(RefreshProgress.StorePhase)]
+    [InlineData("Fetching 'one'")]
+    public async Task A_project_deleted_mid_refresh_gets_nothing_back(string phase)
     {
         await _host.IndexedProjectAsync("alpha", Fixture());
-        var project = (await _host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct))!;
-        var reachedStore = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var resume = new ManualResetEventSlim();
 
-        var refreshing = Task.Run(() => _host.Services.GetRequiredService<ProjectRefresh>().RunAsync(project,
-            progress =>
-            {
-                if (progress.Phase != RefreshProgress.StorePhase) return;
-                reachedStore.TrySetResult();
-                resume.Wait(Ct);
-            }, Ct), Ct);
-
-        await reachedStore.Task.WaitAsync(Ct);
-        using (var http = _host.CreateClient())
-        using (var deleted = await http.DeleteAsync("/api/projects/alpha", Ct))
+        await RefreshDeletedAtAsync(phase, async () =>
+        {
+            using var http = _host.CreateClient();
+            using var deleted = await http.DeleteAsync("/api/projects/alpha", Ct);
             Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
-        resume.Set();
+        });
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => refreshing);
-        Assert.Contains("deleted", error.Message);
         Assert.False(File.Exists(_host.IndexFile("alpha")));
         Assert.False(Directory.Exists(_host.DurableIndexDirectory("alpha")));
+        Assert.False(Directory.Exists(_host.ProjectClones("alpha")));
 
         // The slug reused: the new project has never been built, and must not open the old one's files.
         await _host.CreateProjectAsync("alpha");
@@ -450,6 +441,53 @@ public sealed class RefreshTests : IDisposable
         var detail = await reader.GetFromJsonAsync<ProjectDetail>("/api/projects/alpha", Ct);
         Assert.Null(detail!.Index.BuiltAt);
         Assert.False(File.Exists(_host.IndexFile("alpha")));
+    }
+
+    /// <summary>
+    ///     A delete that forgot the project in the control database and never got as far as discarding
+    ///     its index — its request abandoned while it waited behind the refresh. The discard count never
+    ///     moved, so only the publish asking the control database again, under the writer gate, keeps the
+    ///     build out (GHSA-253f-grfp-cqq7). Asserted by a commit the build would have picked up.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_keeps_nothing_of_a_project_the_control_database_no_longer_holds()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+
+        await RefreshDeletedAtAsync(RefreshProgress.StorePhase, () =>
+            _host.Services.GetRequiredService<ControlDatabase>().DeleteProjectAsync("alpha", Ct));
+
+        Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    /// <summary>
+    ///     Refreshes project alpha, runs <paramref name="delete" /> while the refresh is held in the
+    ///     report of <paramref name="phase" />, and asserts the refresh then failed because the project
+    ///     was deleted. Driven directly rather than through the endpoint, so the delete lands at a known point.
+    /// </summary>
+    private async Task RefreshDeletedAtAsync(string phase, Func<Task> delete)
+    {
+        var project = (await _host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct))!;
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var resume = new ManualResetEventSlim();
+
+        var refreshing = Task.Run(() => _host.Services.GetRequiredService<ProjectRefresh>().RunAsync(project,
+            progress =>
+            {
+                if (progress.Phase != phase) return;
+                reached.TrySetResult();
+                // A blocking wait, because the report is synchronous by design and is the one point a
+                // test can stop a refresh at. It blocks a pool thread, never a task.
+                resume.Wait(Ct);
+            }, Ct), Ct);
+
+        await reached.Task.WaitAsync(Ct);
+        await delete();
+        resume.Set();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => refreshing);
+        Assert.Contains("deleted", error.Message);
     }
 
     /// <summary>
