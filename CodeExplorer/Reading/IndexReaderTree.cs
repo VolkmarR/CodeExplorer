@@ -12,6 +12,14 @@ namespace CodeExplorer.Reading;
 public sealed partial class IndexReader
 {
     /// <summary>
+    ///     The deepest tree <see cref="TreeAsync" /> lists. The depth is a row generator in the tree
+    ///     statement, cross-joined with every file under the listed directory, so it is work the caller
+    ///     sizes and not only output (GHSA-v284-9964-6mjr). Sixty-four levels is deeper than any source
+    ///     tree the index has held; past it the listing is all of the subtree anyway.
+    /// </summary>
+    public const int MaxTreeDepth = 64;
+
+    /// <summary>
     ///     The overview the build stored with this index (#51): one row, no joins and no aggregates, so
     ///     a caller orienting itself pays a row read rather than five passes over <c>files</c> and the
     ///     commit tables.
@@ -163,6 +171,9 @@ public sealed partial class IndexReader
     public async Task<IReadOnlyList<TreeItem>> TreeAsync(QualifiedPath? location, int depth,
         CancellationToken cancellationToken)
     {
+        // Held here as well as refused by the query module, because it is this statement the depth
+        // sizes: whoever calls, it stays a bound (GHSA-v284-9964-6mjr).
+        depth = Math.Clamp(depth, 1, MaxTreeDepth);
         if (location is not null) return await SubtreeAsync(location, depth, cancellationToken);
 
         // The repository level is not a directory level: its counts are the ones the build recorded,
@@ -221,8 +232,8 @@ public sealed partial class IndexReader
         // and joined back at each of its first k segments. `depth` is an int, never a caller's text, so
         // it is inlined; k is filtered rather than bounded per row because a correlated range() measured
         // three times slower (23 ms at depth 1000, 17 ms at depth 3). The range is still a row per k per
-        // file before that filter, so a caller's depth is capped before it reaches here
-        // (FileQueries.MaxTreeDepth): at a billion it was a billion rows per file (GHSA-v284-9964-6mjr).
+        // file before that filter, so TreeAsync clamps the depth to MaxTreeDepth first: at a billion it
+        // was a billion rows per file (GHSA-v284-9964-6mjr).
         await using (var command = Connection.Query($"""
                                                      WITH below AS (
                                                          SELECT str_split(substr(f.directory, length($p) + 1), '/') AS segments,

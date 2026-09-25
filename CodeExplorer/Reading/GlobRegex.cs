@@ -25,6 +25,22 @@ public static class GlobRegex
     public const int MaxLength = ExcludedPaths.MaxLength;
 
     /// <summary>
+    ///     Why a caller's <paramref name="glob" /> is refused, or null: longer than <see cref="MaxLength" />,
+    ///     or holding a reversed range, which GLOB matches nothing with and which would therefore read as
+    ///     a search that found nothing. One sentence for every surface that takes a glob.
+    /// </summary>
+    /// <param name="glob">The pattern as the caller wrote it.</param>
+    /// <param name="subject">What the sentence calls it, such as "The glob" or "The `path` term".</param>
+    public static string? Refusal(string glob, string subject)
+    {
+        if (glob.Length > MaxLength)
+            return $"{subject} may be at most {MaxLength} characters; '{glob[..40]}…' is longer. A path is a few segments; match the rest with *.";
+        return ReversedRange(glob) is { } reversed
+            ? $"{subject} \"{glob}\" has the range [{reversed}], which runs backwards, so no character falls in it and it matches nothing. Write it low to high."
+            : null;
+    }
+
+    /// <summary>
     ///     <paramref name="glob" /> as RE2, unanchored: a caller matches it whole with
     ///     <c>regexp_full_match</c> or wraps it in <c>^…$</c>.
     /// </summary>

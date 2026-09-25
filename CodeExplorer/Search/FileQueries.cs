@@ -120,12 +120,11 @@ public sealed class FileQueries(IndexReaders readers)
     public const int MaxWindows = 100;
 
     /// <summary>
-    ///     The deepest tree listing one call may ask for. The depth is a row generator in the tree
-    ///     statement, cross-joined with every file under the listed directory, so it is work the caller
-    ///     sizes and not only output (GHSA-v284-9964-6mjr). Sixty-four levels is deeper than any source
-    ///     tree the index has held; past it the listing is all of the subtree anyway.
+    ///     The deepest tree listing one call may ask for: the reader's own bound
+    ///     (<see cref="IndexReader.MaxTreeDepth" />), refused here with a sentence rather than clamped
+    ///     there in silence, because a listing cut short would read as the whole tree.
     /// </summary>
-    public const int MaxTreeDepth = 64;
+    public const int MaxTreeDepth = IndexReader.MaxTreeDepth;
 
     /// <summary>
     ///     The windows asked for, each answered on its own, over one open of the index. The one refusal
@@ -288,8 +287,8 @@ public sealed class FileQueries(IndexReaders readers)
     {
         if (glob.Length == 0)
             return "The glob is empty. Pass a pattern such as \"*.cs\" or \"main/src/*Handler.cs\".";
-        if (glob.Length > GlobRegex.MaxLength)
-            return $"A glob may be at most {GlobRegex.MaxLength} characters; '{glob[..40]}…' is longer. A path is a few segments; match the name part with *.";
+        // First, so a glob built to be large is refused before any sentence below quotes it whole.
+        if (GlobRegex.Refusal(glob, "The glob") is { } refused) return refused;
         if (glob.Contains('{') || glob.Contains('}'))
             return $"Brace expansion is not supported, so \"{glob}\" matches nothing. Use one call per alternative, "
                    // "*.cs" and not "**/*.cs": `*` crosses separators, so the leading "**/" adds nothing
@@ -304,9 +303,6 @@ public sealed class FileQueries(IndexReaders readers)
             return
                 $"\"{glob}\" has an unbalanced [ ]: a [ opens a character class such as [0-9] and matches nothing without its ]. "
                 + "Close it, or write the character you meant.";
-        if (GlobRegex.ReversedRange(glob) is { } reversed)
-            return $"\"{glob}\" has the range [{reversed}], which runs backwards, so no character falls in it and the glob matches nothing. "
-                   + "Write it low to high.";
         return null;
     }
 }

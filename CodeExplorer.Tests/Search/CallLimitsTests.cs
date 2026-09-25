@@ -100,7 +100,7 @@ public sealed class CallLimitsTests(CallLimitsFixture fixture) : IClassFixture<C
         string reply = await CallAsync(client, "glob",
             new Dictionary<string, object?> { ["glob"] = new string('?', GlobRegex.MaxLength + 1) });
 
-        Assert.Contains($"A glob may be at most {GlobRegex.MaxLength} characters", reply, StringComparison.Ordinal);
+        Assert.Contains($"The glob may be at most {GlobRegex.MaxLength} characters", reply, StringComparison.Ordinal);
     }
 
     /// <summary>What a GLOB means is kept by the linear matcher: classes, negation, `?` and case.</summary>
@@ -164,7 +164,7 @@ public sealed class CallLimitsTests(CallLimitsFixture fixture) : IClassFixture<C
             ["paths"] = _overBudget
         });
 
-        Assert.Contains($"one call reads at most {FileQueries.MaxLinesPerRead} lines", reply, StringComparison.Ordinal);
+        Assert.Contains($"one call reads at most {FileQueries.MaxLinesPerRead} lines, or", reply, StringComparison.Ordinal);
         Assert.Contains($"(lines 1-{rest} of {CallLimitsFixture.BigLines})", reply, StringComparison.Ordinal);
         Assert.Contains($"'one/README.md' was not read: the entries before it already read as much as one call reads",
             reply, StringComparison.Ordinal);

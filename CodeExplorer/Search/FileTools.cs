@@ -188,7 +188,7 @@ internal sealed partial class FileTools(
         bool cut = end < Math.Min(target.End, file.LineCount);
         if (cut)
             text.Append(CultureInfo.InvariantCulture,
-                $"  ... the rest of this window was not read: one call reads at most {FileQueries.MaxLinesPerRead} lines across its entries.\n");
+                $"  ... the rest of this window was not read: one call reads at most {FileQueries.MaxLinesPerRead} lines, or {FileQueries.MaxCharactersPerRead / 1_000_000} million characters, across its entries.\n");
 
         // An explicit range is what the caller asked for; only a default window or a cap stopped short of
         // what they wanted, and then the next call is spelled out.

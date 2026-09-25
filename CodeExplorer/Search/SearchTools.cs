@@ -171,22 +171,10 @@ internal sealed partial class SearchTools(
         }
         else
         {
-            for (int i = 0; i < result.Files.Count; i++)
-            {
-                var file = result.Files[i];
-                if (!file.Unread)
-                {
-                    AppendFile(text, request, file);
-                    continue;
-                }
-
-                // A page of one is read whatever the file's size, and this is the page that file is on.
-                long pageOfOne = Paging.Skip(result.Page, result.PageSize) + i + 1;
-                text.Append(CultureInfo.InvariantCulture,
-                    $"\n{file.QualifiedPath}  -  {file.MatchCount} {ToolReply.Plural(file.MatchCount, "match", "matches")}\n"
-                    + $"  ... lines not shown: a multiline page reads at most {GrepSearch.MaxMultilinePageMiB} MiB of file content, and the files above used it. "
-                    + $"Call grep with pageSize=1 and page={pageOfOne} to see this file's lines.\n");
-            }
+            // A page of one is read whatever the file's size, so an unread file is pointed at the page
+            // it is on at that size.
+            long first = Paging.Skip(result.Page, result.PageSize) + 1;
+            for (int i = 0; i < result.Files.Count; i++) AppendFile(text, request, result.Files[i], first + i);
         }
 
         if (result.Page < lastPage)
@@ -196,10 +184,17 @@ internal sealed partial class SearchTools(
         return text.ToString();
     }
 
-    private static void AppendFile(StringBuilder text, GrepRequest request, GrepFile file)
+    private static void AppendFile(StringBuilder text, GrepRequest request, GrepFile file, long pageOfOne)
     {
         text.Append(CultureInfo.InvariantCulture,
             $"\n{file.QualifiedPath}  -  {file.MatchCount} {ToolReply.Plural(file.MatchCount, "match", "matches")}\n");
+        if (file.Unread)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $"  ... lines not shown: a multiline page reads at most {GrepSearch.MaxMultilinePageMiB} MiB of file content, and the files above used it. "
+                + $"Call grep with pageSize=1 and page={pageOfOne} to see this file's lines.\n");
+            return;
+        }
 
         int width = file.Lines.Count == 0 ? 1 : ToolReply.Digits(file.Lines[^1].LineNumber);
         string pad = new(' ', width);
