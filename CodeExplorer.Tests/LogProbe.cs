@@ -2,8 +2,12 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeExplorer.Tests;
 
-/// <summary>One log entry as a test reads it: how bad it was, and what it said once formatted.</summary>
-public sealed record LogEntry(LogLevel Level, string Message);
+/// <summary>
+///     One log entry as a test reads it: how bad it was, what it said once formatted, and the exception
+///     it carried — which the formatter leaves out, and which is where an operator finds the details a
+///     status sentence withholds.
+/// </summary>
+public sealed record LogEntry(LogLevel Level, string Message, Exception? Exception);
 
 /// <summary>
 ///     Captures what a host logged, for the few places where the log line is the product rather than a
@@ -46,6 +50,6 @@ public sealed class LogProbe : ILoggerProvider
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter) =>
-            probe.Add(new LogEntry(logLevel, formatter(state, exception)));
+            probe.Add(new LogEntry(logLevel, formatter(state, exception), exception));
     }
 }

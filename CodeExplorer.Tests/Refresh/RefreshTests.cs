@@ -180,6 +180,34 @@ public sealed class RefreshTests : IDisposable
         Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
     }
 
+    /// <summary>
+    ///     A failure nobody wrote a sentence for reaches the status as one naming the project and the
+    ///     phase it failed in, and never in its own words: .NET's message for a file it could not write
+    ///     names the file, and whoever reads the status cannot reach the server's disk (#262). The
+    ///     original goes to the log. The durable file held open exclusively is the failure, as in the
+    ///     interrupted re-store tests.
+    /// </summary>
+    [Fact]
+    public async Task A_failure_in_its_own_words_is_reported_as_the_project_and_phase_and_logged_whole()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        string held = Path.Combine(_host.DurableIndexDirectory("alpha"), "lines.parquet");
+
+        string error;
+        await using (File.Open(held, FileMode.Open, FileAccess.Read, FileShare.None))
+            error = await _host.FailedRefreshErrorAsync("alpha");
+
+        Assert.Contains("'alpha'", error, StringComparison.Ordinal);
+        Assert.Contains(RefreshProgress.StorePhase, error, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("lines.parquet", error, StringComparison.Ordinal);
+        Assert.DoesNotContain('/', error);
+        Assert.DoesNotContain('\\', error);
+        var logged = _host.Logs.Only(LogLevel.Error, "Refresh of project alpha failed");
+        Assert.IsType<IOException>(logged.Exception, exactMatch: false);
+        Assert.Contains("lines.parquet", logged.Exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_second_refresh_of_the_same_project_is_refused_while_one_runs()
     {
@@ -574,7 +602,7 @@ public sealed class RefreshTests : IDisposable
         await delete();
         resume.Set();
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => refreshing);
+        var error = await Assert.ThrowsAsync<ExplainedFailureException>(() => refreshing);
         Assert.Contains("deleted", error.Message);
     }
 

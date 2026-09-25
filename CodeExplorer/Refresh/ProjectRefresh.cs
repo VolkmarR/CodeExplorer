@@ -40,7 +40,7 @@ public sealed class ProjectRefresh(
         // operator deleted the project, or deleted it and created another under the slug, whose record
         // is the one to build.
         project = await control.FindAsync(project.Slug, cancellationToken)
-                  ?? throw new InvalidOperationException(Deleted(project, "before its refresh could start"));
+                  ?? throw new ExplainedFailureException(Deleted(project, "before its refresh could start"));
 
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         var opened = new List<OpenedRepository>();
@@ -58,10 +58,10 @@ public sealed class ProjectRefresh(
             // Every repository failed, so the shadow would be an empty index and the swap would throw
             // the project's whole searchable history away over what is usually a transient network
             // fault. Leaving the old index serving, and saying so, is the answer an operator can act on.
-            // InvalidOperationException and not McpException: no MCP tool is on this path, and the
-            // refresh reports a failure through its status, which is where this message ends up.
+            // The skipped repositories' messages are McpExceptions' own, already scrubbed of server
+            // paths (#232), so the whole sentence is one the status may report as written.
             if (repositories.Count > 0 && opened.Count == 0)
-                throw new InvalidOperationException(
+                throw new ExplainedFailureException(
                     $"No repository of project '{project.Slug}' could be read, so its index was left as it was: "
                     + string.Join(" ", skipped));
 
@@ -86,7 +86,7 @@ public sealed class ProjectRefresh(
 
                 // Thrown inside the try, so the catch below removes the shadow the publish refused.
                 if (!published)
-                    throw new InvalidOperationException(Deleted(project,
+                    throw new ExplainedFailureException(Deleted(project,
                         "while its refresh was running, so nothing the refresh built was kept"));
             }
             catch
