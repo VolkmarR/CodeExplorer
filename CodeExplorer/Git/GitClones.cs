@@ -63,6 +63,29 @@ public sealed class GitClones(
         CancellationToken cancellationToken)
     {
         string path = Path.Combine(_cloneRoot, repository.ProjectSlug, repository.Slug + ".git");
+        try
+        {
+            return await RefreshAndOpenAsync(repository, path, cancellationToken);
+        }
+        catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
+        {
+            // What the transfer itself raised is already an McpException; this is the rest, the local
+            // copy failing on the server's own disk while it is cleared, opened or read. The message
+            // is the operating system's or libgit2's and can name the path, which the reader of the
+            // refresh status must not see and the operator must (#232).
+            if (logger.IsEnabled(LogLevel.Warning))
+                logger.LogWarning(ex, "The local copy of repository {Repository} of project {Project} at {Path} "
+                                      + "could not be used", repository.Slug, repository.ProjectSlug, path);
+            throw new McpException(
+                $"The local copy of repository '{repository.Slug}' could not be used on the server: "
+                + $"{WithoutPath(ex.Message, path).TrimEnd('.')}. Ask the operator to check the server's log "
+                + "for the local copy of this repository, then try again.");
+        }
+    }
+
+    private async Task<CloneOpen> RefreshAndOpenAsync(ProjectRepository repository, string path,
+        CancellationToken cancellationToken)
+    {
         var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
         try
@@ -291,7 +314,8 @@ public sealed class GitClones(
             + $"'{clone.Refs.Head.TargetIdentifier}', which is no branch it holds, and the default branch of "
             + $"'{repository.Url}' could not be read to repair it. Ask the operator to retry the refresh, "
             + $"or to remove repository '{repository.Slug}' from project '{repository.ProjectSlug}' and add it "
-            + "again, which discards the local copy so the next refresh makes a fresh one.");
+            + "again, with its credential if it had one, which discards the local copy so the next refresh "
+            + "makes a fresh one.");
     }
 
     /// <summary>
@@ -359,9 +383,9 @@ public sealed class GitClones(
     ///     The URL carries no password (RepositoryUrl refuses one), and the token only ever reached
     ///     libgit2 through CredentialsProvider, so neither the URL nor libgit2's message can hold it. The
     ///     exception is not attached as InnerException, so nothing beyond this text is serialised.
-    ///     libgit2's message can hold the clone's path, though, when the failure was on this side: it
-    ///     names the directory it could not write. That path is replaced before the message leaves, and
-    ///     logged whole for the operator, who is the one reader able to reach it (#232).
+    ///     libgit2's message can hold the local copy's path, though, when the failure was on this side:
+    ///     it names the directory it could not write. That path is replaced before the message leaves,
+    ///     and logged whole for the operator, who is the one reader able to reach it (#232).
     /// </summary>
     private McpException TransferFailed(string verb, ProjectRepository repository, string path, Exception ex,
         TransferWatch watch)
@@ -379,15 +403,20 @@ public sealed class GitClones(
     }
 
     /// <summary>
-    ///     The message with the clone's path written as "the local copy". Both separators, because
-    ///     libgit2 writes forward slashes on Windows where .NET wrote back slashes, and the full path
-    ///     as well as the configured one, because libgit2 resolves a relative data directory.
+    ///     The message with the local copy's path written as "the local copy", and then any other path
+    ///     under the folder holding every local copy — a parent libgit2 could not create — written as
+    ///     "the local copies". Both separators, because libgit2 writes forward slashes on Windows where
+    ///     .NET writes back slashes, and the full path as well as the configured one, because libgit2
+    ///     resolves a relative data directory.
     /// </summary>
-    private static string WithoutPath(string message, string path)
+    private string WithoutPath(string message, string path) =>
+        Without(Without(message, path, "the local copy"), _cloneRoot, "the local copies");
+
+    private static string Without(string message, string path, string replacement)
     {
         string full = Path.GetFullPath(path);
         foreach (string form in new[] { full, full.Replace('\\', '/'), path, path.Replace('\\', '/') })
-            message = message.Replace(form, "the local copy", StringComparison.OrdinalIgnoreCase);
+            message = message.Replace(form, replacement, StringComparison.OrdinalIgnoreCase);
         return message;
     }
 
