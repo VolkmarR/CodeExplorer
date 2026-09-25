@@ -33,9 +33,15 @@ public sealed class ProjectRefresh(
         CancellationToken cancellationToken)
     {
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
-        var (opened, skipped) = await FetchAsync(repositories, report, cancellationToken);
+        var opened = new List<OpenedRepository>();
+        var skipped = new List<string>();
         try
         {
+            // Inside the try, so a fetch that ends the refresh — cancellation above all — still closes
+            // the copies opened before it. Left open, their pack files stay held, and on Windows a later
+            // removal of the repository fails on them (#241).
+            await FetchAsync(repositories, opened, skipped, report, cancellationToken);
+
             // Every repository failed, so the shadow would be an empty index and the swap would throw
             // the project's whole searchable history away over what is usually a transient network
             // fault. Leaving the old index serving, and saying so, is the answer an operator can act on.
@@ -88,62 +94,40 @@ public sealed class ProjectRefresh(
         }
         finally
         {
-            Release(opened);
+            foreach (var open in opened) open.LocalCopy.Dispose();
         }
     }
 
     /// <summary>
     ///     Brings every local copy up to date and opens it, before the index is touched: a fetch that
     ///     fails leaves the previous index serving. A repository that cannot be read, or that must not
-    ///     be, is named in the skipped list instead of failing the project.
+    ///     be, is named in <paramref name="skipped" /> instead of failing the project. The copies go into
+    ///     <paramref name="opened" />, which the caller owns and closes however this ends.
     /// </summary>
-    private async Task<(List<OpenedRepository> Opened, List<string> Skipped)> FetchAsync(
-        IReadOnlyList<ProjectRepository> repositories, Action<RefreshProgress> report,
-        CancellationToken cancellationToken)
+    private async Task FetchAsync(IReadOnlyList<ProjectRepository> repositories, List<OpenedRepository> opened,
+        List<string> skipped, Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
-        var opened = new List<OpenedRepository>();
-        var skipped = new List<string>();
         int fetched = 0;
-        try
+        foreach (var repository in repositories)
         {
-            foreach (var repository in repositories)
+            // Reported before the fetch, and counted as done after: an operator watching wants to know
+            // which repository is being transferred now, not which one finished last.
+            report(new RefreshProgress(RefreshProgress.FetchStep, _totalSteps, $"Fetching '{repository.Slug}'", fetched++,
+                repositories.Count));
+            try
             {
-                // Reported before the fetch, and counted as done after: an operator watching wants to know
-                // which repository is being transferred now, not which one finished last.
-                report(new RefreshProgress(RefreshProgress.FetchStep, _totalSteps, $"Fetching '{repository.Slug}'",
-                    fetched++, repositories.Count));
-                try
-                {
-                    // Empty and LFS are decided behind the open (CloneOpen); a refusal holds nothing to dispose.
-                    var open = await clones.OpenRefreshedAsync(repository, cancellationToken);
-                    if (open is CloneOpen.Refused refused) skipped.Add(refused.Explanation);
-                    else opened.Add(new OpenedRepository(repository, ((CloneOpen.Opened)open).Copy));
-                }
-                catch (McpException ex)
-                {
-                    // Safe to swallow: the reason is reported in the summary in place of the repository,
-                    // and the other repositories still get indexed. A local copy libgit2 cannot open
-                    // arrives here too, already an McpException naming the repository (#232).
-                    skipped.Add(ex.Message);
-                }
+                // Empty and LFS are decided behind the open (CloneOpen); a refusal holds nothing to dispose.
+                var open = await clones.OpenRefreshedAsync(repository, cancellationToken);
+                if (open is CloneOpen.Refused refused) skipped.Add(refused.Explanation);
+                else opened.Add(new OpenedRepository(repository, ((CloneOpen.Opened)open).Copy));
+            }
+            catch (McpException ex)
+            {
+                // Safe to swallow: the reason is reported in the summary in place of the repository,
+                // and the other repositories still get indexed. A local copy libgit2 cannot open
+                // arrives here too, already an McpException naming the repository (#232).
+                skipped.Add(ex.Message);
             }
         }
-        catch
-        {
-            // Anything else — cancellation above all — ends the refresh before the caller owns the copies
-            // opened so far, so they are released here. Left open, their pack files stay held, and on
-            // Windows a later removal of the repository fails on them (#241).
-            Release(opened);
-            throw;
-        }
-
-        // The open copies are the caller's from here: it owns them for as long as the ingest reads them.
-        return (opened, skipped);
-    }
-
-    /// <summary>Closes the local copies a refresh opened, whichever of its two owners is holding them.</summary>
-    private static void Release(List<OpenedRepository> opened)
-    {
-        foreach (var open in opened) open.LocalCopy.Dispose();
     }
 }

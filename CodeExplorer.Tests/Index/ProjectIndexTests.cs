@@ -389,23 +389,15 @@ public sealed class ProjectIndexTests : IDisposable
             pooled = lease!.Connection;
 
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        using var listener = new System.Diagnostics.Metrics.MeterListener();
-        listener.InstrumentPublished = (instrument, meters) =>
-        {
-            if (instrument.Meter.Name == Telemetry.ServiceName) meters.EnableMeasurementEvents(instrument);
-        };
-        listener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
-        {
-            if (instrument.Name != Telemetry.LeaseDuration) return;
-            foreach (var tag in tags)
-                if (tag is { Key: Telemetry.ProjectTag, Value: "status-cancel" })
-                    cancel.Cancel();
-        });
-        listener.Start();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            host.Services.GetRequiredService<IndexReaders>().StatusAsync("status-cancel", true, cancel.Token));
-        listener.Dispose();
+        using (new TelemetryProbe("status-cancel")
+               {
+                   OnMeasured = measurement =>
+                   {
+                       if (measurement.Instrument == Telemetry.LeaseDuration) cancel.Cancel();
+                   }
+               })
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                host.Services.GetRequiredService<IndexReaders>().StatusAsync("status-cancel", true, cancel.Token));
 
         using var next = await host.Indexes.OpenAsync("status-cancel", Ct);
         Assert.NotSame(pooled, next!.Connection);
