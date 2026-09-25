@@ -78,12 +78,18 @@ public static class SymbolText
     ///     would be the two matchers disagreeing that this design exists to prevent.
     ///     It tests a line and does not count on it; <see cref="OccurrencePattern" /> is the one that counts.
     /// </summary>
-    public static string WholeWordPattern(string symbol)
+    public static string WholeWordPattern(string symbol) => Bounded(symbol, Re2WordEnd, "");
+
+    /// <summary>
+    ///     The symbol escaped, behind a start boundary where it starts with a word character and in
+    ///     front of <paramref name="wordEnd" /> or <paramref name="otherEnd" /> by how it ends.
+    /// </summary>
+    private static string Bounded(string symbol, string wordEnd, string otherEnd)
     {
         ArgumentNullException.ThrowIfNull(symbol);
-        if (symbol.Length == 0) return "";
+        if (symbol.Length == 0) return otherEnd;
         string head = IsWordChar(symbol[0]) ? Re2WordStart : "";
-        string tail = IsWordChar(symbol[^1]) ? Re2WordEnd : "";
+        string tail = IsWordChar(symbol[^1]) ? wordEnd : otherEnd;
         return head + Re2Literal(symbol) + tail;
     }
 
@@ -95,14 +101,7 @@ public static class SymbolText
     ///     boundary but a capture of the word character that would break one — never a character the
     ///     next match can start on, since a start boundary is not a word character.
     /// </summary>
-    public static string OccurrencePattern(string symbol)
-    {
-        ArgumentNullException.ThrowIfNull(symbol);
-        if (symbol.Length == 0) return "()";
-        string head = IsWordChar(symbol[0]) ? Re2WordStart : "";
-        string tail = IsWordChar(symbol[^1]) ? $"({Re2WordChar}?)" : "()";
-        return head + Re2Literal(symbol) + tail;
-    }
+    public static string OccurrencePattern(string symbol) => Bounded(symbol, $"({Re2WordChar}?)", "()");
 
     /// <summary>
     ///     Where the identifier next sits on the line, on word boundaries, or -1. Done by hand rather
