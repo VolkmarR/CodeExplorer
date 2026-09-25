@@ -44,6 +44,13 @@ public sealed record StringDelimiter(string Open, string Close, StringEscape Esc
 
     /// <summary>The holes of live code this literal may carry, or null where it has none.</summary>
     public Hole? Hole { get; init; }
+
+    /// <summary>
+    ///     Whether the opener's last character may be repeated, with the closer then repeated as many
+    ///     times: C#'s raw literal, opened by three quotes or more and closed by exactly as many. A
+    ///     fixed closer read one opened with four as closed by the <c>"""</c> it was written to hold.
+    /// </summary>
+    public bool Extends { get; init; }
 }
 
 /// <summary>
@@ -147,8 +154,11 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     public IReadOnlyList<string> LineComments { get; init; } = [];
 
     /// <summary>
-    ///     Openers recognised only at the start of a trimmed line. <c>*</c> is here and not above
-    ///     because it is the continuation of a doc comment block and a multiplication anywhere else.
+    ///     Openers recognised only at the start of a trimmed line, outside any block comment. xBase's
+    ///     <c>*</c> is here and not above because it is a comment at the start of a line and a
+    ///     multiplication anywhere else. A language whose leading <c>*</c> is only the continuation of
+    ///     a <c>/* */</c> block leaves it out: that line is inside the block the scan already carries,
+    ///     and at the top level the same <c>*</c> is code.
     /// </summary>
     public IReadOnlyList<string> LineStartComments { get; init; } = [];
 
