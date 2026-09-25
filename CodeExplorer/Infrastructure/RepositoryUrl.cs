@@ -46,6 +46,14 @@ public static partial class RepositoryUrl
         + $"{AllowLocalSetting} to true.";
 
     /// <summary>
+    ///     Why a credential was refused for its URL, for the API's answer and the refresh's alike
+    ///     (GHSA-4f8q-c6jj-fr44).
+    /// </summary>
+    public const string ClearTextCredentialRefusal =
+        "A credential is only sent over https or ssh, where it is encrypted; use the https or ssh URL of this "
+        + "repository.";
+
+    /// <summary>
     ///     scp-style syntax as git accepts it: an optional user, a host, a colon, a path. A second colon
     ///     before the <c>@</c> would be a password and is left to fall through as invalid.
     ///     A host holds no backslash, and is not a lone letter: <c>C:repo</c>, <c>\\?\C:\repo</c> and
@@ -62,6 +70,25 @@ public static partial class RepositoryUrl
     /// </summary>
     public static bool LocalAllowed(IConfiguration configuration) =>
         configuration.GetValue<bool>(AllowLocalSetting);
+
+    /// <summary>
+    ///     Whether a credential for this URL would cross the network unencrypted. libgit2 hands it to an
+    ///     <c>http://</c> remote as basic auth, readable by anyone on the path; <c>git://</c> is just as
+    ///     unencrypted and has no authentication of its own, so a credential stored for it has no use that
+    ///     is safe, and refusing it keeps the rule to the one the decision states: a credential is stored
+    ///     only beside an encrypted transport. A local path or <c>file://</c> URL never reaches the
+    ///     network, so its credential is not in question here (GHSA-4f8q-c6jj-fr44).
+    ///     A prefix and not <see cref="Uri" />, because libgit2 picks its transport by prefix: a URL .NET
+    ///     cannot parse, such as one with a space in the host, reads as scp-style to <see cref="Classify" />
+    ///     and is still an http URL to libgit2. <c>http:</c> without the slashes is caught too; libgit2 would
+    ///     read it as scp-style ssh, so refusing it costs nothing that is safe.
+    /// </summary>
+    public static bool SendsCredentialInClear(string? url)
+    {
+        string trimmed = url?.Trim() ?? "";
+        return trimmed.StartsWith("http:", StringComparison.OrdinalIgnoreCase)
+               || trimmed.StartsWith("git://", StringComparison.OrdinalIgnoreCase);
+    }
 
     public static RepositoryUrlKind Classify(string? url)
     {

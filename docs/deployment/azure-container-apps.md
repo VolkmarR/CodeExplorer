@@ -279,3 +279,7 @@ The first release with GHSA-5373-pppr-q3q9 refuses local repositories unless
 reports each as skipped until it is pointed at a remote. The first with GHSA-qxhv-3r9w-q8h4 refuses
 a foreign `Origin` on `/api` and the MCP endpoints, so a replica missing
 `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` now fails every write from the UI, not only the sign-in.
+The first with GHSA-4f8q-c6jj-fr44 refuses a credential beside an `http://` or `git://` URL, which
+would send it in clear text, and there is no setting to allow it: a repository stored with that pair
+is reported as skipped by every refresh, and its token never sent, until it is deleted and added
+again under its https URL.

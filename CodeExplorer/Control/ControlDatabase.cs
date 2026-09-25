@@ -27,6 +27,9 @@ public enum AddRepositoryOutcome
 
     /// <summary>A path or <c>file://</c> URL on a server that has local repositories switched off.</summary>
     LocalNotAllowed,
+
+    /// <summary>A credential beside an <c>http://</c> or <c>git://</c> URL, which would send it in clear text (GHSA-4f8q-c6jj-fr44).</summary>
+    ClearTextCredential,
     SlugTaken,
 
     /// <summary>The project was declared single-repository and already has its one (ADR-0006).</summary>
@@ -364,6 +367,9 @@ public sealed partial class ControlDatabase : IDisposable
             case RepositoryUrlKind.Local when !_localAllowed:
                 return (AddRepositoryOutcome.LocalNotAllowed, null);
         }
+
+        if (!string.IsNullOrEmpty(credential) && RepositoryUrl.SendsCredentialInClear(url))
+            return (AddRepositoryOutcome.ClearTextCredential, null);
 
         var repository = new ProjectRepository(projectSlug, slug, url.Trim(),
             string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));

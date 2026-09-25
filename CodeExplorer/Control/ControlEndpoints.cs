@@ -60,6 +60,8 @@ internal static class ControlEndpoints
                     (AddRepositoryOutcome.InvalidUrl, _) => Results.BadRequest(new { error = RepositoryUrl.Rule }),
                     (AddRepositoryOutcome.LocalNotAllowed, _) => Results.BadRequest(new
                         { error = $"The repository was not added. {RepositoryUrl.LocalRefusal}" }),
+                    (AddRepositoryOutcome.ClearTextCredential, _) => Results.BadRequest(new
+                        { error = $"The repository was not added. {RepositoryUrl.ClearTextCredentialRefusal}" }),
                     (AddRepositoryOutcome.ProjectIsFull, _) => Results.Conflict(new
                     {
                         error =
