@@ -103,7 +103,7 @@ public sealed class GitClones(
         {
             // Both branches are synchronous libgit2 over the network; a worker thread keeps them off
             // the request thread. A clone is already up to date, so it is never followed by a fetch.
-            if (!Repository.IsValid(path))
+            if (!IsCopyOf(repository, path))
                 await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken);
             else
                 await Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
@@ -213,6 +213,28 @@ public sealed class GitClones(
         Directory.Delete(path, true);
     }
 
+    /// <summary>
+    ///     Whether the folder is this repository's local copy: a valid repository whose origin is the
+    ///     stored URL. A fetch goes to the folder's own origin, so a folder a removal left behind
+    ///     (<see cref="RemoveAsync" /> says how) and a repository added later under the same slug would
+    ///     otherwise share it, and one cloned from a local path would read the server's disk past the
+    ///     check in <see cref="OpenRefreshedAsync" /> (GHSA-5373-pppr-q3q9). Nothing changes a stored
+    ///     URL, so a mismatch is always such a folder, and it is cloned over rather than repointed:
+    ///     repointing would keep the other repository's objects and tags.
+    /// </summary>
+    private bool IsCopyOf(ProjectRepository repository, string path)
+    {
+        if (!Repository.IsValid(path)) return false;
+        using var clone = new Repository(path);
+        if (clone.Network.Remotes["origin"]?.Url == repository.Url) return true;
+
+        if (logger.IsEnabled(LogLevel.Warning))
+            logger.LogWarning("The folder at {Path} is not the local copy of repository {Repository} of project "
+                              + "{Project}, whose URL it does not name, and is cloned over", path, repository.Slug,
+                repository.ProjectSlug);
+        return false;
+    }
+
     private void Clone(ProjectRepository repository, string path, CancellationToken cancellationToken)
     {
         // A folder that exists but is not a valid repository is a clone that failed half-way; start over.
@@ -260,12 +282,6 @@ public sealed class GitClones(
             logger.LogInformation("Fetching repository {Repository} of project {Project}",
                 repository.Slug, repository.ProjectSlug);
         using var clone = new Repository(path);
-        // The fetch goes to the stored URL, never to whatever origin the folder on disk names: a folder
-        // a removal left behind (RemoveAsync says how) could have been cloned from a local path, and
-        // fetching its origin would read the server's disk past the check in OpenRefreshedAsync
-        // (GHSA-5373-pppr-q3q9).
-        if (clone.Network.Remotes["origin"]?.Url != repository.Url)
-            clone.Network.Remotes.Update("origin", origin => origin.Url = repository.Url);
         try
         {
             Commands.Fetch(clone, "origin", ["+refs/heads/*:refs/heads/*"], options, null);

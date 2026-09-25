@@ -522,18 +522,7 @@ public sealed class RefreshTests : IDisposable
         Assert.False(Directory.Exists(_host.ClonePath("alpha", repository)));
     }
 
-    /// <summary>Requests a refresh of project alpha, waits for it, and answers the error it failed with.</summary>
-    private async Task<string> FailedRefreshErrorAsync()
-    {
-        using (var response = await _host.RequestRefreshAsync("alpha"))
-            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        await _host.WaitForRefreshesAsync();
-
-        var status = await _host.RefreshStatusAsync("alpha");
-        Assert.Equal(RefreshState.Failed, status.State);
-        Assert.NotNull(status.Error);
-        return status.Error;
-    }
+    private Task<string> FailedRefreshErrorAsync() => _host.FailedRefreshErrorAsync("alpha");
 
     /// <summary>
     ///     Step 3 does several separable things, and until #91 everything after the attribution ran

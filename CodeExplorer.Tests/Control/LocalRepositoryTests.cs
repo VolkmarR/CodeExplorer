@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using CodeExplorer.Index;
-using CodeExplorer.Refresh;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -71,20 +71,11 @@ public sealed class LocalRepositoryTests : IDisposable
     [InlineData(false)]
     public async Task A_stored_local_repository_is_skipped_once_the_setting_is_off(bool clonedBefore)
     {
-        using var host = new TestHost(SearchEngine.Substring);
-        await host.CreateProjectAsync("alpha");
-        await host.AddRepositoryAsync("alpha", "main",
-            host.CreateGitRepository("main", new Dictionary<string, string> { ["README.md"] = "hello" }));
-        if (clonedBefore) await host.RefreshAsync("alpha");
+        using var host = await LocalRepositoryHostAsync(clonedBefore);
 
         host.RestartWithoutLocalRepositories();
-        using (var response = await host.RequestRefreshAsync("alpha"))
-            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        await host.WaitForRefreshesAsync();
+        string error = await host.FailedRefreshErrorAsync("alpha");
 
-        var status = await host.RefreshStatusAsync("alpha");
-        Assert.Equal(RefreshState.Failed, status.State);
-        string error = Assert.IsType<string>(status.Error);
         Assert.Contains("'main'", error);
         Assert.Contains(Setting, error);
         // Refused before libgit2 was asked: a copy that was never made is not made now.
@@ -93,27 +84,34 @@ public sealed class LocalRepositoryTests : IDisposable
 
     /// <summary>
     ///     A local copy left on disk from a local repository, under a repository now stored with a
-    ///     remote URL, is fetched from that URL and not from the origin the folder still names. Fetching
-    ///     the folder's origin would read the server's disk past the refusal.
+    ///     remote URL, is not fetched from the origin it still names: that would read the server's disk
+    ///     past the refusal. It is cloned over from the stored URL instead. A copy whose origin is the
+    ///     stored URL is fetched as before, which the refresh ahead of the change proves.
     /// </summary>
     [Fact]
-    public async Task A_leftover_local_copy_is_fetched_from_the_stored_url_and_not_its_own_origin()
+    public async Task A_leftover_local_copy_is_cloned_over_from_the_stored_url()
     {
-        using var host = new TestHost(SearchEngine.Substring);
-        await host.CreateProjectAsync("alpha");
-        await host.AddRepositoryAsync("alpha", "main",
-            host.CreateGitRepository("main", new Dictionary<string, string> { ["README.md"] = "hello" }));
+        using var host = await LocalRepositoryHostAsync(refreshed: true);
         await host.RefreshAsync("alpha");
         await host.ExecuteOnControlDatabaseAsync(
             "UPDATE repositories SET url = 'https://example.invalid/main.git' WHERE slug = 'main'");
 
         host.RestartWithoutLocalRepositories();
-        using (var response = await host.RequestRefreshAsync("alpha"))
-            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        await host.WaitForRefreshesAsync();
+        string error = await host.FailedRefreshErrorAsync("alpha");
 
-        var status = await host.RefreshStatusAsync("alpha");
-        Assert.Equal(RefreshState.Failed, status.State);
-        Assert.Contains("example.invalid", Assert.IsType<string>(status.Error));
+        Assert.Contains("Cloning repository 'main' from 'https://example.invalid/main.git'", error);
+        host.Logs.Only(LogLevel.Warning, "is cloned over");
+        Assert.False(Directory.Exists(host.ClonePath("alpha", "main")));
+    }
+
+    /// <summary>A host that allows local repositories, with project alpha holding one of them as 'main'.</summary>
+    private static async Task<TestHost> LocalRepositoryHostAsync(bool refreshed)
+    {
+        var host = new TestHost(SearchEngine.Substring);
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "main",
+            host.CreateGitRepository("main", new Dictionary<string, string> { ["README.md"] = "hello" }));
+        if (refreshed) await host.RefreshAsync("alpha");
+        return host;
     }
 }
