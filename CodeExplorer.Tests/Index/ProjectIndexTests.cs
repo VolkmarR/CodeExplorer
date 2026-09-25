@@ -396,6 +396,7 @@ public sealed class ProjectIndexTests : IDisposable
         };
         listener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
         {
+            if (instrument.Name != Telemetry.LeaseDuration) return;
             foreach (var tag in tags)
                 if (tag is { Key: Telemetry.ProjectTag, Value: "status-cancel" })
                     cancel.Cancel();

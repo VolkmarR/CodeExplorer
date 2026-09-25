@@ -361,12 +361,14 @@ public sealed class RefreshTests : IDisposable
     /// <summary>
     ///     A local copy whose object store is corrupt is one repository that cannot be read, not a
     ///     project that cannot be refreshed: the others are indexed and it is named as skipped, and the
-    ///     copy opened before it is released afterwards (#241).
+    ///     copy opened before it is released afterwards (#241). libgit2's error reaches the refresh as an
+    ///     McpException since #232, so this pins the skip; the leak a failure that is not a skip would
+    ///     cause is pinned by the cancellation test below.
     /// </summary>
     [Fact]
     public async Task A_corrupt_local_copy_is_skipped_and_the_copies_opened_before_it_are_released()
     {
-        await ThreeRepositoriesAsync();
+        await ThreeRepositoriesFirstPackedAsync();
         foreach (string file in Directory.EnumerateFiles(Path.Combine(_host.ClonePath("alpha", "two"), "objects"), "*",
                      SearchOption.AllDirectories))
         {
@@ -390,7 +392,7 @@ public sealed class RefreshTests : IDisposable
     [Fact]
     public async Task A_refresh_cancelled_mid_fetch_releases_the_copies_it_had_opened()
     {
-        await ThreeRepositoriesAsync();
+        await ThreeRepositoriesFirstPackedAsync();
         var project = (await _host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct))!;
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
@@ -411,7 +413,7 @@ public sealed class RefreshTests : IDisposable
     ///     object once read; a pack is what an open copy keeps a handle on, so without it a leaked copy
     ///     would be invisible.
     /// </summary>
-    private async Task ThreeRepositoriesAsync()
+    private async Task ThreeRepositoriesFirstPackedAsync()
     {
         await _host.IndexedProjectAsync("alpha",
             new() { ["one"] = Fixture("one")["one"], ["two"] = Fixture("two")["two"], ["three"] = Fixture("three")["three"] });

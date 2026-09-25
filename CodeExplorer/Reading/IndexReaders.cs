@@ -44,19 +44,28 @@ public sealed class IndexReaders(ProjectIndexes indexes)
                     : IndexReader.NoIndex(projectSlug), ProblemKind.NoIndex));
 
         using var reader = new IndexReader(lease.Connection, lease.FullTextLoaded, lease, projectSlug);
+        return await BreakingOnFailureAsync(lease, async () =>
+            await reader.ScopeToAsync(repository, cancellationToken) is { } unknown
+                ? refused(unknown)
+                : await read(reader, cancellationToken));
+    }
+
+    /// <summary>
+    ///     Runs the reads on a lease, and marks it broken when they throw, so the connection goes no
+    ///     further. Since #149 a lease hands its connection back to a pool instead of closing it, and a
+    ///     statement that threw or was abandoned mid-read can leave something on it the next borrower
+    ///     would inherit — an agent cancelling a slow search is the ordinary way that happens. Every
+    ///     lease this class opens is read through here, so no reader can forget to say it; the status
+    ///     read once did, and a cancelled one pooled its connection (#241).
+    /// </summary>
+    private static async Task<T> BreakingOnFailureAsync<T>(IndexLease lease, Func<Task<T>> read)
+    {
         try
         {
-            if (await reader.ScopeToAsync(repository, cancellationToken) is { } unknown) return refused(unknown);
-
-            return await read(reader, cancellationToken);
+            return await read();
         }
         catch
         {
-            // The connection goes no further. Since #149 a lease hands its connection back to a pool
-            // instead of closing it, and a statement that threw or was abandoned mid-read can leave
-            // something on it the next borrower would inherit — an agent cancelling a slow search is
-            // the ordinary way that happens. Said here because this is the seam every read crosses,
-            // so no reader can forget to say it.
             lease.Broken();
             throw;
         }
@@ -128,19 +137,7 @@ public sealed class IndexReaders(ProjectIndexes indexes)
         using var lease = restore
             ? await indexes.OpenAsync(projectSlug, cancellationToken)
             : await indexes.PeekAsync(projectSlug, cancellationToken);
-        if (lease is null) return null;
-
-        try
-        {
-            return await ReadStatusAsync(lease, cancellationToken);
-        }
-        catch
-        {
-            // Not pooled, for the reason OverIndexAsync gives: a status read the operator's page
-            // abandoned is as likely to leave a statement part-read as a search an agent cancelled (#241).
-            lease.Broken();
-            throw;
-        }
+        return lease is null ? null : await BreakingOnFailureAsync(lease, () => ReadStatusAsync(lease, cancellationToken));
     }
 
     private static async Task<IndexStatus?> ReadStatusAsync(IndexLease lease, CancellationToken cancellationToken)
