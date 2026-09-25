@@ -563,7 +563,9 @@ public sealed partial class GrepSearch(IndexReaders readers)
         void Literal(char c, char next)
         {
             if (depth != 0) return;
-            if (next is '?' or '*' or '{')
+            // A surrogate is half a character: a quantifier after the pair would guard only the low half,
+            // leaving a lone high surrogate in a literal that "a😀?" does not require.
+            if (next is '?' or '*' or '{' || char.IsSurrogate(c))
             {
                 Break();
                 return;
@@ -584,10 +586,11 @@ public sealed partial class GrepSearch(IndexReaders readers)
                 case '\\':
                     // \. and \( are the character itself. Every other escape (\d, \b, \x41, \pL, \Q..\E,
                     // octal) is consumed whole and ends the run: kept, its tail would read as literals.
-                    if (i + 1 < pattern.Length && !char.IsLetterOrDigit(pattern[i + 1]))
+                    // An escaped line break is the line break itself, and ends the run like a raw one.
+                    if (next is not ('\0' or '\n' or '\r') && !char.IsLetterOrDigit(next))
                     {
                         i++;
-                        Literal(pattern[i], i + 1 < pattern.Length ? pattern[i + 1] : '\0');
+                        Literal(next, i + 1 < pattern.Length ? pattern[i + 1] : '\0');
                         break;
                     }
 
@@ -604,7 +607,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
                     break;
                 case '[':
                     // An unterminated class is a pattern RE2 rejects; no prefilter rather than a guess.
-                    if ((i = ClassEnd(pattern, i)) < 0) return null;
+                    i = ClassEnd(pattern, i);
+                    if (i < 0) return null;
                     Break();
                     break;
                 case '{':
