@@ -111,7 +111,8 @@ public sealed class ProjectOverview(
     ControlDatabase control,
     IndexReaders readers,
     GitClones clones,
-    IConfiguration configuration)
+    IConfiguration configuration,
+    ILogger<ProjectOverview> logger)
 {
     /// <summary>The ceiling the folder coupling card pairs under, the co-change tool's own (#213).</summary>
     private readonly int _maxCommitPaths = CoChangeCeiling.From(configuration);
@@ -199,7 +200,7 @@ public sealed class ProjectOverview(
         var patterns = await control.ExcludedPathsAsync(project.Slug, cancellationToken);
         return await readers.OverIndexAsync(project.Slug, null,
             async (index, token) =>
-                new ExcludedPathSuggestionsDetail(await index.SuggestExcludedPathsAsync(patterns, token), null),
+                new ExcludedPathSuggestionsDetail(await index.SuggestExcludedPathsAsync(patterns, logger, token), null),
             problem => new ExcludedPathSuggestionsDetail([], problem.Explanation), cancellationToken);
     }
 

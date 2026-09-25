@@ -70,13 +70,14 @@ internal static class ExcludedPathSuggestions
     /// <param name="connection">Bound to the live index.</param>
     /// <param name="paths">How this project names its files (ADR-0006).</param>
     /// <param name="existing">The project's setting, whose patterns and files are not offered again.</param>
+    /// <param name="logger">Told, at debug, of a <c>.gitattributes</c> pattern skipped because RE2 refuses it.</param>
     /// <param name="cancellationToken">Threaded through every statement.</param>
     public static async Task<IReadOnlyList<ExcludedPathSuggestion>> SuggestAsync(DuckDBConnection connection,
-        ProjectPaths paths, IReadOnlyList<string> existing, CancellationToken cancellationToken)
+        ProjectPaths paths, IReadOnlyList<string> existing, ILogger logger, CancellationToken cancellationToken)
     {
         var accepted = new List<ExcludedPathSuggestion>();
         var candidates = new List<(string Pattern, SuggestionRule Rule, string Reason)>();
-        candidates.AddRange(await GitAttributesAsync(connection, cancellationToken));
+        candidates.AddRange(await GitAttributesAsync(connection, logger, cancellationToken));
         candidates.AddRange(_wellKnown.Select(p => (p, SuggestionRule.WellKnownName, "A well-known generated name")));
         foreach (var candidate in candidates)
             await OfferAsync(connection, existing, accepted, candidate, cancellationToken);
@@ -126,36 +127,54 @@ internal static class ExcludedPathSuggestions
     ///     slash at any depth below the file's folder and one with a slash relative to it, so the first
     ///     becomes <c>folder/**/pattern</c> and the second <c>folder/pattern</c>. An attribute unset
     ///     (<c>-</c>), unspecified (<c>!</c>) or set to false marks nothing, and a negated or quoted
-    ///     pattern is left alone rather than half understood.
+    ///     pattern is left alone rather than half understood. So is one RE2 refuses: the repository wrote
+    ///     it and nothing checked it, so it is skipped rather than failing every suggestion with it.
     /// </summary>
     private static async Task<List<(string, SuggestionRule, string)>> GitAttributesAsync(
-        DuckDBConnection connection, CancellationToken cancellationToken)
+        DuckDBConnection connection, ILogger logger, CancellationToken cancellationToken)
     {
-        await using var command = connection.Query("""
-                                                   SELECT f.qualified_path, f.name, l.content
-                                                   FROM files f JOIN lines l USING (file_id)
-                                                   WHERE lower(f.name) = '.gitattributes' AND f.skip_reason IS NULL
-                                                   ORDER BY f.qualified_path, l.line_number
-                                                   """, []);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var patterns = new List<(string, SuggestionRule, string)>();
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            string file = reader.Text("qualified_path");
-            string[] tokens = reader.Text("content").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length < 2 || tokens[0].StartsWith('#') || tokens[0].StartsWith('!')
-                || tokens[0].StartsWith('"')) continue;
-            if (tokens.Skip(1).Select(Marked).FirstOrDefault(a => a is not null) is not { } attribute) continue;
+        var patterns = new List<(string Glob, SuggestionRule, string Reason)>();
+        await using (var command = connection.Query("""
+                                                    SELECT f.qualified_path, f.name, l.content
+                                                    FROM files f JOIN lines l USING (file_id)
+                                                    WHERE lower(f.name) = '.gitattributes' AND f.skip_reason IS NULL
+                                                    ORDER BY f.qualified_path, l.line_number
+                                                    """, []))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                if (Declared(reader.Text("qualified_path"), reader.Text("name"), reader.Text("content")) is { } declared)
+                    patterns.Add(declared);
 
-            string folder = file[..^reader.Text("name").Length];
-            string pattern = tokens[0].TrimEnd('/');
-            string glob = pattern.Contains('/', StringComparison.Ordinal)
-                ? folder + pattern.TrimStart('/')
-                : folder + "**/" + pattern;
-            patterns.Add((glob, SuggestionRule.GitAttributes, $"{attribute} in {file}"));
+        var compiled = new List<(string, SuggestionRule, string)>(patterns.Count);
+        foreach (var pattern in patterns)
+        {
+            if (await ExcludedPaths.RefusedAsync(connection, pattern.Glob, cancellationToken) is not { } refused)
+                compiled.Add(pattern);
+            else if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Skipped the suggestion {Pattern} from {Reason}: {Refused}", pattern.Glob,
+                    pattern.Reason, refused);
         }
 
-        return patterns;
+        return compiled;
+    }
+
+    /// <summary>
+    ///     The glob one line of the <c>.gitattributes</c> at <paramref name="file" /> marks generated or
+    ///     vendored, with its reason, or null where the line marks nothing.
+    /// </summary>
+    private static (string Glob, SuggestionRule, string Reason)? Declared(string file, string name, string content)
+    {
+        string[] tokens = content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 2 || tokens[0].StartsWith('#') || tokens[0].StartsWith('!')
+            || tokens[0].StartsWith('"')) return null;
+        if (tokens.Skip(1).Select(Marked).FirstOrDefault(a => a is not null) is not { } attribute) return null;
+
+        string folder = file[..^name.Length];
+        string pattern = tokens[0].TrimEnd('/');
+        string glob = pattern.Contains('/', StringComparison.Ordinal)
+            ? folder + pattern.TrimStart('/')
+            : folder + "**/" + pattern;
+        return (glob, SuggestionRule.GitAttributes, $"{attribute} in {file}");
     }
 
     /// <summary>The linguist attribute <paramref name="token" /> sets, or null where it sets none.</summary>

@@ -454,7 +454,7 @@ public sealed partial class ControlDatabase : IDisposable
             // name the one at fault. A reversed range such as `[z-a]` is a class GLOB would accept
             // and RE2 refuses; stored, it would fail every overview load until someone removed it.
             foreach (string pattern in patterns)
-                if (await RefusedPatternAsync(connection, pattern, cancellationToken) is { } refused)
+                if (await ExcludedPaths.RefusedAsync(connection, pattern, cancellationToken) is { } refused)
                     return (null, $"'{pattern}' is not a pattern that can be matched: {refused}");
 
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -478,26 +478,6 @@ public sealed partial class ControlDatabase : IDisposable
 
         await BackupAsync();
         return (patterns, null);
-    }
-
-    /// <summary>Why RE2 refuses a pattern's translation, or null where it compiles.</summary>
-    private static async Task<string?> RefusedPatternAsync(DuckDBConnection connection, string pattern,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT regexp_matches('', $p, 'i')";
-        command.Parameters.Add(new DuckDBParameter("p", new ExcludedPaths([pattern]).Expression));
-        try
-        {
-            await command.ExecuteScalarAsync(cancellationToken);
-            return null;
-        }
-        catch (DuckDBException exception)
-        {
-            // Swallowed because it is the answer: the engine's own message is what was wrong with the
-            // pattern, and the caller refuses the save with it rather than storing the pattern.
-            return exception.Message;
-        }
     }
 
     /// <summary>Forgets one repository of a project. False when the project or the repository is unknown.</summary>

@@ -1,3 +1,4 @@
+using System.Globalization;
 using CodeExplorer.Index;
 using CodeExplorer.Reading;
 using Xunit;
@@ -90,6 +91,32 @@ public sealed class FileChangesTests : IDisposable
         Assert.Equal(new PeriodChanges(new DateOnly(1970, 4, 1), 0, 0, 1), changes.Periods[^1]);
         Assert.Equal(31, changes.Periods.Count);
         Assert.Equal(0, changes.Periods.Sum(p => p.Deleted));
+    }
+
+    [Fact]
+    public async Task A_window_before_the_epoch_is_drawn_under_a_culture_with_its_own_minus_sign()
+    {
+        await ChangesInFourMonthsAsync();
+        // Swedish writes a negative number with U+2212, which SQL does not read as a minus. The year's
+        // window starts in April 1969, so every period before January has negative epoch bounds. Read on
+        // the test's own thread, because the in-process server does not carry the test's culture over.
+        using var lease = await _host.OpenIndexAsync("alpha");
+        var window = await IndexQueries.WindowAsync(lease.Connection, 365, null, TestContext.Current.CancellationToken);
+        var culture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = new CultureInfo("sv-SE");
+        try
+        {
+            var changes = await OverviewQueries.FileChangesAsync(lease.Connection, new ProjectPaths(true, "one"),
+                new OverviewScope(365, null, ExcludedPaths.None), window, TestContext.Current.CancellationToken);
+
+            Assert.Equal(13, changes.Periods.Count);
+            Assert.Equal(new DateOnly(1969, 4, 1), changes.Periods[0].Start);
+            Assert.Equal(4, changes.Periods.Sum(p => p.Added));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = culture;
+        }
     }
 
     [Fact]

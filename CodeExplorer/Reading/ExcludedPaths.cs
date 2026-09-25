@@ -92,6 +92,30 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
     public string Expression => $"^(?:{string.Join("|", Patterns.Select(AsRegex))})$";
 
     /// <summary>
+    ///     Why RE2 refuses <paramref name="pattern" />'s translation, or null where it compiles. Asked of
+    ///     the engine that will run it, one pattern at a time so the answer can name the one at fault: a
+    ///     reversed range such as <c>[z-a]</c> is a class GLOB would accept and RE2 refuses.
+    /// </summary>
+    public static async Task<string?> RefusedAsync(DuckDBConnection connection, string pattern,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT regexp_matches('', $p, 'i')";
+        command.Parameters.Add(new DuckDBParameter("p", new ExcludedPaths([pattern]).Expression));
+        try
+        {
+            await command.ExecuteScalarAsync(cancellationToken);
+            return null;
+        }
+        catch (DuckDBException exception)
+        {
+            // Swallowed because it is the answer: the engine's own message is what was wrong with the
+            // pattern, and each caller acts on it — a save refuses the pattern, a suggestion skips it.
+            return exception.Message;
+        }
+    }
+
+    /// <summary>
     ///     One pattern as the RE2 expression matched against the qualified path with a <c>/</c> in
     ///     front. <c>*</c> is any run of characters and <c>?</c> any one, both crossing <c>/</c> as
     ///     GLOB's do, and a run of stars means what one does; a bracket is a class with <c>!</c>

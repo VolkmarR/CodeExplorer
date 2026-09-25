@@ -57,6 +57,29 @@ public sealed class ExcludedPathSuggestionsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_gitattributes_pattern_RE2_refuses_is_skipped_and_the_valid_lines_still_suggest()
+    {
+        await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                // A reversed range is a class GLOB would accept and RE2 refuses.
+                [".gitattributes"] = """
+                                     Generated/** linguist-generated
+                                     [z-a].txt linguist-generated
+                                     /vendor/** linguist-vendored
+                                     """,
+                ["Generated/A.cs"] = "a\n", ["vendor/lib.js"] = "v\n", ["src/Main.cs"] = "m\n"
+            }
+        });
+
+        var suggestions = await SuggestAsync("alpha");
+
+        Assert.Equal(["one/Generated/**", "one/vendor/**"],
+            suggestions.Where(s => s.Rule == SuggestionRule.GitAttributes).Select(s => s.Pattern));
+    }
+
+    [Fact]
     public async Task A_well_known_generated_name_is_suggested_only_where_the_index_holds_one()
     {
         await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
