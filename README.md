@@ -72,7 +72,8 @@ before the refusal is skipped by every refresh, and the token never leaves the s
 deleted and added again under its https or ssh URL.
 
 With authentication off, the server answers only the loopback host names `localhost`, `127.0.0.1`
-and `[::1]`, so a web page that rebinds its own name to 127.0.0.1 is refused with a 400. A configured
+and `[::1]`, so a web page that rebinds its own name to 127.0.0.1 is refused with a 400, as is a request with no
+Host header at all. A configured
 `AllowedHosts` replaces that list. With authentication on or off, `/api` and every MCP endpoint
 refuse with a 403 a request whose `Origin` header is present and is not the server's own, which is
 what stops a page on another site from writing to the server without reading the answer.

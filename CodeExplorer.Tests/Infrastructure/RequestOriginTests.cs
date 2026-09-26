@@ -48,6 +48,15 @@ public sealed class RequestOriginTests
     }
 
     [Fact]
+    public async Task With_no_tenant_a_request_without_a_host_is_refused()
+    {
+        // The framework's filter serves a missing Host by default, which is no loopback name either.
+        using var host = new TestHost(SearchEngine.Substring);
+
+        Assert.Equal(HttpStatusCode.BadRequest, await host.GetWithoutHostAsync("/api/projects"));
+    }
+
+    [Fact]
     public async Task A_configured_allowed_hosts_replaces_the_loopback_default()
     {
         using var host = new TestHost(SearchEngine.Substring, allowedHosts: "code.example");
