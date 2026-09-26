@@ -144,6 +144,21 @@ internal static class Re2
             !pattern.AsSpan(open).StartsWith("(?") || pattern.AsSpan(open).StartsWith("(?P<"));
 
     /// <summary>
+    ///     Whether a flag group in the pattern (<c>(?i)</c>, <c>(?mi:</c>) may turn case folding on. Any
+    ///     <c>i</c> among a group's flags counts, even after a <c>-</c> that turns it off. A caller that
+    ///     narrows on the answer gets only a weaker filter from a wrong yes, but a wrong no would drop
+    ///     a match.
+    /// </summary>
+    public static bool MayFoldCase(string pattern) =>
+        GroupOpenings(pattern).Any(open =>
+        {
+            if (!pattern.AsSpan(open).StartsWith("(?")) return false;
+            for (int i = open + 2; i < pattern.Length && (char.IsAsciiLetter(pattern[i]) || pattern[i] == '-'); i++)
+                if (pattern[i] == 'i') return true;
+            return false;
+        });
+
+    /// <summary>
     ///     The index of every <c>(</c> that opens a group, skipping the ones that are literals: escaped,
     ///     quoted by <c>\Q...\E</c> or inside a character class. A needle searched for in the raw text
     ///     would find <c>(?=</c> in <c>\(?=</c>, an optional literal parenthesis before an equals sign.
