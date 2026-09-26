@@ -40,7 +40,7 @@ var keyRing = builder.AddKeyRing();
 // than at first use because a half-configured tenant has to stop the server, not a request.
 var authentication = builder.AddAuthentication();
 // GHSA-qxhv-3r9w-q8h4: with no tenant, a page that rebinds its own name to 127.0.0.1 is refused.
-bool loopbackOnly = builder.AddLoopbackHosts(authentication);
+bool loopbackOnly = builder.RestrictHostsWithoutTenant(authentication);
 // Blob Storage when a container is configured and a folder on disk when none is (ADR-0004), so a
 // plain `dotnet run` with an empty appsettings needs no Azure and still keeps a durable copy.
 builder.Services.AddSingleton<DurableStore>();

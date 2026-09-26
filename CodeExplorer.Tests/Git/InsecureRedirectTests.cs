@@ -26,20 +26,27 @@ public sealed class InsecureRedirectTests : IDisposable
 {
     private const string Refusal = "cannot redirect from 'https' to 'http'";
 
+    /// <summary>One for the class: generating an RSA key is the slowest thing either test does.</summary>
+    private static readonly X509Certificate2 _certificate = SelfSigned();
+
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
 
     private readonly TcpListener _https = new(IPAddress.Loopback, 0);
     private readonly TcpListener _http = new(IPAddress.Loopback, 0);
-    private readonly X509Certificate2 _certificate = SelfSigned();
     private int _httpConnections;
 
     public InsecureRedirectTests()
     {
         _https.Start();
         _http.Start();
-        ServeRedirects();
-        CountConnections();
+        Accept(_https, Redirect);
+        // Any connection at all to the http side is a followed redirect; it is counted and hung up on.
+        Accept(_http, socket =>
+        {
+            Interlocked.Increment(ref _httpConnections);
+            socket.Dispose();
+        });
     }
 
     private string RemoteUrl => $"https://127.0.0.1:{((IPEndPoint)_https.LocalEndpoint).Port}/remote.git";
@@ -48,8 +55,7 @@ public sealed class InsecureRedirectTests : IDisposable
     {
         _https.Dispose();
         _http.Dispose();
-        _certificate.Dispose();
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        TestHost.DeleteTree(_root);
     }
 
     [Fact]
@@ -80,53 +86,29 @@ public sealed class InsecureRedirectTests : IDisposable
     }
 
     /// <summary>Accepts this test's own certificate and nothing else.</summary>
-    private bool AcceptTestCertificate(Certificate certificate, bool valid, string host) =>
+    private static bool AcceptTestCertificate(Certificate certificate, bool valid, string host) =>
         certificate is CertificateX509 { Certificate: { } presented }
         && presented.GetCertHashString() == _certificate.GetCertHashString();
 
     /// <summary>
-    ///     Answers every request with a redirect to the same path on the http listener, which is what a
+    ///     Answers a request with a redirect to the same path on the http listener, which is what a
     ///     remote moved to a plain-http host, or an attacker able to answer for the https one, sends.
     /// </summary>
-    private void ServeRedirects() => StartThread(() =>
+    private void Redirect(Socket socket)
     {
         try
         {
-            while (true)
-            {
-                var client = _https.AcceptTcpClient();
-                StartThread(() => Redirect(client));
-            }
-        }
-        catch (Exception ex) when (ex is ObjectDisposedException or SocketException or InvalidOperationException)
-        {
-            // Safe to swallow: Dispose stops the listener, which is what ends this loop.
-        }
-    });
+            using var tls = new SslStream(new NetworkStream(socket, ownsSocket: true));
+            tls.AuthenticateAsServer(_certificate);
+            // The request line names the path; the headers after it, up to the blank line, are not needed.
+            using var reader = new StreamReader(tls, Encoding.ASCII, leaveOpen: true);
+            string target = reader.ReadLine()?.Split(' ')[1] ?? "/";
+            while (!string.IsNullOrEmpty(reader.ReadLine())) { }
 
-    private void Redirect(TcpClient client)
-    {
-        try
-        {
-            using (client)
-            using (var tls = new SslStream(client.GetStream()))
-            {
-                tls.AuthenticateAsServer(_certificate);
-                var buffer = new byte[4096];
-                var request = new StringBuilder();
-                while (!request.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
-                {
-                    int read = tls.Read(buffer);
-                    if (read == 0) return;
-                    request.Append(Encoding.ASCII.GetString(buffer, 0, read));
-                }
-
-                string target = request.ToString().Split(' ')[1];
-                int port = ((IPEndPoint)_http.LocalEndpoint).Port;
-                tls.Write(Encoding.ASCII.GetBytes(
-                    $"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}{target}\r\n"
-                    + "Content-Length: 0\r\nConnection: close\r\n\r\n"));
-            }
+            int port = ((IPEndPoint)_http.LocalEndpoint).Port;
+            tls.Write(Encoding.ASCII.GetBytes(
+                $"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}{target}\r\n"
+                + "Content-Length: 0\r\nConnection: close\r\n\r\n"));
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException
                                        or AuthenticationException)
@@ -135,15 +117,19 @@ public sealed class InsecureRedirectTests : IDisposable
         }
     }
 
-    /// <summary>Counts every connection to the http side and hangs up; any at all is a followed redirect.</summary>
-    private void CountConnections() => StartThread(() =>
+    /// <summary>
+    ///     Hands every connection to <paramref name="handle" /> on a thread of its own, as
+    ///     <c>StalledRemoteTests</c> does and for its reason: libgit2 blocks the caller, so a handler
+    ///     waiting on the thread pool could wait behind the very test it answers.
+    /// </summary>
+    private static void Accept(TcpListener listener, Action<Socket> handle) => StartThread(() =>
     {
         try
         {
             while (true)
             {
-                using var socket = _http.AcceptSocket();
-                Interlocked.Increment(ref _httpConnections);
+                var socket = listener.AcceptSocket();
+                StartThread(() => handle(socket));
             }
         }
         catch (Exception ex) when (ex is ObjectDisposedException or SocketException or InvalidOperationException)
