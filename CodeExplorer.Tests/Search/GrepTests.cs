@@ -345,6 +345,58 @@ public sealed class GrepTests : IDisposable
         Assert.DoesNotContain("one/src/Orders.cs", text);
     }
 
+    /// <summary>
+    ///     RE2 folds <c>s</c>, <c>S</c> and <c>ſ</c> (U+017F) together, but DuckDB's <c>lower('ſ')</c> is
+    ///     still <c>ſ</c>, so a lower-cased prefilter dropped a file matching only through the long s
+    ///     (#266). The case-insensitive flag and an inline <c>(?i)</c> both have to admit it. The Kelvin
+    ///     sign needs nothing: <c>lower()</c> maps it to <c>k</c>, and the test pins that it stays found.
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts, "(?i)class\\s+W", true, "one/src/Long.cs")]
+    [InlineData(SearchEngine.Substring, "(?i)class\\s+W", true, "one/src/Long.cs")]
+    [InlineData(SearchEngine.Substring, "class\\s+W", false, "one/src/Long.cs")]
+    [InlineData(SearchEngine.Substring, "(?i)claſs\\s+W", true, "one/src/Plain.cs")]
+    [InlineData(SearchEngine.Fts, "(?i)kind\\s+W", true, "one/src/Kelvin.cs")]
+    [InlineData(SearchEngine.Substring, "(?i)kind\\s+W", true, "one/src/Kelvin.cs")]
+    public async Task Multiline_case_insensitive_prefilter_admits_what_re2_folds(SearchEngine engine, string query,
+        bool caseSensitive, string expected)
+    {
+        _host = new TestHost(engine);
+        await _host.IndexedProjectAsync("fold", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Long.cs"] = "claſs Widget\n",
+                ["src/Plain.cs"] = "class Widget\n",
+                ["src/Kelvin.cs"] = "Kind Widget\n"
+            }
+        });
+        await using var client = await _host.ConnectAsync("fold");
+
+        string text = await GrepAsync(client, new Dictionary<string, object?>
+            { ["query"] = query, ["multiline"] = true, ["caseSensitive"] = caseSensitive });
+
+        Assert.Contains($"{expected}  -  1 match", text);
+    }
+
+    [Theory]
+    [InlineData("(?i)class\\s+W", false, true)]
+    [InlineData("class\\s+W", false, true)]
+    [InlineData("class\\s+W", true, false)]
+    [InlineData("(?i)claſs\\s+W", true, true)]
+    [InlineData("(?i)kind\\s+W", false, false)]
+    public void The_multiline_prefilter_widens_for_the_long_s_only_when_case_folds(string query, bool caseSensitive,
+        bool widened)
+    {
+        var parameters = new List<DuckDB.NET.Data.DuckDBParameter>();
+
+        string sql = Search.GrepSearch.LiteralPrefilter(query, caseSensitive, parameters);
+
+        Assert.Contains("contains(", sql);
+        Assert.Equal(widened, sql.Contains("replace("));
+        Assert.DoesNotContain("ſ", (string)parameters.Single().Value!);
+    }
+
     [Theory]
     [InlineData("Update\\([^)]*Status\\s*=", "Update(")]
     [InlineData("abc|def", null)]

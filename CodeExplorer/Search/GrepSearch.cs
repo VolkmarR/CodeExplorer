@@ -446,15 +446,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
                    THEN len(list_filter(regexp_extract_all(content, $tokens, 1, $flags), v -> v <> '')) ELSE 0 END
               """
             : "len(regexp_extract_all(content, $q, 0, $flags))";
-        string literalFilter = "";
-        if (RequiredLiteral(query) is { } literal)
-        {
-            // The literal holds no newline, so a whole-file match must contain it within one line. Compared
-            // lower-cased regardless of case mode: a (?i) inside the pattern would otherwise defeat it.
-            literalFilter =
-                " AND EXISTS (SELECT 1 FROM lines l WHERE l.file_id = f.file_id AND contains(lower(l.content), $lit))";
-            matchParameters.Add(new DuckDBParameter("lit", literal.ToLowerInvariant()));
-        }
+        string literalFilter = LiteralPrefilter(query, request.CaseSensitive, matchParameters);
 
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = request.Filter.Sql(fileParameters);
@@ -652,6 +644,46 @@ public sealed partial class GrepSearch(IndexReaders readers)
                     text.Append(c);
             return text.ToString();
         }
+    }
+
+    /// <summary>
+    ///     The candidate filter a multiline search puts in front of RE2: a file is read whole only when one
+    ///     of its lines holds the literal the pattern requires (<see cref="RequiredLiteral" />), or every
+    ///     file is when there is none. Its parameter is added to <paramref name="parameters" />. Exposed
+    ///     for tests.
+    /// </summary>
+    internal static string LiteralPrefilter(string query, bool caseSensitive, List<DuckDBParameter> parameters)
+    {
+        if (RequiredLiteral(query) is not { } literal) return "";
+
+        // The literal holds no newline, so a whole-file match must contain it within one line. Compared
+        // lower-cased regardless of case mode: a (?i) inside the pattern would otherwise defeat it.
+        // lower() is not RE2's case folding, though: RE2 folds s, S and ſ (U+017F) together and lower('ſ')
+        // stays ſ, so a file matching only through the long s was dropped before RE2 saw it (#266). When
+        // the search folds case and the literal has an s, both sides map ſ to s. The Kelvin sign, RE2's
+        // other fold beyond ASCII, needs nothing: lower() already maps it to k.
+        string lowered = literal.ToLowerInvariant();
+        bool foldsLongS = (!caseSensitive || InlineCaseFolding(query)) && lowered.AsSpan().IndexOfAny('s', 'ſ') >= 0;
+        parameters.Add(new DuckDBParameter("lit", foldsLongS ? lowered.Replace('ſ', 's') : lowered));
+        string content = foldsLongS ? "replace(lower(l.content), 'ſ', 's')" : "lower(l.content)";
+        return $" AND EXISTS (SELECT 1 FROM lines l WHERE l.file_id = f.file_id AND contains({content}, $lit))";
+    }
+
+    /// <summary>
+    ///     Whether a flag group in the pattern — <c>(?i)</c>, <c>(?mi:</c> — may switch case folding on.
+    ///     Any <c>i</c> among a group's flags counts, even after a <c>-</c> that turns it off: a wrong yes
+    ///     only weakens the prefilter, a wrong no drops a file that matches.
+    /// </summary>
+    private static bool InlineCaseFolding(string pattern)
+    {
+        for (int i = pattern.IndexOf("(?", StringComparison.Ordinal); i >= 0;
+             i = pattern.IndexOf("(?", i + 2, StringComparison.Ordinal))
+        {
+            for (int j = i + 2; j < pattern.Length && (char.IsAsciiLetter(pattern[j]) || pattern[j] == '-'); j++)
+                if (pattern[j] == 'i') return true;
+        }
+
+        return false;
     }
 
     /// <summary>
