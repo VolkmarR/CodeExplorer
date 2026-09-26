@@ -9,8 +9,6 @@ namespace CodeExplorer.Reading;
 ///     an agent that is told lookbehind is unsupported by one tool and handed a parser error by another
 ///     will retry the same pattern on the other tool — and so that the excluded paths a save or a
 ///     suggestion checks tell a refused pattern from a broken connection the way a search does (#296).
-///     It sits in <c>Reading/</c> rather than <c>Search/</c> because <c>Control/</c> checks patterns too
-///     and may not reach <c>Search/</c> (ADR-0005).
 /// </summary>
 public static class Re2
 {
@@ -80,13 +78,15 @@ public static class Re2
     ///     A search runs it before any wrapped form of the caller's pattern, because a wrapper can
     ///     balance what the caller left unbalanced: <c>a)|(b</c> is no pattern, yet <c>(?:a)|(b)</c> is
     ///     one that matches something else and captures a group besides (#238).
-    ///     An empty subject, so the check costs a compile and no scan.
+    ///     An empty subject, so the check costs a compile and no scan. Compiled with the flags the pattern
+    ///     will run with: case folding widens every class RE2 compiles, so a pattern near RE2's size
+    ///     limit can compile without <c>i</c> and be refused with it.
     /// </summary>
     public static async Task<DuckDBException?> RejectionAsync(DuckDBConnection connection, string pattern,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string flags = "")
     {
-        await using var command = connection.Query("SELECT regexp_matches('', $pattern)",
-            [new DuckDBParameter("pattern", pattern)]);
+        await using var command = connection.Query("SELECT regexp_matches('', $pattern, $flags)",
+            [new DuckDBParameter("pattern", pattern), new DuckDBParameter("flags", flags)]);
         try
         {
             await command.ScalarAsync(cancellationToken);

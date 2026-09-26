@@ -103,10 +103,10 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
             return $"the range {reversed} runs backwards, so no character falls in it.";
 
         // The same check a search makes, so a failure that is not RE2 refusing the pattern throws
-        // instead of reaching the operator as "your pattern is invalid" (#296). Compiled without the
-        // 'i' that Matching passes: case folding changes what a pattern matches, not whether it parses.
-        return (await Re2.RejectionAsync(connection, new ExcludedPaths([pattern]).Expression, cancellationToken))
-            ?.Message;
+        // instead of reaching the operator as "your pattern is invalid" (#296). With the 'i' that
+        // Matching passes, so what is compiled is what every overview read will run.
+        return (await Re2.RejectionAsync(connection, new ExcludedPaths([pattern]).Expression, cancellationToken,
+            "i"))?.Message;
     }
 
     /// <summary>
