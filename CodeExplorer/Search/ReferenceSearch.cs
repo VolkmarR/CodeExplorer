@@ -158,7 +158,8 @@ public sealed class ReferenceSearch(IndexReaders readers)
 
         var matchParameters = new List<DuckDBParameter>
         {
-            new("q", pattern), new("occurrence", SymbolText.OccurrencePattern(symbol))
+            new("q", pattern), new("occurrence", SymbolText.OccurrencePattern(symbol)),
+            new("sentinel", SymbolText.OccurrenceSentinel(symbol))
         };
         string literally = SearchQuery.Literally(symbol, matchParameters);
         // What a match is, spelled once for the scan and for the coverage count, so the two cannot drift.
@@ -202,11 +203,13 @@ public sealed class ReferenceSearch(IndexReaders readers)
                       -- 73 ms over Init's 3,296, against 1-2 ms for the \b pattern it replaced; the
                       -- whole statement went from 80 to 89 ms and from 77 to 108 ms. Tolerable because
                       -- it extracts from `hits` and never from `lines`. Not $q, whose end boundary eats
-                      -- the character the next occurrence starts on: a candidate counts when the word
-                      -- character it captured after itself is none (SymbolText.OccurrencePattern).
+                      -- the character the next occurrence starts on: the form grep and list_matches
+                      -- count with, without its groups, over the line and one whole occurrence more
+                      -- that keeps every match on a word start and is taken off again
+                      -- (SymbolText.OccurrencePattern, #294).
                       per_file AS (
                           SELECT file_id, qualified_path, extension, count(*) AS n,
-                                 sum(len(list_filter(regexp_extract_all(content, $occurrence, 1), v -> v = ''))) AS occurrences
+                                 sum(len(regexp_extract_all(content || $sentinel, $occurrence)) - 1) AS occurrences
                           FROM hits GROUP BY ALL),
                       totals AS (
                           SELECT count(*) AS total_files, coalesce(sum(n), 0) AS total_lines,

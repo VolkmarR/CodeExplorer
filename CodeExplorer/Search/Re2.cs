@@ -1,4 +1,3 @@
-using CodeExplorer.Language;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
@@ -72,17 +71,6 @@ internal static class Re2
             : "");
 
     /// <summary>
-    ///     The caller's pattern as a whole word: no letter, digit or underscore immediately before or
-    ///     after the match, the way <c>grep -w</c> reads it and <see cref="CodeExplorer.Language.SymbolText.IsWordChar" />
-    ///     defines one. Not <c>\b</c>, which RE2 reads as ASCII: it found <c>bar</c> inside
-    ///     <c>fooÄbar</c> and nothing in front of <c>Ändern</c> (#235). The boundaries consume a
-    ///     character, so this tests a line and must not count on one; <see cref="WholeWordTokens" />
-    ///     counts.
-    /// </summary>
-    public static string WholeWord(string pattern) =>
-        $"{SymbolText.Re2WordStart}(?:{pattern}){SymbolText.Re2WordEnd}";
-
-    /// <summary>
     ///     Compiles the caller's pattern on its own, throwing the <see cref="DuckDBException" /> that
     ///     <see cref="IsPatternRejection" /> recognises when RE2 refuses it. Run before any wrapped form
     ///     is, because a wrapper can balance what the caller left unbalanced: <c>a)|(b</c> is no pattern,
@@ -96,21 +84,6 @@ internal static class Re2
             [new DuckDBParameter("pattern", pattern)]);
         await command.ScalarAsync(cancellationToken);
     }
-
-    /// <summary>
-    ///     The caller's pattern as a whole word, written so that every character of the text belongs to
-    ///     exactly one match: either the caller's pattern and the boundary after it, with group 1 the
-    ///     caller's match and group <c>n + 1</c> the caller's group <c>n</c>; or a stretch between
-    ///     matches, with group 1 empty.
-    ///     <see cref="WholeWord" /> alone cannot extract. Its end boundary consumes the character after
-    ///     a match, so in <c>bar,bar</c> the second had lost the comma its start boundary needed, and a
-    ///     line break shared the same way lost the match on the next line. Here a start boundary is never
-    ///     tested: a word is eaten whole together with the character after it, a character that is not a
-    ///     word character is eaten alone, and so the caller's pattern is only ever tried where a word
-    ///     could start — which is what a lookbehind would have said, in the engine that has none.
-    /// </summary>
-    public static string WholeWordTokens(string pattern) =>
-        $"({pattern}){SymbolText.Re2WordEnd}|{SymbolText.Re2WordChar}+{SymbolText.Re2NonWordChar}?|{SymbolText.Re2NonWordChar}";
 
     /// <summary>
     ///     The pattern with a <c>\Q</c> it leaves open closed by <c>\E</c>, which RE2 reads the same:
