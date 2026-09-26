@@ -1,6 +1,5 @@
 using System.Text.Json;
 using CodeExplorer.Index;
-using CodeExplorer.Reading;
 using CodeExplorer.Search;
 using ModelContextProtocol.Client;
 using Xunit;
@@ -200,14 +199,13 @@ public sealed class ReferenceTests : IDisposable
 
         string plans = _host!.ScratchFile("reference-plans");
         string scoped;
-        using (QueryPlan.Recording(plans))
+        using (_host.RecordPlans(plans))
             scoped = await FindAsync(client,
                 new Dictionary<string, object?> { ["symbol"] = "OrderStatus", ["repo"] = "two" });
 
         Assert.Contains("your filters hid 2 further matching files", scoped);
-        // Identified by the symbol bound into them, since the recording is process-wide: the other
-        // searches for this name are in this class, whose tests run one at a time, and no other class
-        // runs a reference search for it.
+        // Identified by the symbol bound into them. The recording takes only this server's reads
+        // (#286), and the other searches for this name are in this class, whose tests run one at a time.
         string dump = Assert.Single(Directory.EnumerateFiles(plans, "*ReferenceSearch-QueryAsync.sql.txt"),
             file => File.ReadAllText(file).Contains("OrderStatus", StringComparison.Ordinal));
         // One statement is not yet one scan: a CTE the planner inlined into both of its readers would

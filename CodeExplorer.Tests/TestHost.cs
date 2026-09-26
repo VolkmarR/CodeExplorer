@@ -326,6 +326,13 @@ public sealed class TestHost : IDisposable
     /// </summary>
     public string ScratchFile(string name) => Path.Combine(DataDirectory, name);
 
+    /// <summary>
+    ///     Records the query plan of every read this host makes into <paramref name="directory" /> until
+    ///     disposed, and of no other host's: the classes running beside this one read fixtures with the
+    ///     same repository and file names (#286).
+    /// </summary>
+    public IDisposable RecordPlans(string directory) => QueryPlan.Recording(directory, DataDirectory);
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     public void Dispose()

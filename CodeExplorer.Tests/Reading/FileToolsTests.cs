@@ -787,7 +787,7 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
         var client = await StartAsync();
         string plans = _host.ScratchFile("tree-plans");
         string reply;
-        using (QueryPlan.Recording(plans))
+        using (_host.RecordPlans(plans))
             reply = await ListTreeAsync(client, "", 1);
 
         Assert.Contains("one/", reply, StringComparison.Ordinal);
@@ -826,7 +826,7 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
 
         string plans = _host.ScratchFile("read-plans");
         string reply;
-        using (QueryPlan.Recording(plans))
+        using (_host.RecordPlans(plans))
             reply = await HistoryReadAsync(client, entries);
 
         Assert.Equal(string.Join("\n", singles), reply);

@@ -1,4 +1,3 @@
-using CodeExplorer.Reading;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -350,7 +349,7 @@ public sealed class PathLineageTests(PathLineageFixture fixture) : IClassFixture
         string plans = _host.ScratchFile("plans");
         await using var client = await _host.ConnectAsync("planned");
         string reply;
-        using (QueryPlan.Recording(plans))
+        using (_host.RecordPlans(plans))
             reply = await TestHost.CallAsync(client, "git_log",
                 new Dictionary<string, object?> { ["path"] = "planned/e/Thing.cs" });
 

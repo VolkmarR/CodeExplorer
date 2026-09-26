@@ -19,16 +19,22 @@ namespace CodeExplorer.Reading;
 internal static class QueryPlan
 {
     /// <summary>
-    ///     Every directory a plan is written to right now: the environment variable's for the life of
-    ///     the process, and one per <see cref="Recording" /> while it is held. Replaced whole under
-    ///     <see cref="_gate" /> and read without it, so the check on every query stays one read.
+    ///     Where a plan is written to right now, and for which reads: the environment variable's
+    ///     directory takes every read for the life of the process, and each <see cref="Recording" />
+    ///     takes its own server's while it is held. Replaced whole under <see cref="_gate" /> and read
+    ///     without it, so the check on every query stays one read.
     /// </summary>
-    private static volatile string[] _directories =
-        Environment.GetEnvironmentVariable("CODEEXPLORER_EXPLAIN_DIR") is { } fromEnvironment ? [fromEnvironment] : [];
+    private static volatile Target[] _targets =
+        Environment.GetEnvironmentVariable("CODEEXPLORER_EXPLAIN_DIR") is { } fromEnvironment
+            ? [new Target(fromEnvironment, null)]
+            : [];
 
     private static readonly Lock _gate = new();
 
-    public static bool Enabled => _directories.Length > 0;
+    /// <summary>Numbers every dump, so that no two share a name. See <see cref="Stamp" />.</summary>
+    private static long _sequence;
+
+    public static bool Enabled => _targets.Length > 0;
 
     /// <summary>
     ///     The same switch, held on for the length of one test and pointed at
@@ -36,28 +42,43 @@ internal static class QueryPlan
     ///     once, when this type is initialised, so setting it would only work for a test that happened
     ///     to run before the assembly's first index read, and nothing orders that. Asserting the query
     ///     count through some other counter would be asserting about a mechanism no developer uses.
-    ///     Process-wide while it is held, like the variable, so a dump written during it may belong to
-    ///     any read the process was making. A test therefore identifies its own dumps by the parameters
-    ///     written into them rather than by counting the files.
-    ///     Recordings overlap, because test classes run in parallel, so each adds its directory and
-    ///     removes only its own. A single slot that each one saved and restored let the first to finish
-    ///     switch recording off under the second, whose own dump was then never written.
+    ///     It records only the reads of indexes under <paramref name="dataDirectory" />, the test's own
+    ///     server's. Every test class runs a server of its own in this one process, in parallel, and a
+    ///     recording that took every read in the process let a test count another class's statements as
+    ///     its own whenever their parameters matched: the fixtures share repository and file names
+    ///     (#286). The variable keeps taking everything, because a developer's one server is all there is.
+    ///     Recordings overlap for the same reason, so each adds its entry and removes only its own. A
+    ///     single slot that each one saved and restored let the first to finish switch recording off
+    ///     under the second, whose own dump was then never written.
     /// </summary>
-    internal static IDisposable Recording(string directory)
+    internal static IDisposable Recording(string directory, string dataDirectory)
     {
-        lock (_gate) _directories = [.. _directories, directory];
-        return new Restore(directory);
+        var target = new Target(directory, Path.TrimEndingDirectorySeparator(Path.GetFullPath(dataDirectory))
+                                           + Path.DirectorySeparatorChar);
+        lock (_gate) _targets = [.. _targets, target];
+        return new Restore(target);
     }
 
-    private sealed class Restore(string directory) : IDisposable
+    /// <param name="Directory">Where the dumps go.</param>
+    /// <param name="Scope">
+    ///     The data directory whose reads it takes, ending in a separator; null for every read. Matched
+    ///     against the connection's data source, the instance file under that directory's indexes.
+    /// </param>
+    private sealed record Target(string Directory, string? Scope)
+    {
+        public bool Takes(string dataSource) =>
+            Scope is null || dataSource.StartsWith(Scope, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class Restore(Target target) : IDisposable
     {
         public void Dispose()
         {
             lock (_gate)
             {
-                var remaining = _directories.ToList();
-                remaining.Remove(directory);
-                _directories = [.. remaining];
+                var remaining = _targets.ToList();
+                remaining.Remove(target);
+                _targets = [.. remaining];
             }
         }
     }
@@ -81,7 +102,8 @@ internal static class QueryPlan
 
     /// <summary>
     ///     Runs <c>EXPLAIN ANALYZE</c> on <paramref name="sql" /> and writes it, with the statement and
-    ///     its parameters, to a file named for <paramref name="label" /> and the time.
+    ///     its parameters, to a file named by <see cref="Stamp" />, into the directory of every recording that takes a
+    ///     read of <paramref name="connection" />'s instance file.
     ///     The parameters are rebuilt rather than reused: a <see cref="DuckDBParameter" /> belongs to
     ///     the command it was added to, and handing the same instances to a second command is how this
     ///     would turn into a bug in the thing it is meant to be measuring.
@@ -92,13 +114,13 @@ internal static class QueryPlan
         IReadOnlyList<DuckDBParameter> parameters, CancellationToken cancellationToken)
     {
         // One snapshot for the whole dump, so a recording that ends half-way cannot split it.
-        string[] directories = _directories;
+        string dataSource = connection.DataSource;
+        string[] directories = [.. _targets.Where(target => target.Takes(dataSource)).Select(target => target.Directory)];
         if (directories.Length == 0) return;
         // DuckDB writes a profile to one path, so it goes to the first and is copied to the rest.
         string directory = directories[0];
 
-        string stamp = string.Create(CultureInfo.InvariantCulture,
-            $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Safe(label)}");
+        string stamp = Stamp(label);
         string text;
         try
         {
@@ -166,6 +188,17 @@ internal static class QueryPlan
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    /// <summary>
+    ///     The name of one dump: the time, a number no other dump in the process has, and the label.
+    ///     The time and the label alone gave two reads of one method in one millisecond the same name,
+    ///     so the second overwrote the first, and they sorted two methods in one millisecond by name
+    ///     rather than by the order they ran. Nine digits, so the names still sort by number past any
+    ///     run a process makes.
+    /// </summary>
+    internal static string Stamp(string label) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{Interlocked.Increment(ref _sequence):D9}-{Safe(label)}");
 
     private static string Safe(string label) =>
         string.Concat(label.Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '-'));

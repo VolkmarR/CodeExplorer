@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 using CodeExplorer.Infrastructure;
-using CodeExplorer.Reading;
 using CodeExplorer.Search;
 using Xunit;
 
@@ -435,7 +434,7 @@ public sealed class CommitTests(CommitFixture fixture) : IClassFixture<CommitFix
         string plans = _host.ScratchFile("change-log-plans");
         using var http = _host.CreateClient();
         ChangeLogAnswer? page;
-        using (QueryPlan.Recording(plans))
+        using (_host.RecordPlans(plans))
             page = await http.GetFromJsonAsync<ChangeLogAnswer>("/api/projects/paged/commits?repository=paged&pageSize=1",
                 TestContext.Current.CancellationToken);
 
