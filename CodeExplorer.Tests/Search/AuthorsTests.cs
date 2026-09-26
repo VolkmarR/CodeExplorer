@@ -1,5 +1,4 @@
 using CodeExplorer.Infrastructure;
-using CodeExplorer.Reading;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -117,12 +116,12 @@ public sealed class AuthorsTests(AuthorsFixture fixture) : IClassFixture<Authors
 
         string authorsPlans = _host.ScratchFile("authors-plans");
         string authors;
-        using (QueryPlan.Recording(authorsPlans))
+        using (_host.RecordPlans(authorsPlans))
             authors = await TestHost.CallAsync(client, "authors",
                 new Dictionary<string, object?> { ["repo"] = "tallied", ["limit"] = 1 });
         string logPlans = _host.ScratchFile("log-plans");
         string log;
-        using (QueryPlan.Recording(logPlans))
+        using (_host.RecordPlans(logPlans))
             log = await TestHost.CallAsync(client, "git_log",
                 new Dictionary<string, object?> { ["repo"] = "tallied", ["author"] = "example", ["limit"] = 1 });
 
@@ -136,7 +135,7 @@ public sealed class AuthorsTests(AuthorsFixture fixture) : IClassFixture<Authors
         // against — the one case the separate count is kept for.
         string missPlans = _host.ScratchFile("miss-plans");
         string miss;
-        using (QueryPlan.Recording(missPlans))
+        using (_host.RecordPlans(missPlans))
             miss = await TestHost.CallAsync(client, "git_log",
                 new Dictionary<string, object?> { ["repo"] = "tallied", ["author"] = "nobody" });
         Assert.Contains("2 addresses recorded", miss, StringComparison.Ordinal);
@@ -145,8 +144,8 @@ public sealed class AuthorsTests(AuthorsFixture fixture) : IClassFixture<Authors
 
     /// <summary>
     ///     The commit-log reads of the scoped repository a recording caught, by method, in the order
-    ///     they ran. Filtered by the scope's parameter because the switch is process-wide and another
-    ///     test's reads may land in the same directory.
+    ///     they ran. The recording takes only this server's reads (#286); filtered by the scope's
+    ///     parameter as well, because the server holds the fixture's other projects too.
     /// </summary>
     private static List<string> ReadsOfCommits(string plans) =>
         Directory.EnumerateFiles(plans, "*CommitLogQueries-*.sql.txt")
