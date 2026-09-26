@@ -132,6 +132,11 @@ public sealed class LanguageAnalyzerTests
     [InlineData("cs", "    #endregion MAX_ORDERS")]
     [InlineData("cs", "#error Can't build MAX_ORDERS")]
     [InlineData("cs", "#warning MAX_ORDERS isn't set")]
+    // Whitespace may stand between the `#` and the directive's name, and it is still the directive
+    // (#295).
+    [InlineData("cs", "# region Don't touch MAX_ORDERS")]
+    [InlineData("cs", "  #\tendregion MAX_ORDERS")]
+    [InlineData("prg", "#  REGION Don't touch MAX_ORDERS")]
     [InlineData("prg", "#region MAX_ORDERS")]
     [InlineData("prg", "#REGION Don't touch MAX_ORDERS")]
     [InlineData("prg", "#endregion MAX_ORDERS")]
@@ -145,6 +150,7 @@ public sealed class LanguageAnalyzerTests
     // under X#'s case rule as much as under C#'s.
     [InlineData("cs", "#regional MAX_ORDERS")]
     [InlineData("prg", "#REGIONAL MAX_ORDERS")]
+    [InlineData("cs", "# regional MAX_ORDERS")]
     public void A_directive_word_is_matched_whole(string extension, string line) =>
         Assert.NotEqual(ReferenceKind.Comment, Kind(extension, line, "MAX_ORDERS"));
 
@@ -405,10 +411,35 @@ public sealed class LanguageAnalyzerTests
         // end of the line and turned the call after it into a mention (#240).
         Assert.Equal(ReferenceKind.Call, Kind("cs", "if (c == '\"') return ParseQuoted(reader);", "ParseQuoted"));
         Assert.Equal(ReferenceKind.Call, Kind("cs", "if (c == '\\'') return ParseQuoted(reader);", "ParseQuoted"));
-        // It closes on its own line: a stray apostrophe does not carry to the next.
-        Assert.Equal([ReferenceKind.StringLiteral, ReferenceKind.Call],
+        // A stray apostrophe opens nothing, on its own line or the next (#295).
+        Assert.Equal([ReferenceKind.Call, ReferenceKind.Call],
             KindsIn("cs", "x = 'advance(1)\nadvance(2);", "advance"));
     }
+
+    /// <summary>
+    ///     #295: a char literal is one character or one escape between two apostrophes, so an
+    ///     apostrophe with no closer in that shape is not one. Read as an opener, it ran to the end of
+    ///     the line and every name after it was taken for literal text.
+    /// </summary>
+    [Theory]
+    [InlineData("x = it's Advance(1);")]
+    [InlineData("x = 'ab' + Advance(1);")]
+    [InlineData("x = '' + Advance(1);")]
+    [InlineData("x = '\\' + Advance(1);")]
+    [InlineData("x = ' ; Advance(1); var c = 'y';")]
+    public void An_apostrophe_without_a_closer_in_char_shape_hides_nothing(string line) =>
+        Assert.Equal(ReferenceKind.Call, Kind("cs", line, "Advance"));
+
+    [Theory]
+    [InlineData("var c = 'A';", "A")]
+    [InlineData("f('\\'', 'A');", "A")]
+    [InlineData("f('\\\\', 'A');", "A")]
+    [InlineData("var c = '\\n';", "n")]
+    [InlineData("var c = '\\x41';", "x41")]
+    [InlineData("var c = '\\u0041';", "u0041")]
+    [InlineData("var c = '\\U00000041';", "U00000041")]
+    public void Real_char_literals_are_still_literals(string line, string symbol) =>
+        Assert.Equal(ReferenceKind.StringLiteral, Kind("cs", line, symbol));
 
     [Theory]
     // At the top level a leading `*` is a multiplication or a generator method, and a `/* */`

@@ -51,6 +51,15 @@ public sealed record StringDelimiter(string Open, string Close, StringEscape Esc
     ///     fixed closer read one opened with four as closed by the <c>"""</c> it was written to hold.
     /// </summary>
     public bool OpenerRepeats { get; init; }
+
+    /// <summary>
+    ///     Whether this is a char literal, holding one character or one backslash escape: C#'s
+    ///     <c>'A'</c>, <c>'\''</c>, <c>'A'</c>. Its opener opens it only where a closer follows in
+    ///     that shape, so a stray apostrophe — <c>it's</c> in code the scan misreads, or a quote the
+    ///     line never closes — opens nothing, where read as an opener it took every name after it on
+    ///     the line for literal text (#295).
+    /// </summary>
+    public bool HoldsOneCharacter { get; init; }
 }
 
 /// <summary>
@@ -163,7 +172,8 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     ///     rule: a directive whose line is prose, such as the label after <c>#region</c>. The whole line
     ///     is then a comment and no literal opens in it — an apostrophe in <c>#region Don't touch</c>
     ///     opened a char literal, so a name in the label read as a string with one and as code
-    ///     without (#265).
+    ///     without (#265). Whitespace may stand between the punctuation in front of the word and the
+    ///     word, so <c># region</c> is <c>#region</c> as the compiler reads it (#295).
     /// </summary>
     public IReadOnlyList<string> LineStartComments { get; init; } = [];
 

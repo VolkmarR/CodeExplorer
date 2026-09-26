@@ -809,14 +809,49 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     compiler directive that begins the way a comment does opens none — Delphi's <c>{$IFDEF}</c>
     ///     against its <c>{ }</c> comment — and the exemption is checked wherever the opener is found
     ///     and not only at the start of a line, because a directive is written after code too.
+    ///     A char literal opens only where it closes in its own shape, so a stray apostrophe opens
+    ///     nothing rather than taking the rest of the line (#295).
     /// </summary>
     private int OpenerAt(string line, int index)
     {
         // A loop rather than a LINQ predicate: this runs once per candidate character of every line.
         for (int i = 0; i < _forms.Length; i++)
-            if (At(line, index, _forms[i].Form.Open))
-                return _forms[i].Prose && IsDirectiveAt(line, index) ? -1 : i;
+        {
+            var form = _forms[i].Form;
+            if (!At(line, index, form.Open)) continue;
+            if (form.HoldsOneCharacter && !ClosesAsOneCharacter(line, index + form.Open.Length, form.Close))
+                continue;
+            return _forms[i].Prose && IsDirectiveAt(line, index) ? -1 : i;
+        }
+
         return -1;
+    }
+
+    /// <summary>
+    ///     The longest run of hex digits an escape carries: C#'s <c>\U</c> takes eight, <c>\u</c> four
+    ///     and <c>\x</c> up to four. The letter is not checked against the count — a literal this
+    ///     accepts and the compiler would not is still a literal, and nothing it hides was code.
+    /// </summary>
+    private const int _maxEscapeDigits = 8;
+
+    /// <summary>
+    ///     Whether what starts at <paramref name="body" /> is one character or one backslash escape
+    ///     and then <paramref name="close" />.
+    /// </summary>
+    private static bool ClosesAsOneCharacter(string line, int body, string close)
+    {
+        if (body >= line.Length || At(line, body, close)) return false;
+        int at = body + 1;
+        if (line[body] == '\\')
+        {
+            // The escaped character, which may be the closer itself, and then its digits if any.
+            if (at >= line.Length) return false;
+            at++;
+            int digitsEnd = Math.Min(line.Length, at + _maxEscapeDigits);
+            while (at < digitsEnd && char.IsAsciiHexDigit(line[at])) at++;
+        }
+
+        return At(line, at, close);
     }
 
     /// <summary>
@@ -953,7 +988,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     left behind and not a miss, and the word after it must not run on — <c>implementations</c>
     ///     is not <c>implementation</c>.
     /// </summary>
-    private bool PhraseAt(string line, int index, string phrase)
+    private bool PhraseAt(string line, int index, ReadOnlySpan<char> phrase)
     {
         int at = index;
         for (int i = 0; i < phrase.Length; i++)
@@ -1522,11 +1557,28 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         for (int i = 0; i < _lineStartComments.Length; i++)
         {
             string opener = _lineStartComments[i];
-            if (SymbolText.IsWordChar(opener[^1]) ? PhraseAt(line, start, opener) : At(line, start, opener))
+            if (SymbolText.IsWordChar(opener[^1]) ? DirectiveWordAt(line, start, opener) : At(line, start, opener))
                 return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    ///     Whether this word form stands here, where the punctuation in front of its word may be
+    ///     followed by whitespace: C# and X# both allow <c># region</c> for <c>#region</c>, and read as
+    ///     anything else its label was code, so an apostrophe in it opened a char literal (#295).
+    /// </summary>
+    private bool DirectiveWordAt(string line, int index, string opener)
+    {
+        int sigil = 0;
+        while (sigil < opener.Length && !SymbolText.IsWordChar(opener[sigil])) sigil++;
+        if (sigil == 0) return PhraseAt(line, index, opener);
+        // Spans, because this is asked of every line a scan begins outside everything.
+        if (!line.AsSpan(index).StartsWith(opener.AsSpan(0, sigil), StringComparison.Ordinal)) return false;
+        int word = index + sigil;
+        while (word < line.Length && char.IsWhiteSpace(line[word])) word++;
+        return PhraseAt(line, word, opener.AsSpan(sigil));
     }
 
     /// <summary>One character against another, under the profile's own case rule.</summary>
