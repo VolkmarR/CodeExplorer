@@ -128,7 +128,6 @@ public sealed class FileDeclarations(IndexReaders readers)
             // the candidates, then the lines above them — the file was scanned twice and every
             // candidate's text crossed the boundary twice.
             var declarations = new List<FileDeclaration>();
-            bool scanCutShort = false;
             // Declarations seen, including the ones the offset skips. The skipping happens here and not
             // in SQL because a candidate line is only a declaration once its analyser has placed it —
             // the engine cannot count what it cannot classify, so the page is taken from the walk.
@@ -159,16 +158,12 @@ public sealed class FileDeclarations(IndexReaders readers)
                     // One past the ceiling tells a list that ends here from one cut short, and it is
                     // also where the reading stops: the lines below cannot reach the answer, and
                     // placing each of them costs a regex and a walk of the line.
-                    if (declarations.Count <= MaxDeclarations) return true;
-                    scanCutShort = true;
-                    return false;
+                    return declarations.Count < Cap.Rows(MaxDeclarations);
                 }, token);
             }
 
-            if (scanCutShort) declarations.RemoveAt(declarations.Count - 1);
-
             return new DeclarationsResult(file.QualifiedPath, name,
                 profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled,
-                scanCutShort, offset, declarations);
+                Cap.Trim(declarations, MaxDeclarations), offset, declarations);
         }, cancellationToken);
 }
