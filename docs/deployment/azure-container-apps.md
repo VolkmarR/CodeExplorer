@@ -289,4 +289,6 @@ entries and 100,000 lines or 16 million characters across them, a `multiline` gr
 of file content beyond its first file, and a glob or path term at most 256 characters, 32 terms to an
 argument. Globs keep their meaning but run as RE2, so an agent whose glob or `exclude`
 held a query for minutes gets its answer, and one that passed a larger depth or more entries is told
-the limit and how to split the call.
+the limit and how to split the call. The first with #297 also bounds a `multiline` grep's count, at
+64 MiB of candidate files: a broad pattern past that answers with a lower bound that says so, instead
+of reading the whole index on one core.
