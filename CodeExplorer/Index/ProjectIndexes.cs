@@ -200,6 +200,10 @@ public sealed partial class ProjectIndexes : IDisposable
     // DiscardCount; kept for the life of the process like the gates, and bounded the same way.
     private readonly ConcurrentDictionary<string, long> _discards = new(StringComparer.Ordinal);
 
+    // The projects whose live index a refresh restored without its BM25 index and has not yet swapped
+    // out (#290); see SettleRestoreAsync. Written under the writer gate, like the count above.
+    private readonly ConcurrentDictionary<string, byte> _withoutFullText = new(StringComparer.Ordinal);
+
     // One gate per project, kept for the life of the process: the count is bounded by the control
     // database, and a gate holds nothing but a reader count.
     private readonly ConcurrentDictionary<string, SwapGate> _swapGates = new(StringComparer.Ordinal);
@@ -367,9 +371,7 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     outside the writer gate is the fast path; <see cref="RestoreAsync" /> asks again inside it.
     /// </summary>
     public Task RestoreIfAbsentAsync(string slug, CancellationToken cancellationToken) =>
-        HasIndex(slug)
-            ? Task.CompletedTask
-            : RestoreAsync(slug, FtsAvailable, replace: false, static _ => { }, cancellationToken);
+        HasIndex(slug) ? Task.CompletedTask : RestoreAsync(slug, FtsAvailable, static _ => { }, cancellationToken);
 
     /// <summary>
     ///     The restore a refresh begins with on a disk without the project's file (#229), reported
@@ -377,37 +379,96 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     replaces this index and builds its own full-text index, so building one here too paid the
     ///     most expensive phase of a large refresh twice. Until the swap the restored index is searched
     ///     by substring scan, which <c>index_info</c> says: every line is there, only ranked differently.
-    ///     True when that is what it put in place, which a refresh that then fails before its swap
-    ///     hands to <see cref="RestoreWithFullTextAsync" />. <paramref name="report" /> is told when the
-    ///     restore starts, which is what puts a failed restore under its own phase.
+    ///     The restore is remembered as provisional until the swap replaces it, and a refresh that ends
+    ///     without one hands it to <see cref="SettleRestoreAsync" />. <paramref name="report" /> is told
+    ///     when the restore starts, which is what puts a failed restore under its own phase.
     /// </summary>
-    public async Task<bool> RestoreForRefreshAsync(string slug, Action<RefreshProgress> report,
-        CancellationToken cancellationToken) =>
-        !HasIndex(slug) && await RestoreAsync(slug, fullText: false, replace: false, report, cancellationToken) && FtsAvailable;
+    public async Task RestoreForRefreshAsync(string slug, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
+    {
+        if (!HasIndex(slug) && await RestoreAsync(slug, false, report, cancellationToken) && FtsAvailable)
+            _withoutFullText[slug] = 0;
+    }
 
     /// <summary>
-    ///     Replaces an index <see cref="RestoreForRefreshAsync" /> restored without its BM25 index with a
-    ///     restore that has one, for a refresh that failed before its shadow could replace it. Left as it
-    ///     was, the project would be searched by substring scan until a later refresh succeeded, which on
-    ///     a disk that is not wiped can be indefinitely. It is a second restore rather than a full-text
-    ///     build on the index in place, because a live index is never mutated (CODING_STANDARDS.md), and
-    ///     the cost lands only on a refresh that failed. A project deleted since has nothing to replace.
+    ///     Gives an index <see cref="RestoreForRefreshAsync" /> restored without its BM25 index one of its
+    ///     own, for a refresh that ended without the swap that would have replaced it — cancelled,
+    ///     refused for disk, or failed. Left as it was, the project would be searched by substring scan
+    ///     until a later refresh succeeded, which on a disk that is not wiped can be indefinitely. Nothing
+    ///     to do after a swap, which is the ordinary case.
+    ///     Built into a copy of the live file and moved into place like a restore, because a live index
+    ///     is never mutated (CODING_STANDARDS.md); copied from the local file rather than fetched again,
+    ///     because the transfer is most of what a restore costs and the store is the likeliest reason the
+    ///     refresh failed. The cost lands only on a refresh that did.
     /// </summary>
-    public Task RestoreWithFullTextAsync(string slug, CancellationToken cancellationToken) =>
-        RestoreAsync(slug, fullText: true, replace: true, static _ => { }, cancellationToken);
+    public async Task SettleRestoreAsync(string slug, CancellationToken cancellationToken)
+    {
+        if (!_withoutFullText.ContainsKey(slug)) return;
+
+        using (await HoldWriterAsync(slug, cancellationToken))
+        {
+            // Asked again under the gate, where a swap or a delete clears it: either has left nothing
+            // to settle.
+            if (!_withoutFullText.TryRemove(slug, out _) || !HasIndex(slug)) return;
+
+            string path = RestorePath(slug);
+            string catalog = RestoreCatalog(slug);
+            string refusal = NotPutInPlace(slug, "restored index",
+                "The index restored without a full-text index still serves; the next refresh builds one.");
+            await using (var connection = await ConnectAsync(cancellationToken))
+            {
+                await AttachEmptyAsync(connection, catalog, path, cancellationToken);
+                await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
+                await CopyWithFullTextAsync(connection, slug, cancellationToken);
+                await CheckpointAsync(connection, slug, catalog, refusal, cancellationToken);
+            }
+
+            await ReplaceFileAsync(slug, "the restored index was put in place anyway",
+                MoveIntoPlace(slug, catalog, path, refusal, cancellationToken), cancellationToken);
+        }
+    }
+
+    /// <summary>
+    ///     Copies every table of the attached live index into the empty one the connection is
+    ///     <c>USE</c>ing, and builds the BM25 index over it. The table list is read from the empty
+    ///     index's own schema, which is this build's, so a table added later is copied without a list
+    ///     here to forget it in.
+    /// </summary>
+    private static async Task CopyWithFullTextAsync(DuckDBConnection connection, string slug,
+        CancellationToken cancellationToken)
+    {
+        var tables = new List<string>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT table_name FROM duckdb_tables() "
+                                  + "WHERE database_name = current_database() AND schema_name = 'main'";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) tables.Add(reader.GetString(0));
+        }
+
+        foreach (string table in tables)
+            // index_info is the one row that changes: the copy is what gains the BM25 index.
+            await connection.ExecuteAsync(table == "index_info"
+                    ? $"INSERT INTO index_info SELECT schema_version, built_at, true, single_repository "
+                      + $"FROM {Quote(slug)}.main.index_info"
+                    : $"INSERT INTO {table} SELECT * FROM {Quote(slug)}.main.{table}",
+                cancellationToken);
+
+        await FtsExtension.CreateIndexAsync(connection, cancellationToken);
+    }
 
     /// <summary>
     ///     Rebuilds a project's file from its durable copy, and answers whether this call put one in
-    ///     place. The Parquet is loaded into a file of its own and that file is moved into place, so a
-    ///     restore racing a first refresh cannot have the swap replace the file it is still writing —
-    ///     the move goes through the same drain a swap does, and is the same one-file overwrite.
+    ///     place — not whether there is one now, which another caller may have restored. The
+    ///     Parquet is loaded into a file of its own and that file is moved into place, so a restore
+    ///     racing a first refresh cannot have the swap replace the file it is still writing — the move
+    ///     goes through the same drain a swap does, and is the same one-file overwrite.
     ///     One project at a time and only that project: the gate is per project, so a wake that restores
     ///     a large index does not hold up a connection to a small one. <paramref name="fullText" /> is
-    ///     whether the restored index gets a BM25 index of its own, <paramref name="replace" /> whether
-    ///     it replaces the file on disk rather than filling its absence, and <paramref name="report" /> is
-    ///     told when the restore starts and when its full-text build does.
+    ///     whether the restored index gets a BM25 index of its own, and <paramref name="report" /> is
+    ///     told when the restore starts.
     /// </summary>
-    private async Task<bool> RestoreAsync(string slug, bool fullText, bool replace, Action<RefreshProgress> report,
+    private async Task<bool> RestoreAsync(string slug, bool fullText, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
         // Held from here to the end, not just around the file work: a swap that started while this was
@@ -417,9 +478,8 @@ public sealed partial class ProjectIndexes : IDisposable
         using (await HoldWriterAsync(slug, cancellationToken))
         {
             // Another caller may have restored it, or a refresh may have swapped one in, while this one
-            // waited. Either way there is now an index and nothing to restore. A replacement asks the
-            // opposite: a file gone by now is a project deleted, and there is nothing to replace.
-            if (HasIndex(slug) != replace) return false;
+            // waited. Either way there is now an index and nothing to restore.
+            if (HasIndex(slug)) return false;
 
             // Before the fetch and not once a copy is found: the transfer is most of what a restore
             // costs, and an unreachable store fails in it.
@@ -438,7 +498,7 @@ public sealed partial class ProjectIndexes : IDisposable
             await using (var connection = await ConnectAsync(cancellationToken))
             {
                 await AttachEmptyAsync(connection, catalog, path, cancellationToken);
-                await _durable.LoadAsync(connection, copy, fullText, report, cancellationToken);
+                await _durable.LoadAsync(connection, copy, fullText, cancellationToken);
                 await CheckpointAsync(connection, slug, catalog, refusal, cancellationToken);
             }
 
@@ -606,6 +666,8 @@ public sealed partial class ProjectIndexes : IDisposable
                 RefreshProgress.SwapPhase));
             await ReplaceFileAsync(slug, "the new index was swapped in anyway",
                 MoveIntoPlace(slug, catalog, ShadowPath(slug), refusal, cancellationToken), cancellationToken);
+            // The shadow built its own full-text index, so a restore it replaced has nothing to settle.
+            _withoutFullText.TryRemove(slug, out _);
             return true;
         }
     }
@@ -729,6 +791,7 @@ public sealed partial class ProjectIndexes : IDisposable
             // Counted before anything is removed, so a refresh waiting on the gate to publish sees it
             // whether or not the rest of this completes.
             _discards.AddOrUpdate(slug, 1, (_, count) => count + 1);
+            _withoutFullText.TryRemove(slug, out _);
 
             await ReplaceFileAsync(slug, "the project was deleted anyway", async connection =>
             {
