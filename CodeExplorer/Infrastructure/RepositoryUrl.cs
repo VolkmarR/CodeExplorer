@@ -38,14 +38,14 @@ public static partial class RepositoryUrl
 
     public const string Rule =
         "URL must be http(s), ssh (ssh://git@host/path or git@host:path) or git, with no password or token "
-        + $"in it; file URLs and local paths are accepted only where {AllowLocalSetting} is true. "
-        + "Put a token in the 'credential' field instead.";
+        + $"in it; file URLs, local paths and loopback hosts are accepted only where {AllowLocalSetting} is "
+        + "true. Put a token in the 'credential' field instead.";
 
     /// <summary>Why a local repository was refused, for the API's answer and the refresh's alike.</summary>
     public const string LocalRefusal =
-        "It is a local path or file URL, which reaches the server's own disk, and local repositories are "
-        + "switched off on this server. Use the repository's http(s) or ssh remote, or ask the operator to set "
-        + $"{AllowLocalSetting} to true.";
+        "It is a local path, a file URL or a remote on a loopback host, which reaches the server's own "
+        + "machine, and local repositories are switched off on this server. Use the repository's http(s) or "
+        + $"ssh remote on another host, or ask the operator to set {AllowLocalSetting} to true.";
 
     /// <summary>
     ///     Why a credential was refused for its URL, for the API's answer and the refresh's alike
@@ -98,17 +98,22 @@ public static partial class RepositoryUrl
         {
             // A Windows path like C:\repo parses as an absolute URI with a one-letter scheme.
             if (uri.Scheme.Length == 1 || uri.Scheme == "file") return RepositoryUrlKind.Local;
-            bool remote = uri.Scheme switch
+            bool accepted = uri.Scheme switch
             {
                 // A user name is how ssh names the account (git@); a password after it is a secret.
                 "ssh" or "git" => !uri.UserInfo.Contains(':'),
                 "http" or "https" => uri.UserInfo.Length == 0,
                 _ => false
             };
-            return remote ? RemoteOn(uri.Host) : RepositoryUrlKind.Invalid;
+            // IdnHost and not Host: a fullwidth "ｌｏｃａｌｈｏｓｔ" is folded to the name a resolver looks up.
+            return accepted ? KindByHost(uri.IdnHost) : RepositoryUrlKind.Invalid;
         }
 
-        if (ScpSyntax.Match(url) is { Success: true } scp) return RemoteOn(scp.Groups["host"].Value);
+        // A URL .NET could not parse, such as http://%6cocalhost/: read as scp-style its host would be
+        // the scheme, and it would pass as remote while libgit2 still reads it as a URL, with a host
+        // this classifier never saw.
+        if (url.Contains("://")) return RepositoryUrlKind.Invalid;
+        if (ScpSyntax.Match(url) is { Success: true } scp) return KindByHost(scp.Groups["host"].Value);
         // Whatever else fails to parse is a relative path. Anything with an '@' is more likely a
         // mistyped remote carrying a credential than a folder name, and is refused.
         return url.Contains('@') ? RepositoryUrlKind.Invalid : RepositoryUrlKind.Local;
@@ -121,7 +126,7 @@ public static partial class RepositoryUrl
     ///     reads the spellings a resolver does, decimal and hex among them, and a trailing dot is the DNS
     ///     root, not part of the name. A name that merely contains "localhost" or "127" is no address.
     /// </summary>
-    private static RepositoryUrlKind RemoteOn(string host)
+    private static RepositoryUrlKind KindByHost(string host)
     {
         host = host.TrimEnd('.');
         if (host.StartsWith('[') && host.EndsWith(']')) host = host[1..^1];

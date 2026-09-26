@@ -66,8 +66,25 @@ public sealed class RepositoryUrlTests
     [InlineData("git@127.0.0.1:org/repo.git")]
     [InlineData("git@2130706433:org/repo.git")]
     [InlineData("git@0x7f000001:org/repo.git")]
+    [InlineData("http://ｌｏｃａｌｈｏｓｔ/repo.git")]
     public void A_loopback_remote_is_local(string url) =>
         Assert.Equal(RepositoryUrlKind.Local, RepositoryUrl.Classify(url));
+
+    /// <summary>
+    ///     .NET cannot parse these, and read as scp-style they would name the host "http" and pass as
+    ///     remote, while libgit2 still reads them as URLs, and may decode them to a loopback host.
+    /// </summary>
+    [Theory]
+    [InlineData("http://%6cocalhost/repo.git")]
+    [InlineData("http://127.0.0.1%2e/repo.git")]
+    [InlineData("http://example invalid/repo.git")]
+    public void A_url_dotnet_cannot_parse_is_refused(string url) =>
+        Assert.Equal(RepositoryUrlKind.Invalid, RepositoryUrl.Classify(url));
+
+    [Theory]
+    [InlineData("https://ｅｘａｍｐｌｅ.com/repo.git")]
+    public void A_fullwidth_host_that_is_not_loopback_is_remote(string url) =>
+        Assert.Equal(RepositoryUrlKind.Remote, RepositoryUrl.Classify(url));
 
     [Theory]
     [InlineData("https://localhost.example.com/repo.git")]
