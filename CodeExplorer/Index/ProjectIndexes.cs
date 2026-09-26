@@ -375,18 +375,25 @@ public sealed partial class ProjectIndexes : IDisposable
         HasIndex(slug) ? Task.CompletedTask : RestoreAsync(slug, FtsAvailable, static _ => { }, cancellationToken);
 
     /// <summary>
-    ///     <see cref="RestoreIfAbsentAsync" /> for a read, which an agent's tool call is. A restore that
-    ///     failed for a reason nobody wrote a sentence for — the store unreachable, a Parquet file DuckDB
-    ///     could not read, a move the disk refused — is turned into one here (#291). Any other exception
-    ///     reaches the agent as the SDK's generic error with no remedy, and its own message names files
-    ///     on the server, so the original goes to the log. A refresh's restore is left alone: its status
-    ///     reports such a failure as the phase it failed in (#262, #290).
+    ///     <see cref="RestoreIfAbsentAsync" /> for a read, which is where an agent's tool call enters the
+    ///     index, and so the one place a restore's failure is put in the agent's terms (#291). Anything
+    ///     other than an <c>McpException</c> reaches the agent as the SDK's generic error with no remedy.
+    ///     A refusal already has its sentence and is passed on in it. A failure nobody wrote a sentence
+    ///     for (the store unreachable, a Parquet file DuckDB could not read, a move the disk refused)
+    ///     gets one here, and the original goes to the log, because its message names files on the
+    ///     server. A refresh's restore is left alone: its status reports such a failure as the phase it
+    ///     failed in (#262, #290).
     /// </summary>
     private async Task RestoreForReadAsync(string slug, CancellationToken cancellationToken)
     {
         try
         {
             await RestoreIfAbsentAsync(slug, cancellationToken);
+        }
+        catch (ExplainedFailureException ex)
+        {
+            // Logged where it was thrown, with DuckDB's own message.
+            throw new McpException(ex.Message, ex);
         }
         catch (Exception ex) when (ex is not McpException && !cancellationToken.IsCancellationRequested)
         {
@@ -729,7 +736,7 @@ public sealed partial class ProjectIndexes : IDisposable
             // checkpointed by a DETACH that found the database still in use — and moving the file
             // without it would put an index missing its tail in place. Refused rather than moved with
             // it: nothing opens a log under a name other than the one it was written beside.
-            if (File.Exists(path + ".wal")) throw new McpException(refusal);
+            if (File.Exists(path + ".wal")) throw new ExplainedFailureException(refusal);
             await DetachAsync(connection, slug, cancellationToken);
             // One overwriting move, never delete-then-move: a move that fails after the old file was
             // deleted would leave the project with no index at all, and the caller's cleanup would then
@@ -758,7 +765,7 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     <c>DETACH</c> that checkpoints again on its way out — and turns its failure into
     ///     <paramref name="refusal" />. Refused whether or not a log is left: DuckDB invalidates the
     ///     database a checkpoint failed on, so the file is not trusted. DuckDB's message names the file,
-    ///     so it goes to the log, and the sentence goes to whoever asked for the file.
+    ///     so it goes to the log and the operator's sentence to the status.
     /// </summary>
     private async Task WrittenOutOrRefusedAsync(Func<Task> statement, string slug, string refusal,
         CancellationToken cancellationToken)
@@ -770,19 +777,11 @@ public sealed partial class ProjectIndexes : IDisposable
         catch (DuckDBException ex) when (!cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning(ex, "The finished index of project {Project} could not be written to its file", slug);
-            throw new McpException(refusal, ex);
+            throw new ExplainedFailureException(refusal, ex);
         }
     }
 
-    /// <summary>
-    ///     Why a finished file was not made the project's live one, thrown as an <c>McpException</c> by
-    ///     <see cref="WrittenOutOrRefusedAsync" /> and <see cref="MoveIntoPlace" />. An <c>McpException</c>
-    ///     and not an <see cref="ExplainedFailureException" />, because a restore runs under an agent's
-    ///     tool call as often as under a refresh. An agent shown anything else gets the SDK's generic
-    ///     error with no remedy (#291). A swap throws the same type because it refuses through the same
-    ///     two methods. The refresh status reports either type in its own words, so the sentence names
-    ///     no server path.
-    /// </summary>
+    /// <summary>Why a finished file was not made the project's live one, in the operator's words.</summary>
     /// <param name="slug">The project.</param>
     /// <param name="replacement">What the file is: "new index", "restored index".</param>
     /// <param name="remedy">What still serves, and what tries again.</param>

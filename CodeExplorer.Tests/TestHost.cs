@@ -291,6 +291,26 @@ public sealed class TestHost : IDisposable
         return connection;
     }
 
+    /// <summary>
+    ///     Makes every checkpoint on the index instance fail until disposed, through DuckDB's own fault
+    ///     switch: how a test gets a finished file that cannot be written out. The switch is
+    ///     instance-wide, so disposing it is what lets anything else in the test checkpoint again.
+    /// </summary>
+    public async Task<IAsyncDisposable> FailingCheckpointsAsync()
+    {
+        var instance = await OpenIndexInstanceAsync();
+        await instance.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
+        return new CheckpointsRestored(instance);
+    }
+
+    private sealed class CheckpointsRestored(DuckDBConnection instance) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            await using (instance) await instance.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
+        }
+    }
+
     /// <summary>A statement run on the server's control database, through a connection of its own.</summary>
     public async Task ExecuteOnControlDatabaseAsync(string sql)
     {
