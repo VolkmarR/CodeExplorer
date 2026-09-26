@@ -390,6 +390,63 @@ public sealed class RefreshTests : IDisposable
     }
 
     [Fact]
+    public async Task A_first_clone_of_a_detached_remote_follows_the_branch_at_that_commit()
+    {
+        await _host.CreateProjectAsync("alpha");
+        string remote = _host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" });
+        string branch = _host.BranchOf("one");
+        string first = _host.HeadOf("one");
+        string gitDirectory = _host.FixtureGitPath("one");
+        TestHost.DetachHead(gitDirectory, first);
+        await _host.AddRepositoryAsync("alpha", "one", remote);
+        await _host.RefreshAsync("alpha");
+
+        // A push to the branch, with the remote's HEAD left detached where it was: a clone that stayed
+        // on the detached commit would index the old tree on every refresh from here on (#288).
+        TestHost.AttachHead(gitDirectory, branch);
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+        TestHost.DetachHead(gitDirectory, first);
+
+        var summary = await _host.RefreshAsync("alpha");
+
+        Assert.Equal(2, summary.Files);
+        Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    [Fact]
+    public async Task A_first_clone_of_a_remote_detached_off_every_branch_follows_its_default_named_branch()
+    {
+        await _host.CreateProjectAsync("alpha");
+        string remote = _host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" });
+        string first = _host.HeadOf("one");
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+        // Detached at a commit no branch ends at, so only the fallback rule can name one: the fixture's
+        // branch is main or master, whichever init.defaultBranch says.
+        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
+        await _host.AddRepositoryAsync("alpha", "one", remote);
+
+        var summary = await _host.RefreshAsync("alpha");
+
+        Assert.Equal(2, summary.Files);
+    }
+
+    [Fact]
+    public async Task A_local_copy_left_detached_settles_on_a_branch_at_the_next_refresh()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        // The state a first clone of a detached remote left a local copy in before #288, against a
+        // remote still detached, so the remote's HEAD names nothing to repair it with.
+        string first = _host.HeadOf("one");
+        TestHost.DetachHead(_host.ClonePath("alpha", "one"), first);
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
+
+        var summary = await _host.RefreshAsync("alpha");
+
+        Assert.Equal(2, summary.Files);
+    }
+
+    [Fact]
     public async Task A_remote_that_really_has_no_commits_is_still_reported_as_empty()
     {
         await _host.CreateProjectAsync("alpha");

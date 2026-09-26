@@ -460,6 +460,20 @@ public sealed class TestHost : IDisposable
     /// </summary>
     public static void DetachHead(string gitDirectory, string sha) => WriteHead(gitDirectory, sha);
 
+    /// <summary>
+    ///     Points a detached HEAD back at a branch, so a fixture detached for a first clone can take a
+    ///     commit on that branch the way a push to it would (#288).
+    /// </summary>
+    public static void AttachHead(string gitDirectory, string branch) =>
+        WriteHead(gitDirectory, $"ref: refs/heads/{branch}");
+
+    /// <summary>The branch a fixture's HEAD is on, which is whatever <c>init.defaultBranch</c> made it.</summary>
+    public string BranchOf(string name)
+    {
+        using var repo = new Repository(FixturePath(name));
+        return repo.Head.FriendlyName;
+    }
+
     private static void WriteHead(string gitDirectory, string content) =>
         File.WriteAllText(Path.Combine(gitDirectory, "HEAD"), content + "\n");
 
