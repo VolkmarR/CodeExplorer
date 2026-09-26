@@ -7,6 +7,7 @@ using CodeExplorer.Reading;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.Configuration;
+using ModelContextProtocol;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -62,6 +63,43 @@ public sealed class DurabilityTests : IDisposable
 
         Assert.Equal(["class Alpha;", "class Beta;"], lines);
         Assert.True(host.Indexes.HasIndex("alpha"));
+    }
+
+    /// <summary>
+    ///     A restore whose file cannot be written out is refused to the agent that caused it in words it
+    ///     can act on (#291). The SDK reports any other exception from a tool as a generic error, so the
+    ///     sentence arriving at all is what shows the refusal is an <see cref="McpException" />. DuckDB's
+    ///     fault switch is what makes the restore's checkpoint fail, as in the swap's refusal test.
+    /// </summary>
+    [Fact]
+    public async Task A_restore_that_cannot_write_its_file_out_reaches_an_agent_as_a_refusal()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+        host.DeleteIndexFile("alpha");
+
+        await using var instance = await host.OpenIndexInstanceAsync();
+        await instance.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
+        McpException thrown;
+        try
+        {
+            await using var client = await host.ConnectAsync("alpha");
+            thrown = await Assert.ThrowsAsync<McpException>(() =>
+                TestHost.CallAsync(client, "project_overview", []));
+        }
+        finally
+        {
+            // Instance-wide, so it goes before anything else here checkpoints.
+            await instance.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
+        }
+
+        Assert.Contains("'alpha'", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("not put in place", thrown.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(host.DataDirectory, thrown.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(host.Indexes.HasIndex("alpha"));
+
+        // The remedy the sentence names: the next read tries the restore again.
+        Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
     }
 
     [Fact]
