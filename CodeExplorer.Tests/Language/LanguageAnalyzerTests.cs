@@ -113,11 +113,45 @@ public sealed class LanguageAnalyzerTests
     [InlineData("prg", "#using System.Collections", "Collections")]
     [InlineData("prg", "#define MAX_ORDERS 10", "MAX_ORDERS")]
     [InlineData("prg", "#command WAIT => inkey(0)", "inkey")]
-    [InlineData("prg", "#region MAX_ORDERS", "MAX_ORDERS")]
     [InlineData("cs", "#if MAX_ORDERS", "MAX_ORDERS")]
-    [InlineData("cs", "#region MAX_ORDERS", "MAX_ORDERS")]
+    [InlineData("cs", "#define MAX_ORDERS", "MAX_ORDERS")]
+    [InlineData("cs", "#elif MAX_ORDERS", "MAX_ORDERS")]
     public void A_leading_hash_is_a_directive_and_not_a_comment(string extension, string line, string symbol) =>
         Assert.NotEqual(ReferenceKind.Comment, Kind(extension, line, symbol));
+
+    /// <summary>
+    ///     #265: what follows <c>#region</c>, <c>#endregion</c>, <c>#error</c> and <c>#warning</c> is a
+    ///     label or a message, so a name in it is a mention in prose whatever punctuation stands beside
+    ///     it. Since the char literal joined the C# profile (#240), an apostrophe there opened one that
+    ///     ran to the end of the line, and the same name read as code or as a string by punctuation.
+    /// </summary>
+    [Theory]
+    [InlineData("cs", "#region MAX_ORDERS")]
+    [InlineData("cs", "#region Don't touch MAX_ORDERS")]
+    [InlineData("cs", "#region Customer's 'MAX_ORDERS' code")]
+    [InlineData("cs", "    #endregion MAX_ORDERS")]
+    [InlineData("cs", "#error Can't build MAX_ORDERS")]
+    [InlineData("cs", "#warning MAX_ORDERS isn't set")]
+    [InlineData("prg", "#region MAX_ORDERS")]
+    [InlineData("prg", "#REGION Don't touch MAX_ORDERS")]
+    [InlineData("prg", "#endregion MAX_ORDERS")]
+    [InlineData("prg", "#error Can't build MAX_ORDERS")]
+    [InlineData("prg", "#warning MAX_ORDERS isn't set")]
+    public void A_region_label_or_a_directive_message_is_prose(string extension, string line) =>
+        Assert.Equal(ReferenceKind.Comment, Kind(extension, line, "MAX_ORDERS"));
+
+    [Fact]
+    public void A_directive_word_is_matched_whole()
+    {
+        // `#regional` is no directive, so nothing on it is prose on the strength of its first letters.
+        Assert.NotEqual(ReferenceKind.Comment, Kind("cs", "#regional MAX_ORDERS", "MAX_ORDERS"));
+    }
+
+    [Fact]
+    public void An_apostrophe_in_a_region_label_leaves_the_next_line_as_code() =>
+        Assert.Equal(
+            [ReferenceKind.Comment, ReferenceKind.Call],
+            KindsIn("cs", "#region Don't touch Advance\n    Advance(1);", "Advance"));
 
     [Theory]
     [InlineData("pas", "  ShowMessage('OrderStatus');")]
