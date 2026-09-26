@@ -187,9 +187,6 @@ public sealed class RefreshService(
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Failed, "Failed", started,
                 DateTimeOffset.UtcNow, null, error) { Phases = timeline.Close() };
 
-        // Whether this refresh restored the index without its full-text index, which only its own swap
-        // makes good: a refresh that ends any other way puts one back that has it.
-        bool restoredWithoutFullText = false;
         try
         {
             // Reported before the restore rather than after the check, so a restore that takes minutes
@@ -200,7 +197,7 @@ public sealed class RefreshService(
             // none until the durable copy is restored, and the check would size the shadow of a large
             // project at the floor (#229). It reports a phase of its own, so a restore that fails is
             // not reported as a refresh that failed while starting (#290).
-            restoredWithoutFullText = await indexes.RestoreForRefreshAsync(project.Slug, Report, cancellationToken);
+            await indexes.RestoreForRefreshAsync(project.Slug, Report, cancellationToken);
 
             // Checked again here and not only when it was accepted: another project's refresh may have
             // filled the disk in between, and that is exactly the condition ADR-0003 says to avoid.
@@ -211,8 +208,6 @@ public sealed class RefreshService(
             }
 
             var summary = await refresh.RunAsync(project, Report, cancellationToken);
-            // Swapped out for the shadow, which built its own full-text index.
-            restoredWithoutFullText = false;
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Succeeded, "Done", started,
                 DateTimeOffset.UtcNow, summary, null) { Phases = timeline.Close() };
             if (logger.IsEnabled(LogLevel.Information))
@@ -230,20 +225,21 @@ public sealed class RefreshService(
         }
         finally
         {
-            // After the status says the refresh failed, so an operator is not left waiting on a repair
-            // to learn that; Pending still covers it, so the next refresh queues behind it.
-            if (restoredWithoutFullText) await RestoreWithFullTextAsync(project.Slug, cancellationToken);
+            // However the refresh ended, and after its status says so, so an operator is not left
+            // waiting on a repair to learn that it failed. A swap has left nothing to settle.
+            await SettleRestoreAsync(project.Slug, cancellationToken);
         }
     }
 
     /// <summary>
-    ///     Puts back a full-text index for a refresh that restored without one and then failed (#290).
+    ///     Gives back the full-text index a refresh's restore skipped, when the refresh ended without the
+    ///     swap that would have replaced it (#290).
     /// </summary>
-    private async Task RestoreWithFullTextAsync(string slug, CancellationToken cancellationToken)
+    private async Task SettleRestoreAsync(string slug, CancellationToken cancellationToken)
     {
         try
         {
-            await indexes.RestoreWithFullTextAsync(slug, cancellationToken);
+            await indexes.SettleRestoreAsync(slug, cancellationToken);
         }
         catch (Exception ex)
         {

@@ -180,12 +180,10 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     the Parquet: it is <c>fts</c>'s own tables, and a replica that could not install the extension
     ///     has to answer from a substring scan, and a restore a refresh is about to replace does not
     ///     build one either (#290). <paramref name="fullText" /> decides, and <c>index_info</c> then
-    ///     reports it. <paramref name="report" /> is told when the BM25 build starts. No restore a refresh
-    ///     drives builds one today; if one ever did, its timeline would show the full-text phase twice,
-    ///     which is what the test for #290 counts.
+    ///     reports it.
     /// </summary>
     public async Task LoadAsync(DuckDBConnection connection, DurableCopy copy, bool fullText,
-        Action<RefreshProgress> report, CancellationToken cancellationToken)
+        CancellationToken cancellationToken)
     {
         // index_info is the one table not copied straight back: whether a BM25 index exists is a
         // property of this replica and of the load below, not of the build that wrote the Parquet.
@@ -199,12 +197,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
                 $"INSERT INTO {table} SELECT * FROM read_parquet({IndexQuery.Literal(Parquet(copy, table))})",
                 cancellationToken);
 
-        if (fullText)
-        {
-            report(new RefreshProgress(RefreshProgress.FullTextStep, RefreshProgress.TotalStepCount,
-                RefreshProgress.FullTextPhase));
-            await FtsExtension.CreateIndexAsync(connection, cancellationToken);
-        }
+        if (fullText) await FtsExtension.CreateIndexAsync(connection, cancellationToken);
 
         copy.Recording.Moved();
     }

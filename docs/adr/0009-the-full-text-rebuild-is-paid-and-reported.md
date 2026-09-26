@@ -81,7 +81,7 @@ to make it legible rather than to hide it or to trade an invariant for it.
   used to build the BM25 index the shadow was about to build again. It skips the build now. Between
   the restore and the swap the project is served by substring scan, which `index_info` records. That
   is a window of minutes on a replica that has just woken up, not a live index changed in place. A
-  refresh that fails before its swap replaces the restored index with a second restore that does build
-  the full-text index, so the gap never outlasts the refresh. The restore also reports a phase of its
+  refresh that ends without its swap copies the restored index into a new file, builds the full-text
+  index there and moves that file into place, so the gap never outlasts the refresh. The restore also reports a phase of its
   own, so what it cost is on the timeline, and a failed restore is reported under its own name rather
   than under `Starting`.
