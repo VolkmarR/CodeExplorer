@@ -148,8 +148,9 @@ public static class Languages
     ];
 
     /// <summary>
-    ///     The directives C# and X# both write whose rest of line is a label or a message, not code
-    ///     (#265). One list because the two preprocessors spell them alike.
+    ///     The directives C# and X# both write whose rest of line is a label or a message, not code,
+    ///     read as line-start comments (#265). The ones that name symbols — <c>#if</c>,
+    ///     <c>#define</c> — are not here, because what they name is code.
     /// </summary>
     private static readonly string[] _proseDirectives = ["#region", "#endregion", "#error", "#warning"];
 
@@ -292,8 +293,7 @@ public static class Languages
         new LanguageProfile("X#", ["prg", "vh", "xh", "ch"])
         {
             LineComments = ["//", "&&"],
-            LineStartComments = ["*"],
-            ProseDirectives = _proseDirectives,
+            LineStartComments = ["*", .. _proseDirectives],
             BlockComments = [_cBlockComment],
             // The VO dialect has no backslash escape: a path in a literal is a path, not an escape.
             Strings = [_rawDouble, _rawSingle],
@@ -333,14 +333,13 @@ public static class Languages
             // No line-start `*`, as in every C-family profile (LanguageProfile.LineStartComments): at
             // the top level it is a multiplication or a dereference, and reading it as a comment hid
             // every name on the line (#240).
-            ProseDirectives = _proseDirectives,
+            LineStartComments = _proseDirectives,
             BlockComments = [_cBlockComment],
             Strings = _cSharpLiterals,
             AssignmentOperators = ["="],
             MemberAccessOperators = ["."],
             TypePrefixOperators = [":", "<", ","],
-            // `#` opens no comment here, so `#if` and `#define` read their symbols as code; only the
-            // label and message directives above are prose.
+            // `#` opens no comment here, so `#if` and `#define` read their symbols as code.
             // The `namespace` line is here with the two `using` forms because it is the other half of
             // the same fact: it says what this file is, which is what another file's `using` has to
             // resolve against. Both the file-scoped `namespace Foo;` and the block `namespace Foo {`
