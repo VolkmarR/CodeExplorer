@@ -183,7 +183,8 @@ public sealed class TestHost : IDisposable
     private void Stop()
     {
         Factory.Dispose();
-        foreach (string file in new[] { ControlDatabaseFile, IndexInstanceFile }) AwaitClosed(file);
+        AwaitClosed(ControlDatabaseFile);
+        AwaitClosed(IndexInstanceFile);
     }
 
     /// <summary>
@@ -192,7 +193,10 @@ public sealed class TestHost : IDisposable
     /// </summary>
     private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>A few polls inside the shortest linger measured, 20 ms, without spinning a core.</summary>
+    /// <summary>
+    ///     As short as a sleep usually gets without spinning a core: Windows rounds it up to its timer
+    ///     tick, about 15 ms, so a wait overshoots the release by at most that.
+    /// </summary>
     private const int ClosePollMilliseconds = 5;
 
     /// <summary>
@@ -213,11 +217,9 @@ public sealed class TestHost : IDisposable
                 // Safe to swallow: no file is a file nothing holds.
                 return;
             }
-            catch (IOException ex)
+            catch (IOException) when (DateTime.UtcNow < deadline)
             {
-                if (DateTime.UtcNow >= deadline)
-                    throw new InvalidOperationException(
-                        $"The stopped server still held {path} after {CloseTimeout.TotalSeconds} s.", ex);
+                // Past the deadline the sharing violation propagates, and its message names the file.
                 // Safe to swallow: the old server is still disposing, and the loop is the wait for it.
                 Thread.Sleep(ClosePollMilliseconds);
             }
