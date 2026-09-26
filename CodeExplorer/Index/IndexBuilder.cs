@@ -30,7 +30,8 @@ public sealed class IndexBuilder(
     ///     BM25 ranking and grep output for the whole project. The file still appears in <c>files</c> with
     ///     the reason, so a tree listing and a search can tell the agent about it. A project of large
     ///     hand-written sources raises the setting rather than losing them. A binary above it is
-    ///     skipped for its size as well.
+    ///     skipped for its size as well. The history pass is held to the same ceiling, so a commit that
+    ///     changed such a file is recorded without its lines instead of inflated into a patch (#263).
     /// </summary>
     private const long _defaultMaxFileBytes = 25 * 1024 * 1024;
 
@@ -74,7 +75,7 @@ public sealed class IndexBuilder(
         // After the files, because attribution is joined onto them and a file row is what says which
         // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished
         // and an index that is live with no history would be one nothing ever goes back to fill in.
-        await history.FillAsync(shadow, opened, configured, report, cancellationToken);
+        await history.FillAsync(shadow, opened, configured, _maxFileBytes, report, cancellationToken);
         // After the history, because the overview ranks it, and before CompleteAsync for the same
         // reason the history runs before it: an index that went live without an overview is one
         // nothing would ever go back and fill in.
@@ -129,11 +130,12 @@ public sealed class IndexBuilder(
                         $"Reading '{repository.Slug}' into the shadow index", fileCount, entries.Count));
                 fileId++;
                 fileCount++;
-                // Size first: it is read off the object header, while IsBinary inflates the whole blob,
-                // so the other order inflated every oversized binary on every refresh (#230).
+                // Size first: it is read off the object header, while the content inflates the whole
+                // blob, so asking for it first inflated every oversized binary on every refresh (#230).
+                string? content = entry.Size > _maxFileBytes ? null : entry.Text();
                 string? skipReason = entry.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" :
-                    entry.IsBinary ? "binary" : null;
-                var text = skipReason is null ? SplitLines(entry.Text()) : [];
+                    content is null ? "binary" : null;
+                var text = content is null ? [] : SplitLines(content);
                 for (int i = 0; i < text.Count; i++)
                     lines.CreateRow().AppendValue(++lineId).AppendValue(fileId).AppendValue(i + 1).AppendValue(text[i])
                         // Attribution is filled by the history pass, which runs after this one and before

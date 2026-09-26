@@ -38,21 +38,21 @@ public abstract record CloneOpen
 }
 
 /// <summary>
-///     One file committed at HEAD. The size is read from the object header and the text only on
-///     <see cref="Text" />, so a build can decide to skip a file without loading it. The blob itself
+///     One file committed at HEAD. The size is read from the object header and the content only on
+///     <see cref="Text" />, so a build can decide to skip a file without loading it. The blob id
 ///     stays here: no LibGit2Sharp type leaves <c>Git/</c>.
-///     Each <c>Blob</c> property read is a lookup of its own, and libgit2 caches no blob by default, so
-///     every one inflates the object and applies its delta chain again.
 /// </summary>
 public sealed class CommittedFile
 {
-    private readonly Blob _blob;
+    private readonly ObjectId _id;
+    private readonly BlobReader _blobs;
 
-    internal CommittedFile(string path, Blob blob, long size)
+    internal CommittedFile(string path, ObjectId id, long size, BlobReader blobs)
     {
         Path = path;
-        _blob = blob;
+        _id = id;
         Size = size;
+        _blobs = blobs;
     }
 
     /// <summary>Repository-relative, with forward slashes, as git stores it.</summary>
@@ -65,25 +65,13 @@ public sealed class CommittedFile
     public long Size { get; }
 
     /// <summary>
-    ///     libgit2's call, made the way git makes it: a NUL in the first bytes. It inflates the whole
-    ///     blob, so ask it only of a file <see cref="Size" /> has not already ruled out; it is left to
-    ///     libgit2 because a heuristic of our own would change which files are skipped.
+    ///     The whole content decoded as text, the way <see cref="BlobText" /> decides, or null when
+    ///     libgit2 calls the file binary. Both answers come from one load of the blob, which inflates
+    ///     all of it, so ask only of a file <see cref="Size" /> has not already ruled out. Call it once;
+    ///     there is no cache behind it. The verdict is libgit2's because a heuristic of our own would
+    ///     change which files are skipped.
     /// </summary>
-    public bool IsBinary => _blob.IsBinary;
-
-    /// <summary>
-    ///     The whole content decoded as text, the way <see cref="BlobText" /> decides. Call it once; there
-    ///     is no cache behind it. The UTF-8 check and the decode share one buffer, because trying UTF-8
-    ///     through a read of its own would inflate the blob once more than <see cref="IsBinary" />
-    ///     already does.
-    /// </summary>
-    public string Text()
-    {
-        using var stream = _blob.GetContentStream();
-        var content = new byte[Size];
-        stream.ReadExactly(content);
-        return BlobText.Decode(content);
-    }
+    public string? Text() => _blobs.Text(_id);
 }
 
 /// <summary>
@@ -139,12 +127,17 @@ public sealed record RecordedCommit(
 public sealed class LocalCopy : IDisposable
 {
     private readonly Repository _repository;
+    private readonly BlobReader _blobs;
 
     internal LocalCopy(Repository repository)
     {
         _repository = repository;
         HeadSha = repository.Head.Tip.Sha;
+        _blobs = new BlobReader(repository.Info.Path);
     }
+
+    /// <summary>How many blobs <see cref="CommittedFile.Text" /> has loaded, for the test that holds it to one a file.</summary>
+    internal int BlobLoads => _blobs.Loads;
 
     /// <summary>The commit the copy is at, which the index records as what each repository was built from.</summary>
     public string HeadSha { get; }
@@ -163,8 +156,12 @@ public sealed class LocalCopy : IDisposable
     ///     never meets it runs to a root, which is how the caller learns HEAD's line no longer holds it.
     /// </summary>
     /// <param name="stopAt">The newest commit already recorded for this repository, or null for none.</param>
+    /// <param name="maxBlobBytes">
+    ///     The index's <c>Index:MaxFileBytes</c>. A change with a blob above it on either side is not
+    ///     diffed, and is recorded the way the file pass treats that blob: as binary, with no lines.
+    /// </param>
     /// <param name="cancellationToken">Checked per commit, which is where the diff cost is.</param>
-    public IEnumerable<RecordedCommit> History(string? stopAt, CancellationToken cancellationToken)
+    public IEnumerable<RecordedCommit> History(string? stopAt, long maxBlobBytes, CancellationToken cancellationToken)
     {
         // No SortBy, so the walk streams. First-parent makes the history a line, and a line has one
         // order however it is sorted — but GIT_SORT_TOPOLOGICAL makes libgit2 pre-traverse and buffer
@@ -180,7 +177,7 @@ public sealed class LocalCopy : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (commit.Sha == stopAt) yield break;
-            yield return Describe(commit);
+            yield return Describe(commit, maxBlobBytes);
         }
     }
 
@@ -199,6 +196,49 @@ public sealed class LocalCopy : IDisposable
     ///     same commits both ways and asserts the edit lists are equal.
     /// </summary>
     private static readonly CompareOptions _noContext = new() { ContextLines = 0 };
+
+    /// <summary>
+    ///     Every blob path that differs between two trees, into <paramref name="changed" />, and one
+    ///     record into <paramref name="oversized" /> for each whose blob on either side is over
+    ///     <paramref name="maxBytes" />, sized from its object header without loading it. A subtree with
+    ///     the same id on both sides is not entered. This is not a libgit2 tree diff because that costs
+    ///     as much as the one inside the patch, which read back as a quarter more on a history import:
+    ///     only the directories a commit touched are read here. Nothing here reads a blob, so there is
+    ///     no rename detection; the patch does that over the paths this lets through.
+    /// </summary>
+    private void CompareTrees(Tree? before, Tree? after, string prefix, long maxBytes, List<string> changed,
+        List<ChangedPath> oversized)
+    {
+        var gone = before?.ToDictionary(entry => entry.Name, StringComparer.Ordinal) ?? [];
+        foreach (var entry in after ?? Enumerable.Empty<TreeEntry>())
+        {
+            gone.Remove(entry.Name, out var was);
+            if (was is not null && was.Target.Id == entry.Target.Id && was.Mode == entry.Mode) continue;
+            Compare(was, entry, prefix + entry.Name);
+        }
+
+        foreach (var (name, was) in gone) Compare(was, null, prefix + name);
+
+        void Compare(TreeEntry? was, TreeEntry? now, string path)
+        {
+            if (was?.TargetType == TreeEntryTargetType.Tree || now?.TargetType == TreeEntryTargetType.Tree)
+                CompareTrees(was?.Target as Tree, now?.Target as Tree, path + "/", maxBytes, changed, oversized);
+            // A submodule is a commit of another repository, which this one does not hold.
+            var oldBlob = was?.TargetType == TreeEntryTargetType.Blob ? was : null;
+            var newBlob = now?.TargetType == TreeEntryTargetType.Blob ? now : null;
+            if (oldBlob is null && newBlob is null) return;
+            changed.Add(path);
+            if (!IsLarger(oldBlob) && !IsLarger(newBlob)) return;
+            var kind = oldBlob is null ? ChangeKind.Added
+                : newBlob is null ? ChangeKind.Deleted
+                : (oldBlob.Mode == Mode.SymbolicLink) != (newBlob.Mode == Mode.SymbolicLink) ? ChangeKind.TypeChanged
+                : ChangeKind.Modified;
+            oversized.Add(new ChangedPath(path, path, KindName(kind), 0, 0, true, []));
+        }
+
+        bool IsLarger(TreeEntry? blob) =>
+            blob is not null && _repository.ObjectDatabase.RetrieveObjectMetadata(blob.Target.Id).Size > maxBytes;
+    }
 
     /// <summary>
     ///     The stored name of a change, the enum name lower-cased. The kinds a tree diff produces are
@@ -226,15 +266,35 @@ public sealed class LocalCopy : IDisposable
     ///     per file with a replay per commit two hundred times cheaper (ADR-0007).
     ///     Renames are detected with libgit2's defaults, so a moved file's edits are recorded against
     ///     its new path with the old one beside it, and the replay carries the attribution across.
+    ///     A patch has no size ceiling, and LibGit2Sharp does not expose libgit2's (512 MB, far above
+    ///     the index's), so a blob over <paramref name="maxBlobBytes" /> would be inflated and rendered
+    ///     whole (#263). <see cref="CompareTrees" /> names the changed blobs first and sizes them off
+    ///     their object headers; when any is too large the patch is asked only for the rest, among
+    ///     which renames are still detected. A large file that moved is recorded as a deletion and an
+    ///     addition, since telling that it moved means reading it.
     /// </summary>
-    private RecordedCommit Describe(Commit commit)
+    private RecordedCommit Describe(Commit commit, long maxBlobBytes)
     {
         var parent = commit.Parents.FirstOrDefault();
         var files = new List<ChangedPath>();
-        foreach (var change in _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null, _noContext))
-            files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
-                change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
-                change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
+        var changed = new List<string>();
+        CompareTrees(parent?.Tree, commit.Tree, "", maxBlobBytes, changed, files);
+        // Left null for the ordinary commit, with nothing oversized, which asks for its whole patch as
+        // it always did.
+        var rest = files.Count == 0 ? null : changed.Except(files.Select(file => file.Path)).ToList();
+
+        // Explicit paths are matched literally, not as pathspec patterns, once ExplicitPathsOptions is
+        // passed; an empty list would mean every path, so a commit of nothing but oversized blobs asks
+        // for no patch at all.
+        if (rest is not { Count: 0 })
+        {
+            using var patch = _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, rest,
+                rest is null ? null : new ExplicitPathsOptions(), _noContext);
+            foreach (var change in patch)
+                files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
+                    change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
+                    change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
+        }
 
         // MessageShort is the subject git itself would show; the body is what is left, and an empty
         // string rather than null because the column is NOT NULL and "no body" is not a missing value.
@@ -247,7 +307,11 @@ public sealed class LocalCopy : IDisposable
             commit.Author.When, subject, body, files);
     }
 
-    public void Dispose() => _repository.Dispose();
+    public void Dispose()
+    {
+        _blobs.Dispose();
+        _repository.Dispose();
+    }
 
     /// <summary>
     ///     True when any <c>.gitattributes</c> in the HEAD tree declares <c>filter=lfs</c>. Walks the whole
@@ -276,8 +340,8 @@ public sealed class LocalCopy : IDisposable
             switch (entry.TargetType)
             {
                 case TreeEntryTargetType.Blob:
-                    yield return new CommittedFile(prefix + entry.Name, (Blob)entry.Target,
-                        _repository.ObjectDatabase.RetrieveObjectMetadata(entry.Target.Id).Size);
+                    yield return new CommittedFile(prefix + entry.Name, entry.Target.Id,
+                        _repository.ObjectDatabase.RetrieveObjectMetadata(entry.Target.Id).Size, _blobs);
                     break;
                 case TreeEntryTargetType.Tree:
                     foreach (var child in Files((Tree)entry.Target, prefix + entry.Name + "/")) yield return child;

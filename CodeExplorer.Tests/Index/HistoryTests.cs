@@ -730,6 +730,55 @@ public sealed class HistoryTests : IDisposable
         Assert.Equal(await _host.ScalarsAsync(project, sql), refreshed);
     }
 
+    /// <summary>
+    ///     A text blob over <c>Index:MaxFileBytes</c> is recorded in history the way the file pass
+    ///     treats it at HEAD: as a change with no lines, rather than inflated and rendered whole into a
+    ///     patch (#263). The ceiling stands on either side of a change, so shrinking the file back under
+    ///     it is recorded the same way. A small file the same commit touched is still diffed.
+    /// </summary>
+    [Fact]
+    public async Task A_text_file_over_the_size_ceiling_is_recorded_in_history_without_lines()
+    {
+        using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
+        string source = host.CreateEmptyGitRepository("one");
+        string dump = string.Concat(Enumerable.Range(1, 200).Select(i => $"INSERT INTO t VALUES ({i});\n"));
+        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/Check.cs"] = "first\n" },
+            "Add the validator", "Ada", "ada@example.invalid", 0);
+        host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond\n", ["data/dump.sql"] = dump },
+            "Add the dump", "Ada", "ada@example.invalid", 1);
+        // One commit that shrinks the dump and moves the small file: the patch asked for the rest of a
+        // commit with an oversized change in it still detects the move.
+        using (var repo = new Repository(source))
+        {
+            Directory.CreateDirectory(Path.Combine(source, "lib"));
+            File.Move(Path.Combine(source, "src", "Check.cs"), Path.Combine(source, "lib", "Check.cs"));
+            File.WriteAllText(Path.Combine(source, "data", "dump.sql"), "small\n");
+            Commands.Stage(repo, "*");
+            var author = new Signature("Ada", "ada@example.invalid", DateTimeOffset.UnixEpoch.AddMinutes(2));
+            repo.Commit("Shrink the dump", author, author);
+        }
+
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "one", source);
+        await host.RefreshAsync("alpha");
+
+        var changes = await host.ScalarsAsync("alpha",
+            """
+            SELECT c.subject || '|' || coalesce(f.old_path || ' -> ', '') || f.path || '|' || f.change_kind
+                   || '|' || f.added || '|' || f.deleted
+            FROM commit_files f JOIN commits c USING (commit_id)
+            ORDER BY f.commit_id, f.path
+            """);
+        Assert.Equal([
+            "Add the validator|src/Check.cs|added|1|0",
+            "Add the dump|data/dump.sql|added|0|0",
+            "Add the dump|src/Check.cs|modified|1|0",
+            "Shrink the dump|data/dump.sql|modified|0|0",
+            "Shrink the dump|src/Check.cs -> lib/Check.cs|renamed|0|0"
+        ], changes);
+    }
+
     private async Task IndexTwoCommitProjectAsync()
     {
         string source = _host.CreateEmptyGitRepository("one");

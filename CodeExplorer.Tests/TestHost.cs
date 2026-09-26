@@ -70,10 +70,14 @@ public sealed class TestHost : IDisposable
     ///     The operator's own <c>AllowedHosts</c>, which replaces the loopback default an
     ///     unauthenticated server otherwise answers under (GHSA-qxhv-3r9w-q8h4).
     /// </param>
+    /// <param name="maxFileBytes">
+    ///     Lowered to a few kilobytes so a fixture can cross <c>Index:MaxFileBytes</c> without committing
+    ///     the 25 MiB the shipped default would take.
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
         bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
         int? maxCommitPaths = null, int? transferStallSeconds = null, bool allowLocalRepositories = true,
-        string? allowedHosts = null)
+        string? allowedHosts = null, long? maxFileBytes = null)
     {
         _allowLocalRepositories = allowLocalRepositories;
         _allowedHosts = allowedHosts;
@@ -85,6 +89,7 @@ public sealed class TestHost : IDisposable
         _extensionDirectory = extensionDirectory;
         _maxCommitPaths = maxCommitPaths;
         _transferStallSeconds = transferStallSeconds;
+        _maxFileBytes = maxFileBytes;
         Factory = Build();
     }
 
@@ -96,6 +101,7 @@ public sealed class TestHost : IDisposable
     private readonly string? _extensionDirectory;
     private readonly int? _maxCommitPaths;
     private readonly int? _transferStallSeconds;
+    private readonly long? _maxFileBytes;
     private bool _allowLocalRepositories;
     private readonly string? _allowedHosts;
 
@@ -136,6 +142,8 @@ public sealed class TestHost : IDisposable
                 builder.UseSetting("History:MaxCommitPaths", paths.ToString(CultureInfo.InvariantCulture));
             if (_transferStallSeconds is { } stall)
                 builder.UseSetting("Git:TransferStallSeconds", stall.ToString(CultureInfo.InvariantCulture));
+            if (_maxFileBytes is { } fileBytes)
+                builder.UseSetting("Index:MaxFileBytes", fileBytes.ToString(CultureInfo.InvariantCulture));
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
             if (_allowLocalRepositories) builder.UseSetting(RepositoryUrl.AllowLocalSetting, "true");
             if (_allowedHosts is { } hosts) builder.UseSetting(RequestOrigin.AllowedHostsSetting, hosts);
