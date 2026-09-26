@@ -133,7 +133,7 @@ public sealed class MatchList(IndexReaders readers)
             // compiled alone before the count refuses, and before a whole-word wrapping balances it.
             int groups = Re2.CaptureGroups(query);
             if ((request.WholeWord || request.Group > groups)
-                && await Re2.RejectionAsync(connection, query, cancellationToken) is { } rejection)
+                && await Re2.RejectionAsync(connection, query, "", cancellationToken) is { } rejection)
                 return new Problem(Re2.Rejected(rejection));
             if (request.Group > groups)
                 return new Problem(

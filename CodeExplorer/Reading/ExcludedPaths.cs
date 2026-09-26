@@ -80,8 +80,14 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
         if (!Any) return null;
 
         parameters.Add(new DuckDBParameter(prefix, Expression));
-        return $"regexp_matches('/' || {path}, ${prefix}, 'i')";
+        return $"regexp_matches('/' || {path}, ${prefix}, '{Flags}')";
     }
+
+    /// <summary>
+    ///     The RE2 flags every pattern runs with: case-insensitive, like every other path filter. Named
+    ///     once so that the save's check compiles what <see cref="Matching" /> runs.
+    /// </summary>
+    private const string Flags = "i";
 
     /// <summary>
     ///     Every pattern as one anchored RE2 alternation: what <see cref="Matching" /> binds, and what
@@ -103,10 +109,9 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
             return $"the range {reversed} runs backwards, so no character falls in it.";
 
         // The same check a search makes, so a failure that is not RE2 refusing the pattern throws
-        // instead of reaching the operator as "your pattern is invalid" (#296). With the 'i' that
-        // Matching passes, so what is compiled is what every overview read will run.
-        return (await Re2.RejectionAsync(connection, new ExcludedPaths([pattern]).Expression, cancellationToken,
-            "i"))?.Message;
+        // instead of reaching the operator as "your pattern is invalid" (#296).
+        return (await Re2.RejectionAsync(connection, new ExcludedPaths([pattern]).Expression, Flags,
+            cancellationToken))?.Message;
     }
 
     /// <summary>

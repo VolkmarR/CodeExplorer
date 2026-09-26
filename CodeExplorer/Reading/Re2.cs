@@ -83,7 +83,7 @@ public static class Re2
     ///     limit can compile without <c>i</c> and be refused with it.
     /// </summary>
     public static async Task<DuckDBException?> RejectionAsync(DuckDBConnection connection, string pattern,
-        CancellationToken cancellationToken, string flags = "")
+        string flags, CancellationToken cancellationToken)
     {
         await using var command = connection.Query("SELECT regexp_matches('', $pattern, $flags)",
             [new DuckDBParameter("pattern", pattern), new DuckDBParameter("flags", flags)]);
