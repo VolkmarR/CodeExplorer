@@ -9,6 +9,7 @@ using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -179,6 +180,72 @@ public sealed class RefreshTests : IDisposable
         Assert.DoesNotContain(_host.DataDirectory, status.Error, StringComparison.OrdinalIgnoreCase);
         // The old index is the one still serving.
         Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    /// <summary>
+    ///     The same refusal, seen from the refresh rather than its status: an <see cref="McpException" />
+    ///     naming no server path, the shape every refusal of a swap or a restore takes (#291). Held in the
+    ///     swap's report, which comes after the shadow's own checkpoint and before the file work.
+    /// </summary>
+    [Fact]
+    public async Task A_swap_refused_for_a_write_ahead_log_throws_a_refusal_naming_no_server_path()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+
+        using var straggler = await _host.OpenIndexInstanceAsync();
+        McpException error;
+        try
+        {
+            error = await Assert.ThrowsAsync<McpException>(() => RefreshHeldAtAsync(RefreshProgress.SwapPhase,
+                async () =>
+                {
+                    await straggler.ExecuteAsync("CREATE TABLE \"alpha$shadow\".main.straggler AS SELECT 1 AS one",
+                        Ct);
+                    await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
+                }));
+        }
+        finally
+        {
+            // Instance-wide, so it goes before anything else here checkpoints the live index.
+            await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
+        }
+
+        Assert.Contains("'alpha'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("not put in place", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["one/src/A.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+    }
+
+    /// <summary>
+    ///     A restore a refresh begins with on a wiped disk, refused because its file could not be written
+    ///     out, reaches the status in its own words (#262, #291).
+    /// </summary>
+    [Fact]
+    public async Task A_refused_restore_reaches_the_refresh_status_in_its_own_words()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        _host.DeleteIndexFile("alpha");
+
+        using var straggler = await _host.OpenIndexInstanceAsync();
+        await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
+        try
+        {
+            using (var response = await _host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            await _host.WaitForRefreshesAsync();
+        }
+        finally
+        {
+            await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
+        }
+
+        var status = await _host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.NotNull(status.Error);
+        Assert.Contains("'alpha'", status.Error, StringComparison.Ordinal);
+        Assert.Contains("not put in place", status.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, status.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -674,9 +741,20 @@ public sealed class RefreshTests : IDisposable
     /// <summary>
     ///     Refreshes project alpha, runs <paramref name="delete" /> while the refresh is held in the
     ///     report of <paramref name="phase" />, and asserts the refresh then failed because the project
-    ///     was deleted. Driven directly rather than through the endpoint, so the delete lands at a known point.
+    ///     was deleted.
     /// </summary>
     private async Task RefreshDeletedAtAsync(string phase, Func<Task> delete)
+    {
+        var error = await Assert.ThrowsAsync<ExplainedFailureException>(() => RefreshHeldAtAsync(phase, delete));
+        Assert.Contains("deleted", error.Message);
+    }
+
+    /// <summary>
+    ///     Refreshes project alpha and runs <paramref name="whileHeld" /> while the refresh is held in the
+    ///     report of <paramref name="phase" />. Driven directly rather than through the endpoint, so the
+    ///     work lands at a known point and the refresh's own exception reaches the test, not only its status.
+    /// </summary>
+    private async Task RefreshHeldAtAsync(string phase, Func<Task> whileHeld)
     {
         var project = (await _host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct))!;
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -693,11 +771,17 @@ public sealed class RefreshTests : IDisposable
             }, Ct), Ct);
 
         await reached.Task.WaitAsync(Ct);
-        await delete();
-        resume.Set();
+        try
+        {
+            await whileHeld();
+        }
+        finally
+        {
+            // Released even when the work failed, so a failing test does not leave a refresh blocked.
+            resume.Set();
+        }
 
-        var error = await Assert.ThrowsAsync<ExplainedFailureException>(() => refreshing);
-        Assert.Contains("deleted", error.Message);
+        await refreshing;
     }
 
     /// <summary>

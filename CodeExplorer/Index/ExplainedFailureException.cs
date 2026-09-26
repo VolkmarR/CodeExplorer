@@ -8,7 +8,9 @@ namespace CodeExplorer.Index;
 ///     write (#262). It lives here and not in <c>Refresh/</c> for the reason
 ///     <see cref="RefreshProgress" /> does: the index throws half of them, and cannot depend on the
 ///     refresh that reports them. An <see cref="InvalidOperationException" />, so a catch written for
-///     one still matches; not an <c>McpException</c>, because no MCP tool is on these paths.
+///     one still matches; not an <c>McpException</c>, because no MCP tool is on these paths. A failure
+///     an agent's tool call can meet as well, such as a restore refused (#291), throws an
+///     <c>McpException</c> instead.
 /// </summary>
 public sealed class ExplainedFailureException(string message, Exception? innerException = null)
     : InvalidOperationException(message, innerException);
