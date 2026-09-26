@@ -107,19 +107,35 @@ public sealed class GitClones(
     {
         var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
-        string? note;
+        Task<string?> transfer;
         try
         {
             // Both branches are synchronous libgit2 over the network; a worker thread keeps them off
             // the request thread. A clone is already up to date, so it is never followed by a fetch.
-            note = !IsCopyOf(repository, path)
-                ? await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken)
-                : await Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
+            transfer = !IsCopyOf(repository, path)
+                ? Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken)
+                : Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
         }
-        finally
+        catch
         {
             gate.Release();
+            throw;
         }
+
+        // The gate is the transfer's and not this call's: it is released when libgit2 returns, however
+        // long after the refresh has stopped waiting, so no clone starts over a folder one still writes.
+        // The fault is observed there too, since after a cancellation nothing else awaits it.
+        _ = transfer.ContinueWith(t =>
+        {
+            _ = t.Exception;
+            gate.Release();
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+        // Waited on apart from the transfer, because a cancellation reaches libgit2 only through a
+        // progress callback, and a remote that has gone quiet fires none: the transfer would run on to
+        // the stall limit before it heard of it (#289). The refresh stops now, and the abandoned
+        // transfer ends at the limit at the latest and deletes a clone it left half made.
+        string? note = await transfer.WaitAsync(cancellationToken);
 
         var clone = new Repository(path);
         try
@@ -437,9 +453,9 @@ public sealed class GitClones(
         CancellationToken cancellationToken)
     {
         // Checked here and nowhere inside: ListRemoteReferences takes no FetchOptions, so there is no
-        // OnTransferProgress to hang a cancellation on the way Fetch does. The advertisement is one
-        // round-trip with no transfer behind it, and the stall limit bounds it like any other wait on
-        // the remote, so the window this leaves open is the short one.
+        // OnTransferProgress to hang a cancellation on the way Fetch does. The refresh does not wait for
+        // it once cancelled (RefreshAndOpenAsync), and the stall limit ends it like any other wait on
+        // the remote.
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
@@ -499,7 +515,8 @@ public sealed class GitClones(
     private McpException TransferFailed(string verb, ProjectRepository repository, string path, Exception ex,
         TransferWatch watch)
     {
-        string reason = watch.Stalled
+        // Asked first and here, on the thread the transfer failed on, where libgit2 keeps its last error.
+        string reason = watch.Stalled && !TransferStallLimit.RemoteAnswered(ex)
             ? $"the remote stopped responding and sent nothing for {_stallSeconds} seconds. Ask the operator to "
               + $"check that the remote is reachable and up, then try again; {TransferStallLimit.Setting} raises "
               + "the limit for a remote that is slow to start sending."
@@ -530,9 +547,9 @@ public sealed class GitClones(
     ///     When a transfer last heard from its remote. This, and not the exception, is how a stall is
     ///     recognised: LibGit2Sharp drops libgit2's error code, so a timeout arrives as a plain
     ///     <see cref="LibGit2SharpException" /> whose message is the operating system's, in its language.
-    ///     No callback fires during the reference discovery, so an error that ends a discovery which
-    ///     trickled for longer than the limit reads as a stall too; that is a remote slow enough to be
-    ///     reported as one.
+    ///     No callback fires during the reference discovery, so a discovery that trickled for longer than
+    ///     the limit looks silent here; the error it ended with, when it is the remote's own answer, is
+    ///     what tells it apart (<see cref="TransferStallLimit.RemoteAnswered" />, #289).
     /// </summary>
     private sealed class TransferWatch(TimeSpan limit)
     {
