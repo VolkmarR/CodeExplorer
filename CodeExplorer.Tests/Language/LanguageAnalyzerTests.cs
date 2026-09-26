@@ -427,6 +427,7 @@ public sealed class LanguageAnalyzerTests
     [InlineData("x = '' + Advance(1);")]
     [InlineData("x = '\\' + Advance(1);")]
     [InlineData("x = ' ; Advance(1); var c = 'y';")]
+    [InlineData("var s = $\"{(c == '\\'' ? Advance(1) : 0)}\";")]
     public void An_apostrophe_without_a_closer_in_char_shape_hides_nothing(string line) =>
         Assert.Equal(ReferenceKind.Call, Kind("cs", line, "Advance"));
 

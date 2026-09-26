@@ -54,7 +54,7 @@ public sealed record StringDelimiter(string Open, string Close, StringEscape Esc
 
     /// <summary>
     ///     Whether this is a char literal, holding one character or one backslash escape: C#'s
-    ///     <c>'A'</c>, <c>'\''</c>, <c>'A'</c>. Its opener opens it only where a closer follows in
+    ///     <c>'A'</c>, <c>'\''</c>, <c>'\u0041'</c>. Its opener opens it only where a closer follows in
     ///     that shape, so a stray apostrophe — <c>it's</c> in code the scan misreads, or a quote the
     ///     line never closes — opens nothing, where read as an opener it took every name after it on
     ///     the line for literal text (#295).
