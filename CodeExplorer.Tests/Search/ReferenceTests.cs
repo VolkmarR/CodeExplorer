@@ -619,10 +619,12 @@ public sealed class ReferenceTests : IDisposable
     ///     the label holds — an apostrophe in one opened a char literal and filed the name as a string,
     ///     and without one the name read as code.
     /// </summary>
-    [Fact]
-    public async Task A_region_label_is_not_a_reference()
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task A_region_label_is_not_a_reference(SearchEngine engine)
     {
-        _host = new TestHost(SearchEngine.Substring);
+        _host = new TestHost(engine);
         await _host.IndexedProjectAsync("regions", new Dictionary<string, Dictionary<string, string>>
         {
             ["one"] = new()
@@ -630,9 +632,9 @@ public sealed class ReferenceTests : IDisposable
                 ["src/Limits.cs"] = """
                                     class Limits
                                     {
-                                        #region MaxOrders
-                                        #region Don't touch MaxOrders
-                                        int Read() => MaxOrders;
+                                        #region MAX_ORDERS
+                                        #region Don't touch MAX_ORDERS
+                                        int Read() => MAX_ORDERS;
                                         #endregion
                                         #endregion
                                     }
@@ -643,9 +645,9 @@ public sealed class ReferenceTests : IDisposable
         await using var client = await _host.ConnectAsync("regions");
 
         string text = await FindAsync(client,
-            new Dictionary<string, object?> { ["symbol"] = "MaxOrders", ["includeNoise"] = true });
+            new Dictionary<string, object?> { ["symbol"] = "MAX_ORDERS", ["includeNoise"] = true });
 
-        Assert.Contains("\"MaxOrders\" in 1 file: 1 reference, 2 in comments, strings or imports", text);
+        Assert.Contains("\"MAX_ORDERS\" in 1 file: 1 reference, 2 in comments, strings or imports", text);
         Assert.Contains("COMMENTS", text);
         Assert.DoesNotContain("STRINGS", text);
     }

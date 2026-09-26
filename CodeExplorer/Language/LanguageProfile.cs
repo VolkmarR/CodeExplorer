@@ -170,7 +170,8 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     public IReadOnlyList<string> DirectivePrefixes { get; init; } = [];
 
     /// <summary>
-    ///     Directive words whose line is prose: C#'s <c>#region</c> label and <c>#error</c> message.
+    ///     Directive words whose line is prose: the label after <c>#region</c> and <c>#endregion</c>,
+    ///     the message after <c>#error</c> and <c>#warning</c>, as C# and X# write them.
     ///     Matched at the start of the line's text, as a whole word and under the profile's own case
     ///     rule, and the whole line is then a comment, so no literal opens in it. Without this, an
     ///     apostrophe in <c>#region Don't touch</c> opened a char literal, and a name in the label read
