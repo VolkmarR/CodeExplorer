@@ -164,11 +164,10 @@ public sealed class ProjectRefresh(
                 // refusal holds nothing to dispose.
                 var open = await clones.OpenRefreshedAsync(repository, cancellationToken);
                 if (open is CloneOpen.Refused refused) skipped.Add(refused.Explanation);
-                else
+                else if (open is CloneOpen.Opened { Copy: var copy, Note: var note })
                 {
-                    var copy = (CloneOpen.Opened)open;
-                    opened.Add(new OpenedRepository(repository, copy.Copy));
-                    if (copy.Note is { } note) notes.Add(note);
+                    opened.Add(new OpenedRepository(repository, copy));
+                    if (note is not null) notes.Add(note);
                 }
             }
             catch (McpException ex)
