@@ -17,11 +17,15 @@ namespace CodeExplorer.Tests;
 ///     libgit2 refuses the downgrade itself, and the server sets nothing that changes its redirect
 ///     policy, so these tests pin libgit2's own behaviour: an upgrade that follows the redirect fails
 ///     here. They call libgit2 directly rather than through a refresh because the remote's certificate
-///     is self-signed, and the server rightly offers no way to accept one; the callback below is the
-///     only difference from the options <c>GitClones</c> passes.
+///     is self-signed, and the server rightly offers no way to accept one. The callback below is the
+///     only option here that <c>GitClones</c> does not set; none of the ones it sets bear on redirects.
+///     The ref advertisement <c>GitClones</c> also reads goes through the same libgit2 transport, but
+///     <c>ListRemoteReferences</c> takes no certificate callback, so it cannot reach this remote at all.
 /// </summary>
 public sealed class InsecureRedirectTests : IDisposable
 {
+    private const string Refusal = "cannot redirect from 'https' to 'http'";
+
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
 
@@ -57,7 +61,7 @@ public sealed class InsecureRedirectTests : IDisposable
         var refused = Assert.ThrowsAny<LibGit2SharpException>(() =>
             Repository.Clone(RemoteUrl, Path.Combine(_root, "clone"), options));
 
-        Assert.Contains("cannot redirect from 'https' to 'http'", refused.Message, StringComparison.Ordinal);
+        Assert.Contains(Refusal, refused.Message, StringComparison.Ordinal);
         Assert.Equal(0, Volatile.Read(ref _httpConnections));
     }
 
@@ -71,7 +75,7 @@ public sealed class InsecureRedirectTests : IDisposable
         var refused = Assert.ThrowsAny<LibGit2SharpException>(() => Commands.Fetch(copy, "origin",
             ["+refs/heads/*:refs/heads/*"], new FetchOptions { CertificateCheck = AcceptTestCertificate }, null));
 
-        Assert.Contains("cannot redirect from 'https' to 'http'", refused.Message, StringComparison.Ordinal);
+        Assert.Contains(Refusal, refused.Message, StringComparison.Ordinal);
         Assert.Equal(0, Volatile.Read(ref _httpConnections));
     }
 
