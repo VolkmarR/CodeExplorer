@@ -159,6 +159,11 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     ///     multiplication anywhere else. A language whose leading <c>*</c> is only the continuation of
     ///     a <c>/* */</c> block leaves it out: that line is inside the block the scan already carries,
     ///     and at the top level the same <c>*</c> is code.
+    ///     An opener that ends in a letter is a word, matched whole and under the profile's own case
+    ///     rule: a directive whose line is prose, such as the label after <c>#region</c>. The whole line
+    ///     is then a comment and no literal opens in it — an apostrophe in <c>#region Don't touch</c>
+    ///     opened a char literal, so a name in the label read as a string with one and as code
+    ///     without (#265).
     /// </summary>
     public IReadOnlyList<string> LineStartComments { get; init; } = [];
 
@@ -168,17 +173,6 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     ///     compiler directive reads as prose, which is how <c>#region</c> used to hide a whole line.
     /// </summary>
     public IReadOnlyList<string> DirectivePrefixes { get; init; } = [];
-
-    /// <summary>
-    ///     Directive words whose line is prose: the label after <c>#region</c> and <c>#endregion</c>,
-    ///     the message after <c>#error</c> and <c>#warning</c>, as C# and X# write them.
-    ///     Matched at the start of the line's text, as a whole word and under the profile's own case
-    ///     rule, and the whole line is then a comment, so no literal opens in it. Without this, an
-    ///     apostrophe in <c>#region Don't touch</c> opened a char literal, and a name in the label read
-    ///     as a string with one and as code without (#265). The directives that name symbols —
-    ///     <c>#if</c>, <c>#define</c> — are not listed, because what they name is code.
-    /// </summary>
-    public IReadOnlyList<string> ProseDirectives { get; init; } = [];
 
     /// <summary>
     ///     Block comment pairs. An opener anywhere on a line opens one, and it stays open across the
