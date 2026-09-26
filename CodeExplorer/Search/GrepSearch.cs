@@ -660,30 +660,17 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // lower-cased regardless of case mode: a (?i) inside the pattern would otherwise defeat it.
         // lower() is not RE2's case folding, though: RE2 folds s, S and ſ (U+017F) together and lower('ſ')
         // stays ſ, so a file matching only through the long s was dropped before RE2 saw it (#266). When
-        // the search folds case and the literal has an s, both sides map ſ to s. The Kelvin sign, RE2's
-        // other fold beyond ASCII, needs nothing: lower() already maps it to k.
+        // the search folds case and the literal has an s, the literal maps ſ to s, and so does a line,
+        // but only a line that holds a ſ: the plain test answers every other one, so almost no line pays
+        // for the replace. The Kelvin sign, RE2's other fold beyond ASCII, needs nothing: lower()
+        // already maps it to k.
         string lowered = literal.ToLowerInvariant();
-        bool foldsLongS = (!caseSensitive || InlineCaseFolding(query)) && lowered.AsSpan().IndexOfAny('s', 'ſ') >= 0;
+        bool foldsLongS = (!caseSensitive || Re2.MayFoldCase(query)) && lowered.AsSpan().IndexOfAny('s', 'ſ') >= 0;
         parameters.Add(new DuckDBParameter("lit", foldsLongS ? lowered.Replace('ſ', 's') : lowered));
-        string content = foldsLongS ? "replace(lower(l.content), 'ſ', 's')" : "lower(l.content)";
-        return $" AND EXISTS (SELECT 1 FROM lines l WHERE l.file_id = f.file_id AND contains({content}, $lit))";
-    }
-
-    /// <summary>
-    ///     Whether a flag group in the pattern — <c>(?i)</c>, <c>(?mi:</c> — may switch case folding on.
-    ///     Any <c>i</c> among a group's flags counts, even after a <c>-</c> that turns it off: a wrong yes
-    ///     only weakens the prefilter, a wrong no drops a file that matches.
-    /// </summary>
-    private static bool InlineCaseFolding(string pattern)
-    {
-        for (int i = pattern.IndexOf("(?", StringComparison.Ordinal); i >= 0;
-             i = pattern.IndexOf("(?", i + 2, StringComparison.Ordinal))
-        {
-            for (int j = i + 2; j < pattern.Length && (char.IsAsciiLetter(pattern[j]) || pattern[j] == '-'); j++)
-                if (pattern[j] == 'i') return true;
-        }
-
-        return false;
+        string test = foldsLongS
+            ? "(contains(lower(l.content), $lit) OR (contains(l.content, 'ſ') AND contains(replace(lower(l.content), 'ſ', 's'), $lit)))"
+            : "contains(lower(l.content), $lit)";
+        return $" AND EXISTS (SELECT 1 FROM lines l WHERE l.file_id = f.file_id AND {test})";
     }
 
     /// <summary>
