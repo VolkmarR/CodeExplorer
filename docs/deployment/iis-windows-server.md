@@ -226,7 +226,9 @@ lines or 16 million characters across them, and a `multiline` grep page at most 
 beyond its first file. Globs keep SQL `GLOB`'s meaning but run as RE2, so a pattern full of stars no
 longer holds one of the pool's cores for minutes; a glob or path term is at most 256 characters and an
 argument at most 32 terms. The multiline budget is independent of `Index:MaxFileBytes`: a file larger
-than 8 MiB is still shown, on a page of its own.
+than 8 MiB is still shown, on a page of its own. A `multiline` grep also counts its matches over at
+most 64 MiB of candidate files (#297), so a pattern with no literal to narrow by no longer reads the
+whole index for its count: on a 367 MiB index that was ten seconds of one core per call.
 
 `Storage:DurableDirectory` is optional and the second disk above is a suggestion, not a requirement —
 it defaults to `durable` under the data directory. Separating them is worth it precisely because they
@@ -335,3 +337,4 @@ work.
 | A refresh skips a repository because "the remote stopped responding" | The remote sent nothing for `Git:TransferStallSeconds`; a remote that answers with an HTTP error, however slowly, is reported with that error instead. Check the remote first; raise the setting only for one slow to start a pack. |
 | An agent is told "depth may be at most 64", "One read takes at most 100 entries", "was not read: the entries before it already read as much as one call reads" or "may be at most 256 characters" | The per-call limits since GHSA-v284-9964-6mjr, section 5. They are not settings; the reply says how to split the call. |
 | A multiline grep lists a file with "lines not shown" | The page spent its 8 MiB multiline read budget on the files above it (GHSA-v284-9964-6mjr). The reply names the `pageSize=1` page that shows that file. |
+| A multiline grep says "At least N files match" or "No matches in the files searched" | Its count read the 64 MiB multiline count budget of candidate files and did not search the rest (#297). Not a setting; the reply says how many files it left out, and a `path`, `ext` or `exclude` filter or a longer literal in the pattern gets an exact count. |

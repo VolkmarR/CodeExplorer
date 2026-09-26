@@ -81,7 +81,9 @@ million characters, across them, explicit ranges included; an entry past that bu
 not read, and says so. A `multiline` grep page reads at most 8 MiB of file content to mark its
 matches: its first file is read whatever its size, and a later file that does not fit is listed with
 its count and the page to ask for. A multiline file shows at most 4,200 lines, the most single-line
-mode can show for one file. Globs — `glob`, and every `path`, `exclude` and extension term — keep SQL `GLOB`'s meaning but
+mode can show for one file. A `multiline` grep counts its matches over at most 64 MiB of candidate
+files, in path order (#297): past that its totals are a lower bound, and the reply says how many files
+it did not search and how to narrow the search. Globs — `glob`, and every `path`, `exclude` and extension term — keep SQL `GLOB`'s meaning but
 run as RE2, so they cannot backtrack. A glob or term is at most 256 characters, an argument at most
 32 terms, and a reversed range such as `[z-a]` is refused rather than matching nothing. None of these
 is a setting.

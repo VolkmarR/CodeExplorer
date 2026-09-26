@@ -256,6 +256,8 @@ public sealed class CallLimitsTests(CallLimitsFixture fixture) : IClassFixture<C
         Assert.Contains($"1-{FileQueries.MaxTreeDepth}", Described("list_tree"), StringComparison.Ordinal);
         Assert.Contains($"at most {GrepSearch.MaxMultilinePageMiB} MiB of file content",
             Described("grep"), StringComparison.Ordinal);
+        Assert.Contains($"counts at most {GrepSearch.MaxMultilineCountMiB} MiB of candidate files",
+            Described("grep"), StringComparison.Ordinal);
     }
 
     private static readonly string[] _overBudget = ["one/big.txt:1-60000", "one/big.txt:1-60000", "one/README.md"];

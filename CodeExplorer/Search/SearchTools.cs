@@ -51,7 +51,7 @@ internal sealed partial class SearchTools(
         [Description("Only search files with this extension, without the dot, e.g. \"cs\" or \"tsx\".")]
         string? ext = null,
         [Description("""
-                     Match across line breaks, so a pattern can span a wrapped statement such as `repo.Update(entity,\n  e => e.Status = ...)`. Implies regex. Same RE2 syntax, and `.` also crosses newlines here. Every line a match spans is returned and marked as matched. Slower than single-line mode; give the pattern a distinctive literal so candidate files can be narrowed first. A page reads at most 8 MiB of file content to mark its matches; a file past that is listed with its match count and the page to ask for to see its lines.
+                     Match across line breaks, so a pattern can span a wrapped statement such as `repo.Update(entity,\n  e => e.Status = ...)`. Implies regex. Same RE2 syntax, and `.` also crosses newlines here. Every line a match spans is returned and marked as matched. Slower than single-line mode; give the pattern a distinctive literal so candidate files can be narrowed first. A page reads at most 8 MiB of file content to mark its matches; a file past that is listed with its match count and the page to ask for to see its lines. A search counts at most 64 MiB of candidate files, in path order; past that its totals are a lower bound and the reply says how many files it did not search.
                      """)]
         bool multiline = false,
         [Description("""
@@ -84,6 +84,16 @@ internal sealed partial class SearchTools(
 
     private static string NoMatches(GrepRequest request, GrepResult result)
     {
+        // A miss the count budget cut is no proof that nothing matches, so it says neither that nor
+        // anything about the filters: the recount without them was not run (#297).
+        if (result.FilesNotSearched > 0)
+            return $"No matches in the files searched for \"{request.Query}\" ({result.Engine} engine). The count "
+                   + CountStopped(result.FilesNotSearched);
+        if (result.FilesNotSearchedOutsideFilters > 0)
+            return $"No matches for \"{request.Query}\" ({result.Engine} engine). Nothing matches within your filters; "
+                   + "whether it matches outside them is not known. Without them, the count "
+                   + CountStopped(result.FilesNotSearchedOutsideFilters);
+
         var text = new StringBuilder($"No matches for \"{request.Query}\" ({result.Engine} engine). ");
         text.Append(FilterVerdict(result.FilesMatchingWithoutFilters, "pattern",
             "Nothing matches anywhere in the project"));
@@ -142,21 +152,35 @@ internal sealed partial class SearchTools(
             _ => $"{miss}; no filters narrowed the search, which spanned every file. "
         };
 
+    /// <summary>
+    ///     The rest of a sentence that starts with a subject naming the count, for a multiline search the
+    ///     count budget cut: how much it read, how much it left, and how to get an exact count instead.
+    /// </summary>
+    private static string CountStopped(int notSearched) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"stopped after {GrepSearch.MaxMultilineCountMiB} MiB of candidate files, so {notSearched} more {ToolReply.Plural(notSearched, "file")} ")
+        + (notSearched == 1 ? "was" : "were")
+        + " not searched. For an exact count, narrow with path, ext or exclude, or put a longer literal the match must contain into the pattern.\n";
+
     private static string Format(GrepRequest request, GrepResult result)
     {
         int lastPage = (result.TotalFiles + result.PageSize - 1) / result.PageSize;
+        bool cut = result.FilesNotSearched > 0;
         var text = new StringBuilder();
         // Spell out that the counts are project-wide totals, not this page; read as per-page numbers they
-        // turn a paging decision into a guess.
-        text.Append(CultureInfo.InvariantCulture,
-                $"{result.TotalFiles} {ToolReply.Plural(result.TotalFiles, "file")} match in total")
+        // turn a paging decision into a guess. A count the budget cut is a lower bound and says so first,
+        // so it is never read as the total.
+        text.Append(cut ? "At least " : "")
             .Append(CultureInfo.InvariantCulture,
-                $" ({result.TotalLines} matching {ToolReply.Plural(result.TotalLines, "line")})")
+                $"{result.TotalFiles} {ToolReply.Plural(result.TotalFiles, "file")} match{(cut ? "" : " in total")}")
+            .Append(CultureInfo.InvariantCulture,
+                $" ({(cut ? "at least " : "")}{result.TotalLines} matching {ToolReply.Plural(result.TotalLines, "line")})")
             .Append(lastPage == 1
-                ? ", all shown below"
+                ? cut ? ", all counted shown below" : ", all shown below"
                 : string.Create(CultureInfo.InvariantCulture,
                     $"; showing {result.Files.Count} of them, page {result.Page} of {lastPage}"))
             .Append(CultureInfo.InvariantCulture, $" ({result.Engine} engine)\n");
+        if (cut) text.Append("The count ").Append(CountStopped(result.FilesNotSearched));
 
         if (result.Files.Count == 0)
         {

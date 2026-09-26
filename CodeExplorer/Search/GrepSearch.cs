@@ -63,6 +63,11 @@ public sealed record GrepFile(
 ///     scan rank differently. <see cref="FilesMatchingWithoutFilters" /> is filled only when nothing
 ///     matched under path, extension or exclude filters: it tells "no matches" from "matches existed
 ///     and the filters hid them", which read identically and mean opposite things.
+///     <see cref="FilesNotSearched" /> is how many candidate files a multiline count left out once it
+///     had read <see cref="GrepSearch.MaxMultilineCountBytes" />: where it is not zero the totals are a
+///     lower bound. <see cref="FilesNotSearchedOutsideFilters" /> is the same for the recount without
+///     filters, set only when that recount found nothing in what it read, so whether the pattern
+///     matches outside the filters is not known and <see cref="FilesMatchingWithoutFilters" /> is null.
 /// </summary>
 public sealed record GrepResult(
     string Engine,
@@ -71,7 +76,9 @@ public sealed record GrepResult(
     int Page,
     int PageSize,
     IReadOnlyList<GrepFile> Files,
-    int? FilesMatchingWithoutFilters) : Outcome;
+    int? FilesMatchingWithoutFilters,
+    int FilesNotSearched = 0,
+    int FilesNotSearchedOutsideFilters = 0) : Outcome;
 
 /// <summary>
 ///     Text and regular-expression search over a project's <c>lines</c>. All matching runs inside
@@ -129,6 +136,19 @@ public sealed partial class GrepSearch(IndexReaders readers)
 
     /// <summary><see cref="MaxMultilinePageMiB" /> in bytes, which is what file sizes are compared in.</summary>
     public const long MaxMultilinePageBytes = MaxMultilinePageMiB * 1024L * 1024;
+
+    /// <summary>
+    ///     The most candidate file content one multiline search reads to count its matches (#297).
+    ///     Counting reads every candidate whole inside DuckDB, so before this a pattern with no literal
+    ///     to narrow by read the whole index: 367 MiB and ten seconds on Radix, for any caller who asked.
+    ///     Sixty-four MiB is about a second of that same pass, and it holds the largest repository there
+    ///     (acslib, 61 MiB) whole, so a search scoped to one repository still gets an exact count. The
+    ///     first candidate is counted whatever its size, as the page's first file is read.
+    /// </summary>
+    public const int MaxMultilineCountMiB = 64;
+
+    /// <summary><see cref="MaxMultilineCountMiB" /> in bytes, which is what file sizes are compared in.</summary>
+    public const long MaxMultilineCountBytes = MaxMultilineCountMiB * 1024L * 1024;
 
     /// <summary>
     ///     Wrapped around every multiline match by <c>regexp_replace</c> so the exact boundaries come
@@ -456,34 +476,58 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // The extract alone decides both whether a document matches and how often: it is empty exactly
         // when regexp_matches is false, empty matches and empty documents included, so testing
         // regexp_matches first would run the pattern over every matching document twice.
+        // `uncounted` drives the join so that a search with no match still returns the one row saying
+        // how many candidates the budget left out.
         var counts = new List<(long FileId, string Path, int Count, long Bytes)>();
+        int notSearched = 0;
         await using (var command = connection.Query($"""
-                                                     {Documents(fileFilter + literalFilter)}
-                                                     SELECT file_id, qualified_path, size_bytes, match_count FROM (
+                                                     {CountedDocuments(fileFilter + literalFilter)}
+                                                     SELECT u.n AS not_searched, m.file_id, m.qualified_path, m.size_bytes,
+                                                            m.match_count
+                                                     FROM uncounted u LEFT JOIN (
                                                          SELECT file_id, qualified_path, size_bytes,
                                                                 {matchCount} AS match_count
-                                                         FROM docs)
-                                                     WHERE match_count > 0
-                                                     ORDER BY match_count DESC, qualified_path
+                                                         FROM docs) m ON m.match_count > 0
+                                                     ORDER BY m.match_count DESC, m.qualified_path
                                                      """, [.. matchParameters, .. fileParameters]))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
+            {
+                notSearched = (int)reader.Int64("not_searched");
+                if (reader.IsNull("file_id")) continue;
                 counts.Add((reader.Int64("file_id"), reader.Text("qualified_path"),
                     (int)reader.Int64("match_count"), reader.Int64("size_bytes")));
+            }
         }
 
+        // The recount drops the filters, so it reads a superset of what the count read: after a count the
+        // budget cut, it would be cut too and could not say that nothing matches outside. Where it is cut
+        // and finds nothing, whether anything matches outside is not known, which is not the same as none.
         int? withoutFilters = null;
-        if (counts.Count == 0 && request.HasFileFilters)
-            withoutFilters = (int)await connection.CountAsync(
-                $"{Documents(literalFilter)} SELECT count(*) FROM docs WHERE regexp_matches(content, $q, $flags)",
-                matchParameters, cancellationToken);
+        int notSearchedOutside = 0;
+        if (counts.Count == 0 && notSearched == 0 && request.HasFileFilters)
+        {
+            await using var command = connection.Query($"""
+                                                        {CountedDocuments(literalFilter)}
+                                                        SELECT (SELECT n FROM uncounted) AS not_searched,
+                                                               count(*) AS matching
+                                                        FROM docs WHERE regexp_matches(content, $q, $flags)
+                                                        """, matchParameters);
+            await using var reader = await command.ReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            int matching = (int)reader.Int64("matching");
+            int outside = (int)reader.Int64("not_searched");
+            if (matching == 0 && outside > 0) notSearchedOutside = outside;
+            else withoutFilters = matching;
+        }
 
         long totalMatches = counts.Sum(c => (long)c.Count);
         var pageFiles = counts.Skip((int)Math.Min(bounds.Skip, counts.Count)).Take(bounds.PageSize).ToList();
         if (request.FilesOnly || pageFiles.Count == 0)
             return new GrepResult(MultilineEngine, counts.Count, totalMatches, bounds.Page, bounds.PageSize,
-                [.. pageFiles.Select(f => new GrepFile(f.Path, f.Count, 0, []))], withoutFilters);
+                [.. pageFiles.Select(f => new GrepFile(f.Path, f.Count, 0, []))], withoutFilters, notSearched,
+                notSearchedOutside);
 
         // RE2 marks its own match boundaries: the pattern becomes group 1 and every match is rewritten as
         // START match END, so the offsets read back are exact even for \b, ^ or $, which a text search
@@ -543,7 +587,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         }
 
         return new GrepResult(MultilineEngine, counts.Count, totalMatches, bounds.Page, bounds.PageSize, files,
-            withoutFilters);
+            withoutFilters, notSearched);
 
         // Skipped files (binary, oversized) have no lines and would aggregate to nothing; filtered out
         // here so they never even reach the join.
@@ -553,10 +597,40 @@ public sealed partial class GrepSearch(IndexReaders readers)
                     WITH candidates AS (
                         SELECT f.file_id, f.qualified_path, f.size_bytes FROM files f
                         WHERE f.skip_reason IS NULL{candidateFilter}),
+                    {Aggregated("candidates")}
+                    """;
+        }
+
+        // The candidates in path order, read while their running size stays within MaxMultilineCountBytes
+        // and the first whatever its size; the running size only grows, so what is read is a prefix and
+        // "the files after X" is all a reply has to say about the rest. `uncounted` is how many were
+        // left out. The budget is a constant, so inlining it is safe. Both read the candidates, which are
+        // materialized so the literal prefilter runs over `lines` once, not once for each.
+        static string CountedDocuments(string candidateFilter)
+        {
+            return $"""
+                    WITH candidates AS MATERIALIZED (
+                        SELECT f.file_id, f.qualified_path, f.size_bytes,
+                               sum(f.size_bytes) OVER running AS through, row_number() OVER running AS rn
+                        FROM files f
+                        WHERE f.skip_reason IS NULL{candidateFilter}
+                        WINDOW running AS (ORDER BY f.qualified_path ROWS UNBOUNDED PRECEDING)),
+                    counted AS (
+                        SELECT file_id, qualified_path, size_bytes FROM candidates
+                        WHERE rn = 1 OR through <= {MaxMultilineCountBytes}),
+                    uncounted AS (
+                        SELECT count(*) AS n FROM candidates WHERE rn > 1 AND through > {MaxMultilineCountBytes}),
+                    {Aggregated("counted")}
+                    """;
+        }
+
+        static string Aggregated(string files)
+        {
+            return $"""
                     docs AS (
                         SELECT c.file_id, c.qualified_path, c.size_bytes,
                                string_agg(l.content, chr(10) ORDER BY l.line_number) AS content
-                        FROM candidates c JOIN lines l USING (file_id)
+                        FROM {files} c JOIN lines l USING (file_id)
                         GROUP BY ALL)
                     """;
         }
