@@ -178,17 +178,19 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     Loads a fetched copy into a database whose tables the caller has already created and which
     ///     its connection is already <c>USE</c>ing. The BM25 index is rebuilt here rather than carried in
     ///     the Parquet: it is <c>fts</c>'s own tables, and a replica that could not install the extension
-    ///     has to answer from a substring scan, which is what <paramref name="ftsAvailable" /> decides
-    ///     and what <c>index_info</c> then reports.
+    ///     has to answer from a substring scan, and a restore a refresh is about to replace does not
+    ///     build one either (#290). <paramref name="fullText" /> decides, and <c>index_info</c> then
+    ///     reports it. <paramref name="report" /> is told when the BM25 build starts, so a refresh's
+    ///     timeline names every full-text build it pays for, this one included.
     /// </summary>
-    public async Task LoadAsync(DuckDBConnection connection, DurableCopy copy, bool ftsAvailable,
-        CancellationToken cancellationToken)
+    public async Task LoadAsync(DuckDBConnection connection, DurableCopy copy, bool fullText,
+        Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
         // index_info is the one table not copied straight back: whether a BM25 index exists is a
         // property of this replica and of the load below, not of the build that wrote the Parquet.
         await connection.ExecuteAsync(
             $"INSERT INTO {_indexInfo} SELECT schema_version, built_at, "
-            + $"{(ftsAvailable ? "true" : "false")} AS fts_indexed, single_repository "
+            + $"{(fullText ? "true" : "false")} AS fts_indexed, single_repository "
             + $"FROM read_parquet({IndexQuery.Literal(Parquet(copy, _indexInfo))})",
             cancellationToken);
         foreach (string table in _contentTables)
@@ -196,7 +198,12 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
                 $"INSERT INTO {table} SELECT * FROM read_parquet({IndexQuery.Literal(Parquet(copy, table))})",
                 cancellationToken);
 
-        if (ftsAvailable) await FtsExtension.CreateIndexAsync(connection, cancellationToken);
+        if (fullText)
+        {
+            report(new RefreshProgress(RefreshProgress.FullTextStep, RefreshProgress.TotalStepCount,
+                RefreshProgress.FullTextPhase));
+            await FtsExtension.CreateIndexAsync(connection, cancellationToken);
+        }
 
         copy.Recording.Moved();
     }

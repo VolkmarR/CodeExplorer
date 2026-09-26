@@ -191,6 +191,58 @@ public sealed class DurabilityTests : IDisposable
         Assert.Equal(before.Count + 1, after.Count);
     }
 
+    /// <summary>
+    ///     A refresh on a wiped disk restores first, and the shadow it then builds replaces the restored
+    ///     index within minutes (#290). The restore used to build the full-text index for it anyway, so
+    ///     the most expensive phase of a large refresh was paid twice. Read off the phases the status
+    ///     records, which name every full-text build a refresh makes, the restore's included.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_that_begins_with_a_restore_builds_the_full_text_index_once()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\nvoid Needle() {}\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+
+        await host.RefreshAsync("alpha");
+
+        var phases = (await host.RefreshStatusAsync("alpha")).Phases.Select(cost => cost.Phase).ToList();
+        Assert.Single(phases, phase => phase == RefreshProgress.FullTextPhase);
+        // The restore is a phase of its own, costed like the rest, and it runs before the first fetch.
+        Assert.Equal(1, phases.IndexOf(RefreshProgress.RestorePhase));
+        Assert.Equal(RefreshProgress.StartPhase, phases[0]);
+        // And the index the refresh left is searched by BM25, which the shadow built.
+        Assert.Equal(["true"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+    }
+
+    /// <summary>
+    ///     A restore that fails inside a refresh names the restore, not "Starting" (#290): an operator
+    ///     reading the status has to be able to tell that the durable copy was what failed. The failure
+    ///     is the lines table held open exclusively, so its transfer fails part-way through the fetch.
+    /// </summary>
+    [Fact]
+    public async Task A_restore_that_fails_inside_a_refresh_is_reported_in_its_own_phase()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+
+        await using (File.Open(Path.Combine(host.DurableIndexDirectory("alpha"), "lines.parquet"),
+                         FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            using (var response = await host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            await host.WaitForRefreshesAsync();
+        }
+
+        var status = await host.RefreshStatusAsync("alpha");
+        Assert.Equal(RefreshState.Failed, status.State);
+        Assert.Contains($"\"{RefreshProgress.RestorePhase}\"", status.Error);
+        Assert.Equal(RefreshProgress.RestorePhase, status.Phases[^1].Phase);
+    }
+
     [Fact]
     public async Task The_project_list_reads_every_project_without_restoring_any_of_them()
     {

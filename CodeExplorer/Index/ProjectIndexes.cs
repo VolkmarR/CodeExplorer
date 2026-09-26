@@ -367,7 +367,21 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     outside the writer gate is the fast path; <see cref="RestoreAsync" /> asks again inside it.
     /// </summary>
     public Task RestoreIfAbsentAsync(string slug, CancellationToken cancellationToken) =>
-        HasIndex(slug) ? Task.CompletedTask : RestoreAsync(slug, cancellationToken);
+        HasIndex(slug) ? Task.CompletedTask : RestoreAsync(slug, FtsAvailable, static _ => { }, cancellationToken);
+
+    /// <summary>
+    ///     The restore a refresh begins with on a disk without the project's file (#229), reported
+    ///     under its own phase and without the BM25 index (#290). The shadow the refresh builds next
+    ///     replaces this index and builds its own full-text index, so building one here too paid the
+    ///     most expensive phase of a large refresh twice. Until the swap the restored index is searched
+    ///     by substring scan, which <c>index_info</c> says; so is it after a refresh that fails before
+    ///     its swap, until the next one succeeds — every line is still there, only ranked differently.
+    ///     <paramref name="report" /> is told when the restore starts, which is what puts a failed
+    ///     restore under its own phase.
+    /// </summary>
+    public Task RestoreForRefreshAsync(string slug, Action<RefreshProgress> report,
+        CancellationToken cancellationToken) =>
+        HasIndex(slug) ? Task.CompletedTask : RestoreAsync(slug, false, report, cancellationToken);
 
     /// <summary>
     ///     Rebuilds a project's file from its durable copy, and answers whether there was one. The
@@ -375,9 +389,12 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     racing a first refresh cannot have the swap replace the file it is still writing — the move
     ///     goes through the same drain a swap does, and is the same one-file overwrite.
     ///     One project at a time and only that project: the gate is per project, so a wake that restores
-    ///     a large index does not hold up a connection to a small one.
+    ///     a large index does not hold up a connection to a small one. <paramref name="fullText" /> is
+    ///     whether the restored index gets a BM25 index of its own, and <paramref name="report" /> is
+    ///     told when the restore starts and when that build does.
     /// </summary>
-    private async Task<bool> RestoreAsync(string slug, CancellationToken cancellationToken)
+    private async Task<bool> RestoreAsync(string slug, bool fullText, Action<RefreshProgress> report,
+        CancellationToken cancellationToken)
     {
         // Held from here to the end, not just around the file work: a swap that started while this was
         // downloading would otherwise install the newer index and have the move below overwrite it with
@@ -388,6 +405,11 @@ public sealed partial class ProjectIndexes : IDisposable
             // Another caller may have restored it, or a refresh may have swapped one in, while this one
             // waited. Either way there is now an index and nothing to restore.
             if (HasIndex(slug)) return true;
+
+            // Before the fetch and not once a copy is found: the transfer is most of what a restore
+            // costs, and an unreachable store fails in it.
+            report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount,
+                RefreshProgress.RestorePhase));
 
             // Null is a project that has never been indexed, or a copy an older schema wrote. Both
             // mean "rebuild from git", and both have recorded themselves on the way out.
@@ -401,7 +423,7 @@ public sealed partial class ProjectIndexes : IDisposable
             await using (var connection = await ConnectAsync(cancellationToken))
             {
                 await AttachEmptyAsync(connection, catalog, path, cancellationToken);
-                await _durable.LoadAsync(connection, copy, FtsAvailable, cancellationToken);
+                await _durable.LoadAsync(connection, copy, fullText, report, cancellationToken);
                 await CheckpointAsync(connection, slug, catalog, refusal, cancellationToken);
             }
 

@@ -86,6 +86,16 @@ public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, lon
     /// </summary>
     public const string StartPhase = "Starting";
 
+    /// <summary>
+    ///     Putting the project's index back from its durable copy, which a refresh on a disk without the
+    ///     index file does before it fetches anything (#229). A phase of the fetching step rather than
+    ///     a step of its own: it is the first step's preparation, and the seven steps are what the
+    ///     counter is read for. It was billed to <see cref="StartPhase" /> until #290, so a restore
+    ///     that failed was reported as a refresh that failed while starting. A project with no durable
+    ///     copy passes through it in the milliseconds it takes to find none.
+    /// </summary>
+    public const string RestorePhase = "Restoring the index from its durable copy";
+
     public const string AttributionPhase = "Writing attribution onto the lines";
 
     public const string OverviewPhase = "Building the project overview";
