@@ -338,9 +338,9 @@ public sealed partial class ProjectIndexes : IDisposable
                     return null;
                 }
 
-                return new IndexLease(connection, FtsAvailable, reusable =>
+                return new IndexLease(connection, FtsAvailable, completed =>
                 {
-                    if (reusable) pool.Return(connection, generation);
+                    if (completed) pool.Return(connection, generation);
                     // Closed rather than pooled: nobody said the work on it completed, and the next
                     // borrower must not inherit whatever a statement that threw or was cancelled left.
                     else connection.Dispose();

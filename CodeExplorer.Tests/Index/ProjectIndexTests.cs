@@ -346,7 +346,7 @@ public sealed class ProjectIndexTests : IDisposable
                                       && m.Tags.GetValueOrDefault(Telemetry.ProjectTag) is GateOne or GateTwo);
 
     /// <summary>
-    ///     A lease hands its connection back rather than closing it, so a swap has to empty the pool it
+    ///     A completed lease hands its connection back rather than closing it, so a swap has to empty the pool it
     ///     went into: the catalog those connections are bound to is detached and the file replaced
     ///     underneath them (#149). A read after the swap must see the new index, not fail on a stale
     ///     binding — which is what a pooled connection the swap forgot would give it.
@@ -440,6 +440,33 @@ public sealed class ProjectIndexTests : IDisposable
 
         using var next = await host.OpenIndexAsync("completed");
         Assert.Same(pooled, next.Connection);
+    }
+
+    /// <summary>
+    ///     The same for a read of the index rather than about it: an agent abandoning a search is the
+    ///     ordinary way a read is cancelled, and its connection must not be the next caller's.
+    /// </summary>
+    [Fact]
+    public async Task A_read_cancelled_mid_read_does_not_pool_its_connection()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("read-cancel", Repository("class A;\n"));
+        System.Data.Common.DbConnection used = null!;
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            host.Services.GetRequiredService<IndexReaders>().OverIndexAsync<int>("read-cancel", null,
+                (reader, token) =>
+                {
+                    used = reader.Connection;
+                    cancel.Cancel();
+                    token.ThrowIfCancellationRequested();
+                    return Task.FromResult(0);
+                }, _ => -1, cancel.Token));
+
+        using var next = await host.OpenIndexAsync("read-cancel");
+        Assert.NotSame(used, next.Connection);
+        Assert.Equal(System.Data.ConnectionState.Closed, used.State);
     }
 
     /// <summary>A read through <see cref="IndexReaders" /> that returned says so, and its connection is reused.</summary>

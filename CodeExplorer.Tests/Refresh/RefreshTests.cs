@@ -52,7 +52,8 @@ public sealed class RefreshTests : IDisposable
         _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
 
         // An in-flight query: a lease is what a grep or a file read holds while it works, and the
-        // drain is what makes a swap wait for one.
+        // drain is what makes a swap wait for one. It is never completed, so it is closed rather than
+        // pooled, and releasing it must count the reader out all the same (#267).
         using (var inFlight = await _host.OpenIndexAsync("alpha"))
         {
             using (var response = await _host.RequestRefreshAsync("alpha"))

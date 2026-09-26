@@ -52,8 +52,8 @@ public sealed class IndexReaders(ProjectIndexes indexes)
 
     /// <summary>
     ///     Runs the reads on a lease, and says it completed only once they returned, so a connection
-    ///     whose reads threw goes no further. Since #149 a lease hands its connection back to a pool
-    ///     instead of closing it, and a statement that threw or was abandoned mid-read can leave
+    ///     whose reads threw goes no further. Since #149 a completed lease hands its connection back to
+    ///     a pool instead of closing it, and a statement that threw or was abandoned mid-read can leave
     ///     something on it the next borrower would inherit — an agent cancelling a slow search is the
     ///     ordinary way that happens. The exception path needs nothing here: a lease not completed is
     ///     closed on dispose (#267), which is what a cancelled status read once pooled instead (#241).

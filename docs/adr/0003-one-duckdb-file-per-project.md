@@ -95,7 +95,9 @@ checkout, so nothing is ever read through a binding the lease did not just make;
 the open connection, not the binding. A pooled connection is bound to a catalog a swap detaches, so
 the swap empties that project's pool while the gate is shut — and marks the connections still out,
 which the drain's timeout permits, so that one orphaned reader cannot hand a dead binding back into
-a pool everyone else draws from.
+a pool everyone else draws from. Since #267 only a lease whose work said it completed goes back to
+the pool at all; one disposed without saying so, after a throw, a cancel or a forgotten call, is
+closed, so a forgotten call costs a new connection rather than handing on a half-read one.
 
 The gate was the sharper problem. `ATTACH` is a property of the instance, so one semaphore
 serialises it across every project; a lease took that semaphore before it had looked at whether the
