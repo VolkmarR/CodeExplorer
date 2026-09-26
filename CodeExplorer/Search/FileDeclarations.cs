@@ -155,15 +155,15 @@ public sealed class FileDeclarations(IndexReaders readers)
 
                     declarations.Add(new FileDeclaration(line.LineNumber, line.Content, what.Type,
                         what.Member, what.Role, declared.Evidence));
-                    // One past the ceiling tells a list that ends here from one cut short, and it is
-                    // also where the reading stops: the lines below cannot reach the answer, and
-                    // placing each of them costs a regex and a walk of the line.
-                    return declarations.Count < Cap.Rows(MaxDeclarations);
+                    // The row past the cap is also where the reading stops: the lines below cannot
+                    // reach the answer, and placing each of them costs a regex and a walk of the line.
+                    return declarations.Count < RowCap.Limit(MaxDeclarations);
                 }, token);
             }
 
+            bool capped = RowCap.Trim(declarations, MaxDeclarations);
             return new DeclarationsResult(file.QualifiedPath, name,
                 profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled,
-                Cap.Trim(declarations, MaxDeclarations), offset, declarations);
+                capped, offset, declarations);
         }, cancellationToken);
 }

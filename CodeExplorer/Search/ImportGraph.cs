@@ -61,8 +61,7 @@ public sealed class ImportGraph(IndexReaders readers)
     /// <summary>
     ///     How many edges one answer carries. A file with more imports than this is generated or is a
     ///     barrel that re-exports a package, and past the first few hundred the list has stopped being
-    ///     the answer to "what does this depend on". The query reads one row past it, which is what
-    ///     tells a list that ends here from one that was cut short — see <see cref="Cap" />.
+    ///     the answer to "what does this depend on". Read through <see cref="RowCap" />.
     /// </summary>
     public const int MaxEdges = 500;
 
@@ -89,14 +88,14 @@ public sealed class ImportGraph(IndexReaders readers)
                                                              ORDER BY i.line_number, i.import_id
                                                              LIMIT $limit
                                                              """,
-                [new DuckDBParameter("f", file.FileId), new("limit", Cap.Rows(MaxEdges))]);
+                [new DuckDBParameter("f", file.FileId), new("limit", RowCap.Limit(MaxEdges))]);
             await using var reader = await command.ReaderAsync(token);
             while (await reader.ReadAsync(token))
                 edges.Add(new ImportedFrom(reader.Text("name"), ImportColumns.Shape(reader.Text("shape")),
                     reader.Int32("line_number"), reader.TextOrNull("target_path"),
                     reader.TextOrNull("unresolved"), ImportColumns.Strength(reader.Text("evidence"))));
 
-            bool capped = Cap.Trim(edges, MaxEdges);
+            bool capped = RowCap.Trim(edges, MaxEdges);
             return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, file.Module,
                 capped, edges);
         }, cancellationToken);
