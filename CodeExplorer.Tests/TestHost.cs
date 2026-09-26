@@ -206,6 +206,7 @@ public sealed class TestHost : IDisposable
         using var command = lease.Connection.CreateCommand();
         command.CommandText = "DELETE FROM index_info";
         await command.ExecuteNonQueryAsync(Ct);
+        lease.Completed();
     }
 
     private string ControlDatabaseFile => Path.Combine(DataDirectory, "control.duckdb");
