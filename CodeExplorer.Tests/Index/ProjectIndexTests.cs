@@ -386,7 +386,10 @@ public sealed class ProjectIndexTests : IDisposable
         // One lease handed back, so the pool holds exactly this connection for the status read to borrow.
         System.Data.Common.DbConnection pooled;
         using (var lease = await host.Indexes.OpenAsync("status-cancel", Ct))
+        {
             pooled = lease!.Connection;
+            lease.Completed();
+        }
 
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         using (new TelemetryProbe("status-cancel")
@@ -402,6 +405,80 @@ public sealed class ProjectIndexTests : IDisposable
         using var next = await host.Indexes.OpenAsync("status-cancel", Ct);
         Assert.NotSame(pooled, next!.Connection);
         Assert.Equal(System.Data.ConnectionState.Closed, pooled.State);
+    }
+
+    /// <summary>
+    ///     A lease is pooled only when its work said it completed, so one disposed without saying so —
+    ///     a reader that threw, or one that never learned the rule — costs a new connection rather than
+    ///     handing the next borrower one nobody vouched for (#267).
+    /// </summary>
+    [Fact]
+    public async Task A_lease_disposed_without_completing_does_not_pool_its_connection()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("uncompleted", Repository("class A;\n"));
+        System.Data.Common.DbConnection unpooled;
+        using (var lease = await host.OpenIndexAsync("uncompleted"))
+            unpooled = lease.Connection;
+
+        using var next = await host.OpenIndexAsync("uncompleted");
+        Assert.NotSame(unpooled, next.Connection);
+        Assert.Equal(System.Data.ConnectionState.Closed, unpooled.State);
+    }
+
+    [Fact]
+    public async Task A_completed_lease_returns_its_connection_for_the_next_lease()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("completed", Repository("class A;\n"));
+        System.Data.Common.DbConnection pooled;
+        using (var lease = await host.OpenIndexAsync("completed"))
+        {
+            pooled = lease.Connection;
+            lease.Completed();
+        }
+
+        using var next = await host.OpenIndexAsync("completed");
+        Assert.Same(pooled, next.Connection);
+    }
+
+    /// <summary>A read through <see cref="IndexReaders" /> that returned says so, and its connection is reused.</summary>
+    [Fact]
+    public async Task A_completed_status_read_pools_its_connection()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("status-done", Repository("class A;\n"));
+        System.Data.Common.DbConnection pooled;
+        using (var lease = await host.OpenIndexAsync("status-done"))
+        {
+            pooled = lease.Connection;
+            lease.Completed();
+        }
+
+        Assert.NotNull(await host.Services.GetRequiredService<IndexReaders>().StatusAsync("status-done", true, Ct));
+
+        using var next = await host.OpenIndexAsync("status-done");
+        Assert.Same(pooled, next.Connection);
+    }
+
+    /// <summary>
+    ///     Disposing twice releases once: a second release would count the reader out of the drain a
+    ///     second time and let a swap through while another lease still holds the project.
+    /// </summary>
+    [Fact]
+    public async Task A_double_dispose_releases_the_lease_once()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("twice", Repository("class A;\n"));
+        var first = await host.OpenIndexAsync("twice");
+        first.Completed();
+        first.Dispose();
+        first.Dispose();
+
+        // Only one connection went back, so two leases held at once cannot both be handed it.
+        using var a = await host.OpenIndexAsync("twice");
+        using var b = await host.OpenIndexAsync("twice");
+        Assert.NotSame(a.Connection, b.Connection);
     }
 
     private static Dictionary<string, Dictionary<string, string>> Repository(string content) =>

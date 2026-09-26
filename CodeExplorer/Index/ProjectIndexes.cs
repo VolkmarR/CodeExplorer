@@ -30,7 +30,7 @@ public enum SearchEngine
 public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded, Action<bool> release)
     : IDisposable
 {
-    private volatile bool _broken;
+    private volatile bool _completed;
     private int _released;
 
     public DuckDBConnection Connection { get; } = connection;
@@ -43,23 +43,26 @@ public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded,
     public bool FullTextLoaded { get; } = fullTextLoaded;
 
     /// <summary>
-    ///     Says this connection must not be handed to anyone else: the work on it threw or was
-    ///     cancelled, and a statement that ended that way can leave a result part-read behind it. Every
-    ///     connection used to be closed after one call, so pooling is what makes this need saying, and
-    ///     <see cref="IndexReaders" /> says it for every lease it opens, in one helper.
+    ///     Says the work on this connection finished cleanly, so it may be handed to someone else. A
+    ///     lease disposed without it is closed rather than pooled: a statement that threw or was
+    ///     cancelled can leave a result part-read behind it, and the next borrower would inherit it.
+    ///     Pooling was once the default and closing the exception a caller had to ask for, and a status
+    ///     read that forgot to ask pooled a cancelled connection (#241); inverted, a forgotten call
+    ///     costs a new connection, never a reused bad one (#267). <see cref="IndexReaders" /> says it
+    ///     for every lease it opens, in one helper.
     /// </summary>
-    public void Broken() => _broken = true;
+    public void Completed() => _completed = true;
 
     public void Dispose()
     {
-        // The connection is not closed here: unless it was reported broken it goes back to its
+        // The connection is not closed here: if the work said it completed it goes back to its
         // project's pool, and releasing is what puts it there and only then lets a swap through
         // (#149). The order is the point — a connection handed back after the drain had counted this
         // reader out would land in a pool the swap had already emptied, and the next caller would get
         // a binding to a detached catalog.
         // Guarded, because a double dispose would let a swap through while another lease still holds
         // the project — the one thing the drain exists to prevent.
-        if (Interlocked.Exchange(ref _released, 1) == 0) release(!_broken);
+        if (Interlocked.Exchange(ref _released, 1) == 0) release(_completed);
     }
 }
 
@@ -338,8 +341,8 @@ public sealed partial class ProjectIndexes : IDisposable
                 return new IndexLease(connection, FtsAvailable, reusable =>
                 {
                     if (reusable) pool.Return(connection, generation);
-                    // Closed rather than pooled: the reader said the work on it threw, and the next
-                    // borrower must not inherit whatever that left.
+                    // Closed rather than pooled: nobody said the work on it completed, and the next
+                    // borrower must not inherit whatever a statement that threw or was cancelled left.
                     else connection.Dispose();
                     gate.Leave();
                 });

@@ -44,31 +44,25 @@ public sealed class IndexReaders(ProjectIndexes indexes)
                     : IndexReader.NoIndex(projectSlug), ProblemKind.NoIndex));
 
         using var reader = new IndexReader(lease.Connection, lease.FullTextLoaded, lease, projectSlug);
-        return await BreakingOnFailureAsync(lease, async () =>
+        return await CompletingAsync(lease, async () =>
             await reader.ScopeToAsync(repository, cancellationToken) is { } unknown
                 ? refused(unknown)
                 : await read(reader, cancellationToken));
     }
 
     /// <summary>
-    ///     Runs the reads on a lease, and marks it broken when they throw, so the connection goes no
-    ///     further. Since #149 a lease hands its connection back to a pool instead of closing it, and a
-    ///     statement that threw or was abandoned mid-read can leave something on it the next borrower
-    ///     would inherit — an agent cancelling a slow search is the ordinary way that happens. Every
-    ///     lease this class opens is read through here, so no reader can forget to say it; the status
-    ///     read once did, and a cancelled one pooled its connection (#241).
+    ///     Runs the reads on a lease, and says it completed only once they returned, so a connection
+    ///     whose reads threw goes no further. Since #149 a lease hands its connection back to a pool
+    ///     instead of closing it, and a statement that threw or was abandoned mid-read can leave
+    ///     something on it the next borrower would inherit — an agent cancelling a slow search is the
+    ///     ordinary way that happens. The exception path needs nothing here: a lease not completed is
+    ///     closed on dispose (#267), which is what a cancelled status read once pooled instead (#241).
     /// </summary>
-    private static async Task<T> BreakingOnFailureAsync<T>(IndexLease lease, Func<Task<T>> read)
+    private static async Task<T> CompletingAsync<T>(IndexLease lease, Func<Task<T>> read)
     {
-        try
-        {
-            return await read();
-        }
-        catch
-        {
-            lease.Broken();
-            throw;
-        }
+        var result = await read();
+        lease.Completed();
+        return result;
     }
 
     /// <summary>The same for a caller whose answer is an <see cref="Outcome" />, which a problem already is.</summary>
@@ -139,7 +133,7 @@ public sealed class IndexReaders(ProjectIndexes indexes)
             : await indexes.PeekAsync(projectSlug, cancellationToken);
         if (lease is null) return null;
 
-        return await BreakingOnFailureAsync<IndexStatus?>(lease, async () =>
+        return await CompletingAsync<IndexStatus?>(lease, async () =>
         {
             // epoch() for the reason ReaderColumns.EpochInstant gives.
             await using var command = lease.Connection.Query(

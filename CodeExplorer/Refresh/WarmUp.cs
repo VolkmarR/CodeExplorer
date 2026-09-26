@@ -36,6 +36,9 @@ public sealed class WarmUp(ControlDatabase control, ProjectIndexes indexes, ILog
             try
             {
                 using var lease = await indexes.OpenAsync(project.Slug, cancellationToken);
+                // Nothing runs on it beyond the attach and the USE the open already finished, so the
+                // connection is clean, and pooling it keeps the first read of the morning from opening one.
+                lease?.Completed();
                 warmed.Add(new WarmedProject(project.Slug, lease is not null));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
