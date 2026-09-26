@@ -19,7 +19,7 @@ public sealed class UnifiedDiffTests : IDisposable
     public void Dispose() => TestHost.DeleteTree(_root);
 
     /// <summary>
-    ///     <c>LocalCopy.NoContext</c> asks libgit2 for no context lines, which is worth several times
+    ///     <see cref="NativeDiff" /> asks libgit2 for no context lines, which is worth several times
     ///     the wall clock of a first history import because every rendered line is marshalled into
     ///     managed strings before it is thrown away. This is what says it threw away only what it was
     ///     already throwing away.
@@ -108,7 +108,7 @@ public sealed class UnifiedDiffTests : IDisposable
                 .Select(change => new ChangedPath(change.Path, change.OldPath, LocalCopy.KindName(change.Status),
                     change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison, UnifiedDiff.Edits(change.Patch)))
                 .OrderBy(change => change.Path, StringComparer.Ordinal).ToList();
-            var read = diff.Diff(parent?.Tree.Id, commit.Tree.Id, long.MaxValue).Recorded!
+            var read = diff.Diff(parent?.Tree.Id, commit.Tree.Id, long.MaxValue)
                 .OrderBy(change => change.Path, StringComparer.Ordinal).ToList();
 
             Assert.Equal(rendered.Select(Describe), read.Select(Describe));

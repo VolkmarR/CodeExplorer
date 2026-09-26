@@ -19,6 +19,9 @@ public sealed record LineEdit(int OldLine, int Deleted, int Added);
 ///     Reads the edits out of the unified-diff text libgit2 renders for one file. Only the hunk headers
 ///     and the first character of each body line are looked at; the content itself is never needed,
 ///     because attribution is about positions.
+///     The history walk no longer renders text: <see cref="NativeDiff" /> reads the same edits off
+///     libgit2's hunk structs (#292), placing each by <see cref="OldPosition" />. This reading of the
+///     rendered patch stays as the independent account the tests hold that one to.
 /// </summary>
 internal static class UnifiedDiff
 {

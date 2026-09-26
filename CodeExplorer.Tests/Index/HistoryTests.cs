@@ -730,6 +730,10 @@ public sealed class HistoryTests : IDisposable
         Assert.Equal(await _host.ScalarsAsync(project, sql), refreshed);
     }
 
+    /// <summary>A text file of two hundred lines, well over the 1 KiB ceiling the size tests set.</summary>
+    private static readonly string _dump =
+        string.Concat(Enumerable.Range(1, 200).Select(i => $"INSERT INTO t VALUES ({i});\n"));
+
     /// <summary>
     ///     A text blob over <c>Index:MaxFileBytes</c> is recorded in history the way the file pass
     ///     treats it at HEAD: as a change with no lines, rather than inflated and rendered whole into a
@@ -741,11 +745,10 @@ public sealed class HistoryTests : IDisposable
     {
         using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
         string source = host.CreateEmptyGitRepository("one");
-        string dump = string.Concat(Enumerable.Range(1, 200).Select(i => $"INSERT INTO t VALUES ({i});\n"));
         host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/Check.cs"] = "first\n" },
             "Add the validator", "Ada", "ada@example.invalid", 0);
         host.CommitToGitRepositoryAs("one",
-            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond\n", ["data/dump.sql"] = dump },
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond\n", ["data/dump.sql"] = _dump },
             "Add the dump", "Ada", "ada@example.invalid", 1);
         // One commit that shrinks the dump and moves the small file: the patch asked for the rest of a
         // commit with an oversized change in it still detects the move.
@@ -763,20 +766,14 @@ public sealed class HistoryTests : IDisposable
         await host.AddRepositoryAsync("alpha", "one", source);
         await host.RefreshAsync("alpha");
 
-        var changes = await host.ScalarsAsync("alpha",
-            """
-            SELECT c.subject || '|' || coalesce(f.old_path || ' -> ', '') || f.path || '|' || f.change_kind
-                   || '|' || f.added || '|' || f.deleted
-            FROM commit_files f JOIN commits c USING (commit_id)
-            ORDER BY f.commit_id, f.path
-            """);
         Assert.Equal([
+
             "Add the validator|src/Check.cs|added|1|0",
             "Add the dump|data/dump.sql|added|0|0",
             "Add the dump|src/Check.cs|modified|1|0",
             "Shrink the dump|data/dump.sql|modified|0|0",
             "Shrink the dump|src/Check.cs -> lib/Check.cs|renamed|0|0"
-        ], changes);
+        ], await RecordedChangesAsync(host));
     }
 
     /// <summary>
@@ -789,8 +786,7 @@ public sealed class HistoryTests : IDisposable
     {
         using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
         string source = host.CreateEmptyGitRepository("one");
-        string dump = string.Concat(Enumerable.Range(1, 200).Select(i => $"INSERT INTO t VALUES ({i});\n"));
-        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = dump },
+        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = _dump },
             "Add the dump", "Ada", "ada@example.invalid", 0);
         host.MoveInGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = "seed/dump.sql" },
             "Move the dump", "Ada", "ada@example.invalid", 1);
@@ -807,18 +803,17 @@ public sealed class HistoryTests : IDisposable
 
     /// <summary>
     ///     A file that replaced a directory holding a blob over the ceiling, and a directory that replaced
-    ///     the file again (#292). The patch is asked for paths by name, and a name also matches as a
-    ///     directory prefix, so asking for <c>data</c> would diff <c>data/dump.sql</c> too: it would then
-    ///     be recorded twice, once without lines and once with all two hundred of them. The file itself
-    ///     is still diffed.
+    ///     the file again (#292). The patch of such a commit used to be asked for the other paths by name,
+    ///     and a name also matches as a directory prefix, so asking for <c>data</c> diffed
+    ///     <c>data/dump.sql</c> too. Recorded twice, it would show once without lines and once with all
+    ///     two hundred of them. The file itself is still diffed.
     /// </summary>
     [Fact]
     public async Task A_blob_over_the_size_ceiling_is_not_diffed_where_a_file_and_a_directory_swap()
     {
         using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
         string source = host.CreateEmptyGitRepository("one");
-        string dump = string.Concat(Enumerable.Range(1, 200).Select(i => $"INSERT INTO t VALUES ({i});\n"));
-        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = dump },
+        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = _dump },
             "Add the dump", "Ada", "ada@example.invalid", 0);
         string directory = Path.Combine(source, "data");
         using (var repo = new Repository(source))
@@ -831,7 +826,7 @@ public sealed class HistoryTests : IDisposable
 
             File.Delete(directory);
             Directory.CreateDirectory(directory);
-            File.WriteAllText(Path.Combine(directory, "dump.sql"), dump);
+            File.WriteAllText(Path.Combine(directory, "dump.sql"), _dump);
             Commands.Stage(repo, "*");
             author = new Signature("Ada", "ada@example.invalid", DateTimeOffset.UnixEpoch.AddMinutes(2));
             repo.Commit("Replace the file with a directory", author, author);
