@@ -102,6 +102,34 @@ public sealed class DurabilityTests : IDisposable
         Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
     }
 
+    /// <summary>
+    ///     A restore that fails for any other reason also reaches the agent as a sentence with a remedy,
+    ///     not as the SDK's generic error (#291). What .NET or DuckDB said names files on the server, so
+    ///     it goes to the log only. The failure is the lines table held open exclusively, as in the
+    ///     refresh's own restore test.
+    /// </summary>
+    [Fact]
+    public async Task A_restore_that_fails_under_an_agent_reaches_it_as_a_refusal_naming_no_server_path()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+
+        McpException thrown;
+        await using (File.Open(Path.Combine(host.DurableIndexDirectory("alpha"), "lines.parquet"),
+                         FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            await using var client = await host.ConnectAsync("alpha");
+            thrown = await Assert.ThrowsAsync<McpException>(() =>
+                TestHost.CallAsync(client, "project_overview", []));
+        }
+
+        Assert.Contains("'alpha'", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("could not be restored", thrown.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(host.DataDirectory, thrown.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task A_restored_index_still_answers_full_text_searches()
     {
