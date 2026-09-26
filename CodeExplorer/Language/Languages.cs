@@ -166,6 +166,10 @@ public static class Languages
 
     private static readonly StringDelimiter _rawSingle = new("'", "'", StringEscape.None);
 
+    /// <summary>The C family's char literal, which opens only in its own short shape (#295).</summary>
+    private static readonly StringDelimiter _charLiteral =
+        new("'", "'", StringEscape.Backslash) { HoldsOneCharacter = true };
+
     /// <summary>
     ///     The holes of live code in an interpolated literal. One for C# and another for the template
     ///     literal, because the languages spell the opener differently; both close and nest on the brace.
@@ -199,7 +203,7 @@ public static class Languages
         new StringDelimiter("$\"", "\"", StringEscape.Backslash)
             { Hole = _cSharpHole },
         _doubleQuoted,
-        new StringDelimiter("'", "'", StringEscape.Backslash) { HoldsOneCharacter = true }
+        _charLiteral
     ];
 
     /// <summary>
