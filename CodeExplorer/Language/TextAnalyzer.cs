@@ -1521,12 +1521,8 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     private bool OpensAWholeLine(string line, int start)
     {
         for (int i = 0; i < _proseDirectives.Length; i++)
-        {
-            int end = start + _proseDirectives[i].Length;
-            if (At(line, start, _proseDirectives[i], _keywordComparison)
-                && (end == line.Length || !SymbolText.IsWordChar(line[end])))
+            if (PhraseAt(line, start, _proseDirectives[i]))
                 return true;
-        }
 
         if (IsDirectiveAt(line, start)) return false;
         for (int i = 0; i < _lineStartComments.Length; i++)

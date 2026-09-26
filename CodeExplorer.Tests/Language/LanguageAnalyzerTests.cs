@@ -140,12 +140,13 @@ public sealed class LanguageAnalyzerTests
     public void A_region_label_or_a_directive_message_is_prose(string extension, string line) =>
         Assert.Equal(ReferenceKind.Comment, Kind(extension, line, "MAX_ORDERS"));
 
-    [Fact]
-    public void A_directive_word_is_matched_whole()
-    {
-        // `#regional` is no directive, so nothing on it is prose on the strength of its first letters.
-        Assert.NotEqual(ReferenceKind.Comment, Kind("cs", "#regional MAX_ORDERS", "MAX_ORDERS"));
-    }
+    [Theory]
+    // `#regional` is no directive, so nothing on it is prose on the strength of its first letters —
+    // under X#'s case rule as much as under C#'s.
+    [InlineData("cs", "#regional MAX_ORDERS")]
+    [InlineData("prg", "#REGIONAL MAX_ORDERS")]
+    public void A_directive_word_is_matched_whole(string extension, string line) =>
+        Assert.NotEqual(ReferenceKind.Comment, Kind(extension, line, "MAX_ORDERS"));
 
     [Fact]
     public void An_apostrophe_in_a_region_label_leaves_the_next_line_as_code() =>
