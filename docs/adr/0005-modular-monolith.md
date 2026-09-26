@@ -281,3 +281,6 @@ two compiles and disagreed on what a failure meant — the excluded-paths one to
 for a bad pattern, so a lost catalog reached the operator as "your pattern is invalid". `Control/`
 may not reach `Search/`, so `Re2` moved to `Reading/`, which all three already reach, and its one
 check answers RE2's rejection and lets every other failure throw. The arrows are unchanged.
+Not `Infrastructure/`: the check is a statement run on a caller's connection through `Reading/`'s
+query helpers, and what `Re2` otherwise holds is how a caller's pattern is read by the engine, which
+is no more host plumbing than the glob translation already beside it in `GlobRegex`.
