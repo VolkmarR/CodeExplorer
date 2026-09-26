@@ -62,7 +62,8 @@ internal static class QueryPlan
     /// <param name="Directory">Where the dumps go.</param>
     /// <param name="Scope">
     ///     The data directory whose reads it takes, ending in a separator; null for every read. Matched
-    ///     against the connection's data source, the instance file under that directory's indexes.
+    ///     against the connection's data source, the instance file under that directory's indexes, as
+    ///     it is written: a scoped recording is a test's, and a test host's data directory is absolute.
     /// </param>
     private sealed record Target(string Directory, string? Scope)
     {

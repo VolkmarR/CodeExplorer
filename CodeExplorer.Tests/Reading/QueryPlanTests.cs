@@ -45,11 +45,7 @@ public sealed class QueryPlanTests : IDisposable
         Assert.NotEmpty(Directory.EnumerateFiles(plans, "*IndexReader-FindFileAsync.sql.txt"));
     }
 
-    /// <summary>
-    ///     Every read is its own dump, named in the order it ran. A name made of the time and the label
-    ///     alone gave two reads of one method in one millisecond the same file, so the second wrote over
-    ///     the first, and sorted two different methods in that millisecond by name instead of by order.
-    /// </summary>
+    /// <summary>Every read is its own dump, named in the order it ran (see <see cref="QueryPlan.Stamp" />).</summary>
     [Fact]
     public void Two_dumps_in_one_millisecond_get_their_own_names_in_the_order_they_ran()
     {

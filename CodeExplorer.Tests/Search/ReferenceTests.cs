@@ -204,8 +204,8 @@ public sealed class ReferenceTests : IDisposable
                 new Dictionary<string, object?> { ["symbol"] = "OrderStatus", ["repo"] = "two" });
 
         Assert.Contains("your filters hid 2 further matching files", scoped);
-        // Identified by the symbol bound into them. The recording takes only this server's reads
-        // (#286), and the other searches for this name are in this class, whose tests run one at a time.
+        // The recording takes only this test's own server's reads (#286); the symbol bound into the
+        // statement is a second check that the dump is the search asserted on.
         string dump = Assert.Single(Directory.EnumerateFiles(plans, "*ReferenceSearch-QueryAsync.sql.txt"),
             file => File.ReadAllText(file).Contains("OrderStatus", StringComparison.Ordinal));
         // One statement is not yet one scan: a CTE the planner inlined into both of its readers would
