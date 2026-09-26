@@ -399,7 +399,12 @@ public sealed class RefreshTests : IDisposable
         string gitDirectory = _host.FixtureGitPath("one");
         TestHost.DetachHead(gitDirectory, first);
         await _host.AddRepositoryAsync("alpha", "one", remote);
-        await _host.RefreshAsync("alpha");
+        var cloned = await _host.RefreshAsync("alpha");
+
+        // The operator reads the choice off the status, not the server's log.
+        Assert.Equal(
+            [$"Repository 'one': the remote's HEAD is detached, so its local copy follows branch '{branch}', whose tip is that commit."],
+            cloned.Notes);
 
         // A push to the branch, with the remote's HEAD left detached where it was: a clone that stayed
         // on the detached commit would index the old tree on every refresh from here on (#288).
@@ -411,6 +416,36 @@ public sealed class RefreshTests : IDisposable
 
         Assert.Equal(2, summary.Files);
         Assert.Equal(["one/src/A.cs", "one/src/B.cs"], await _host.ScalarsAsync("alpha", PathQuery));
+        // A copy already on its branch keeps it without a word, as it did before #288 (#260).
+        Assert.Empty(summary.Notes);
+    }
+
+    [Theory]
+    [InlineData("main", "master")]
+    [InlineData("master", "alpha")]
+    [InlineData("trunk", "zeta")]
+    public async Task A_first_clone_of_a_detached_remote_breaks_a_tie_at_that_commit_by_the_documented_rule(
+        string expected, string other)
+    {
+        await _host.CreateProjectAsync("alpha");
+        string remote = _host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" });
+        string gitDirectory = _host.FixtureGitPath("one");
+        // Both branches at the one commit, beside the fixture's own branch renamed to sort last, so
+        // nothing but the rule decides: main, then master, then the first by name (#288). libgit2's own
+        // guess prefers master, which the first case proves is overruled.
+        _host.RenameDefaultBranch("one", "zzz");
+        string first = _host.HeadOf("one");
+        _host.CreateBranch("one", expected);
+        _host.CreateBranch("one", other);
+        TestHost.DetachHead(gitDirectory, first);
+        await _host.AddRepositoryAsync("alpha", "one", remote);
+        await _host.RefreshAsync("alpha");
+
+        TestHost.AttachHead(gitDirectory, expected);
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
+        TestHost.DetachHead(gitDirectory, first);
+
+        Assert.Equal(2, (await _host.RefreshAsync("alpha")).Files);
     }
 
     [Fact]
@@ -419,15 +454,26 @@ public sealed class RefreshTests : IDisposable
         await _host.CreateProjectAsync("alpha");
         string remote = _host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" });
         string first = _host.HeadOf("one");
+        string branch = _host.BranchOf("one");
+        string gitDirectory = _host.FixtureGitPath("one");
         _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
         // Detached at a commit no branch ends at, so only the fallback rule can name one: the fixture's
         // branch is main or master, whichever init.defaultBranch says.
-        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
+        TestHost.DetachHead(gitDirectory, first);
         await _host.AddRepositoryAsync("alpha", "one", remote);
 
-        var summary = await _host.RefreshAsync("alpha");
+        var cloned = await _host.RefreshAsync("alpha");
 
-        Assert.Equal(2, summary.Files);
+        Assert.Equal(2, cloned.Files);
+        Assert.Contains($"follows branch '{branch}', because no branch ends at that commit", cloned.Notes.Single(),
+            StringComparison.Ordinal);
+
+        // And it keeps following that branch, which the detached commit never will.
+        TestHost.AttachHead(gitDirectory, branch);
+        _host.CommitToGitRepository("one", new Dictionary<string, string> { ["src/C.cs"] = "class C;\n" });
+        TestHost.DetachHead(gitDirectory, first);
+
+        Assert.Equal(3, (await _host.RefreshAsync("alpha")).Files);
     }
 
     [Fact]

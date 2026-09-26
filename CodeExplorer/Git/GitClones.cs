@@ -107,14 +107,14 @@ public sealed class GitClones(
     {
         var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
+        string? note;
         try
         {
             // Both branches are synchronous libgit2 over the network; a worker thread keeps them off
             // the request thread. A clone is already up to date, so it is never followed by a fetch.
-            if (!IsCopyOf(repository, path))
-                await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken);
-            else
-                await Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
+            note = !IsCopyOf(repository, path)
+                ? await Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken)
+                : await Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
         }
         finally
         {
@@ -140,7 +140,7 @@ public sealed class GitClones(
                 return new CloneOpen.UsesLfs($"Repository '{repository.Slug}': {_lfsRefusal}");
             }
 
-            return new CloneOpen.Opened(new LocalCopy(clone));
+            return new CloneOpen.Opened(new LocalCopy(clone), note);
         }
         catch
         {
@@ -243,7 +243,8 @@ public sealed class GitClones(
         return false;
     }
 
-    private void Clone(ProjectRepository repository, string path, CancellationToken cancellationToken)
+    /// <summary>Makes the local copy, and answers the note <see cref="FollowBranch" /> wrote, if any.</summary>
+    private string? Clone(ProjectRepository repository, string path, CancellationToken cancellationToken)
     {
         // A folder that exists but is not a valid repository is a clone that failed half-way; start over.
         Delete(path);
@@ -269,11 +270,20 @@ public sealed class GitClones(
             throw failure;
         }
 
-        // libgit2 puts a clone of a detached remote on the branch whose tip is the detached commit when
-        // there is one, and leaves it detached when there is not; a detached clone would index that one
-        // commit on every refresh from here on, because the fetch moves branches and never HEAD (#288).
+        // libgit2 settles a clone of a detached remote itself: on a branch at the detached commit,
+        // preferring whatever init.defaultBranch says on this server among several, and detached when
+        // none is there, which would index that one commit on every refresh from here on, since a fetch
+        // moves branches and never HEAD. Neither is a rule an operator can read off the status, and the
+        // clone cannot tell which of the two libgit2 did, so the remote's HEAD is asked once more and a
+        // detached one is decided by FollowBranch's rule instead (#288). One round trip, on a first
+        // clone only; unanswered, a clone libgit2 left on a branch keeps it.
         using var clone = new Repository(path);
-        if (clone.Info.IsHeadDetached) FollowBranch(clone, repository, clone.Head.Tip.Sha);
+        if (clone.Head.Tip is null) return null;
+        string? detachedAt = AdvertisedReferences(repository, cancellationToken)
+            ?.FirstOrDefault(r => r.CanonicalName == "HEAD") is DirectReference head
+            ? head.TargetIdentifier
+            : clone.Info.IsHeadDetached ? clone.Head.Tip.Sha : null;
+        return detachedAt is null ? null : FollowBranch(clone, repository, detachedAt, "refs/remotes/origin/");
     }
 
     /// <summary>
@@ -282,9 +292,9 @@ public sealed class GitClones(
     ///     and that is what the tree walk reads, so a fetch that only moved <c>refs/remotes</c> would
     ///     download the commits and index none of them. It is forced because there is no working copy
     ///     and nothing to merge — the remote's history replaces ours outright, including after a force
-    ///     push.
+    ///     push. Answers the note <see cref="AlignHead" /> wrote, if any.
     /// </summary>
-    private void Fetch(ProjectRepository repository, string path, CancellationToken cancellationToken)
+    private string? Fetch(ProjectRepository repository, string path, CancellationToken cancellationToken)
     {
         // Pruned, because the clone is a mirror of the remote and nothing here merges: a branch deleted
         // upstream must go, or the index keeps serving a branch that no longer exists. That takes the
@@ -309,7 +319,7 @@ public sealed class GitClones(
             throw TransferFailed("Fetching", repository, path, ex, watch);
         }
 
-        AlignHead(clone, repository, path, cancellationToken);
+        return AlignHead(clone, repository, path, cancellationToken);
     }
 
     /// <summary>
@@ -318,9 +328,10 @@ public sealed class GitClones(
     ///     branch renamed or deleted upstream leaves HEAD naming a branch the prune removed: the tree
     ///     walk reads HEAD, so the repository reports itself as having no commits, and nothing else
     ///     ever writes HEAD, so it stays that way for every later refresh (#31). A remote whose HEAD is
-    ///     detached names no branch, and the clone keeps the one it has (#260).
+    ///     detached names no branch, and the clone keeps the one it has (#260). Answers the note
+    ///     <see cref="FollowBranch" /> wrote for a clone that was detached itself, and otherwise null.
     /// </summary>
-    private void AlignHead(Repository clone, ProjectRepository repository, string path,
+    private string? AlignHead(Repository clone, ProjectRepository repository, string path,
         CancellationToken cancellationToken)
     {
         if (AdvertisedReferences(repository, cancellationToken) is { } advertised)
@@ -330,7 +341,7 @@ public sealed class GitClones(
             // protocol v2 advertises an unborn HEAD with a symref target: an empty remote can name a
             // default branch that exists nowhere yet, and that must not read as a failure to resolve one.
             if (!advertised.Any(r => r.CanonicalName.StartsWith("refs/heads/", StringComparison.Ordinal)))
-                return;
+                return null;
 
             // Only a symbolic HEAD names the branch the remote defaults to, and the refspec just fetched
             // it. A detached HEAD is advertised as a direct reference to a commit id, which libgit2
@@ -339,23 +350,20 @@ public sealed class GitClones(
             if (head is SymbolicReference { TargetIdentifier: var branch } && clone.Refs[branch] is not null)
             {
                 if (clone.Refs.Head.TargetIdentifier != branch) clone.Refs.UpdateTarget(clone.Refs.Head, branch);
-                return;
+                return null;
             }
 
             // A clone on a branch keeps it (#260). One that is detached itself, which a first clone of a
-            // detached remote was before #288, settles on a branch by the rule a first clone now follows.
-            if (clone.Info.IsHeadDetached)
-            {
-                FollowBranch(clone, repository, (head as DirectReference)?.TargetIdentifier);
-                return;
-            }
+            // detached remote could be before #288, settles by the rule a first clone now follows.
+            if (head is DirectReference { TargetIdentifier: var detachedAt } && clone.Info.IsHeadDetached)
+                return FollowBranch(clone, repository, detachedAt, "refs/heads/");
         }
 
         // Either the advertisement could not be read or it named nothing this clone has. A HEAD that
         // still resolves keeps serving the branch it has and the next refresh tries again; one that
         // resolves to nothing is a local copy the operator has to hear about, because the indexer
         // would otherwise report the remote as empty when the remote is fine.
-        if (clone.Head.Tip is not null) return;
+        if (clone.Head.Tip is not null) return null;
 
         // The path is for the operator, who can reach the disk, and so it goes to the log only. The
         // message reaches whoever reads the refresh status, who cannot, and to whom a path discloses
@@ -375,47 +383,48 @@ public sealed class GitClones(
     }
 
     /// <summary>
-    ///     Puts a detached clone's HEAD on a branch, so that later fetches move it on with that branch.
-    ///     The rule, in order: the branch whose tip is the remote's detached commit, then <c>main</c>, then
-    ///     <c>master</c>, then the first branch in ordinal order of its name; among several branches at
-    ///     the detached commit, the same order breaks the tie (#288). A clone with no branch at all is
-    ///     left as it is, with nothing to follow.
-    ///     The branches are the clone's own when it has any, which after a fetch mirror the remote's. A
-    ///     first clone holds them as <c>refs/remotes/origin/*</c> only, because libgit2's bare clone still
-    ///     maps them there, and the chosen one is written as a local branch for HEAD to name. Only then:
-    ///     a later fetch never updates those refs, so one could name a branch long deleted upstream.
+    ///     Puts the clone's HEAD on a branch when the remote's HEAD is detached, so that later fetches
+    ///     move it on with that branch, and answers the sentence the refresh status reports the choice
+    ///     with. The rule, in order: a branch whose tip is the detached commit, then any branch; within
+    ///     either, <c>main</c>, then <c>master</c>, then the first in ordinal order of its name (#288). A
+    ///     clone with no branch at all is left as it is and answers null, with nothing to follow.
     /// </summary>
-    /// <param name="clone">The local copy, whose HEAD is detached.</param>
-    /// <param name="repository">The repository, for the log line naming the choice.</param>
-    /// <param name="detachedAt">The commit the remote's HEAD is detached at, or null when unknown.</param>
-    private void FollowBranch(Repository clone, ProjectRepository repository, string? detachedAt)
+    /// <param name="clone">The local copy.</param>
+    /// <param name="repository">The repository, which the sentence names.</param>
+    /// <param name="detachedAt">The commit the remote's HEAD is detached at.</param>
+    /// <param name="branchPrefix">
+    ///     Where the clone holds the remote's branches: <c>refs/heads/</c> after a fetch, which mirrors
+    ///     them, and <c>refs/remotes/origin/</c> after a first clone, because libgit2's bare clone still
+    ///     maps them there. The chosen one is written as a local branch for HEAD to name.
+    /// </param>
+    private string? FollowBranch(Repository clone, ProjectRepository repository, string detachedAt,
+        string branchPrefix)
     {
-        const string localPrefix = "refs/heads/";
-        const string trackingPrefix = "refs/remotes/origin/";
-        var branches = clone.Refs.FromGlob(localPrefix + "*").ToList() is { Count: > 0 } local
-            ? local.Select(r => (Name: r.CanonicalName[localPrefix.Length..], Reference: r))
-            : clone.Refs.FromGlob(trackingPrefix + "*")
-                .Where(r => r is DirectReference)
-                .Select(r => (Name: r.CanonicalName[trackingPrefix.Length..], Reference: r));
-        var ordered = branches
-            .OrderBy(b => b.Name switch { "main" => 0, "master" => 1, _ => 2 })
+        var ordered = clone.Refs.FromGlob(branchPrefix + "*")
+            .OfType<DirectReference>()
+            .Select(r => (Name: r.CanonicalName[branchPrefix.Length..], Tip: r.TargetIdentifier))
+            .OrderBy(b => b.Tip != detachedAt)
+            .ThenBy(b => b.Name switch { "main" => 0, "master" => 1, _ => 2 })
             .ThenBy(b => b.Name, StringComparer.Ordinal)
             .ToList();
-        if (ordered.Count == 0) return;
+        if (ordered.Count == 0) return null;
 
-        var atCommit = ordered.FirstOrDefault(b => b.Reference.TargetIdentifier == detachedAt);
-        var (name, reference) = atCommit.Reference is not null ? atCommit : ordered[0];
-        string branch = localPrefix + name;
-        if (clone.Refs[branch] is null) clone.Refs.Add(branch, reference.TargetIdentifier);
+        var (name, tip) = ordered[0];
+        string branch = "refs/heads/" + name;
+        if (clone.Refs[branch] is null) clone.Refs.Add(branch, tip);
+        // By name: the overload taking the Reference would move a detached HEAD to the branch's commit
+        // and leave it detached, where this one makes it name the branch.
         clone.Refs.UpdateTarget("HEAD", branch);
 
+        string note = $"Repository '{repository.Slug}': the remote's HEAD is detached, so its local copy follows "
+                      + $"branch '{name}', "
+                      + (tip == detachedAt
+                          ? "whose tip is that commit."
+                          : "because no branch ends at that commit; the rule is main, then master, then the "
+                            + "first by name.");
         if (logger.IsEnabled(LogLevel.Information))
-            logger.LogInformation("The remote of repository {Repository} of project {Project} has a detached HEAD; "
-                                  + "its local copy follows branch {Branch}, {Reason}", repository.Slug,
-                repository.ProjectSlug, name,
-                atCommit.Reference is not null
-                    ? "whose tip is the detached commit"
-                    : "because no branch ends at the detached commit");
+            logger.LogInformation("Project {Project}: {Note}", repository.ProjectSlug, note);
+        return note;
     }
 
     /// <summary>

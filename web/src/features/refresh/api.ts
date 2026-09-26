@@ -7,6 +7,8 @@ export interface IndexSummary {
   files: number
   lines: number
   skipped: string[]
+  /** Choices the refresh made for a repository it did read, such as the branch a detached remote is followed on. */
+  notes: string[]
 }
 
 /** The states the server names, serialised as words rather than ordinals so this union is stable. */

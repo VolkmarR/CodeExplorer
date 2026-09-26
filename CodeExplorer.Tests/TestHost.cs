@@ -429,6 +429,13 @@ public sealed class TestHost : IDisposable
         repo.Branches.Rename(repo.Head, branch);
     }
 
+    /// <summary>A second branch on a fixture, at the commit its HEAD is at.</summary>
+    public void CreateBranch(string name, string branch)
+    {
+        using var repo = new Repository(FixturePath(name));
+        repo.CreateBranch(branch);
+    }
+
     /// <summary>The commit a fixture's HEAD is at, for a test that resets the fixture back to it later.</summary>
     public string HeadOf(string name)
     {
