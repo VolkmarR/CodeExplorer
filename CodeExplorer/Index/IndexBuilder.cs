@@ -132,8 +132,9 @@ public sealed class IndexBuilder(
                 fileCount++;
                 // Size first: it is read off the object header, while the content inflates the whole
                 // blob, so asking for it first inflated every oversized binary on every refresh (#230).
-                string? content = entry.Size > _maxFileBytes ? null : entry.Text();
-                string? skipReason = entry.Size > _maxFileBytes ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" :
+                bool oversized = entry.Size > _maxFileBytes;
+                string? content = oversized ? null : entry.Text();
+                string? skipReason = oversized ? $"larger than {_maxFileBytes / 1024 / 1024} MiB" :
                     content is null ? "binary" : null;
                 var text = content is null ? [] : SplitLines(content);
                 for (int i = 0; i < text.Count; i++)
