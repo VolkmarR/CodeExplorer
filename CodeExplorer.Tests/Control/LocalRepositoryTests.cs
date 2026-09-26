@@ -125,7 +125,7 @@ public sealed class LocalRepositoryTests : IDisposable
         host.RestartWithoutLocalRepositories();
         string error = await host.FailedRefreshErrorAsync("alpha");
 
-        Assert.Contains("'main' was not read. It is a local path or file URL", error);
+        Assert.Contains("'main' was not read. It is a local path, a file URL or a remote on a loopback host", error);
         Assert.Contains(Setting, error);
     }
 
