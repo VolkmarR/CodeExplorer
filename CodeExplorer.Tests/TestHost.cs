@@ -594,7 +594,10 @@ public sealed class TestHost : IDisposable
     public async Task<List<string>> ScalarsAsync(string slug, string sql)
     {
         using var lease = await OpenIndexAsync(slug);
-        return await ScalarsAsync(lease, sql);
+        var values = await ScalarsAsync(lease, sql);
+        // Completed as a reader would be, so tests of the pool read through pooled connections.
+        lease.Completed();
+        return values;
     }
 
     /// <summary>
@@ -607,6 +610,7 @@ public sealed class TestHost : IDisposable
         using var command = lease.Connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(Ct);
+        lease.Completed();
     }
 
     /// <summary>The same, against a lease already held: a test proving what a swap does to one in flight.</summary>
