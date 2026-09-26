@@ -174,8 +174,9 @@ public sealed partial class GrepSearch(IndexReaders readers)
         try
         {
             // Only a wrapped pattern needs compiling alone first; a bare one is compiled by the search.
-            if (regex && (request.WholeWord || request.Multiline))
-                await Re2.CompileAsync(connection, query, cancellationToken);
+            if (regex && (request.WholeWord || request.Multiline)
+                && await Re2.RejectionAsync(connection, query, cancellationToken) is { } rejection)
+                return new Problem(Re2.Rejected(rejection));
             return request.Multiline
                 ? await SearchMultilineAsync(connection, request, query, bounds, cancellationToken)
                 : await SearchLinesAsync(index, request, query, regex, bounds, cancellationToken);

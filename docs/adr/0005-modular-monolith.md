@@ -272,3 +272,12 @@ off. `Git/` may not reach `Control/`, and two classifiers could disagree about w
 which is a way around the setting. So `RepositoryUrl` moved to `Infrastructure/`, where what more
 than one module is handed lives, with the setting's name and its refusal sentence beside it. The
 arrows are unchanged: both modules already reached `Infrastructure/`.
+
+## Revisited for #296, on 2026-09-26: the RE2 pattern check joins `Reading/`
+
+Two modules asked RE2 whether it accepts a pattern: `Search/` before a wrapped search, and the
+excluded-paths check that `Control/` runs on a save and `Reading/` runs on a suggestion. They had
+two compiles and disagreed on what a failure meant — the excluded-paths one took any DuckDB error
+for a bad pattern, so a lost catalog reached the operator as "your pattern is invalid". `Control/`
+may not reach `Search/`, so `Re2` moved to `Reading/`, which all three already reach, and its one
+check answers RE2's rejection and lets every other failure throw. The arrows are unchanged.

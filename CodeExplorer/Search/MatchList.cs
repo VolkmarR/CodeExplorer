@@ -132,8 +132,9 @@ public sealed class MatchList(IndexReaders readers)
             // that was never wrong. A pattern that does not compile has no groups to count, so it is
             // compiled alone before the count refuses, and before a whole-word wrapping balances it.
             int groups = Re2.CaptureGroups(query);
-            if (request.WholeWord || request.Group > groups)
-                await Re2.CompileAsync(connection, query, cancellationToken);
+            if ((request.WholeWord || request.Group > groups)
+                && await Re2.RejectionAsync(connection, query, cancellationToken) is { } rejection)
+                return new Problem(Re2.Rejected(rejection));
             if (request.Group > groups)
                 return new Problem(
                     $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "

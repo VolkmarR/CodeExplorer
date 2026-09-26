@@ -102,20 +102,11 @@ public sealed record ExcludedPaths(IReadOnlyList<string> Patterns)
         if (GlobRegex.ReversedRange(pattern) is { } reversed)
             return $"the range {reversed} runs backwards, so no character falls in it.";
 
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT regexp_matches('', $p, 'i')";
-        command.Parameters.Add(new DuckDBParameter("p", new ExcludedPaths([pattern]).Expression));
-        try
-        {
-            await command.ExecuteScalarAsync(cancellationToken);
-            return null;
-        }
-        catch (DuckDBException exception)
-        {
-            // Swallowed because it is the answer: the engine's own message is what was wrong with the
-            // pattern, and each caller acts on it — a save refuses the pattern, a suggestion skips it.
-            return exception.Message;
-        }
+        // The same check a search makes, so a failure that is not RE2 refusing the pattern throws
+        // instead of reaching the operator as "your pattern is invalid" (#296). Compiled without the
+        // 'i' that Matching passes: case folding changes what a pattern matches, not whether it parses.
+        return (await Re2.RejectionAsync(connection, new ExcludedPaths([pattern]).Expression, cancellationToken))
+            ?.Message;
     }
 
     /// <summary>
