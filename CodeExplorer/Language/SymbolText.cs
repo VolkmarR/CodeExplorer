@@ -69,6 +69,49 @@ public static class SymbolText
     public const string Re2WordEnd = $"(?:$|{Re2NonWordChar})";
 
     /// <summary>
+    ///     An RE2 pattern as a whole word: no letter, digit or underscore immediately before or after the
+    ///     match, the way <c>grep -w</c> reads it and <see cref="IsWordChar" /> defines one. Not <c>\b</c>,
+    ///     which RE2 reads as ASCII: it found <c>bar</c> inside <c>fooÄbar</c> and nothing in front of
+    ///     <c>Ändern</c> (#235). The boundaries consume a character, so this tests a line and must not
+    ///     count on one; <see cref="WholeWordMatches" /> counts.
+    ///     Every whole-word search is built here, a caller's pattern for <c>grep</c> and
+    ///     <c>list_matches</c> and a symbol for <c>find_references</c> (<see cref="WholeWordPattern" />),
+    ///     because two workarounds for one missing lookbehind disagreed about the same line (#294).
+    ///     <paramref name="start" /> and <paramref name="end" /> leave a boundary off, for a symbol
+    ///     whose end is punctuation.
+    /// </summary>
+    public static string WholeWord(string pattern, bool start = true, bool end = true) =>
+        $"{(start ? Re2WordStart : "")}(?:{pattern}){WordEnd(end)}";
+
+    /// <summary>
+    ///     An RE2 pattern as a whole word, written so that the matches of it run back to back from the
+    ///     start of the text: each is the text skipped since the last one as group 1, then the pattern
+    ///     as group 2 (its group <c>n</c> as group <c>n + 2</c>) and the boundary after it — or, once no
+    ///     whole word is left, the rest of the text with both groups empty.
+    ///     <see cref="WholeWord" /> alone cannot count or extract. Its end boundary consumes the character
+    ///     after a match, so in <c>bar,bar</c> the second had lost the comma its start boundary needed,
+    ///     and a line break shared the same way lost the match on the next line. Here a start boundary is
+    ///     never tested: the pattern is only tried where the skip can stop (<see cref="Skipped" />), and
+    ///     the skip stops only where a word could start — which is what a lookbehind would have said, in
+    ///     the engine that has none. The rest-of-text alternative is what keeps the matches back to back:
+    ///     without it, RE2 would start the next match wherever it finds one, the middle of a word
+    ///     included, once no whole word is left to skip to.
+    ///     It replaced a form that matched every word of the text separately, with one extract per word:
+    ///     the same answers, and counting <c>Init</c>'s 3,299 lines in Radix took 868 ms against 292 (#294).
+    /// </summary>
+    public static string WholeWordMatches(string pattern, bool start = true, bool end = true) =>
+        $"({Skipped(start)})({pattern}){WordEnd(end)}|(?s:.)+";
+
+    /// <summary>
+    ///     Everything a whole-word match may skip before it: whole words, each with the characters that
+    ///     are not word characters after it, as few as will do. Stopping only after a character that is
+    ///     not a word character is where a word can start; without a start boundary it may stop anywhere.
+    /// </summary>
+    private static string Skipped(bool start) => start ? $"(?:{Re2WordChar}*{Re2NonWordChar}+)*?" : "(?s:.)*?";
+
+    private static string WordEnd(bool end) => end ? Re2WordEnd : "";
+
+    /// <summary>
     ///     The identifier as an RE2 pattern for the engine: escaped, and anchored on a word boundary at
     ///     each end that has a word character to anchor to. A boundary against punctuation would mean
     ///     the opposite of what it does against a letter, so it is left off there rather than applied
@@ -78,30 +121,32 @@ public static class SymbolText
     ///     would be the two matchers disagreeing that this design exists to prevent.
     ///     It tests a line and does not count on it; <see cref="OccurrencePattern" /> is the one that counts.
     /// </summary>
-    public static string WholeWordPattern(string symbol) => Bounded(symbol, Re2WordEnd, "");
+    public static string WholeWordPattern(string symbol) =>
+        WholeWord(Re2Literal(symbol), StartsWithWordChar(symbol), EndsWithWordChar(symbol));
 
     /// <summary>
-    ///     The symbol escaped, behind a start boundary where it starts with a word character and in
-    ///     front of <paramref name="wordEnd" /> or <paramref name="otherEnd" /> by how it ends.
+    ///     The identifier as <see cref="WholeWordMatches" /> without its groups and without the rest of
+    ///     the text, so that every match is one occurrence, bounded at the same ends as
+    ///     <see cref="WholeWordPattern" />. Counted over the text with <see cref="OccurrenceSentinel" />
+    ///     after it, which stands in for the rest-of-text alternative: there is always one more whole
+    ///     occurrence to skip to, so no match starts in the middle of a word, and the count is one high.
+    ///     No groups, because a group is what makes an extract slow: DuckDB asks RE2 for every group of
+    ///     every match, and over <c>Init</c>'s 3,299 lines in Radix the grouped form took 159 ms to count
+    ///     what this counts in 69 — the 68 ms of the form it replaced, which lost an occurrence that
+    ///     starts inside a failed one (#294).
     /// </summary>
-    private static string Bounded(string symbol, string wordEnd, string otherEnd)
-    {
-        ArgumentNullException.ThrowIfNull(symbol);
-        if (symbol.Length == 0) return otherEnd;
-        string head = IsWordChar(symbol[0]) ? Re2WordStart : "";
-        string tail = IsWordChar(symbol[^1]) ? wordEnd : otherEnd;
-        return head + Re2Literal(symbol) + tail;
-    }
+    public static string OccurrencePattern(string symbol) =>
+        $"{Skipped(StartsWithWordChar(symbol))}{Re2Literal(symbol)}{WordEnd(EndsWithWordChar(symbol))}";
 
     /// <summary>
-    ///     The identifier as an RE2 pattern whose every match is a candidate occurrence, and whose group
-    ///     1 is empty exactly when that candidate is a whole one. <see cref="WholeWordPattern" /> cannot
-    ///     count: its end boundary consumes the character after a match, so in <c>Ship(Ship())</c> the
-    ///     second name had lost the <c>(</c> its own start boundary needed. Here the end is not a
-    ///     boundary but a capture of the word character that would break one — never a character the
-    ///     next match can start on, since a start boundary is not a word character.
+    ///     What <see cref="OccurrencePattern" /> is counted over the text followed by: a line break, which is
+    ///     not a word character, and the symbol, which is therefore one whole occurrence more.
     /// </summary>
-    public static string OccurrencePattern(string symbol) => Bounded(symbol, $"({Re2WordChar}?)", "()");
+    public static string OccurrenceSentinel(string symbol) => "\n" + symbol;
+
+    private static bool StartsWithWordChar(string symbol) => symbol.Length > 0 && IsWordChar(symbol[0]);
+
+    private static bool EndsWithWordChar(string symbol) => symbol.Length > 0 && IsWordChar(symbol[^1]);
 
     /// <summary>
     ///     Where the identifier next sits on the line, on word boundaries, or -1. Done by hand rather

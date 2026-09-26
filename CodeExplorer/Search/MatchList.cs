@@ -1,5 +1,6 @@
 using System.Globalization;
 using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
@@ -110,17 +111,17 @@ public sealed class MatchList(IndexReaders readers)
         var filter = request.Filter with { Repository = index.Repository?.Slug };
         int limit = Math.Clamp(request.Limit, 1, MaxLimit);
 
-        // A whole word is tested with one form and extracted from another (Re2.WholeWordTokens), whose
-        // group 1 is the caller's whole match and so whose group n + 1 is the caller's group n. Every
-        // stretch between matches comes back as an empty value — one per word on the line — so empty
-        // values are dropped before unnest rather than after, where each would have been a row.
+        // A whole word is tested with one form and extracted from another (SymbolText.WholeWordMatches),
+        // whose group 2 is the caller's whole match and so whose group n + 2 is the caller's group n. The
+        // rest of a line after its last whole word comes back as an empty value, so empty values are
+        // dropped before unnest rather than after, where each would have been a row.
         var matchParameters = new List<DuckDBParameter>
         {
-            new("q", request.WholeWord ? Re2.WholeWord(query) : query),
-            new("extract", request.WholeWord ? Re2.WholeWordTokens(query) : query),
+            new("q", request.WholeWord ? SymbolText.WholeWord(query) : query),
+            new("extract", request.WholeWord ? SymbolText.WholeWordMatches(query) : query),
             new("flags", request.CaseSensitive ? "" : "i")
         };
-        int group = request.WholeWord ? request.Group + 1 : request.Group;
+        int group = request.WholeWord ? request.Group + 2 : request.Group;
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
 

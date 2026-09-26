@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeExplorer.Infrastructure;
+using CodeExplorer.Language;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
@@ -204,7 +205,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         {
             engine = RegexEngine;
             match = "regexp_matches(l.content, $q, $flags)";
-            matchParameters.Add(new DuckDBParameter("q", request.WholeWord ? Re2.WholeWord(query) : query));
+            matchParameters.Add(new DuckDBParameter("q", request.WholeWord ? SymbolText.WholeWord(query) : query));
             matchParameters.Add(new DuckDBParameter("flags", request.CaseSensitive ? "" : "i"));
         }
         else
@@ -428,22 +429,22 @@ public sealed partial class GrepSearch(IndexReaders readers)
         CancellationToken cancellationToken)
     {
         string flags = request.CaseSensitive ? "s" : "si";
-        // Whole words are counted and marked from their tokenising form, whose group 1 is the match
-        // (Re2.WholeWordTokens): the whole-word test alone loses a match one character from the last.
-        // The tokens form yields an entry for every word of a document, so it is extracted only from a
-        // document the whole-word test has already found a match in; the plain pattern's extract is
+        // Whole words are counted and marked from the form whose group 2 is the match
+        // (SymbolText.WholeWordMatches): the whole-word test alone loses a match one character from the
+        // last. That form runs every match over the text skipped before it, so it is extracted only from
+        // a document the whole-word test has already found a match in; the plain pattern's extract is
         // empty exactly where there is none, and needs no test in front of it.
         bool wholeWord = request.WholeWord;
         var marking = wholeWord
-            ? new DuckDBParameter("tokens", Re2.WholeWordTokens(query))
+            ? new DuckDBParameter("words", SymbolText.WholeWordMatches(query))
             : new DuckDBParameter("q", query);
         List<DuckDBParameter> matchParameters = wholeWord
-            ? [new("q", Re2.WholeWord(query)), marking, new("flags", flags)]
+            ? [new("q", SymbolText.WholeWord(query)), marking, new("flags", flags)]
             : [marking, new("flags", flags)];
         string matchCount = wholeWord
             ? """
               CASE WHEN regexp_matches(content, $q, $flags)
-                   THEN len(list_filter(regexp_extract_all(content, $tokens, 1, $flags), v -> v <> '')) ELSE 0 END
+                   THEN len(list_filter(regexp_extract_all(content, $words, 2, $flags), v -> v <> '')) ELSE 0 END
               """
             : "len(regexp_extract_all(content, $q, 0, $flags))";
         string literalFilter = LiteralPrefilter(query, request.CaseSensitive, matchParameters);
@@ -487,10 +488,11 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // START match END, so the offsets read back are exact even for \b, ^ or $, which a text search
         // for the matched string could not honour. The ids come from the query above, never from the
         // request, so inlining them is safe.
-        // A whole-word match carries the boundary after it, and every stretch between matches is a
-        // match of the tokenising form too, so both are written back whole after their marked group 1:
-        // the only groups a rewrite can name without counting the caller's are 0 and 1.
-        // WithoutMarkedCopies then drops the copy of group 1 each one repeats.
+        // A whole-word match carries the text skipped before it and the boundary after it, and the rest
+        // of the document after the last one is a match too, so each is written back whole after its
+        // marked groups 1 and 2: the only groups a rewrite can name without counting the caller's are 0,
+        // 1 and 2, and group 0 is the only one holding the boundary. WithoutMarkedCopies then puts the
+        // skipped text back in front of the marked match and drops the copies group 0 repeats.
         // Marking reads each file whole, so the page's files are read while they fit the byte budget
         // (MaxMultilinePageBytes). The first always is, or a file larger than the budget could never be
         // shown; a later one that does not fit is skipped rather than ending the walk, so a small file
@@ -506,7 +508,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
 
         string ids = string.Join(",", read.Select(id => id.ToString(CultureInfo.InvariantCulture)));
         string rewrite = wholeWord
-            ? @"$tokens, chr(1) || '\1' || chr(2) || '\0'"
+            ? @"$words, chr(1) || '\1' || chr(2) || chr(1) || '\2' || chr(2) || '\0'"
             : @"'(' || $q || ')', chr(1) || '\1' || chr(2)";
         var marked = new Dictionary<long, string>();
         await using (var command = connection.Query($"""
@@ -560,26 +562,32 @@ public sealed partial class GrepSearch(IndexReaders readers)
     }
 
     /// <summary>
-    ///     Content marked from <see cref="Re2.WholeWordTokens" /> back to content marked the plain way.
-    ///     Every token was rewritten as START group-1 END and then the token whole, which begins with
-    ///     group 1 again: the repeat is dropped, and so is the empty pair in front of a stretch between
-    ///     matches.
+    ///     Content marked from <see cref="CodeExplorer.Language.SymbolText.WholeWordMatches" /> back to
+    ///     content marked the plain way. Every match was rewritten as START skipped END, START match END,
+    ///     and then the match whole, which begins with the skipped text and the match again: the skipped
+    ///     text is kept in front of the marked match, the repeat of both is dropped, and so is the empty
+    ///     pair in front of the rest of the document.
     /// </summary>
     private static string WithoutMarkedCopies(string marked)
     {
         var text = new StringBuilder(marked.Length);
         for (int i = 0; i < marked.Length; i++)
         {
-            int end;
-            if (marked[i] != _matchStart || (end = marked.IndexOf(_matchEnd, i + 1)) < 0)
+            int skippedEnd, matchEnd;
+            if (marked[i] != _matchStart
+                || (skippedEnd = marked.IndexOf(_matchEnd, i + 1)) < 0
+                || skippedEnd + 1 >= marked.Length || marked[skippedEnd + 1] != _matchStart
+                || (matchEnd = marked.IndexOf(_matchEnd, skippedEnd + 2)) < 0)
             {
                 text.Append(marked[i]);
                 continue;
             }
 
-            int length = end - i - 1;
-            if (length > 0) text.Append(marked, i, length + 2);
-            i = end + length;
+            int skipped = skippedEnd - i - 1;
+            int match = matchEnd - skippedEnd - 2;
+            text.Append(marked, i + 1, skipped);
+            if (match > 0) text.Append(marked, skippedEnd + 1, match + 2);
+            i = matchEnd + skipped + match;
         }
 
         return text.ToString();
