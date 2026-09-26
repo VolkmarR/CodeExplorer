@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
 using LibGit2Sharp;
@@ -34,18 +35,22 @@ internal sealed class BlobReader : IDisposable
     {
         Check(git_blob_lookup(out var blob, _repository, id.RawId), "load a blob");
         Loads++;
+        byte[]? buffer = null;
         try
         {
             if (git_blob_is_binary(blob) != 0) return null;
             // Copied out rather than decoded in place: a span over native memory needs unsafe code,
-            // which nothing else here does, and the copy is what the stream read made as well.
-            var content = new byte[checked((int)git_blob_rawsize(blob))];
-            Marshal.Copy(git_blob_rawcontent(blob), content, 0, content.Length);
-            return BlobText.Decode(content);
+            // which nothing else here does. Into a pooled buffer, because the copy lives only as long
+            // as the decode and a build makes one for every file it reads.
+            int size = checked((int)git_blob_rawsize(blob));
+            buffer = ArrayPool<byte>.Shared.Rent(size);
+            Marshal.Copy(git_blob_rawcontent(blob), buffer, 0, size);
+            return BlobText.Decode(buffer.AsSpan(0, size));
         }
         finally
         {
             git_blob_free(blob);
+            if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 

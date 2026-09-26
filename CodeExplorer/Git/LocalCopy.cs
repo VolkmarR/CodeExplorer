@@ -221,13 +221,14 @@ public sealed class LocalCopy : IDisposable
 
         void Compare(TreeEntry? was, TreeEntry? now, string path)
         {
-            if (was?.TargetType == TreeEntryTargetType.Tree || now?.TargetType == TreeEntryTargetType.Tree)
-                CompareTrees(was?.Target as Tree, now?.Target as Tree, path + "/", maxBytes, changed, oversized);
+            // Either side may be a tree while the other is not: a file replaced by a directory.
+            var oldTree = was?.Target as Tree;
+            var newTree = now?.Target as Tree;
+            if (oldTree is not null || newTree is not null)
+                CompareTrees(oldTree, newTree, path + "/", maxBytes, changed, oversized);
             // A submodule is a change the patch records, so its path is kept, but it is never sized: it
             // is a commit of another repository, which this one does not hold.
-            if (was?.TargetType is not (null or TreeEntryTargetType.Tree)
-                || now?.TargetType is not (null or TreeEntryTargetType.Tree))
-                changed.Add(path);
+            if ((was is not null && oldTree is null) || (now is not null && newTree is null)) changed.Add(path);
             var oldBlob = was?.TargetType == TreeEntryTargetType.Blob ? was : null;
             var newBlob = now?.TargetType == TreeEntryTargetType.Blob ? now : null;
             if (!IsLarger(oldBlob) && !IsLarger(newBlob)) return;
@@ -281,24 +282,24 @@ public sealed class LocalCopy : IDisposable
         var files = new List<ChangedPath>();
         var changed = new List<string>();
         CompareTrees(parent?.Tree, commit.Tree, "", maxBlobBytes, changed, files);
-        // Left null for the ordinary commit, with nothing oversized, which asks for its whole patch as
-        // it always did.
-        var rest = files.Count == 0 ? null : changed.Except(files.Select(file => file.Path)).ToList();
+        var skipped = files.Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
+        var rest = changed.Where(path => !skipped.Contains(path)).ToList();
 
-        // Explicit paths are matched literally, not as pathspec patterns, once ExplicitPathsOptions is
-        // passed; an empty list would mean every path, so a commit of nothing but oversized blobs asks
-        // for no patch at all.
-        if (rest is not { Count: 0 })
+        // The ordinary commit, with nothing oversized, asks for its whole patch as it always did.
+        // Otherwise the rest are named, matched literally rather than as pathspec patterns once
+        // ExplicitPathsOptions is passed; an empty list would mean every path, so a commit of nothing
+        // but oversized blobs asks for no patch at all.
+        if (skipped.Count == 0 || rest.Count > 0)
         {
-            using var patch = _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, rest,
-                rest is null ? null : new ExplicitPathsOptions(), _noContext);
+            using var patch = skipped.Count == 0
+                ? _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null, _noContext)
+                : _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, rest, new ExplicitPathsOptions(),
+                    _noContext);
             // A pathspec also matches as a directory prefix, so a file `a` that replaced a directory
             // `a/` holding an oversized blob brings that blob back into the patch. It is recorded once,
             // as the oversized change it already is.
-            var recorded = rest is null ? null : files.Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
-            foreach (var change in patch)
-                if (recorded?.Contains(change.Path) != true)
-                    files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
+            foreach (var change in patch.Where(change => !skipped.Contains(change.Path)))
+                files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
                     change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
                     change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
         }
