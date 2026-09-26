@@ -83,6 +83,10 @@ _Avoid_: Dependency, include, reference (which is a different thing here), edge
 One recorded change on a repository's default branch, identified by its SHA and carrying the author
 who wrote it. Merges count as one commit and their side branches are not walked (ADR-0007), so a
 pull request reads as a single change.
+The default branch is the one the remote's HEAD names. A remote whose HEAD is detached names none, so
+a local copy already on a branch keeps it, and one that is not settles on a branch: the one whose tip
+is the detached commit, else `main`, else `master`, else the first by name (#288). The server's log
+says which one it chose and why.
 _Avoid_: Revision, changeset, changelist
 
 **History**:
