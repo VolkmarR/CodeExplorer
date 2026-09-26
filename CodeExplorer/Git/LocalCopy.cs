@@ -198,22 +198,6 @@ public sealed class LocalCopy : IDisposable
     }
 
     /// <summary>
-    ///     No context lines around a hunk, because nothing here reads one. libgit2 renders three above
-    ///     and three below every hunk by default, and each rendered line costs a native-to-managed
-    ///     transition, a UTF-8 decode, a re-marshal of the file path and two string copies before
-    ///     <see cref="UnifiedDiff.Edits" /> throws it away — for scattered single-line edits that is
-    ///     seven lines rendered per line of change. Sampling a live import put 42% of the walk in
-    ///     LibGit2Sharp's patch rendering, which is what this is against.
-    ///     It is not a change to what is read. <see cref="UnifiedDiff.Edits" /> takes a context line
-    ///     only as "advance one position" and reads the position itself from each hunk header, so with
-    ///     no context every edit run becomes its own hunk and the headers say where each one sits.
-    ///     <c>InterhunkLines</c> stays 0, its default; raising it would merge runs back together.
-    ///     Pinned by <c>Edits_are_the_same_whether_or_not_libgit2_renders_context</c>, which diffs the
-    ///     same commits both ways and asserts the edit lists are equal.
-    /// </summary>
-    private static readonly CompareOptions _noContext = new() { ContextLines = 0 };
-
-    /// <summary>
     ///     The stored name of a change, the enum name lower-cased. The kinds a tree diff produces are
     ///     spelled out so that no path allocates one; anything else keeps the general expression.
     /// </summary>
@@ -238,15 +222,13 @@ public sealed class LocalCopy : IDisposable
     ///     (ADR-0007), and <see cref="NativeDiff" /> makes it.
     ///     Renames are detected with libgit2's defaults, so a moved file's edits are recorded against
     ///     its new path with the old one beside it, and the replay carries the attribution across.
-    ///     A blob over <paramref name="maxBlobBytes" /> must not be inflated (#263), and rename detection
-    ///     reads the blobs it compares, so a commit with one on either side of a change is not patched
-    ///     whole: see <see cref="AroundOversized" />.
+    ///     A blob over <paramref name="maxBlobBytes" /> is never inflated (#263): its change is recorded
+    ///     without lines, as the file pass treats that blob.
     /// </summary>
     private RecordedCommit Describe(Commit commit, long maxBlobBytes)
     {
         var parent = commit.Parents.FirstOrDefault();
-        var diff = _diffs.Diff(parent?.Tree.Id, commit.Tree.Id, maxBlobBytes);
-        var files = diff.Recorded ?? AroundOversized(parent, commit, diff.Changed, maxBlobBytes);
+        var files = _diffs.Diff(parent?.Tree.Id, commit.Tree.Id, maxBlobBytes);
 
         // MessageShort is the subject git itself would show; the body is what is left, and an empty
         // string rather than null because the column is NOT NULL and "no body" is not a missing value.
@@ -258,109 +240,6 @@ public sealed class LocalCopy : IDisposable
         return new RecordedCommit(commit.Sha, parent?.Sha, commit.Author.Name, commit.Author.Email,
             commit.Author.When, subject, body, files);
     }
-
-    /// <summary>
-    ///     A commit with a blob over the ceiling. The oversized changes are recorded without lines and the
-    ///     patch is asked only for the rest, among which renames are still detected. It is the rare
-    ///     commit, so it takes the plain LibGit2Sharp patch and a second walk of the trees.
-    /// </summary>
-    private List<ChangedPath> AroundOversized(Commit? parent, Commit commit, List<TreeChange> changes,
-        long maxBlobBytes)
-    {
-        var oversized = changes.Where(change => change.Old?.Size > maxBlobBytes || change.New?.Size > maxBlobBytes)
-            .ToList();
-        var files = Oversized(oversized);
-        var skipped = oversized.Select(change => change.Path).ToHashSet(StringComparer.Ordinal);
-        // A path matches as a directory prefix too, even with ExplicitPathsOptions, so naming a file
-        // `a` that replaced a directory `a/` — or the other way round — would bring the directory's
-        // oversized blobs back into the patch (#292). Such a path is diffed on its own instead.
-        var holding = new HashSet<string>(StringComparer.Ordinal);
-        foreach (string path in skipped)
-            for (int slash = path.IndexOf('/'); slash > 0; slash = path.IndexOf('/', slash + 1))
-                holding.Add(path[..slash]);
-
-        var named = new List<string>();
-        foreach (var change in changes)
-        {
-            if (skipped.Contains(change.Path)) continue;
-            if (holding.Contains(change.Path)) files.Add(DiffAlone(change));
-            else named.Add(change.Path);
-        }
-
-        // Matched literally rather than as pathspec patterns once ExplicitPathsOptions is passed; an
-        // empty list would mean every path, so a commit of nothing but oversized blobs asks for none.
-        if (named.Count == 0) return files;
-        using var patch = _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, named, new ExplicitPathsOptions(),
-            _noContext);
-        foreach (var change in patch)
-            files.Add(Rendered(change.Path, change.OldPath, change.Status, change.LinesAdded, change.LinesDeleted,
-                change.IsBinaryComparison, change.Patch));
-        return files;
-    }
-
-    /// <summary>
-    ///     The changes over the ceiling, recorded the way the file pass treats such a blob: as binary,
-    ///     with no lines. One whose blob left one path and arrived at another in the same commit is the
-    ///     move libgit2 detects first, by id, and is recorded as the rename it is — the id is all that
-    ///     telling needs, so nothing is read (#292). A large file moved and edited in one commit has a
-    ///     new id, and stays a deletion and an addition, since matching it means reading it. The pairing
-    ///     does not consult <c>diff.renames</c>; only a git configuration that switched rename
-    ///     detection off would make it disagree with the patch's.
-    /// </summary>
-    private static List<ChangedPath> Oversized(List<TreeChange> oversized)
-    {
-        var files = new List<ChangedPath>(oversized.Count);
-        var departed = new Dictionary<GitId, Queue<string>>();
-        foreach (var change in oversized)
-        {
-            if (change is not { Old: { } old, New: null }) continue;
-            if (!departed.TryGetValue(old.Id, out var paths)) departed[old.Id] = paths = new Queue<string>();
-            paths.Enqueue(change.Path);
-        }
-
-        // Both ends of every move, which is one set because a commit names each path once.
-        var moved = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var change in oversized)
-        {
-            if (change is not { Old: null, New: { } arrived }
-                || !departed.TryGetValue(arrived.Id, out var from) || !from.TryDequeue(out string? oldPath))
-                continue;
-            moved.Add(oldPath);
-            moved.Add(change.Path);
-            files.Add(new ChangedPath(change.Path, oldPath, KindName(ChangeKind.Renamed), 0, 0, true, []));
-        }
-
-        foreach (var change in oversized)
-        {
-            if (moved.Contains(change.Path)) continue;
-            files.Add(new ChangedPath(change.Path, change.Path, KindName(change.Kind), 0, 0, true, []));
-        }
-
-        return files;
-    }
-
-    /// <summary>
-    ///     A path that is a file on one side and a directory on the other, diffed blob to blob so the
-    ///     directory's contents stay out of it. It exists on one side only, so it is an addition or a
-    ///     deletion, and is not a candidate for rename detection. A submodule there is recorded
-    ///     without lines: it is a commit of another repository, which this one cannot diff.
-    /// </summary>
-    private ChangedPath DiffAlone(TreeChange change)
-    {
-        var side = (change.Old ?? change.New)!.Value;
-        if (side.IsSubmodule) return new ChangedPath(change.Path, change.Path, KindName(change.Kind), 0, 0, false, []);
-        var blob = _repository.Lookup<Blob>(new ObjectId(side.Id.ToRaw()));
-        var content = change.Old is null
-            ? _repository.Diff.Compare(null, blob, _noContext)
-            : _repository.Diff.Compare(blob, null, _noContext);
-        return Rendered(change.Path, change.Path, change.Kind, content.LinesAdded, content.LinesDeleted,
-            content.IsBinaryComparison, content.Patch);
-    }
-
-    /// <summary>A change LibGit2Sharp rendered, its edits read back out of the rendered text.</summary>
-    private static ChangedPath Rendered(string path, string oldPath, ChangeKind kind, int added, int deleted,
-        bool binary, string patch) =>
-        new(path, oldPath, KindName(kind), added, deleted, binary, binary ? [] : UnifiedDiff.Edits(patch));
 
     public void Dispose()
     {
