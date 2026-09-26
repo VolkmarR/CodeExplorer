@@ -1,5 +1,7 @@
 using System.Text;
+using CodeExplorer.Git;
 using CodeExplorer.Index;
+using LibGit2Sharp;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -45,5 +47,24 @@ public sealed class BinaryClassificationTests : IDisposable
             "control.txt|binary", "empty.txt|text", "late-nul.txt|text", "legacy.prg|text", "marked.prg|text",
             "modern.prg|text", "wide-be.prg|binary", "wide.prg|binary", "zero.dat|binary"
         ], files);
+    }
+
+    /// <summary>
+    ///     The verdict and the text come from one load of the blob (#263). libgit2 caches no blob, so
+    ///     asking for them through two calls inflated the object and applied its delta chain twice for
+    ///     every file a build indexes.
+    /// </summary>
+    [Fact]
+    public void A_file_is_classified_and_read_from_a_single_load_of_its_blob()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        string path = _host.CreateGitRepository("one",
+            new Dictionary<string, byte[]> { ["a.cs"] = "class A {}\n"u8.ToArray(), ["b.dat"] = "\0\0"u8.ToArray() });
+
+        using var copy = new LocalCopy(new Repository(path));
+        var read = copy.Files().Select(file => file.Text()).ToList();
+
+        Assert.Equal(["class A {}\n", null], read);
+        Assert.Equal(2, copy.BlobLoads);
     }
 }

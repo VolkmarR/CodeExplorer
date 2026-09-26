@@ -34,17 +34,21 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     Every repository the project has, opened or not. It decides whose history is kept;
     ///     <paramref name="opened" /> only decides whose history is walked.
     /// </param>
+    /// <param name="maxFileBytes">
+    ///     The file pass's <c>Index:MaxFileBytes</c>, which bounds the diff too: a change to a blob the
+    ///     index would not read is recorded with no lines rather than inflated into a patch (#263).
+    /// </param>
     /// <param name="report">How far the pass has got, for the status an operator polls.</param>
     /// <param name="cancellationToken">Checked per commit, which is where the time goes.</param>
     public async Task<HistorySummary> FillAsync(ShadowIndex shadow, IReadOnlyList<OpenedRepository> opened,
-        IReadOnlyList<ProjectRepository> configured, Action<RefreshProgress> report,
+        IReadOnlyList<ProjectRepository> configured, long maxFileBytes, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
         using var recording = Telemetry.HistoryBuild(shadow.Slug);
 
         // The walk and the diffs are synchronous git calls, like the file walk: a worker thread keeps
         // them off the request thread and the token is checked inside.
-        var summary = await Task.Run(() => Fill(shadow, opened, configured, report, cancellationToken),
+        var summary = await Task.Run(() => Fill(shadow, opened, configured, maxFileBytes, report, cancellationToken),
             cancellationToken);
 
         recording.Built(summary.Commits, summary.AttributedFiles);
@@ -56,7 +60,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     }
 
     private HistorySummary Fill(ShadowIndex shadow, IReadOnlyList<OpenedRepository> opened,
-        IReadOnlyList<ProjectRepository> configured, Action<RefreshProgress> report,
+        IReadOnlyList<ProjectRepository> configured, long maxFileBytes, Action<RefreshProgress> report,
         CancellationToken cancellationToken)
     {
         var (connection, catalog) = (shadow.Connection, shadow.Catalog);
@@ -71,7 +75,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         long attributed = 0;
         foreach (var (repository, copy) in opened)
         {
-            var fresh = AppendCommits(shadow, repository.Slug, copy, report, cancellationToken);
+            var fresh = AppendCommits(shadow, repository.Slug, copy, maxFileBytes, report, cancellationToken);
             appended += fresh.Count;
             attributed += Replay(connection, catalog, repository.Slug, fresh, report, cancellationToken);
         }
@@ -111,13 +115,13 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     Returns the new commits with the ids they were given, oldest first, for the replay.
     /// </summary>
     private List<(int Id, RecordedCommit Commit)> AppendCommits(ShadowIndex shadow, string slug, LocalCopy copy,
-        Action<RefreshProgress> report, CancellationToken cancellationToken)
+        long maxFileBytes, Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
         var (connection, catalog) = (shadow.Connection, shadow.Catalog);
         string inRepository = $"repo_slug = {IndexQuery.Literal(slug)}";
         string? newest = NewestRecorded(connection, inRepository, cancellationToken);
         var fresh = new List<RecordedCommit>();
-        foreach (var commit in copy.History(newest, cancellationToken))
+        foreach (var commit in copy.History(newest, maxFileBytes, cancellationToken))
         {
             // The walk is where a first import spends its minutes, and how long it is cannot be known
             // before it ends, so the count runs without a total rather than against an invented one.

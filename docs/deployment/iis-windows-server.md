@@ -202,6 +202,12 @@ bounds each wait, not the transfer, so raise it only for a remote that is slow t
 large pack. It must be between 1 and 2147483: zero would be libgit2's "no limit", the hang the
 setting exists to end, so it is refused with an error naming the setting rather than honoured.
 
+`Index:MaxFileBytes` — 25 MiB by default — is the largest file a refresh reads. A larger file is
+listed with the reason but not indexed, and a commit that added or changed one is recorded in history
+with no line counts rather than diffed, so a refresh inflates no file larger than this, a dump or a
+generated bundle included. Raise it for a project of large hand-written sources, and size the
+application pool's memory for it.
+
 `Control:AllowLocalRepositories` — `false` by default — decides whether a repository may be a local
 path, a UNC share or a `file://` URL. Leave it off unless every caller who can add a repository may
 also read everything the application pool's identity can: with it on, any of them can have the server
