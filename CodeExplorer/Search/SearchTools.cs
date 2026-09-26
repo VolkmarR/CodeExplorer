@@ -158,14 +158,13 @@ internal sealed partial class SearchTools(
     /// </summary>
     private static string CountStopped(int notSearched) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"stopped after {GrepSearch.MaxMultilineCountMiB} MiB of candidate files, so {notSearched} more {ToolReply.Plural(notSearched, "file")} ")
-        + (notSearched == 1 ? "was" : "were")
-        + " not searched. For an exact count, narrow with path, ext or exclude, or put a longer literal the match must contain into the pattern.\n";
+            $"stopped after {GrepSearch.MaxMultilineCountMiB} MiB of candidate files, so {notSearched} more {ToolReply.Plural(notSearched, "file")} {ToolReply.Plural(notSearched, "was", "were")} not searched. For an exact count, narrow with path, ext or exclude, or put a longer literal the match must contain into the pattern.\n");
 
     private static string Format(GrepRequest request, GrepResult result)
     {
         int lastPage = (result.TotalFiles + result.PageSize - 1) / result.PageSize;
         bool cut = result.FilesNotSearched > 0;
+        string atLeast = cut ? "at least " : "";
         var text = new StringBuilder();
         // Spell out that the counts are project-wide totals, not this page; read as per-page numbers they
         // turn a paging decision into a guess. A count the budget cut is a lower bound and says so first,
@@ -174,7 +173,7 @@ internal sealed partial class SearchTools(
             .Append(CultureInfo.InvariantCulture,
                 $"{result.TotalFiles} {ToolReply.Plural(result.TotalFiles, "file")} match{(cut ? "" : " in total")}")
             .Append(CultureInfo.InvariantCulture,
-                $" ({(cut ? "at least " : "")}{result.TotalLines} matching {ToolReply.Plural(result.TotalLines, "line")})")
+                $" ({atLeast}{result.TotalLines} matching {ToolReply.Plural(result.TotalLines, "line")})")
             .Append(lastPage == 1
                 ? ", all shown below"
                 : string.Create(CultureInfo.InvariantCulture,

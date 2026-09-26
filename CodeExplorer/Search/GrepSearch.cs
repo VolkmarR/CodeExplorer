@@ -589,7 +589,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         }
 
         return new GrepResult(MultilineEngine, counts.Count, totalMatches, bounds.Page, bounds.PageSize, files,
-            withoutFilters, notSearched);
+            withoutFilters, notSearched, notSearchedOutside);
 
         // Skipped files (binary, oversized) have no lines and would aggregate to nothing; filtered out
         // here so they never even reach the join.
@@ -613,15 +613,15 @@ public sealed partial class GrepSearch(IndexReaders readers)
             return $"""
                     WITH candidates AS MATERIALIZED (
                         SELECT f.file_id, f.qualified_path, f.size_bytes,
-                               sum(f.size_bytes) OVER running AS through, row_number() OVER running AS rn
+                               row_number() OVER running = 1
+                                   OR sum(f.size_bytes) OVER running <= {MaxMultilineCountBytes} AS in_budget
                         FROM files f
                         WHERE f.skip_reason IS NULL{candidateFilter}
                         WINDOW running AS (ORDER BY f.qualified_path ROWS UNBOUNDED PRECEDING)),
                     counted AS (
-                        SELECT file_id, qualified_path, size_bytes FROM candidates
-                        WHERE rn = 1 OR through <= {MaxMultilineCountBytes}),
+                        SELECT file_id, qualified_path, size_bytes FROM candidates WHERE in_budget),
                     uncounted AS (
-                        SELECT count(*) AS n FROM candidates WHERE rn > 1 AND through > {MaxMultilineCountBytes}),
+                        SELECT count(*) FILTER (WHERE NOT in_budget) AS n FROM candidates),
                     {Aggregated("counted")}
                     """;
         }
