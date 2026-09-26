@@ -10,7 +10,12 @@ namespace CodeExplorer.Tests;
 public sealed class RowCapTests
 {
     [Fact]
-    public void A_read_asks_for_one_row_past_the_cap() => Assert.Equal(4, RowCap.Limit(3));
+    public void A_read_that_fills_its_limit_is_a_cut()
+    {
+        var rows = Enumerable.Range(1, RowCap.Limit(3)).ToList();
+
+        Assert.True(RowCap.Trim(rows, 3));
+    }
 
     [Theory]
     [InlineData(2, false, 2)]

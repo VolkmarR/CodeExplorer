@@ -5,7 +5,8 @@ namespace CodeExplorer.Reading;
 ///     row more than it reports, because a list that merely reaches the cap is otherwise
 ///     indistinguishable from one that was cut: a file with exactly the cap's number of rows would be
 ///     told there are more. The extra row is dropped, because the cap is the promise and not the query.
-///     One spelling, so that every capped read means the same thing by "truncated".
+///     One spelling, so that the reads capped this way cannot drift apart on what "truncated" means.
+///     A read that counts its total with <c>count(*) OVER ()</c> knows it was cut without this.
 /// </summary>
 public static class RowCap
 {
