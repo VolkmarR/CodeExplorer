@@ -39,7 +39,8 @@ sends `http://localhost:5173` with every write. The proxy removes exactly that o
 sees a request with no `Origin`, which it serves, and passes every other origin through to be
 refused. Open the UI as `http://localhost:5173`: under `127.0.0.1:5173` every write is a 403.
 `changeOrigin` presents `localhost:5000` as the Host, so the server's own Host check never sees the
-name the browser used; a rebound name reaching `vp dev` is refused by Vite's `server.allowedHosts`.
+name the browser used; a rebound name reaching `vp dev` is refused by Vite's `server.allowedHosts`, which
+`vite.config.ts` sets explicitly to Vite's loopback names and IP addresses and nothing more.
 
 ## Layout
 

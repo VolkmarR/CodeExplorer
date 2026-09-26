@@ -280,7 +280,7 @@ MCP endpoints too — anyone who can reach the host can read every indexed repos
 Unauthenticated, the server answers only the loopback host names (`localhost`, `127.0.0.1`,
 `[::1]`) unless `AllowedHosts` names others, so set it to the names the site is reached under,
 separated by semicolons (`codeexplorer.corp.example;codeexplorer`), with the section 5 settings — the
-name is `AllowedHosts` there too, since it has no `:`. Every other name gets a 400, and
+name is `AllowedHosts` there too, since it has no `:`. Every other name gets a 400, as does a request with no Host header, and
 the startup log says why. That default is what keeps a web page from rebinding its own name to the
 server's address and reading it from a browser inside the network.
 

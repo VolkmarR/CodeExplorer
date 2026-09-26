@@ -29,6 +29,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // The dev server's own guard against DNS rebinding, the attack the server's Host check stops
+    // (GHSA-qxhv-3r9w-q8h4): a page that rebinds its name to 127.0.0.1 could otherwise read the UI
+    // and, through the proxy below, the API. Empty on purpose: Vite always answers `localhost`, names
+    // under `.localhost` and IP addresses, and this adds no other name. Written out so the protection
+    // is a decision here and not a default a Vite upgrade can change; `true` would switch it off.
+    allowedHosts: [],
     proxy: {
       '/api': {
         target: 'http://localhost:5000',

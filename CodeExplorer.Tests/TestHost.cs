@@ -10,6 +10,7 @@ using CodeExplorer.Reading;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using LibGit2Sharp;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -818,6 +819,22 @@ public sealed class TestHost : IDisposable
         if (token is not null)
             http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return http;
+    }
+
+    /// <summary>
+    ///     A GET that carries no Host header at all, as an HTTP/1.0 client sends it. Through the test
+    ///     server rather than <see cref="CreateClient" />, because an <see cref="HttpClient" /> always
+    ///     fills a Host in from its base address.
+    /// </summary>
+    public async Task<HttpStatusCode> GetWithoutHostAsync(string path)
+    {
+        var context = await Factory.Server.SendAsync(request =>
+        {
+            request.Request.Method = HttpMethods.Get;
+            request.Request.Path = path;
+            request.Request.Headers.Host = default;
+        }, Ct);
+        return (HttpStatusCode)context.Response.StatusCode;
     }
 
     public async Task<McpClient> ConnectAsync(string slug, string? token = null)
