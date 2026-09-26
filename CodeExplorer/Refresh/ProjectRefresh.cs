@@ -45,6 +45,7 @@ public sealed class ProjectRefresh(
         var repositories = await control.ListRepositoriesAsync(project.Slug, cancellationToken);
         var opened = new List<OpenedRepository>();
         var skipped = new List<string>();
+        var notes = new List<string>();
         var condition = new PublishCondition(discards,
             async token => await control.FindAsync(project.Slug, token) is not null);
         bool kept = false;
@@ -53,7 +54,7 @@ public sealed class ProjectRefresh(
             // Inside the try, so a fetch that ends the refresh — cancellation above all — still closes
             // the copies opened before it. Left open, their pack files stay held, and on Windows a later
             // removal of the repository fails on them (#241).
-            await FetchAsync(repositories, opened, skipped, report, cancellationToken);
+            await FetchAsync(repositories, opened, skipped, notes, report, cancellationToken);
 
             // Every repository failed, so the shadow would be an empty index and the swap would throw
             // the project's whole searchable history away over what is usually a transient network
@@ -101,7 +102,7 @@ public sealed class ProjectRefresh(
                     "Refreshed project {Project}: {Repositories} repositories, {Files} files, {Lines} lines",
                     project.Slug, summary.Repositories, summary.Files, summary.Lines);
             kept = true;
-            return summary with { Skipped = skipped };
+            return summary with { Skipped = skipped, Notes = notes };
         }
         finally
         {
@@ -143,11 +144,12 @@ public sealed class ProjectRefresh(
     /// <summary>
     ///     Brings every local copy up to date and opens it, before the index is touched: a fetch that
     ///     fails leaves the previous index serving. A repository that cannot be read, or that must not
-    ///     be, is named in <paramref name="skipped" /> instead of failing the project. The copies go into
+    ///     be, is named in <paramref name="skipped" /> instead of failing the project, and a choice made for one
+    ///     that is read goes into <paramref name="notes" />. The copies go into
     ///     <paramref name="opened" />, which the caller owns and closes however this ends.
     /// </summary>
     private async Task FetchAsync(IReadOnlyList<ProjectRepository> repositories, List<OpenedRepository> opened,
-        List<string> skipped, Action<RefreshProgress> report, CancellationToken cancellationToken)
+        List<string> skipped, List<string> notes, Action<RefreshProgress> report, CancellationToken cancellationToken)
     {
         int fetched = 0;
         foreach (var repository in repositories)
@@ -162,7 +164,12 @@ public sealed class ProjectRefresh(
                 // refusal holds nothing to dispose.
                 var open = await clones.OpenRefreshedAsync(repository, cancellationToken);
                 if (open is CloneOpen.Refused refused) skipped.Add(refused.Explanation);
-                else opened.Add(new OpenedRepository(repository, ((CloneOpen.Opened)open).Copy));
+                else
+                {
+                    var copy = (CloneOpen.Opened)open;
+                    opened.Add(new OpenedRepository(repository, copy.Copy));
+                    if (copy.Note is { } note) notes.Add(note);
+                }
             }
             catch (McpException ex)
             {

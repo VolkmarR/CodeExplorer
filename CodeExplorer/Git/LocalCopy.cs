@@ -12,8 +12,12 @@ public abstract record CloneOpen
 {
     private CloneOpen() { }
 
-    /// <summary>The copy is the caller's to read and to dispose.</summary>
-    public sealed record Opened(LocalCopy Copy) : CloneOpen;
+    /// <summary>
+    ///     The copy is the caller's to read and to dispose. <see cref="Note" /> is a sentence for the
+    ///     refresh status about a choice made on the operator's behalf while opening it, such as the
+    ///     branch a detached remote is followed on (#288), and null when nothing was chosen.
+    /// </summary>
+    public sealed record Opened(LocalCopy Copy, string? Note = null) : CloneOpen;
 
     /// <summary>The repository is not to be read, and <see cref="Explanation" /> says why in operator-facing prose.</summary>
     public abstract record Refused(string Explanation) : CloneOpen;

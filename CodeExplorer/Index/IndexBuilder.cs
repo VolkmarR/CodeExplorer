@@ -10,7 +10,15 @@ namespace CodeExplorer.Index;
 ///     What a build produced. <paramref name="Skipped" /> names every repository left out and why, so
 ///     one bad repository does not fail the project and is not silently missing from it either.
 /// </summary>
-public sealed record IndexSummary(int Repositories, long Files, long Lines, IReadOnlyList<string> Skipped);
+public sealed record IndexSummary(int Repositories, long Files, long Lines, IReadOnlyList<string> Skipped)
+{
+    /// <summary>
+    ///     What the refresh decided for the operator about a repository it did read, such as the branch
+    ///     it follows on a remote whose HEAD is detached (#288). A default rather than a fifth positional
+    ///     parameter, as <see cref="CodeExplorer.Refresh.RefreshStatus.Phases" /> is: only the refresh has any to add.
+    /// </summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
+}
 
 /// <summary>One repository of a project and the open local copy a build reads it from.</summary>
 public sealed record OpenedRepository(ProjectRepository Repository, LocalCopy LocalCopy);
