@@ -197,10 +197,11 @@ public sealed class ReferenceSearch(IndexReaders readers)
                       -- `occurrences` runs a pattern a second time over the hit lines, which the
                       -- first pass has already narrowed the table down to: a line naming the symbol
                       -- twice is two references, so counting rows would undercount the project total
-                      -- the reply prints beside the sample. Measured on a 516 MB index with the \b
-                      -- pattern it replaced, it added about 10 ms to a 51 ms scan of 151,000 matching
-                      -- lines (#119) — cheap because it extracts from `hits` and never from `lines`;
-                      -- the list_filter over one short list per line was not re-measured. Not $q, whose end boundary eats
+                      -- the reply prints beside the sample. Measured on a 520 MB index (#287), the
+                      -- projection that counts them took 58 ms over SqlSelectBase's 851 hit lines and
+                      -- 73 ms over Init's 3,296, against 1-2 ms for the \b pattern it replaced; the
+                      -- whole statement went from 80 to 89 ms and from 77 to 108 ms. Tolerable because
+                      -- it extracts from `hits` and never from `lines`. Not $q, whose end boundary eats
                       -- the character the next occurrence starts on: a candidate counts when the word
                       -- character it captured after itself is none (SymbolText.OccurrencePattern).
                       per_file AS (
