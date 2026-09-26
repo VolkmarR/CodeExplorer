@@ -135,7 +135,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
                                                        AND ({declarationShapes})
                                                      ORDER BY f.qualified_path, l.line_number
                                                      LIMIT $limit
-                                                     """, [.. parameters, new("limit", Cap.Rows(MaxCandidates))]))
+                                                     """, [.. parameters, new("limit", RowCap.Limit(MaxCandidates))]))
         await using (var reader = await command.ReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -144,7 +144,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
                     reader.Text("content")));
         }
 
-        bool capped = Cap.Trim(candidates, MaxCandidates);
+        bool capped = RowCap.Trim(candidates, MaxCandidates);
 
         // The lines above each candidate, so that a `procedure Foo;` inside a commented-out block is
         // not a declaration and one below a Delphi `implementation` is known to be the body.

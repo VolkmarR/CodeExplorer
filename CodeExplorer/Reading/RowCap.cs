@@ -7,10 +7,10 @@ namespace CodeExplorer.Reading;
 ///     told there are more. The extra row is dropped, because the cap is the promise and not the query.
 ///     One spelling, so that every capped read means the same thing by "truncated".
 /// </summary>
-public static class Cap
+public static class RowCap
 {
     /// <summary>How many rows a read capped at <paramref name="cap" /> asks for: one past it.</summary>
-    public static int Rows(int cap) => cap + 1;
+    public static int Limit(int cap) => cap + 1;
 
     /// <summary>
     ///     Cuts <paramref name="rows" /> back to <paramref name="cap" /> and says whether there was
