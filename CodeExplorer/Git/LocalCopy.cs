@@ -131,13 +131,17 @@ public sealed record RecordedCommit(
 public sealed class LocalCopy : IDisposable
 {
     private readonly Repository _repository;
+    private readonly NativeRepository _native;
     private readonly BlobReader _blobs;
+    private readonly NativeDiff _diffs;
 
     internal LocalCopy(Repository repository)
     {
         _repository = repository;
         HeadSha = repository.Head.Tip.Sha;
-        _blobs = new BlobReader(repository.Info.Path);
+        _native = NativeRepository.Open(repository.Info.Path);
+        _blobs = new BlobReader(_native);
+        _diffs = new NativeDiff(_native);
     }
 
     /// <summary>How many blobs <see cref="CommittedFile.Text" /> has loaded, for the test that holds it to one a file.</summary>
@@ -202,52 +206,6 @@ public sealed class LocalCopy : IDisposable
     private static readonly CompareOptions _noContext = new() { ContextLines = 0 };
 
     /// <summary>
-    ///     Every blob path that differs between two trees, into <paramref name="changed" />, and one
-    ///     record into <paramref name="oversized" /> for each whose blob on either side is over
-    ///     <paramref name="maxBytes" />, sized from its object header without loading it. A subtree with
-    ///     the same id on both sides is not entered. This is not a libgit2 tree diff because that costs
-    ///     as much as the one inside the patch, which read back as a quarter more on a history import:
-    ///     only the directories a commit touched are read here. Nothing here reads a blob, so there is
-    ///     no rename detection; the patch does that over the paths this lets through.
-    /// </summary>
-    private void CompareTrees(Tree? before, Tree? after, string prefix, long maxBytes, List<string> changed,
-        List<ChangedPath> oversized)
-    {
-        var gone = before?.ToDictionary(entry => entry.Name, StringComparer.Ordinal) ?? [];
-        foreach (var entry in after ?? Enumerable.Empty<TreeEntry>())
-        {
-            gone.Remove(entry.Name, out var was);
-            if (was is not null && was.Target.Id == entry.Target.Id && was.Mode == entry.Mode) continue;
-            Compare(was, entry, prefix + entry.Name);
-        }
-
-        foreach (var (name, was) in gone) Compare(was, null, prefix + name);
-
-        void Compare(TreeEntry? was, TreeEntry? now, string path)
-        {
-            // Either side may be a tree while the other is not: a file replaced by a directory.
-            var oldTree = was?.Target as Tree;
-            var newTree = now?.Target as Tree;
-            if (oldTree is not null || newTree is not null)
-                CompareTrees(oldTree, newTree, path + "/", maxBytes, changed, oversized);
-            // A submodule is a change the patch records, so its path is kept, but it is never sized: it
-            // is a commit of another repository, which this one does not hold.
-            if ((was is not null && oldTree is null) || (now is not null && newTree is null)) changed.Add(path);
-            var oldBlob = was?.TargetType == TreeEntryTargetType.Blob ? was : null;
-            var newBlob = now?.TargetType == TreeEntryTargetType.Blob ? now : null;
-            if (!IsLarger(oldBlob) && !IsLarger(newBlob)) return;
-            var kind = oldBlob is null ? ChangeKind.Added
-                : newBlob is null ? ChangeKind.Deleted
-                : (oldBlob.Mode == Mode.SymbolicLink) != (newBlob.Mode == Mode.SymbolicLink) ? ChangeKind.TypeChanged
-                : ChangeKind.Modified;
-            oversized.Add(new ChangedPath(path, path, KindName(kind), 0, 0, true, []));
-        }
-
-        bool IsLarger(TreeEntry? blob) =>
-            blob is not null && _repository.ObjectDatabase.RetrieveObjectMetadata(blob.Target.Id).Size > maxBytes;
-    }
-
-    /// <summary>
     ///     The stored name of a change, the enum name lower-cased. The kinds a tree diff produces are
     ///     spelled out so that no path allocates one; anything else keeps the general expression.
     /// </summary>
@@ -265,48 +223,22 @@ public sealed class LocalCopy : IDisposable
     /// <summary>
     ///     One commit with the paths it touched, diffed against its first parent — or against nothing
     ///     for the root commit, which adds every file it holds.
-    ///     A <c>Patch</c> and not a <c>TreeChanges</c>: the line counts and the edits are the point, and
+    ///     A patch and not a list of changed paths: the line counts and the edits are the point, and
     ///     only a patch computes them. It is the expensive part of a history walk — measured at 7 ms a
     ///     commit over the whole of a 4,300-commit repository — and is paid once per commit, because a
-    ///     later refresh stops at the commits already recorded. Attribution rides on the same patch: the
-    ///     edits are read out of the text libgit2 already rendered, which is what made replacing a blame
-    ///     per file with a replay per commit two hundred times cheaper (ADR-0007).
+    ///     later refresh stops at the commits already recorded. Attribution rides on the same patch
+    ///     (ADR-0007), and <see cref="NativeDiff" /> makes it.
     ///     Renames are detected with libgit2's defaults, so a moved file's edits are recorded against
     ///     its new path with the old one beside it, and the replay carries the attribution across.
-    ///     A patch has no size ceiling, and LibGit2Sharp does not expose libgit2's (512 MB, far above
-    ///     the index's), so a blob over <paramref name="maxBlobBytes" /> would be inflated and rendered
-    ///     whole (#263). <see cref="CompareTrees" /> names the changed blobs first and sizes them off
-    ///     their object headers; when any is too large the patch is asked only for the rest, among
-    ///     which renames are still detected. A large file that moved is recorded as a deletion and an
-    ///     addition, since telling that it moved means reading it.
+    ///     A blob over <paramref name="maxBlobBytes" /> must not be inflated (#263), and rename detection
+    ///     reads the blobs it compares, so a commit with one on either side of a change is not patched
+    ///     whole: see <see cref="AroundOversized" />.
     /// </summary>
     private RecordedCommit Describe(Commit commit, long maxBlobBytes)
     {
         var parent = commit.Parents.FirstOrDefault();
-        var files = new List<ChangedPath>();
-        var changed = new List<string>();
-        CompareTrees(parent?.Tree, commit.Tree, "", maxBlobBytes, changed, files);
-        var skipped = files.Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
-        var rest = changed.Where(path => !skipped.Contains(path)).ToList();
-
-        // The ordinary commit, with nothing oversized, asks for its whole patch as it always did.
-        // Otherwise the rest are named, matched literally rather than as pathspec patterns once
-        // ExplicitPathsOptions is passed; an empty list would mean every path, so a commit of nothing
-        // but oversized blobs asks for no patch at all.
-        if (skipped.Count == 0 || rest.Count > 0)
-        {
-            using var patch = skipped.Count == 0
-                ? _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null, _noContext)
-                : _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, rest, new ExplicitPathsOptions(),
-                    _noContext);
-            // A pathspec also matches as a directory prefix, so a file `a` that replaced a directory
-            // `a/` holding an oversized blob brings that blob back into the patch. It is recorded once,
-            // as the oversized change it already is.
-            foreach (var change in patch.Where(change => !skipped.Contains(change.Path)))
-                files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
-                    change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
-                    change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
-        }
+        var described = _diffs.Describe(parent?.Tree.Id, commit.Tree.Id, maxBlobBytes);
+        var files = described.Files ?? AroundOversized(parent, commit, described.Changes, maxBlobBytes);
 
         // MessageShort is the subject git itself would show; the body is what is left, and an empty
         // string rather than null because the column is NOT NULL and "no body" is not a missing value.
@@ -319,9 +251,112 @@ public sealed class LocalCopy : IDisposable
             commit.Author.When, subject, body, files);
     }
 
+    /// <summary>
+    ///     A commit with a blob over the ceiling. The oversized changes are recorded without lines and the
+    ///     patch is asked only for the rest, among which renames are still detected. It is the rare
+    ///     commit, so it takes the plain LibGit2Sharp patch and a second walk of the trees.
+    /// </summary>
+    private List<ChangedPath> AroundOversized(Commit? parent, Commit commit, List<TreeChange> changes,
+        long maxBlobBytes)
+    {
+        var oversized = changes.Where(change => change.Old?.Size > maxBlobBytes || change.New?.Size > maxBlobBytes)
+            .ToList();
+        var files = Oversized(oversized);
+        var skipped = oversized.Select(change => change.Path).ToHashSet(StringComparer.Ordinal);
+        // A path matches as a directory prefix too, even with ExplicitPathsOptions, so naming a file
+        // `a` that replaced a directory `a/` — or the other way round — would bring the directory's
+        // oversized blobs back into the patch (#292). Such a path is diffed on its own instead.
+        var holding = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string path in skipped)
+            for (int slash = path.IndexOf('/'); slash > 0; slash = path.IndexOf('/', slash + 1))
+                holding.Add(path[..slash]);
+
+        var named = new List<string>();
+        foreach (var change in changes)
+        {
+            if (skipped.Contains(change.Path)) continue;
+            if (holding.Contains(change.Path)) files.Add(DiffAlone(change));
+            else named.Add(change.Path);
+        }
+
+        // Matched literally rather than as pathspec patterns once ExplicitPathsOptions is passed; an
+        // empty list would mean every path, so a commit of nothing but oversized blobs asks for none.
+        if (named.Count == 0) return files;
+        using var patch = _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, named, new ExplicitPathsOptions(),
+            _noContext);
+        foreach (var change in patch)
+            files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
+                change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
+                change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
+        return files;
+    }
+
+    /// <summary>
+    ///     The changes over the ceiling, recorded the way the file pass treats such a blob: as binary,
+    ///     with no lines. One whose blob left one path and arrived at another in the same commit is the
+    ///     move libgit2 detects first, by id, and is recorded as the rename it is — the id is all that
+    ///     telling needs, so nothing is read (#292). A large file moved and edited in one commit has a
+    ///     new id, and stays a deletion and an addition, since matching it means reading it.
+    /// </summary>
+    private static List<ChangedPath> Oversized(List<TreeChange> oversized)
+    {
+        var files = new List<ChangedPath>(oversized.Count);
+        var departed = new Dictionary<GitId, Queue<string>>();
+        foreach (var change in oversized)
+        {
+            if (change is not { Old: { } old, New: null }) continue;
+            if (!departed.TryGetValue(old.Id, out var paths)) departed[old.Id] = paths = new Queue<string>();
+            paths.Enqueue(change.Path);
+        }
+
+        // Both ends of every move, which is one set because a commit names each path once.
+        var moved = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var change in oversized)
+        {
+            if (change is not { Old: null, New: { } arrived }
+                || !departed.TryGetValue(arrived.Id, out var from) || !from.TryDequeue(out string? oldPath))
+                continue;
+            moved.Add(oldPath);
+            moved.Add(change.Path);
+            files.Add(new ChangedPath(change.Path, oldPath, KindName(ChangeKind.Renamed), 0, 0, true, []));
+        }
+
+        foreach (var change in oversized)
+        {
+            if (moved.Contains(change.Path)) continue;
+            var kind = change.Old is null ? ChangeKind.Added
+                : change.New is null ? ChangeKind.Deleted
+                : change.Old.Value.IsLink != change.New.Value.IsLink ? ChangeKind.TypeChanged
+                : ChangeKind.Modified;
+            files.Add(new ChangedPath(change.Path, change.Path, KindName(kind), 0, 0, true, []));
+        }
+
+        return files;
+    }
+
+    /// <summary>
+    ///     A path that is a file on one side and a directory on the other, diffed blob to blob so the
+    ///     directory's contents stay out of it. It exists on one side only, so it is an addition or a
+    ///     deletion, and is not a candidate for rename detection. A submodule there is recorded
+    ///     without lines: it is a commit of another repository, which this one cannot diff.
+    /// </summary>
+    private ChangedPath DiffAlone(TreeChange change)
+    {
+        var side = (change.Old ?? change.New)!.Value;
+        string kind = KindName(change.Old is null ? ChangeKind.Added : ChangeKind.Deleted);
+        if (side.IsSubmodule) return new ChangedPath(change.Path, change.Path, kind, 0, 0, false, []);
+        var blob = _repository.Lookup<Blob>(new ObjectId(side.Id.ToRaw()));
+        var content = change.Old is null
+            ? _repository.Diff.Compare(null, blob, _noContext)
+            : _repository.Diff.Compare(blob, null, _noContext);
+        return new ChangedPath(change.Path, change.Path, kind, content.LinesAdded, content.LinesDeleted,
+            content.IsBinaryComparison, content.IsBinaryComparison ? [] : UnifiedDiff.Edits(content.Patch));
+    }
+
     public void Dispose()
     {
-        _blobs.Dispose();
+        _diffs.Dispose();
+        _native.Dispose();
         _repository.Dispose();
     }
 

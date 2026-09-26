@@ -779,6 +779,90 @@ public sealed class HistoryTests : IDisposable
         ], changes);
     }
 
+    /// <summary>
+    ///     A file over <c>Index:MaxFileBytes</c> that moved unchanged is recorded as the move it is, so
+    ///     its history follows it to the new path (#292). Its blob id is the same on both sides, so
+    ///     telling that it moved needs no read of it.
+    /// </summary>
+    [Fact]
+    public async Task A_moved_file_over_the_size_ceiling_is_recorded_as_a_rename()
+    {
+        using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
+        string source = host.CreateEmptyGitRepository("one");
+        string dump = string.Concat(Enumerable.Range(1, 200).Select(i => $"INSERT INTO t VALUES ({i});\n"));
+        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = dump },
+            "Add the dump", "Ada", "ada@example.invalid", 0);
+        host.MoveInGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = "seed/dump.sql" },
+            "Move the dump", "Ada", "ada@example.invalid", 1);
+
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "one", source);
+        await host.RefreshAsync("alpha");
+
+        Assert.Equal([
+            "Add the dump|data/dump.sql|added|0|0",
+            "Move the dump|data/dump.sql -> seed/dump.sql|renamed|0|0"
+        ], await RecordedChangesAsync(host));
+    }
+
+    /// <summary>
+    ///     A file that replaced a directory holding a blob over the ceiling, and a directory that replaced
+    ///     the file again (#292). The patch is asked for paths by name, and a name also matches as a
+    ///     directory prefix, so asking for <c>data</c> would diff <c>data/dump.sql</c> too: it would then
+    ///     be recorded twice, once without lines and once with all two hundred of them. The file itself
+    ///     is still diffed.
+    /// </summary>
+    [Fact]
+    public async Task A_blob_over_the_size_ceiling_is_not_diffed_where_a_file_and_a_directory_swap()
+    {
+        using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
+        string source = host.CreateEmptyGitRepository("one");
+        string dump = string.Concat(Enumerable.Range(1, 200).Select(i => $"INSERT INTO t VALUES ({i});\n"));
+        host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = dump },
+            "Add the dump", "Ada", "ada@example.invalid", 0);
+        string directory = Path.Combine(source, "data");
+        using (var repo = new Repository(source))
+        {
+            Directory.Delete(directory, true);
+            File.WriteAllText(directory, "one line\n");
+            Commands.Stage(repo, "*");
+            var author = new Signature("Ada", "ada@example.invalid", DateTimeOffset.UnixEpoch.AddMinutes(1));
+            repo.Commit("Replace the directory with a file", author, author);
+
+            File.Delete(directory);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "dump.sql"), dump);
+            Commands.Stage(repo, "*");
+            author = new Signature("Ada", "ada@example.invalid", DateTimeOffset.UnixEpoch.AddMinutes(2));
+            repo.Commit("Replace the file with a directory", author, author);
+        }
+
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "one", source);
+        await host.RefreshAsync("alpha");
+
+        Assert.Equal([
+            "Add the dump|data/dump.sql|added|0|0",
+            "Replace the directory with a file|data|added|1|0",
+            "Replace the directory with a file|data/dump.sql|deleted|0|0",
+            "Replace the file with a directory|data|deleted|0|1",
+            "Replace the file with a directory|data/dump.sql|added|0|0"
+        ], await RecordedChangesAsync(host));
+    }
+
+    /// <summary>
+    ///     Every recorded change as <c>subject|[old -> ]path|kind|added|deleted</c>, in commit and
+    ///     path order.
+    /// </summary>
+    private static Task<List<string>> RecordedChangesAsync(TestHost host) =>
+        host.ScalarsAsync("alpha",
+            """
+            SELECT c.subject || '|' || coalesce(f.old_path || ' -> ', '') || f.path || '|' || f.change_kind
+                   || '|' || f.added || '|' || f.deleted
+            FROM commit_files f JOIN commits c USING (commit_id)
+            ORDER BY f.commit_id, f.path
+            """);
+
     private async Task IndexTwoCommitProjectAsync()
     {
         string source = _host.CreateEmptyGitRepository("one");
