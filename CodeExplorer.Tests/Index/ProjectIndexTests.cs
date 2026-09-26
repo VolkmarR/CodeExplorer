@@ -2,6 +2,7 @@ using System.Net;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
+using DuckDB.NET.Data;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -383,13 +384,7 @@ public sealed class ProjectIndexTests : IDisposable
     {
         var host = Start(SearchEngine.Substring);
         await host.IndexedProjectAsync("status-cancel", Repository("class A;\n"));
-        // One lease handed back, so the pool holds exactly this connection for the status read to borrow.
-        System.Data.Common.DbConnection pooled;
-        using (var lease = await host.Indexes.OpenAsync("status-cancel", Ct))
-        {
-            pooled = lease!.Connection;
-            lease.Completed();
-        }
+        var pooled = await host.PooledConnectionAsync("status-cancel");
 
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         using (new TelemetryProbe("status-cancel")
@@ -402,9 +397,7 @@ public sealed class ProjectIndexTests : IDisposable
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 host.Services.GetRequiredService<IndexReaders>().StatusAsync("status-cancel", true, cancel.Token));
 
-        using var next = await host.Indexes.OpenAsync("status-cancel", Ct);
-        Assert.NotSame(pooled, next!.Connection);
-        Assert.Equal(System.Data.ConnectionState.Closed, pooled.State);
+        await AssertNotPooledAsync(host, "status-cancel", pooled);
     }
 
     /// <summary>
@@ -417,13 +410,11 @@ public sealed class ProjectIndexTests : IDisposable
     {
         var host = Start(SearchEngine.Substring);
         await host.IndexedProjectAsync("uncompleted", Repository("class A;\n"));
-        System.Data.Common.DbConnection unpooled;
+        DuckDBConnection unpooled;
         using (var lease = await host.OpenIndexAsync("uncompleted"))
             unpooled = lease.Connection;
 
-        using var next = await host.OpenIndexAsync("uncompleted");
-        Assert.NotSame(unpooled, next.Connection);
-        Assert.Equal(System.Data.ConnectionState.Closed, unpooled.State);
+        await AssertNotPooledAsync(host, "uncompleted", unpooled);
     }
 
     [Fact]
@@ -431,12 +422,7 @@ public sealed class ProjectIndexTests : IDisposable
     {
         var host = Start(SearchEngine.Substring);
         await host.IndexedProjectAsync("completed", Repository("class A;\n"));
-        System.Data.Common.DbConnection pooled;
-        using (var lease = await host.OpenIndexAsync("completed"))
-        {
-            pooled = lease.Connection;
-            lease.Completed();
-        }
+        var pooled = await host.PooledConnectionAsync("completed");
 
         using var next = await host.OpenIndexAsync("completed");
         Assert.Same(pooled, next.Connection);
@@ -451,7 +437,7 @@ public sealed class ProjectIndexTests : IDisposable
     {
         var host = Start(SearchEngine.Substring);
         await host.IndexedProjectAsync("read-cancel", Repository("class A;\n"));
-        System.Data.Common.DbConnection used = null!;
+        DuckDBConnection used = null!;
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
@@ -464,9 +450,7 @@ public sealed class ProjectIndexTests : IDisposable
                     return Task.FromResult(0);
                 }, _ => -1, cancel.Token));
 
-        using var next = await host.OpenIndexAsync("read-cancel");
-        Assert.NotSame(used, next.Connection);
-        Assert.Equal(System.Data.ConnectionState.Closed, used.State);
+        await AssertNotPooledAsync(host, "read-cancel", used);
     }
 
     /// <summary>A read through <see cref="IndexReaders" /> that returned says so, and its connection is reused.</summary>
@@ -475,12 +459,7 @@ public sealed class ProjectIndexTests : IDisposable
     {
         var host = Start(SearchEngine.Substring);
         await host.IndexedProjectAsync("status-done", Repository("class A;\n"));
-        System.Data.Common.DbConnection pooled;
-        using (var lease = await host.OpenIndexAsync("status-done"))
-        {
-            pooled = lease.Connection;
-            lease.Completed();
-        }
+        var pooled = await host.PooledConnectionAsync("status-done");
 
         Assert.NotNull(await host.Services.GetRequiredService<IndexReaders>().StatusAsync("status-done", true, Ct));
 
@@ -506,6 +485,14 @@ public sealed class ProjectIndexTests : IDisposable
         using var a = await host.OpenIndexAsync("twice");
         using var b = await host.OpenIndexAsync("twice");
         Assert.NotSame(a.Connection, b.Connection);
+    }
+
+    /// <summary>Not pooled means closed, and so never the connection the next lease is handed.</summary>
+    private static async Task AssertNotPooledAsync(TestHost host, string slug, DuckDBConnection connection)
+    {
+        using var next = await host.OpenIndexAsync(slug);
+        Assert.NotSame(connection, next.Connection);
+        Assert.Equal(System.Data.ConnectionState.Closed, connection.State);
     }
 
     private static Dictionary<string, Dictionary<string, string>> Repository(string content) =>

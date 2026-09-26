@@ -200,14 +200,7 @@ public sealed class TestHost : IDisposable
     ///     build finished. A build writes <c>index_info</c> last, so removing its row is exactly that
     ///     state, and the project must read as not built rather than as built from half its files.
     /// </summary>
-    public async Task InterruptBuildAsync(string slug)
-    {
-        using var lease = await OpenIndexAsync(slug);
-        using var command = lease.Connection.CreateCommand();
-        command.CommandText = "DELETE FROM index_info";
-        await command.ExecuteNonQueryAsync(Ct);
-        lease.Completed();
-    }
+    public Task InterruptBuildAsync(string slug) => ExecuteAsync(slug, "DELETE FROM index_info");
 
     private string ControlDatabaseFile => Path.Combine(DataDirectory, "control.duckdb");
 
@@ -585,6 +578,17 @@ public sealed class TestHost : IDisposable
         var lease = await Indexes.OpenAsync(slug, Ct);
         Assert.NotNull(lease);
         return lease;
+    }
+
+    /// <summary>
+    ///     Opens a lease and hands it back completed, so the project's pool holds exactly this
+    ///     connection for the next lease to borrow: the starting state of every test of the pool.
+    /// </summary>
+    public async Task<DuckDBConnection> PooledConnectionAsync(string slug)
+    {
+        using var lease = await OpenIndexAsync(slug);
+        lease.Completed();
+        return lease.Connection;
     }
 
     /// <summary>
