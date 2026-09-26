@@ -56,8 +56,9 @@ is why it survives a restart only where that key ring does. A container without
 `Storage:BlobContainerUrl` signs every operator out on every stop.
 
 A repository is added by its http(s), ssh or git remote. A local path or `file://` URL is refused
-unless `Control:AllowLocalRepositories` is `true`, and it is off by default, on a developer machine
-too: a local repository is any repository the server's account can read, other projects' local
+unless `Control:AllowLocalRepositories` is `true`, and so is a remote whose host is loopback
+(`localhost`, 127.0.0.0/8 or `::1`, in any spelling), which reaches the same machine over the
+network. The setting is off by default, on a developer machine too: a local repository is any repository the server's account can read, other projects' local
 copies under `Storage:DataDirectory` included, and whoever may add a repository would then read it
 through MCP — anyone in the tenant, or anyone who can reach the port when authentication is off.
 Switching the setting off again stops the refresh reading local repositories already stored; each is

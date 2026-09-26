@@ -36,6 +36,52 @@ public sealed class RepositoryUrlTests
     public void Repository_urls_are_classified_and_secrets_in_them_refused(string url, RepositoryUrlKind expected) =>
         Assert.Equal(expected, RepositoryUrl.Classify(url));
 
+    /// <summary>
+    ///     A remote whose host is loopback reaches the server itself over the network, so it counts as
+    ///     local, in every spelling of the address and every URL form libgit2 reads.
+    /// </summary>
+    [Theory]
+    [InlineData("http://localhost/repo.git")]
+    [InlineData("https://LOCALHOST:8443/repo.git")]
+    [InlineData("http://localhost./repo.git")]
+    [InlineData("http://127.0.0.1/repo.git")]
+    [InlineData("http://127.255.0.9:3000/repo.git")]
+    [InlineData("http://127.1/repo.git")]
+    [InlineData("http://2130706433/repo.git")]
+    [InlineData("http://0x7f000001/repo.git")]
+    [InlineData("http://127.0.0.1./repo.git")]
+    [InlineData("http://[::1]/repo.git")]
+    [InlineData("http://[0:0:0:0:0:0:0:1]/repo.git")]
+    [InlineData("http://[::ffff:127.0.0.1]/repo.git")]
+    [InlineData("ssh://git@localhost/repo.git")]
+    [InlineData("ssh://git@127.0.0.1:2222/repo.git")]
+    [InlineData("ssh://git@2130706433/repo.git")]
+    [InlineData("ssh://git@0x7f000001/repo.git")]
+    [InlineData("ssh://git@[::1]/repo.git")]
+    [InlineData("ssh://git@[::ffff:127.0.0.1]/repo.git")]
+    [InlineData("git://localhost/repo.git")]
+    [InlineData("git@localhost:org/repo.git")]
+    [InlineData("git@localhost.:org/repo.git")]
+    [InlineData("127.0.0.1:org/repo.git")]
+    [InlineData("git@127.0.0.1:org/repo.git")]
+    [InlineData("git@2130706433:org/repo.git")]
+    [InlineData("git@0x7f000001:org/repo.git")]
+    public void A_loopback_remote_is_local(string url) =>
+        Assert.Equal(RepositoryUrlKind.Local, RepositoryUrl.Classify(url));
+
+    [Theory]
+    [InlineData("https://localhost.example.com/repo.git")]
+    [InlineData("https://mylocalhost/repo.git")]
+    [InlineData("https://127.example.com/repo.git")]
+    [InlineData("https://host127/repo.git")]
+    [InlineData("ssh://git@localhost-mirror/repo.git")]
+    [InlineData("git@localhost.example.com:org/repo.git")]
+    [InlineData("git@127.example.com:org/repo.git")]
+    [InlineData("http://128.0.0.1/repo.git")]
+    [InlineData("http://[::2]/repo.git")]
+    public void A_host_that_only_looks_like_loopback_is_remote(string url) =>
+        Assert.Equal(RepositoryUrlKind.Remote, RepositoryUrl.Classify(url));
+
     /// <summary>A credential beside these would be sent unencrypted, or kept for a transport that has none (GHSA-4f8q-c6jj-fr44).</summary>
     [Theory]
     [InlineData("http://example.invalid/repo.git", true)]

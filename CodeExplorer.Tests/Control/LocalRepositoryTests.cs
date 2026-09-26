@@ -17,6 +17,11 @@ public sealed class LocalRepositoryTests : IDisposable
 {
     private const string Setting = "Control:AllowLocalRepositories";
 
+    // A remote on the server itself: over the network, but to the same machine as a local path.
+    private const string LoopbackHttp = "http://localhost/repo.git";
+    private const string LoopbackSsh = "ssh://git@[::1]/repo.git";
+    private const string LoopbackScp = "git@127.0.0.1:org/repo.git";
+
     private readonly TestHost _host = new(SearchEngine.Substring, allowLocalRepositories: false);
 
     public void Dispose() => _host.Dispose();
@@ -32,6 +37,15 @@ public sealed class LocalRepositoryTests : IDisposable
     [InlineData("FILE:///srv/repo")]
     [InlineData(@"\\?\C:\repo")]
     [InlineData("C:repo")]
+    [InlineData(LoopbackHttp)]
+    [InlineData("http://localhost./repo.git")]
+    [InlineData("https://127.0.0.1/repo.git")]
+    [InlineData("http://2130706433/repo.git")]
+    [InlineData("http://0x7f000001/repo.git")]
+    [InlineData("http://[::1]/repo.git")]
+    [InlineData("http://[::ffff:127.0.0.1]/repo.git")]
+    [InlineData(LoopbackSsh)]
+    [InlineData(LoopbackScp)]
     public async Task A_local_repository_is_refused_and_the_answer_names_the_setting(string url)
     {
         await _host.CreateProjectAsync("alpha");
@@ -51,6 +65,8 @@ public sealed class LocalRepositoryTests : IDisposable
     [InlineData("ssh://git@ssh.dev.azure.com/v3/org/project/repo")]
     [InlineData("git://example.invalid/repo.git")]
     [InlineData("git@github.com:org/repo.git")]
+    [InlineData("https://localhost.example.com/repo.git")]
+    [InlineData("git@127.example.com:org/repo.git")]
     public async Task A_remote_repository_is_still_accepted(string url)
     {
         await _host.CreateProjectAsync("alpha");
@@ -80,6 +96,37 @@ public sealed class LocalRepositoryTests : IDisposable
         Assert.Contains(Setting, error);
         // Refused before libgit2 was asked: a copy that was never made is not made now.
         if (!clonedBefore) Assert.False(Directory.Exists(host.ClonePath("alpha", "main")));
+    }
+
+    [Theory]
+    [InlineData(LoopbackHttp)]
+    [InlineData(LoopbackSsh)]
+    [InlineData(LoopbackScp)]
+    public async Task A_loopback_remote_is_accepted_where_local_repositories_are(string url)
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.CreateProjectAsync("alpha");
+        using var http = host.CreateClient();
+
+        using var response =
+            await http.PostAsJsonAsync("/api/projects/alpha/repositories", new { slug = "main", url }, Ct);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    /// <summary>Refused on the stored URL before any transfer, as a stored local path is.</summary>
+    [Fact]
+    public async Task A_stored_loopback_remote_is_skipped_once_the_setting_is_off()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "main", LoopbackHttp);
+
+        host.RestartWithoutLocalRepositories();
+        string error = await host.FailedRefreshErrorAsync("alpha");
+
+        Assert.Contains("'main' was not read. It is a local path or file URL", error);
+        Assert.Contains(Setting, error);
     }
 
     /// <summary>
