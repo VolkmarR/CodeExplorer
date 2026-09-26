@@ -30,7 +30,7 @@ public enum SearchEngine
 public sealed class IndexLease(DuckDBConnection connection, bool fullTextLoaded, Action<bool> release)
     : IDisposable
 {
-    private volatile bool _completed;
+    private bool _completed;
     private int _released;
 
     public DuckDBConnection Connection { get; } = connection;
