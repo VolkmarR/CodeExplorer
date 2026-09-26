@@ -217,6 +217,34 @@ public sealed class DurabilityTests : IDisposable
     }
 
     /// <summary>
+    ///     The restore a refresh begins with skips the full-text build because the shadow replaces it.
+    ///     A refresh that then fails has no shadow to swap in, and the restored index would be searched by
+    ///     substring scan until a later refresh succeeded — on a disk that is not wiped, indefinitely.
+    ///     The failure is a fetch with no branch left to follow, so every repository fails after the restore.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_that_fails_after_its_restore_leaves_a_full_text_index()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\nvoid Needle() {}\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        host.RenameDefaultBranch("one", "trunk");
+        TestHost.BreakHead(host.FixtureGitPath("one"), "main");
+
+        using (var response = await host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await host.WaitForRefreshesAsync();
+
+        Assert.Equal(RefreshState.Failed, (await host.RefreshStatusAsync("alpha")).State);
+        Assert.Equal(["true"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+        Assert.Equal(["void Needle() {}"], await host.ScalarsAsync("alpha", """
+                                                                           SELECT content FROM lines
+                                                                           WHERE fts_main_lines.match_bm25(line_id, 'needle') IS NOT NULL
+                                                                           """));
+    }
+
+    /// <summary>
     ///     A restore that fails inside a refresh names the restore, not "Starting" (#290): an operator
     ///     reading the status has to be able to tell that the durable copy was what failed. The failure
     ///     is the lines table held open exclusively, so its transfer fails part-way through the fetch.

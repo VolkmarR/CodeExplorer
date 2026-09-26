@@ -187,6 +187,9 @@ public sealed class RefreshService(
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Failed, "Failed", started,
                 DateTimeOffset.UtcNow, null, error) { Phases = timeline.Close() };
 
+        // Whether this refresh restored the index without its full-text index, which only its own swap
+        // makes good: a refresh that ends any other way puts one back that has it.
+        bool restoredWithoutFullText = false;
         try
         {
             // Reported before the restore rather than after the check, so a restore that takes minutes
@@ -197,7 +200,7 @@ public sealed class RefreshService(
             // none until the durable copy is restored, and the check would size the shadow of a large
             // project at the floor (#229). It reports a phase of its own, so a restore that fails is
             // not reported as a refresh that failed while starting (#290).
-            await indexes.RestoreForRefreshAsync(project.Slug, Report, cancellationToken);
+            restoredWithoutFullText = await indexes.RestoreForRefreshAsync(project.Slug, Report, cancellationToken);
 
             // Checked again here and not only when it was accepted: another project's refresh may have
             // filled the disk in between, and that is exactly the condition ADR-0003 says to avoid.
@@ -208,6 +211,8 @@ public sealed class RefreshService(
             }
 
             var summary = await refresh.RunAsync(project, Report, cancellationToken);
+            // Swapped out for the shadow, which built its own full-text index.
+            restoredWithoutFullText = false;
             _statuses[project.Slug] = new RefreshStatus(project.Slug, RefreshState.Succeeded, "Done", started,
                 DateTimeOffset.UtcNow, summary, null) { Phases = timeline.Close() };
             if (logger.IsEnabled(LogLevel.Information))
@@ -222,6 +227,32 @@ public sealed class RefreshService(
             Fail(ex is McpException or ExplainedFailureException
                 ? ex.Message
                 : Unexplained(project.Slug, Status(project.Slug).Phase));
+        }
+        finally
+        {
+            // After the status says the refresh failed, so an operator is not left waiting on a repair
+            // to learn that; Pending still covers it, so the next refresh queues behind it.
+            if (restoredWithoutFullText) await RestoreWithFullTextAsync(project.Slug, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    ///     Puts back a full-text index for a refresh that restored without one and then failed (#290).
+    /// </summary>
+    private async Task RestoreWithFullTextAsync(string slug, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await indexes.RestoreWithFullTextAsync(slug, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Safe to swallow: the refresh has already failed and said why, and the index it restored
+            // still answers every search, by substring scan. The log line is how an operator learns the
+            // project stays that way until a refresh succeeds.
+            logger.LogWarning(ex, "Project {Project} could not be given back its full-text index after its "
+                                  + "refresh failed; it is searched by substring scan until a refresh succeeds",
+                slug);
         }
     }
 

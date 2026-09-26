@@ -180,8 +180,9 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     the Parquet: it is <c>fts</c>'s own tables, and a replica that could not install the extension
     ///     has to answer from a substring scan, and a restore a refresh is about to replace does not
     ///     build one either (#290). <paramref name="fullText" /> decides, and <c>index_info</c> then
-    ///     reports it. <paramref name="report" /> is told when the BM25 build starts, so a refresh's
-    ///     timeline names every full-text build it pays for, this one included.
+    ///     reports it. <paramref name="report" /> is told when the BM25 build starts. No restore a refresh
+    ///     drives builds one today; if one ever did, its timeline would show the full-text phase twice,
+    ///     which is what the test for #290 counts.
     /// </summary>
     public async Task LoadAsync(DuckDBConnection connection, DurableCopy copy, bool fullText,
         Action<RefreshProgress> report, CancellationToken cancellationToken)
