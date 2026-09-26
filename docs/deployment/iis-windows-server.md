@@ -209,7 +209,9 @@ generated bundle included. Raise it for a project of large hand-written sources,
 application pool's memory for it.
 
 `Control:AllowLocalRepositories` — `false` by default — decides whether a repository may be a local
-path, a UNC share or a `file://` URL. Leave it off unless every caller who can add a repository may
+path, a UNC share, a `file://` URL or a remote on the server itself: an http(s), ssh or scp-style
+URL whose host is loopback, `localhost` or an address in 127.0.0.0/8 or `::1`, however it is
+spelled. Leave it off unless every caller who can add a repository may
 also read everything the application pool's identity can: with it on, any of them can have the server
 clone a repository from its own disk, another project's local copy under the data directory
 included, and read it through MCP. Switching it off again stops a refresh reading the local
@@ -332,7 +334,7 @@ work.
 | `IOException` on an index file, intermittently                   | Two worker processes. Check `maxProcesses` and overlapped recycling in section 3. |
 | HTTP 400 on every request, no tenant configured                  | `AllowedHosts` is unset, so only loopback names are answered. Section 7; the startup log names it too. |
 | HTTP 403 on every write from the UI, reads work                  | A proxy in front of IIS terminates TLS and the app sees `http`. `ASPNETCORE_FORWARDEDHEADERS_ENABLED`, section 4. |
-| A refresh skips a repository as "a local path or file URL"       | `Control:AllowLocalRepositories` is off, which it is by default, and has been since GHSA-5373-pppr-q3q9 for repositories stored before it. Point the repository at its remote, or section 5. |
+| A refresh skips a repository as "a local path or file URL"       | `Control:AllowLocalRepositories` is off, which it is by default, and has been since GHSA-5373-pppr-q3q9 for repositories stored before it. A remote whose host is loopback, such as `http://localhost/...`, is reported the same way. Point the repository at its remote, or section 5. |
 | A refresh skips a repository because "a credential is only sent over https or ssh" | It was stored with a credential beside an `http://` or `git://` URL, which is refused since GHSA-4f8q-c6jj-fr44. Delete it and add it again under its https or ssh URL, section 5. |
 | A refresh skips a repository because "the remote stopped responding" | The remote sent nothing for `Git:TransferStallSeconds`; a remote that answers with an HTTP error, however slowly, is reported with that error instead. Check the remote first; raise the setting only for one slow to start a pack. |
 | An agent is told "depth may be at most 64", "One read takes at most 100 entries", "was not read: the entries before it already read as much as one call reads" or "may be at most 256 characters" | The per-call limits since GHSA-v284-9964-6mjr, section 5. They are not settings; the reply says how to split the call. |

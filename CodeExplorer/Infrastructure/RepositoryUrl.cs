@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.RegularExpressions;
 
 namespace CodeExplorer.Infrastructure;
@@ -9,7 +10,8 @@ public enum RepositoryUrlKind
     Invalid,
 
     /// <summary>
-    ///     A path or <c>file://</c> URL: a repository on the server's own disk, accepted only where
+    ///     A path or <c>file://</c> URL, which is on the server's own disk, or a remote whose host is
+    ///     loopback, which reaches the server itself over the network: accepted only where
     ///     <see cref="RepositoryUrl.AllowLocalSetting" /> is true.
     /// </summary>
     Local,
@@ -61,7 +63,7 @@ public static partial class RepositoryUrl
     ///     directory through its local transport before it tries ssh, so reading any of them as scp-style
     ///     would be a way past <see cref="AllowLocalSetting" />. git itself reads a drive letter the same way.
     /// </summary>
-    [GeneratedRegex(@"^(?:[^@:/\\]+@)?(?![A-Za-z]:)[^@:/\\]+:(?![0-9]+/)[^:]*$")]
+    [GeneratedRegex(@"^(?:[^@:/\\]+@)?(?![A-Za-z]:)(?<host>[^@:/\\]+):(?![0-9]+/)[^:]*$")]
     private static partial Regex ScpSyntax { get; }
 
     /// <summary>
@@ -96,18 +98,36 @@ public static partial class RepositoryUrl
         {
             // A Windows path like C:\repo parses as an absolute URI with a one-letter scheme.
             if (uri.Scheme.Length == 1 || uri.Scheme == "file") return RepositoryUrlKind.Local;
-            return uri.Scheme switch
+            bool remote = uri.Scheme switch
             {
                 // A user name is how ssh names the account (git@); a password after it is a secret.
-                "ssh" or "git" when !uri.UserInfo.Contains(':') => RepositoryUrlKind.Remote,
-                "http" or "https" when uri.UserInfo.Length == 0 => RepositoryUrlKind.Remote,
-                _ => RepositoryUrlKind.Invalid
+                "ssh" or "git" => !uri.UserInfo.Contains(':'),
+                "http" or "https" => uri.UserInfo.Length == 0,
+                _ => false
             };
+            return remote ? RemoteOn(uri.Host) : RepositoryUrlKind.Invalid;
         }
 
-        if (ScpSyntax.IsMatch(url)) return RepositoryUrlKind.Remote;
+        if (ScpSyntax.Match(url) is { Success: true } scp) return RemoteOn(scp.Groups["host"].Value);
         // Whatever else fails to parse is a relative path. Anything with an '@' is more likely a
         // mistyped remote carrying a credential than a folder name, and is refused.
         return url.Contains('@') ? RepositoryUrlKind.Invalid : RepositoryUrlKind.Local;
+    }
+
+    /// <summary>
+    ///     A remote on a loopback host is local: it reaches the server's own services over the network,
+    ///     which is as much the server's own machine as a path is. Loopback is <c>localhost</c> or an
+    ///     address in 127.0.0.0/8 or <c>::1</c>, IPv4-mapped included. <see cref="IPAddress.TryParse(string, out IPAddress)" />
+    ///     reads the spellings a resolver does, decimal and hex among them, and a trailing dot is the DNS
+    ///     root, not part of the name. A name that merely contains "localhost" or "127" is no address.
+    /// </summary>
+    private static RepositoryUrlKind RemoteOn(string host)
+    {
+        host = host.TrimEnd('.');
+        if (host.StartsWith('[') && host.EndsWith(']')) host = host[1..^1];
+        bool loopback = host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                        || (IPAddress.TryParse(host, out var address)
+                            && IPAddress.IsLoopback(address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address));
+        return loopback ? RepositoryUrlKind.Local : RepositoryUrlKind.Remote;
     }
 }
