@@ -41,6 +41,16 @@ public sealed class GitClones(
     // entry per repository for the life of the process, which is bounded by the control database.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
 
+    // Every transfer still running, as the continuation that releases its gate; see Settled.
+    private readonly ConcurrentDictionary<Task, byte> _transfers = new();
+
+    /// <summary>
+    ///     Completes once every transfer running now has returned from libgit2 and released its gate,
+    ///     including one a cancelled refresh stopped waiting for, which runs on to the stall limit at the
+    ///     latest (#289). Never faults.
+    /// </summary>
+    public Task Settled => Task.WhenAll(_transfers.Keys);
+
     // Absolute, because libgit2 resolves a relative data directory before it names a path in an error,
     // and the path has to be written the same way to be recognised and kept out of a message (#232).
     private readonly string _cloneRoot =
@@ -124,12 +134,21 @@ public sealed class GitClones(
 
         // The gate is the transfer's and not this call's: it is released when libgit2 returns, however
         // long after the refresh has stopped waiting, so no clone starts over a folder one still writes.
-        // The fault is observed there too, since after a cancellation nothing else awaits it.
-        _ = transfer.ContinueWith(t =>
+        // Not fire-and-forget: the release is kept in _transfers until it has run, and Settled awaits it.
+        var settled = transfer.ContinueWith(t =>
         {
-            _ = t.Exception;
             gate.Release();
+            // After a cancellation nothing else awaits the transfer, so its failure is logged here; one
+            // the refresh waited for is reported by the refresh, and a cancellation is no failure.
+            if (t.Exception is { } failure && cancellationToken.IsCancellationRequested
+                                            && logger.IsEnabled(LogLevel.Warning))
+                logger.LogWarning(failure.GetBaseException(), "The transfer of repository {Repository} of project "
+                                                              + "{Project}, abandoned by a cancelled refresh, failed",
+                    repository.Slug, repository.ProjectSlug);
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        _transfers[settled] = 0;
+        _ = settled.ContinueWith(t => _transfers.TryRemove(t, out _), CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
         // Waited on apart from the transfer, because a cancellation reaches libgit2 only through a
         // progress callback, and a remote that has gone quiet fires none: the transfer would run on to

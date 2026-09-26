@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using CodeExplorer.Control;
+using CodeExplorer.Git;
 using CodeExplorer.Index;
 using CodeExplorer.Refresh;
 using Microsoft.Extensions.DependencyInjection;
@@ -134,6 +135,11 @@ public sealed class StalledRemoteTests : IDisposable
         var elapsed = await TimedAsync(Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh));
 
         Assert.True(elapsed < TimeSpan.FromSeconds(15), $"The cancelled refresh took {elapsed}.");
+
+        // The abandoned clone still holds its gate. Hanging up on it ends it, and it has to be over
+        // before the host's directories are deleted under it.
+        foreach (var socket in _accepted) socket.Dispose();
+        await TimedAsync(host.Services.GetRequiredService<GitClones>().Settled);
     }
 
     /// <summary>
