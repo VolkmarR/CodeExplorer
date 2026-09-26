@@ -163,8 +163,53 @@ public sealed class TestHost : IDisposable
     /// </summary>
     public void Restart()
     {
-        Factory.Dispose();
+        Stop();
         Factory = Build();
+    }
+
+    /// <summary>
+    ///     Disposes the server and waits until its DuckDB instances have let go of their files (#285).
+    ///     <c>Factory.Dispose()</c> alone can return before they do: the app's own <c>RunAsync</c> disposes
+    ///     the host on the entry-point thread once the host stops, and the factory's dispose, finding the
+    ///     service provider already being disposed, returns without waiting for it. Measured in full-suite
+    ///     runs, the control database stayed open for 20 to 80 ms after it returned. A new server started
+    ///     in that window opens the same path, and DuckDB.NET, which keeps one native instance per path
+    ///     while any connection to it is open, hands it the old instance: the old server's projects, attach
+    ///     state and all, whatever the file on disk now holds. Waiting on the files rather than on the
+    ///     host, because nothing the factory exposes completes when the entry point has finished.
+    /// </summary>
+    private void Stop()
+    {
+        Factory.Dispose();
+        foreach (string file in new[] { ControlDatabaseFile, IndexFile("instance") }) AwaitClosed(file);
+    }
+
+    /// <summary>
+    ///     Returns once nothing holds <paramref name="path" /> open, or at once when it does not exist:
+    ///     a server that never resolved the control database or the index instance never created them.
+    /// </summary>
+    private static void AwaitClosed(string path)
+    {
+        // Far past the 80 ms measured, so only a server that never lets go reaches it, and that one
+        // fails here, named, instead of as a wrong answer from the next server.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            try
+            {
+                using (File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) return;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // Safe to swallow: no file is a file nothing holds.
+                return;
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                // Safe to swallow: the old server is still disposing, and the loop is the wait for it.
+                Thread.Sleep(5);
+            }
+        }
     }
 
     /// <summary>
@@ -184,7 +229,7 @@ public sealed class TestHost : IDisposable
     /// </summary>
     public void RestartWithoutControlDatabase()
     {
-        Factory.Dispose();
+        Stop();
         DeleteDatabase(ControlDatabaseFile);
         Factory = Build();
     }
