@@ -95,19 +95,11 @@ public sealed class ExcludedPathsTests : IDisposable
         // The same file, so DuckDB.NET hands both connections one database instance.
         using var connection = new DuckDBConnection($"Data Source={path}");
         await connection.OpenAsync(Ct);
-        string attached = _host.ScratchFile("attached.duckdb").Replace("'", "''");
-        await ExecuteAsync(other, $"ATTACH '{attached}' AS attached");
-        await ExecuteAsync(connection, "USE attached");
-        await ExecuteAsync(other, "DETACH attached");
+        await other.ExecuteAsync($"ATTACH {IndexQuery.Literal(_host.ScratchFile("attached.duckdb"))} AS attached", Ct);
+        await connection.ExecuteAsync("USE attached", Ct);
+        await other.ExecuteAsync("DETACH attached", Ct);
 
         await Assert.ThrowsAsync<DuckDBException>(() => ExcludedPaths.RefusedAsync(connection, "**/*.rc", Ct));
-    }
-
-    private static async Task ExecuteAsync(DuckDBConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        await command.ExecuteNonQueryAsync(Ct);
     }
 
     [Fact]
