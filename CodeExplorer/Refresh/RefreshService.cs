@@ -195,8 +195,9 @@ public sealed class RefreshService(
 
             // Before the check below, which sizes the shadow from the live file: on a wiped disk there is
             // none until the durable copy is restored, and the check would size the shadow of a large
-            // project at the floor (#229). The restore itself is the one an agent's first open would pay.
-            await indexes.RestoreIfAbsentAsync(project.Slug, cancellationToken);
+            // project at the floor (#229). It reports a phase of its own, so a restore that fails is
+            // not reported as a refresh that failed while starting (#290).
+            await indexes.RestoreForRefreshAsync(project.Slug, Report, cancellationToken);
 
             // Checked again here and not only when it was accepted: another project's refresh may have
             // filled the disk in between, and that is exactly the condition ADR-0003 says to avoid.
