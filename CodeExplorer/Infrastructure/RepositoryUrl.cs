@@ -78,8 +78,8 @@ public static partial class RepositoryUrl
     ///     remote as basic auth, and <c>git://</c> is just as unencrypted (GHSA-4f8q-c6jj-fr44). The API and
     ///     the refresh both ask this, so the pair refused on the way in is the pair skipped on the way out.
     ///     A prefix and not <see cref="Uri" />, because libgit2 picks its transport by prefix: a URL .NET
-    ///     cannot parse, such as one with a space in the host, reads as scp-style to <see cref="Classify" />
-    ///     and is still an http URL to libgit2.
+    ///     cannot parse, such as one with a space in the host, is invalid to <see cref="Classify" /> now,
+    ///     but a server may have stored one before, and it is still an http URL to libgit2.
     /// </summary>
     public static bool SendsCredentialInClear(string? url, bool hasCredential)
     {
