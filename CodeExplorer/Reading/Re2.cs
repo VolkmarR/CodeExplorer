@@ -1,16 +1,18 @@
-using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
-namespace CodeExplorer.Search;
+namespace CodeExplorer.Reading;
 
 /// <summary>
-///     What every tool that hands a caller's pattern to DuckDB has to say about RE2 (ADR-0004): which
-///     constructs it does not have, and what one of its rejections means. Shared so that <c>grep</c>
-///     and <c>list_matches</c> cannot explain the same refused pattern two different ways — an agent
-///     that is told lookbehind is unsupported by one tool and handed a parser error by another will
-///     retry the same pattern on the other tool.
+///     What every surface that hands a caller's pattern to DuckDB has to say about RE2 (ADR-0004):
+///     which constructs it does not have, and what one of its rejections means. Shared so that
+///     <c>grep</c> and <c>list_matches</c> cannot explain the same refused pattern two different ways —
+///     an agent that is told lookbehind is unsupported by one tool and handed a parser error by another
+///     will retry the same pattern on the other tool — and so that the excluded paths a save or a
+///     suggestion checks tell a refused pattern from a broken connection the way a search does (#296).
+///     It sits in <c>Reading/</c> rather than <c>Search/</c> because <c>Control/</c> checks patterns too
+///     and may not reach <c>Search/</c> (ADR-0005).
 /// </summary>
-internal static class Re2
+public static class Re2
 {
     /// <summary>
     ///     RE2 rejects these; each is a .NET or PCRE habit an agent brings along. Recognised up front so
@@ -71,18 +73,31 @@ internal static class Re2
             : "");
 
     /// <summary>
-    ///     Compiles the caller's pattern on its own, throwing the <see cref="DuckDBException" /> that
-    ///     <see cref="IsPatternRejection" /> recognises when RE2 refuses it. Run before any wrapped form
-    ///     is, because a wrapper can balance what the caller left unbalanced: <c>a)|(b</c> is no pattern,
-    ///     yet <c>(?:a)|(b)</c> is one that matches something else and captures a group besides (#238).
+    ///     Compiles <paramref name="pattern" /> on its own and answers RE2's rejection of it, or null
+    ///     when it compiles. Any other failure — a lost catalog, a cancelled query — throws, because it
+    ///     says nothing about the pattern and reported as one would send the caller off rewriting a
+    ///     pattern that was never wrong (#296).
+    ///     A search runs it before any wrapped form of the caller's pattern, because a wrapper can
+    ///     balance what the caller left unbalanced: <c>a)|(b</c> is no pattern, yet <c>(?:a)|(b)</c> is
+    ///     one that matches something else and captures a group besides (#238).
     ///     An empty subject, so the check costs a compile and no scan.
     /// </summary>
-    public static async Task CompileAsync(DuckDBConnection connection, string pattern,
+    public static async Task<DuckDBException?> RejectionAsync(DuckDBConnection connection, string pattern,
         CancellationToken cancellationToken)
     {
         await using var command = connection.Query("SELECT regexp_matches('', $pattern)",
             [new DuckDBParameter("pattern", pattern)]);
-        await command.ScalarAsync(cancellationToken);
+        try
+        {
+            await command.ScalarAsync(cancellationToken);
+            return null;
+        }
+        catch (DuckDBException exception) when (IsPatternRejection(exception))
+        {
+            // Swallowed because it is the answer: the rejection is what was wrong with the pattern, and
+            // each caller turns it into its own refusal.
+            return exception;
+        }
     }
 
     /// <summary>
