@@ -87,6 +87,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     private readonly string[] _nameOnlyModifiers;
 
     private readonly string[] _directivePrefixes;
+    private readonly string[] _proseDirectives;
     private readonly string[] _instantiationKeywords;
     private readonly string[] _lineComments;
     private readonly string[] _memberAccess;
@@ -154,6 +155,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         _profile = profile;
         _lineComments = [.. profile.LineComments];
         _directivePrefixes = [.. profile.DirectivePrefixes];
+        _proseDirectives = [.. profile.ProseDirectives];
         _lineStartComments = [.. profile.LineStartComments];
         // Longest opener first, so `"""` is tried before `"` and `(*` before a `(` some profile may
         // one day add. Ordering here rather than in the table keeps a profile from having a silent
@@ -1513,10 +1515,19 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     /// <summary>
     ///     Whether one of the line-start comment forms opens at the start of the line's text, at
     ///     <paramref name="start" />, making the whole line prose. The forms found anywhere on a line
-    ///     are the scan's business; this is only the ones that mean nothing elsewhere.
+    ///     are the scan's business; this is only the ones that mean nothing elsewhere. A prose directive
+    ///     is one of them, and is asked first, so that a directive prefix it begins with cannot exempt it.
     /// </summary>
     private bool OpensAWholeLine(string line, int start)
     {
+        for (int i = 0; i < _proseDirectives.Length; i++)
+        {
+            int end = start + _proseDirectives[i].Length;
+            if (At(line, start, _proseDirectives[i], _keywordComparison)
+                && (end == line.Length || !SymbolText.IsWordChar(line[end])))
+                return true;
+        }
+
         if (IsDirectiveAt(line, start)) return false;
         for (int i = 0; i < _lineStartComments.Length; i++)
             if (At(line, start, _lineStartComments[i]))

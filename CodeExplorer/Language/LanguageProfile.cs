@@ -170,6 +170,16 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
     public IReadOnlyList<string> DirectivePrefixes { get; init; } = [];
 
     /// <summary>
+    ///     Directive words whose line is prose: C#'s <c>#region</c> label and <c>#error</c> message.
+    ///     Matched at the start of the line's text, as a whole word and under the profile's own case
+    ///     rule, and the whole line is then a comment, so no literal opens in it. Without this, an
+    ///     apostrophe in <c>#region Don't touch</c> opened a char literal, and a name in the label read
+    ///     as a string with one and as code without (#265). The directives that name symbols —
+    ///     <c>#if</c>, <c>#define</c> — are not listed, because what they name is code.
+    /// </summary>
+    public IReadOnlyList<string> ProseDirectives { get; init; } = [];
+
+    /// <summary>
     ///     Block comment pairs. An opener anywhere on a line opens one, and it stays open across the
     ///     lines below until its closer: the scan carries that between lines, which is what stops the
     ///     second line of a commented-out block from reading as a call.

@@ -614,6 +614,42 @@ public sealed class ReferenceTests : IDisposable
         Assert.DoesNotContain("Änderungen", change);
     }
 
+    /// <summary>
+    ///     #265: a region label names the code it groups and is not a use of it, whatever punctuation
+    ///     the label holds — an apostrophe in one opened a char literal and filed the name as a string,
+    ///     and without one the name read as code.
+    /// </summary>
+    [Fact]
+    public async Task A_region_label_is_not_a_reference()
+    {
+        _host = new TestHost(SearchEngine.Substring);
+        await _host.IndexedProjectAsync("regions", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["src/Limits.cs"] = """
+                                    class Limits
+                                    {
+                                        #region MaxOrders
+                                        #region Don't touch MaxOrders
+                                        int Read() => MaxOrders;
+                                        #endregion
+                                        #endregion
+                                    }
+
+                                    """
+            }
+        });
+        await using var client = await _host.ConnectAsync("regions");
+
+        string text = await FindAsync(client,
+            new Dictionary<string, object?> { ["symbol"] = "MaxOrders", ["includeNoise"] = true });
+
+        Assert.Contains("\"MaxOrders\" in 1 file: 1 reference, 2 in comments, strings or imports", text);
+        Assert.Contains("COMMENTS", text);
+        Assert.DoesNotContain("STRINGS", text);
+    }
+
     [Fact]
     public async Task A_project_without_an_index_gets_an_explanation()
     {
