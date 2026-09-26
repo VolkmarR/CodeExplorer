@@ -141,7 +141,15 @@ public sealed class LocalCopy : IDisposable
         HeadSha = repository.Head.Tip.Sha;
         _native = NativeRepository.Open(repository.Info.Path);
         _blobs = new BlobReader(_native);
-        _diffs = new NativeDiff(_native);
+        try
+        {
+            _diffs = new NativeDiff(_native);
+        }
+        catch
+        {
+            _native.Dispose();
+            throw;
+        }
     }
 
     /// <summary>How many blobs <see cref="CommittedFile.Text" /> has loaded, for the test that holds it to one a file.</summary>
@@ -237,8 +245,8 @@ public sealed class LocalCopy : IDisposable
     private RecordedCommit Describe(Commit commit, long maxBlobBytes)
     {
         var parent = commit.Parents.FirstOrDefault();
-        var described = _diffs.Describe(parent?.Tree.Id, commit.Tree.Id, maxBlobBytes);
-        var files = described.Files ?? AroundOversized(parent, commit, described.Changes, maxBlobBytes);
+        var diff = _diffs.Diff(parent?.Tree.Id, commit.Tree.Id, maxBlobBytes);
+        var files = diff.Recorded ?? AroundOversized(parent, commit, diff.Changed, maxBlobBytes);
 
         // MessageShort is the subject git itself would show; the body is what is left, and an empty
         // string rather than null because the column is NOT NULL and "no body" is not a missing value.
@@ -285,9 +293,8 @@ public sealed class LocalCopy : IDisposable
         using var patch = _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, named, new ExplicitPathsOptions(),
             _noContext);
         foreach (var change in patch)
-            files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
-                change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
-                change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
+            files.Add(Rendered(change.Path, change.OldPath, change.Status, change.LinesAdded, change.LinesDeleted,
+                change.IsBinaryComparison, change.Patch));
         return files;
     }
 
@@ -296,7 +303,9 @@ public sealed class LocalCopy : IDisposable
     ///     with no lines. One whose blob left one path and arrived at another in the same commit is the
     ///     move libgit2 detects first, by id, and is recorded as the rename it is — the id is all that
     ///     telling needs, so nothing is read (#292). A large file moved and edited in one commit has a
-    ///     new id, and stays a deletion and an addition, since matching it means reading it.
+    ///     new id, and stays a deletion and an addition, since matching it means reading it. The pairing
+    ///     does not consult <c>diff.renames</c>; only a git configuration that switched rename
+    ///     detection off would make it disagree with the patch's.
     /// </summary>
     private static List<ChangedPath> Oversized(List<TreeChange> oversized)
     {
@@ -324,11 +333,7 @@ public sealed class LocalCopy : IDisposable
         foreach (var change in oversized)
         {
             if (moved.Contains(change.Path)) continue;
-            var kind = change.Old is null ? ChangeKind.Added
-                : change.New is null ? ChangeKind.Deleted
-                : change.Old.Value.IsLink != change.New.Value.IsLink ? ChangeKind.TypeChanged
-                : ChangeKind.Modified;
-            files.Add(new ChangedPath(change.Path, change.Path, KindName(kind), 0, 0, true, []));
+            files.Add(new ChangedPath(change.Path, change.Path, KindName(change.Kind), 0, 0, true, []));
         }
 
         return files;
@@ -343,15 +348,19 @@ public sealed class LocalCopy : IDisposable
     private ChangedPath DiffAlone(TreeChange change)
     {
         var side = (change.Old ?? change.New)!.Value;
-        string kind = KindName(change.Old is null ? ChangeKind.Added : ChangeKind.Deleted);
-        if (side.IsSubmodule) return new ChangedPath(change.Path, change.Path, kind, 0, 0, false, []);
+        if (side.IsSubmodule) return new ChangedPath(change.Path, change.Path, KindName(change.Kind), 0, 0, false, []);
         var blob = _repository.Lookup<Blob>(new ObjectId(side.Id.ToRaw()));
         var content = change.Old is null
             ? _repository.Diff.Compare(null, blob, _noContext)
             : _repository.Diff.Compare(blob, null, _noContext);
-        return new ChangedPath(change.Path, change.Path, kind, content.LinesAdded, content.LinesDeleted,
-            content.IsBinaryComparison, content.IsBinaryComparison ? [] : UnifiedDiff.Edits(content.Patch));
+        return Rendered(change.Path, change.Path, change.Kind, content.LinesAdded, content.LinesDeleted,
+            content.IsBinaryComparison, content.Patch);
     }
+
+    /// <summary>A change LibGit2Sharp rendered, its edits read back out of the rendered text.</summary>
+    private static ChangedPath Rendered(string path, string oldPath, ChangeKind kind, int added, int deleted,
+        bool binary, string patch) =>
+        new(path, oldPath, KindName(kind), added, deleted, binary, binary ? [] : UnifiedDiff.Edits(patch));
 
     public void Dispose()
     {

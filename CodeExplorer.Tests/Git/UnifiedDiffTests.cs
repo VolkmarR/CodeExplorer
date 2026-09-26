@@ -84,6 +84,44 @@ public sealed class UnifiedDiffTests : IDisposable
         Assert.Equal([new LineEdit(1, 1, 1), new LineEdit(3, 1, 1)], edits["lines.txt"].Edits);
     }
 
+    /// <summary>
+    ///     <see cref="NativeDiff" /> reads each edit off a hunk header instead of the rendered text
+    ///     (#292), which is sound only because a hunk with no context is exactly one edit. Held here
+    ///     against the reading of LibGit2Sharp's patch at three lines of context, where hunks do merge
+    ///     edits, so the two share nothing but libgit2's diff itself: the paths, kinds, line counts and
+    ///     edits of every commit must come out the same.
+    /// </summary>
+    [Fact]
+    public void Edits_read_from_hunk_headers_are_the_ones_the_rendered_patch_holds()
+    {
+        string path = Build();
+        using var repository = new Repository(path);
+        using var native = NativeRepository.Open(repository.Info.Path);
+        using var diff = new NativeDiff(native);
+
+        int compared = 0;
+        foreach (var commit in repository.Commits)
+        {
+            var parent = commit.Parents.FirstOrDefault();
+            var rendered = repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null,
+                    new CompareOptions { ContextLines = 3 })
+                .Select(change => new ChangedPath(change.Path, change.OldPath, LocalCopy.KindName(change.Status),
+                    change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison, UnifiedDiff.Edits(change.Patch)))
+                .OrderBy(change => change.Path, StringComparer.Ordinal).ToList();
+            var read = diff.Diff(parent?.Tree.Id, commit.Tree.Id, long.MaxValue).Recorded!
+                .OrderBy(change => change.Path, StringComparer.Ordinal).ToList();
+
+            Assert.Equal(rendered.Select(Describe), read.Select(Describe));
+            compared += read.Count;
+        }
+
+        Assert.True(compared >= 12, $"only {compared} files compared");
+
+        static string Describe(ChangedPath change) =>
+            $"{change.OldPath} -> {change.Path} {change.ChangeKind} +{change.Added} -{change.Deleted} "
+            + string.Join(" ", change.Edits);
+    }
+
     private sealed record FileEdits(string Status, string? OldPath, IReadOnlyList<LineEdit> Edits);
 
     private static Dictionary<string, FileEdits> Read(Repository repository, Commit? parent, Commit commit,
