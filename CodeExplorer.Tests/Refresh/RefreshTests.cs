@@ -396,8 +396,7 @@ public sealed class RefreshTests : IDisposable
         string remote = _host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" });
         string branch = _host.BranchOf("one");
         string first = _host.HeadOf("one");
-        string gitDirectory = _host.FixtureGitPath("one");
-        TestHost.DetachHead(gitDirectory, first);
+        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
         await _host.AddRepositoryAsync("alpha", "one", remote);
         var cloned = await _host.RefreshAsync("alpha");
 
@@ -408,9 +407,7 @@ public sealed class RefreshTests : IDisposable
 
         // A push to the branch, with the remote's HEAD left detached where it was: a clone that stayed
         // on the detached commit would index the old tree on every refresh from here on (#288).
-        TestHost.AttachHead(gitDirectory, branch);
-        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
-        TestHost.DetachHead(gitDirectory, first);
+        _host.PushWhileDetached("one", branch, first, new Dictionary<string, string> { [NewFile] = "class B;\n" });
 
         var summary = await _host.RefreshAsync("alpha");
 
@@ -429,7 +426,6 @@ public sealed class RefreshTests : IDisposable
     {
         await _host.CreateProjectAsync("alpha");
         string remote = _host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" });
-        string gitDirectory = _host.FixtureGitPath("one");
         // Both branches at the one commit, beside the fixture's own branch renamed to sort last, so
         // nothing but the rule decides: main, then master, then the first by name (#288). libgit2's own
         // guess prefers master, which the first case proves is overruled.
@@ -437,13 +433,11 @@ public sealed class RefreshTests : IDisposable
         string first = _host.HeadOf("one");
         _host.CreateBranch("one", expected);
         _host.CreateBranch("one", other);
-        TestHost.DetachHead(gitDirectory, first);
+        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
         await _host.AddRepositoryAsync("alpha", "one", remote);
         await _host.RefreshAsync("alpha");
 
-        TestHost.AttachHead(gitDirectory, expected);
-        _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
-        TestHost.DetachHead(gitDirectory, first);
+        _host.PushWhileDetached("one", expected, first, new Dictionary<string, string> { [NewFile] = "class B;\n" });
 
         Assert.Equal(2, (await _host.RefreshAsync("alpha")).Files);
     }
@@ -455,11 +449,10 @@ public sealed class RefreshTests : IDisposable
         string remote = _host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" });
         string first = _host.HeadOf("one");
         string branch = _host.BranchOf("one");
-        string gitDirectory = _host.FixtureGitPath("one");
         _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
         // Detached at a commit no branch ends at, so only the fallback rule can name one: the fixture's
         // branch is main or master, whichever init.defaultBranch says.
-        TestHost.DetachHead(gitDirectory, first);
+        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
         await _host.AddRepositoryAsync("alpha", "one", remote);
 
         var cloned = await _host.RefreshAsync("alpha");
@@ -469,9 +462,7 @@ public sealed class RefreshTests : IDisposable
             StringComparison.Ordinal);
 
         // And it keeps following that branch, which the detached commit never will.
-        TestHost.AttachHead(gitDirectory, branch);
-        _host.CommitToGitRepository("one", new Dictionary<string, string> { ["src/C.cs"] = "class C;\n" });
-        TestHost.DetachHead(gitDirectory, first);
+        _host.PushWhileDetached("one", branch, first, new Dictionary<string, string> { ["src/C.cs"] = "class C;\n" });
 
         Assert.Equal(3, (await _host.RefreshAsync("alpha")).Files);
     }

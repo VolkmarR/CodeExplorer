@@ -468,11 +468,15 @@ public sealed class TestHost : IDisposable
     public static void DetachHead(string gitDirectory, string sha) => WriteHead(gitDirectory, sha);
 
     /// <summary>
-    ///     Points a detached HEAD back at a branch, so a fixture detached for a first clone can take a
-    ///     commit on that branch the way a push to it would (#288).
+    ///     A push to a branch of a fixture whose HEAD is detached, which stays detached at
+    ///     <paramref name="detachedAt" />: the remote's branch moves on and its HEAD does not (#288).
     /// </summary>
-    public static void AttachHead(string gitDirectory, string branch) =>
-        WriteHead(gitDirectory, $"ref: refs/heads/{branch}");
+    public void PushWhileDetached(string name, string branch, string detachedAt, Dictionary<string, string> files)
+    {
+        BreakHead(FixtureGitPath(name), branch);
+        CommitToGitRepository(name, files);
+        DetachHead(FixtureGitPath(name), detachedAt);
+    }
 
     /// <summary>The branch a fixture's HEAD is on, which is whatever <c>init.defaultBranch</c> made it.</summary>
     public string BranchOf(string name)

@@ -273,17 +273,17 @@ public sealed class GitClones(
         // libgit2 settles a clone of a detached remote itself: on a branch at the detached commit,
         // preferring whatever init.defaultBranch says on this server among several, and detached when
         // none is there, which would index that one commit on every refresh from here on, since a fetch
-        // moves branches and never HEAD. Neither is a rule an operator can read off the status, and the
-        // clone cannot tell which of the two libgit2 did, so the remote's HEAD is asked once more and a
-        // detached one is decided by FollowBranch's rule instead (#288). One round trip, on a first
-        // clone only; unanswered, a clone libgit2 left on a branch keeps it.
+        // moves branches and never HEAD. FollowBranch's rule decides instead, so that the status can
+        // name it (#288). The clone cannot say which the remote's HEAD was: libgit2 writes a symbolic
+        // refs/remotes/origin/HEAD for a detached one too. So the remote is asked, once per first clone,
+        // which is one ref advertisement beside a download of the whole history. Unanswered, a clone
+        // libgit2 left detached is still decided, and one it put on a branch keeps it.
         using var clone = new Repository(path);
-        if (clone.Head.Tip is null) return null;
-        string? detachedAt = AdvertisedReferences(repository, cancellationToken)
-            ?.FirstOrDefault(r => r.CanonicalName == "HEAD") is DirectReference head
-            ? head.TargetIdentifier
-            : clone.Info.IsHeadDetached ? clone.Head.Tip.Sha : null;
-        return detachedAt is null ? null : FollowBranch(clone, repository, detachedAt, "refs/remotes/origin/");
+        if (clone.Head.Tip is not { Sha: var tip }) return null;
+        var head = AdvertisedReferences(repository, cancellationToken)?.FirstOrDefault(r => r.CanonicalName == "HEAD");
+        return head is DirectReference || (head is null && clone.Info.IsHeadDetached)
+            ? FollowBranch(clone, repository, tip, "refs/remotes/origin/")
+            : null;
     }
 
     /// <summary>
