@@ -328,8 +328,7 @@ public sealed class TestHost : IDisposable
 
     /// <summary>
     ///     Records the query plan of every read this host makes into <paramref name="directory" /> until
-    ///     disposed, and of no other host's: the classes running beside this one read fixtures with the
-    ///     same repository and file names (#286).
+    ///     disposed, and of no other host's (see <see cref="QueryPlan.Recording" />).
     /// </summary>
     public IDisposable RecordPlans(string directory) => QueryPlan.Recording(directory, DataDirectory);
 
