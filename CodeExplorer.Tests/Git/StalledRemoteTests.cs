@@ -3,7 +3,10 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using CodeExplorer.Control;
 using CodeExplorer.Index;
+using CodeExplorer.Refresh;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -87,6 +90,52 @@ public sealed class StalledRemoteTests : IDisposable
         Assert.True(elapsed > TimeSpan.FromSeconds(StallSeconds * 2), $"The refresh took only {elapsed}.");
     }
 
+    [Fact]
+    public async Task A_remote_slow_to_answer_with_an_error_is_reported_with_that_error()
+    {
+        // A 404 in answer to the reference discovery, a piece at a time, for longer than the limit in
+        // all but with every gap inside it. No callback fires during the discovery, so how long the
+        // remote took cannot tell this from a stall; the error it ended with can (#289).
+        Serve(socket => Drip(socket, "",
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "missing", RemoteUrl);
+
+        using (var response = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var elapsed = await TimedAsync(_host.WaitForRefreshesAsync());
+
+        string error = Assert.IsType<string>((await _host.RefreshStatusAsync("alpha")).Error);
+        Assert.Contains("404", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("stopped responding", error, StringComparison.Ordinal);
+        // Past the limit, or the remote was not slow enough for the elapsed time to have misled.
+        Assert.True(elapsed > TimeSpan.FromSeconds(StallSeconds), $"The refresh took only {elapsed}.");
+    }
+
+    [Fact]
+    public async Task A_refresh_cancelled_on_a_stalled_remote_stops_well_within_the_stall_limit()
+    {
+        // A limit no test would wait out, so only the cancellation can end the refresh in time. Its own
+        // host, because the class's has the lowered limit and building it would put that one back.
+        using var host = new TestHost(SearchEngine.Substring, transferStallSeconds: 120);
+        Serve(_ => { });
+        await host.CreateProjectAsync("alpha");
+        await host.AddRepositoryAsync("alpha", "stalled", RemoteUrl);
+        var project = (await host.Services.GetRequiredService<ControlDatabase>()
+            .FindAsync("alpha", TestContext.Current.CancellationToken))!;
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+
+        // Cancelled a second into the clone, by which time libgit2 is waiting on the silent remote and
+        // calls nothing back that could carry the cancellation to it (#289).
+        var refresh = host.Services.GetRequiredService<ProjectRefresh>().RunAsync(project, progress =>
+        {
+            if (progress.Phase == "Fetching 'stalled'") cancel.CancelAfter(TimeSpan.FromSeconds(1));
+        }, cancel.Token);
+        var elapsed = await TimedAsync(Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh));
+
+        Assert.True(elapsed < TimeSpan.FromSeconds(15), $"The cancelled refresh took {elapsed}.");
+    }
+
     /// <summary>
     ///     Bounded here rather than by the runner, so a regression fails the test instead of hanging the
     ///     suite: a libgit2 call that never returns cannot be cancelled by the token either.
@@ -127,7 +176,19 @@ public sealed class StalledRemoteTests : IDisposable
     ///     Protocol v0: the service line, a flush, the capabilities line an empty repository sends in place
     ///     of its first ref, and a closing flush. With no ref to want, libgit2 asks for nothing further.
     /// </summary>
-    private static void DripEmptyAdvertisement(Socket socket)
+    private static void DripEmptyAdvertisement(Socket socket) => Drip(socket,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/x-git-upload-pack-advertisement\r\n"
+        + "Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
+        "001e# service=git-upload-pack\n0000"
+        + "003e0000000000000000000000000000000000000000 capabilities^{}\0\n"
+        + "0000");
+
+    /// <summary>
+    ///     Reads one request, sends <paramref name="upfront" /> at once and then
+    ///     <paramref name="dripped" /> twelve bytes at a time, 600 ms apart: every gap well inside the
+    ///     limit, and a response of 60 bytes or more well past it in all.
+    /// </summary>
+    private static void Drip(Socket socket, string upfront, string dripped)
     {
         try
         {
@@ -140,14 +201,8 @@ public sealed class StalledRemoteTests : IDisposable
                 request.Append(Encoding.ASCII.GetString(buffer, 0, read));
             }
 
-            socket.Send(Encoding.ASCII.GetBytes(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/x-git-upload-pack-advertisement\r\n"
-                + "Cache-Control: no-cache\r\nConnection: close\r\n\r\n"));
-            byte[] body = Encoding.ASCII.GetBytes("001e# service=git-upload-pack\n0000"
-                                                  + "003e0000000000000000000000000000000000000000 capabilities^{}\0\n"
-                                                  + "0000");
-            // Nine pieces 600 ms apart: every gap well inside the limit, the whole well past twice it.
-            foreach (var piece in body.Chunk(12))
+            if (upfront.Length > 0) socket.Send(Encoding.ASCII.GetBytes(upfront));
+            foreach (var piece in Encoding.ASCII.GetBytes(dripped).Chunk(12))
             {
                 Thread.Sleep(600);
                 socket.Send(piece);

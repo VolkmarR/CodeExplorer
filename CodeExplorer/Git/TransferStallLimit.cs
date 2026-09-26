@@ -53,6 +53,34 @@ internal static class TransferStallLimit
         return seconds;
     }
 
+    /// <summary>
+    ///     Whether <paramref name="failure" /> is the remote answering over HTTP — a status, an
+    ///     authentication challenge, a reply that was not git's — which a remote that went quiet cannot
+    ///     have sent (#289). libgit2 files every such failure under its HTTP class, and a timeout under
+    ///     another: the socket's own, or the TLS layer's on top of it, which passes the socket's failure
+    ///     up as its own. LibGit2Sharp drops the class along with the code, so it is read from libgit2's
+    ///     last error, which is kept per thread; the caller asks on the thread the transfer failed on.
+    ///     The class is trusted only when that error's message is the exception's, so an older failure
+    ///     left behind on a pooled thread cannot speak for this one.
+    /// </summary>
+    public static bool RemoteAnswered(Exception failure)
+    {
+        nint last = LastError();
+        if (last == 0) return false;
+        var error = Marshal.PtrToStructure<GitError>(last);
+        return error.Class == _httpErrorClass && Marshal.PtrToStringUTF8(error.Message) == failure.Message;
+    }
+
+    // GIT_ERROR_HTTP in libgit2 1.9's git_error_t.
+    private const int _httpErrorClass = 34;
+
+    // libgit2's git_error: the message, then the class.
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct GitError(nint Message, int Class);
+
+    [DllImport(Library, EntryPoint = "git_error_last", CallingConvention = CallingConvention.Cdecl)]
+    private static extern nint LastError();
+
     private static void Set(int option, int milliseconds)
     {
         // git_libgit2_opts is variadic. Everywhere but Apple silicon a variadic int travels where a fixed
