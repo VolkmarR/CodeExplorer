@@ -62,6 +62,8 @@ internal static class TransferStallLimit
     ///     last error, which is kept per thread; the caller asks on the thread the transfer failed on.
     ///     The class is trusted only when that error's message is the exception's, so an older failure
     ///     left behind on a pooled thread cannot speak for this one.
+    ///     Only HTTP's class is told apart: a remote's own <c>ERR</c> line and an SSH failure share their
+    ///     classes with a timeout, so after a slow discovery those still read as a stall.
     /// </summary>
     public static bool RemoteAnswered(Exception failure)
     {
