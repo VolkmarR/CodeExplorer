@@ -121,8 +121,11 @@ public static class SymbolText
     ///     would be the two matchers disagreeing that this design exists to prevent.
     ///     It tests a line and does not count on it; <see cref="OccurrencePattern" /> is the one that counts.
     /// </summary>
-    public static string WholeWordPattern(string symbol) =>
-        WholeWord(Re2Literal(symbol), StartsWithWordChar(symbol), EndsWithWordChar(symbol));
+    public static string WholeWordPattern(string symbol)
+    {
+        (bool start, bool end) = BoundedEnds(symbol);
+        return WholeWord(Re2Literal(symbol), start, end);
+    }
 
     /// <summary>
     ///     The identifier as <see cref="WholeWordMatches" /> without its groups and without the rest of
@@ -135,8 +138,11 @@ public static class SymbolText
     ///     what this counts in 69 — the 68 ms of the form it replaced, which lost an occurrence that
     ///     starts inside a failed one (#294).
     /// </summary>
-    public static string OccurrencePattern(string symbol) =>
-        $"{Skipped(StartsWithWordChar(symbol))}{Re2Literal(symbol)}{WordEnd(EndsWithWordChar(symbol))}";
+    public static string OccurrencePattern(string symbol)
+    {
+        (bool start, bool end) = BoundedEnds(symbol);
+        return $"{Skipped(start)}{Re2Literal(symbol)}{WordEnd(end)}";
+    }
 
     /// <summary>
     ///     What <see cref="OccurrencePattern" /> is counted over the text followed by: a line break, which is
@@ -144,9 +150,12 @@ public static class SymbolText
     /// </summary>
     public static string OccurrenceSentinel(string symbol) => "\n" + symbol;
 
-    private static bool StartsWithWordChar(string symbol) => symbol.Length > 0 && IsWordChar(symbol[0]);
-
-    private static bool EndsWithWordChar(string symbol) => symbol.Length > 0 && IsWordChar(symbol[^1]);
+    /// <summary>Which ends of the symbol take a word boundary: the ones with a word character at them.</summary>
+    private static (bool Start, bool End) BoundedEnds(string symbol)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(symbol);
+        return (IsWordChar(symbol[0]), IsWordChar(symbol[^1]));
+    }
 
     /// <summary>
     ///     Where the identifier next sits on the line, on word boundaries, or -1. Done by hand rather

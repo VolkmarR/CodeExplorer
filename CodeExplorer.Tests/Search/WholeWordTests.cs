@@ -76,6 +76,9 @@ public sealed class WholeWordTests
             // A multiline grep counts matches rather than lines.
             Assert.True(occurrences == spanned.TotalLines, $"multiline grep matches of {symbol}: {spanned.TotalLines}");
             Assert.True(occurrences == listed.TotalMatches, $"list_matches matches of {symbol}: {listed.TotalMatches}");
+            // Equal counts could still be different lines, so the lines themselves are compared too.
+            Assert.Equal(grepped.Files.SelectMany(f => f.Lines).Where(l => l.IsMatch).Select(l => l.LineNumber).Order(),
+                found.References.Select(r => r.LineNumber).Distinct().Order());
         }
     }
 
