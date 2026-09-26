@@ -290,7 +290,7 @@ public sealed partial class ProjectIndexes : IDisposable
         // an off-hours wake should cost the restore of the one project being connected to rather than
         // everyone's (#9). Projects attach on first connection for the same reason, which is what the
         // rest of this method has always done.
-        await RestoreIfAbsentAsync(slug, cancellationToken);
+        await RestoreForReadAsync(slug, cancellationToken);
 
         var lease = await AttachAndLeaseAsync(slug, cancellationToken);
         if (lease is null) recording.Absent();
@@ -373,6 +373,29 @@ public sealed partial class ProjectIndexes : IDisposable
     /// </summary>
     public Task RestoreIfAbsentAsync(string slug, CancellationToken cancellationToken) =>
         HasIndex(slug) ? Task.CompletedTask : RestoreAsync(slug, FtsAvailable, static _ => { }, cancellationToken);
+
+    /// <summary>
+    ///     <see cref="RestoreIfAbsentAsync" /> for a read, which an agent's tool call is. A restore that
+    ///     failed for a reason nobody wrote a sentence for — the store unreachable, a Parquet file DuckDB
+    ///     could not read, a move the disk refused — is turned into one here (#291). Any other exception
+    ///     reaches the agent as the SDK's generic error with no remedy, and its own message names files
+    ///     on the server, so the original goes to the log. A refresh's restore is left alone: its status
+    ///     reports such a failure as the phase it failed in (#262, #290).
+    /// </summary>
+    private async Task RestoreForReadAsync(string slug, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RestoreIfAbsentAsync(slug, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not McpException && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Project {Project} could not be restored from its durable copy", slug);
+            throw new McpException(
+                $"The index of project '{slug}' could not be restored from its durable copy, so nothing was "
+                + "restored. Try again shortly; if it keeps failing, ask the operator to refresh the project.", ex);
+        }
+    }
 
     /// <summary>
     ///     The restore a refresh begins with on a disk without the project's file (#229), reported
@@ -756,7 +779,8 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     <see cref="WrittenOutOrRefusedAsync" /> and <see cref="MoveIntoPlace" />. An <c>McpException</c>
     ///     and not an <see cref="ExplainedFailureException" />, because a restore runs under an agent's
     ///     tool call as often as under a refresh. An agent shown anything else gets the SDK's generic
-    ///     error with no remedy (#291). The refresh status reports either in its own words, so it names
+    ///     error with no remedy (#291). A swap throws the same type because it refuses through the same
+    ///     two methods. The refresh status reports either type in its own words, so the sentence names
     ///     no server path.
     /// </summary>
     /// <param name="slug">The project.</param>

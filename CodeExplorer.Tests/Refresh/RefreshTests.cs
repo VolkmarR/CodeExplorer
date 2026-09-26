@@ -237,6 +237,7 @@ public sealed class RefreshTests : IDisposable
         }
         finally
         {
+            // Instance-wide, so it goes before anything else here checkpoints.
             await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
         }
 
