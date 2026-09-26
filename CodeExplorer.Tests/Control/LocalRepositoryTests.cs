@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -37,13 +38,8 @@ public sealed class LocalRepositoryTests : IDisposable
     [InlineData("FILE:///srv/repo")]
     [InlineData(@"\\?\C:\repo")]
     [InlineData("C:repo")]
+    // One per URL form; every spelling of a loopback address is RepositoryUrlTests' to cover.
     [InlineData(LoopbackHttp)]
-    [InlineData("http://localhost./repo.git")]
-    [InlineData("https://127.0.0.1/repo.git")]
-    [InlineData("http://2130706433/repo.git")]
-    [InlineData("http://0x7f000001/repo.git")]
-    [InlineData("http://[::1]/repo.git")]
-    [InlineData("http://[::ffff:127.0.0.1]/repo.git")]
     [InlineData(LoopbackSsh)]
     [InlineData(LoopbackScp)]
     public async Task A_local_repository_is_refused_and_the_answer_names_the_setting(string url)
@@ -65,8 +61,6 @@ public sealed class LocalRepositoryTests : IDisposable
     [InlineData("ssh://git@ssh.dev.azure.com/v3/org/project/repo")]
     [InlineData("git://example.invalid/repo.git")]
     [InlineData("git@github.com:org/repo.git")]
-    [InlineData("https://localhost.example.com/repo.git")]
-    [InlineData("git@127.example.com:org/repo.git")]
     public async Task A_remote_repository_is_still_accepted(string url)
     {
         await _host.CreateProjectAsync("alpha");
@@ -125,8 +119,7 @@ public sealed class LocalRepositoryTests : IDisposable
         host.RestartWithoutLocalRepositories();
         string error = await host.FailedRefreshErrorAsync("alpha");
 
-        Assert.Contains("'main' was not read. It is a local path, a file URL or a remote on a loopback host", error);
-        Assert.Contains(Setting, error);
+        Assert.Contains($"'main' was not read. {RepositoryUrl.LocalRefusal}", error);
     }
 
     /// <summary>

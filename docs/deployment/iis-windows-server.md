@@ -210,8 +210,8 @@ application pool's memory for it.
 
 `Control:AllowLocalRepositories` — `false` by default — decides whether a repository may be a local
 path, a UNC share, a `file://` URL or a remote on the server itself: an http(s), ssh or scp-style
-URL whose host is loopback, `localhost` or an address in 127.0.0.0/8 or `::1`, however it is
-spelled. Leave it off unless every caller who can add a repository may also read everything the
+URL whose host is loopback, `localhost` or an address in 127.0.0.0/8 or `::1`, however the
+address is written; a DNS name that resolves to the server itself is not recognised. Leave it off unless every caller who can add a repository may also read everything the
 application pool's identity can: with it on, any of them can have the server clone a repository from its own disk, another project's local copy under the data directory
 included, and read it through MCP. Switching it off again stops a refresh reading the local
 repositories already stored; each is reported as skipped.

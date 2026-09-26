@@ -21,8 +21,8 @@ choosing, and neither surface accepts both.
 A remote on the server's own disk, a path or a `file://` URL, is accepted only where
 `Control:AllowLocalRepositories` is on, which it is not by default, and so is a remote on the
 server itself over the network: one whose host is loopback, `localhost` or `127.0.0.1` or `::1` in
-any spelling. A repository is not a local copy, which is the clone CodeExplorer makes of every
-repository.
+any way the address can be written, though not a DNS name that resolves to the server. A
+repository is not a local copy, which is the clone CodeExplorer makes of every repository.
 _Avoid_: Source, codebase
 
 **Local copy**:

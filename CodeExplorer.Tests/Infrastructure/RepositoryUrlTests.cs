@@ -82,11 +82,6 @@ public sealed class RepositoryUrlTests
         Assert.Equal(RepositoryUrlKind.Invalid, RepositoryUrl.Classify(url));
 
     [Theory]
-    [InlineData("https://ｅｘａｍｐｌｅ.com/repo.git")]
-    public void A_fullwidth_host_that_is_not_loopback_is_remote(string url) =>
-        Assert.Equal(RepositoryUrlKind.Remote, RepositoryUrl.Classify(url));
-
-    [Theory]
     [InlineData("https://localhost.example.com/repo.git")]
     [InlineData("https://mylocalhost/repo.git")]
     [InlineData("https://127.example.com/repo.git")]
@@ -96,6 +91,7 @@ public sealed class RepositoryUrlTests
     [InlineData("git@127.example.com:org/repo.git")]
     [InlineData("http://128.0.0.1/repo.git")]
     [InlineData("http://[::2]/repo.git")]
+    [InlineData("https://ｅｘａｍｐｌｅ.com/repo.git")]
     public void A_host_that_only_looks_like_loopback_is_remote(string url) =>
         Assert.Equal(RepositoryUrlKind.Remote, RepositoryUrl.Classify(url));
 
