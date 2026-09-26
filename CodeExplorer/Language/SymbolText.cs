@@ -63,7 +63,7 @@ public static class SymbolText
     ///     that counts or extracts matches has to allow for it, because two matches one character apart
     ///     share the character between them.
     /// </summary>
-    public const string Re2WordStart = $"(?:^|{Re2NonWordChar})";
+    private const string Re2WordStart =$"(?:^|{Re2NonWordChar})";
 
     /// <summary>A word boundary after a match; consumes the character after it, as <see cref="Re2WordStart" /> does.</summary>
     public const string Re2WordEnd = $"(?:$|{Re2NonWordChar})";
@@ -77,10 +77,11 @@ public static class SymbolText
     ///     Every whole-word search is built here, a caller's pattern for <c>grep</c> and
     ///     <c>list_matches</c> and a symbol for <c>find_references</c> (<see cref="WholeWordPattern" />),
     ///     because two workarounds for one missing lookbehind disagreed about the same line (#294).
-    ///     <paramref name="start" /> and <paramref name="end" /> leave a boundary off, for a symbol
-    ///     whose end is punctuation.
     /// </summary>
-    public static string WholeWord(string pattern, bool start = true, bool end = true) =>
+    public static string WholeWord(string pattern) => WholeWord(pattern, true, true);
+
+    /// <summary><see cref="WholeWord(string)" />, with a boundary left off an end of a symbol that is punctuation.</summary>
+    private static string WholeWord(string pattern, bool start, bool end) =>
         $"{(start ? Re2WordStart : "")}(?:{pattern}){WordEnd(end)}";
 
     /// <summary>
@@ -88,7 +89,7 @@ public static class SymbolText
     ///     start of the text: each is the text skipped since the last one as group 1, then the pattern
     ///     as group 2 (its group <c>n</c> as group <c>n + 2</c>) and the boundary after it — or, once no
     ///     whole word is left, the rest of the text with both groups empty.
-    ///     <see cref="WholeWord" /> alone cannot count or extract. Its end boundary consumes the character
+    ///     <see cref="WholeWord(string)" /> alone cannot count or extract. Its end boundary consumes the character
     ///     after a match, so in <c>bar,bar</c> the second had lost the comma its start boundary needed,
     ///     and a line break shared the same way lost the match on the next line. Here a start boundary is
     ///     never tested: the pattern is only tried where the skip can stop (<see cref="Skipped" />), and
@@ -99,8 +100,7 @@ public static class SymbolText
     ///     It replaced a form that matched every word of the text separately, with one extract per word:
     ///     the same answers, and counting <c>Init</c>'s 3,299 lines in Radix took 868 ms against 292 (#294).
     /// </summary>
-    public static string WholeWordMatches(string pattern, bool start = true, bool end = true) =>
-        $"({Skipped(start)})({pattern}){WordEnd(end)}|(?s:.)+";
+    public static string WholeWordMatches(string pattern) => $"({Skipped(true)})({pattern}){Re2WordEnd}|(?s:.)+";
 
     /// <summary>
     ///     Everything a whole-word match may skip before it: whole words, each with the characters that
