@@ -96,7 +96,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     line-start forms: a <c>//</c> or a <c>/*</c> there is found by the scan like any other,
     ///     while a bare <c>*</c> is a comment at the start of a line and a multiplication anywhere else.
     /// </summary>
-    private readonly string[] _lineStartComments;
+    private readonly LineStartForm[] _lineStartComments;
 
     /// <summary>
     ///     What moves the file from one side of the declaration/implementation split to the other,
@@ -154,7 +154,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         _profile = profile;
         _lineComments = [.. profile.LineComments];
         _directivePrefixes = [.. profile.DirectivePrefixes];
-        _lineStartComments = [.. profile.LineStartComments];
+        _lineStartComments = [.. profile.LineStartComments.Select(LineStartForm.Of)];
         // Longest opener first, so `"""` is tried before `"` and `(*` before a `(` some profile may
         // one day add. Ordering here rather than in the table keeps a profile from having a silent
         // correctness rule in the order its forms are written.
@@ -868,9 +868,9 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     }
 
     /// <summary>Where the line's text begins, without allocating the trimmed copy to find out.</summary>
-    private static int FirstNonSpace(string line)
+    private static int FirstNonSpace(string line, int from = 0)
     {
-        int i = 0;
+        int i = from;
         while (i < line.Length && char.IsWhiteSpace(line[i])) i++;
         return i;
     }
@@ -988,7 +988,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     ///     left behind and not a miss, and the word after it must not run on — <c>implementations</c>
     ///     is not <c>implementation</c>.
     /// </summary>
-    private bool PhraseAt(string line, int index, ReadOnlySpan<char> phrase)
+    private bool PhraseAt(string line, int index, string phrase)
     {
         int at = index;
         for (int i = 0; i < phrase.Length; i++)
@@ -1556,29 +1556,31 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         if (IsDirectiveAt(line, start)) return false;
         for (int i = 0; i < _lineStartComments.Length; i++)
         {
-            string opener = _lineStartComments[i];
-            if (SymbolText.IsWordChar(opener[^1]) ? DirectiveWordAt(line, start, opener) : At(line, start, opener))
-                return true;
+            var (sigil, word) = _lineStartComments[i];
+            if (!At(line, start, sigil)) continue;
+            if (word is null || PhraseAt(line, FirstNonSpace(line, start + sigil.Length), word)) return true;
         }
 
         return false;
     }
 
     /// <summary>
-    ///     Whether this word form stands here, where the punctuation in front of its word may be
-    ///     followed by whitespace: C# and X# both allow <c># region</c> for <c>#region</c>, and read as
-    ///     anything else its label was code, so an apostrophe in it opened a char literal (#295).
+    ///     A line-start comment form, split once where the profile is read: the punctuation in front,
+    ///     and the word after it where the form ends in one. Whitespace may stand between the two, as
+    ///     C# and X# both allow <c># region</c> for <c>#region</c>; read as anything else its label was
+    ///     code, so an apostrophe in it opened a char literal (#295).
     /// </summary>
-    private bool DirectiveWordAt(string line, int index, string opener)
+    /// <param name="Sigil">What the form begins with, matched as written.</param>
+    /// <param name="Word">The word after it, matched whole, or null where the form is punctuation only.</param>
+    private readonly record struct LineStartForm(string Sigil, string? Word)
     {
-        int sigil = 0;
-        while (sigil < opener.Length && !SymbolText.IsWordChar(opener[sigil])) sigil++;
-        if (sigil == 0) return PhraseAt(line, index, opener);
-        // Spans, because this is asked of every line a scan begins outside everything.
-        if (!line.AsSpan(index).StartsWith(opener.AsSpan(0, sigil), StringComparison.Ordinal)) return false;
-        int word = index + sigil;
-        while (word < line.Length && char.IsWhiteSpace(line[word])) word++;
-        return PhraseAt(line, word, opener.AsSpan(sigil));
+        public static LineStartForm Of(string opener)
+        {
+            if (!SymbolText.IsWordChar(opener[^1])) return new LineStartForm(opener, null);
+            int sigil = 0;
+            while (!SymbolText.IsWordChar(opener[sigil])) sigil++;
+            return new LineStartForm(opener[..sigil], opener[sigil..]);
+        }
     }
 
     /// <summary>One character against another, under the profile's own case rule.</summary>
