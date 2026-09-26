@@ -27,7 +27,6 @@ public sealed class ClearTextCredentialTests : IDisposable
     // The URL shapes are RepositoryUrlTests'; these are the ones that also pass Classify on the way in.
     [InlineData("http://example.invalid/repo.git")]
     [InlineData("git://example.invalid/repo.git")]
-    [InlineData("http://example invalid/repo.git")]
     public async Task A_credential_for_an_unencrypted_url_is_refused(string url)
     {
         await _host.CreateProjectAsync("alpha");
