@@ -62,7 +62,7 @@ public sealed class ImportGraph(IndexReaders readers)
     ///     How many edges one answer carries. A file with more imports than this is generated or is a
     ///     barrel that re-exports a package, and past the first few hundred the list has stopped being
     ///     the answer to "what does this depend on". The query reads one row past it, which is what
-    ///     tells a list that ends here from one that was cut short — see <see cref="Trim" />.
+    ///     tells a list that ends here from one that was cut short — see <see cref="Cap" />.
     /// </summary>
     public const int MaxEdges = 500;
 
@@ -89,28 +89,15 @@ public sealed class ImportGraph(IndexReaders readers)
                                                              ORDER BY i.line_number, i.import_id
                                                              LIMIT $limit
                                                              """,
-                [new DuckDBParameter("f", file.FileId), new("limit", MaxEdges + 1)]);
+                [new DuckDBParameter("f", file.FileId), new("limit", Cap.Rows(MaxEdges))]);
             await using var reader = await command.ReaderAsync(token);
             while (await reader.ReadAsync(token))
                 edges.Add(new ImportedFrom(reader.Text("name"), ImportColumns.Shape(reader.Text("shape")),
                     reader.Int32("line_number"), reader.TextOrNull("target_path"),
                     reader.TextOrNull("unresolved"), ImportColumns.Strength(reader.Text("evidence"))));
 
-            bool capped = Trim(edges);
+            bool capped = Cap.Trim(edges, MaxEdges);
             return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, file.Module,
                 capped, edges);
         }, cancellationToken);
-
-    /// <summary>
-    ///     Cuts the list back to <see cref="MaxEdges" /> and says whether there was anything to cut.
-    ///     The query asks for one row more than it reports, because a list that merely reaches the
-    ///     ceiling is indistinguishable from one the ceiling cut short: a file with exactly
-    ///     <see cref="MaxEdges" /> imports would otherwise be told there are more.
-    /// </summary>
-    private static bool Trim(List<ImportedFrom> edges)
-    {
-        if (edges.Count <= MaxEdges) return false;
-        edges.RemoveRange(MaxEdges, edges.Count - MaxEdges);
-        return true;
-    }
 }
