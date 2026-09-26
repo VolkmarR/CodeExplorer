@@ -76,3 +76,12 @@ to make it legible rather than to hide it or to trade an invariant for it.
   judged not worth paying, the argument starts from a number read off a refresh rather than from one
   inferred from a status message — and deferring the build past the swap starts by amending this ADR
   and the swap invariant it leans on, which is the part that would otherwise be discovered late.
+- **A refresh pays for the build once, even when it begins with a restore (#290).** On a disk
+  without the project's file, a refresh restores the durable copy before it fetches, and that restore
+  used to build the BM25 index the shadow was about to build again. It skips the build now. Between
+  the restore and the swap the project is served by substring scan, which `index_info` records. That
+  is a window of minutes on a replica that has just woken up, not a live index changed in place. A
+  refresh that fails before its swap replaces the restored index with a second restore that does build
+  the full-text index, so the gap never outlasts the refresh. The restore also reports a phase of its
+  own, so what it cost is on the timeline, and a failed restore is reported under its own name rather
+  than under `Starting`.
