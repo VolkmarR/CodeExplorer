@@ -26,20 +26,20 @@ public static class RequestOrigin
     ///     <c>AllowedHosts</c> is configured, and says whether it did. With a tenant a rebound page is
     ///     one more anonymous caller the fallback policy refuses, so the framework's default stays.
     ///     A <c>Configure</c> and not a <c>PostConfigure</c>: the framework's own post-configuration
-    ///     fills <c>AllowedHosts</c> in from configuration only when nothing has set it. A request with
-    ///     no Host at all is refused too: the framework serves one by default, and it names no loopback
-    ///     host any more than a rebound name does.
+    ///     fills <c>AllowedHosts</c> in from configuration only when nothing has set it. Without a
+    ///     tenant a request with no Host at all is refused too, under a configured list as well: the
+    ///     framework serves one by default, and it names no allowed host any more than a rebound name does.
     /// </summary>
     public static bool AddLoopbackHosts(this WebApplicationBuilder builder, AuthenticationSettings authentication)
     {
-        bool loopbackOnly = !authentication.Enabled
-                            && string.IsNullOrWhiteSpace(builder.Configuration[AllowedHostsSetting]);
-        if (loopbackOnly)
-            builder.Services.Configure<HostFilteringOptions>(options =>
-            {
-                options.AllowedHosts = [.. _loopbackHosts];
-                options.AllowEmptyHosts = false;
-            });
+        if (authentication.Enabled) return false;
+
+        bool loopbackOnly = string.IsNullOrWhiteSpace(builder.Configuration[AllowedHostsSetting]);
+        builder.Services.Configure<HostFilteringOptions>(options =>
+        {
+            options.AllowEmptyHosts = false;
+            if (loopbackOnly) options.AllowedHosts = [.. _loopbackHosts];
+        });
         return loopbackOnly;
     }
 
