@@ -182,7 +182,8 @@ public static class Languages
     ///     the worse of the two errors.
     ///     A raw literal is opened by three quotes or more and closed by as many
     ///     (<see cref="StringDelimiter.OpenerRepeats" />). The char literal is here because without it <c>'"'</c> opened a string that took the rest
-    ///     of its line (#240). It does not span: a stray apostrophe ends with its line.
+    ///     of its line (#240). It opens only in its own short shape
+    ///     (<see cref="StringDelimiter.HoldsOneCharacter" />), so a stray apostrophe opens nothing (#295).
     ///     Written longest opener first for a reader; the analyser orders them itself.
     /// </summary>
     private static readonly StringDelimiter[] _cSharpLiterals =
@@ -198,7 +199,7 @@ public static class Languages
         new StringDelimiter("$\"", "\"", StringEscape.Backslash)
             { Hole = _cSharpHole },
         _doubleQuoted,
-        _singleQuotedEscaped
+        new StringDelimiter("'", "'", StringEscape.Backslash) { HoldsOneCharacter = true }
     ];
 
     /// <summary>
