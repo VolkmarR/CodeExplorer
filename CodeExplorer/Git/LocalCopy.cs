@@ -223,11 +223,13 @@ public sealed class LocalCopy : IDisposable
         {
             if (was?.TargetType == TreeEntryTargetType.Tree || now?.TargetType == TreeEntryTargetType.Tree)
                 CompareTrees(was?.Target as Tree, now?.Target as Tree, path + "/", maxBytes, changed, oversized);
-            // A submodule is a commit of another repository, which this one does not hold.
+            // A submodule is a change the patch records, so its path is kept, but it is never sized: it
+            // is a commit of another repository, which this one does not hold.
+            if (was?.TargetType is not (null or TreeEntryTargetType.Tree)
+                || now?.TargetType is not (null or TreeEntryTargetType.Tree))
+                changed.Add(path);
             var oldBlob = was?.TargetType == TreeEntryTargetType.Blob ? was : null;
             var newBlob = now?.TargetType == TreeEntryTargetType.Blob ? now : null;
-            if (oldBlob is null && newBlob is null) return;
-            changed.Add(path);
             if (!IsLarger(oldBlob) && !IsLarger(newBlob)) return;
             var kind = oldBlob is null ? ChangeKind.Added
                 : newBlob is null ? ChangeKind.Deleted
@@ -290,8 +292,13 @@ public sealed class LocalCopy : IDisposable
         {
             using var patch = _repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, rest,
                 rest is null ? null : new ExplicitPathsOptions(), _noContext);
+            // A pathspec also matches as a directory prefix, so a file `a` that replaced a directory
+            // `a/` holding an oversized blob brings that blob back into the patch. It is recorded once,
+            // as the oversized change it already is.
+            var recorded = rest is null ? null : files.Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
             foreach (var change in patch)
-                files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
+                if (recorded?.Contains(change.Path) != true)
+                    files.Add(new ChangedPath(change.Path, change.OldPath, KindName(change.Status),
                     change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison,
                     change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch)));
         }

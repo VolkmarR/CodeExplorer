@@ -18,10 +18,6 @@ namespace CodeExplorer.Git;
 /// </summary>
 internal sealed class BlobReader : IDisposable
 {
-    // The native library LibGit2Sharp ships and has already loaded, and has initialised; the name
-    // changes with the LibGit2Sharp package, as TransferStallLimit says.
-    private const string _library = "git2-5853918";
-
     private readonly RepositoryHandle _repository;
 
     public BlobReader(string gitDirectory)
@@ -70,25 +66,25 @@ internal sealed class BlobReader : IDisposable
         }
     }
 
-    [DllImport(_library, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(TransferStallLimit.Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern int git_repository_open(out RepositoryHandle repository, byte[] path);
 
-    [DllImport(_library, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(TransferStallLimit.Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern void git_repository_free(nint repository);
 
     // The id is a git_oid, twenty bytes of SHA-1 in the bundled build, passed as a pointer to them.
-    [DllImport(_library, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(TransferStallLimit.Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern int git_blob_lookup(out nint blob, RepositoryHandle repository, byte[] id);
 
-    [DllImport(_library, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(TransferStallLimit.Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern void git_blob_free(nint blob);
 
-    [DllImport(_library, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(TransferStallLimit.Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern int git_blob_is_binary(nint blob);
 
-    [DllImport(_library, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(TransferStallLimit.Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern nint git_blob_rawcontent(nint blob);
 
-    [DllImport(_library, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(TransferStallLimit.Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern ulong git_blob_rawsize(nint blob);
 }

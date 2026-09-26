@@ -27,8 +27,9 @@ internal static class TransferStallLimit
 
     // The native library LibGit2Sharp ships and has already loaded; the name carries the libgit2 commit
     // it was built from, so it changes with the LibGit2Sharp package. A mismatch throws
-    // DllNotFoundException the first time GitClones is built, which every refresh test does.
-    private const string _library = "git2-5853918";
+    // DllNotFoundException the first time GitClones is built, which every refresh test does. BlobReader
+    // binds to the same library, so this is the one place the name is kept.
+    internal const string Library = "git2-5853918";
 
     // git_libgit2_opt_t in libgit2 1.7 and later, which the bundled 1.9 is.
     private const int _setServerConnectTimeout = 39;
@@ -66,10 +67,10 @@ internal static class TransferStallLimit
                 + "is older than 1.7 or the option numbers above no longer match it.");
     }
 
-    [DllImport(_library, EntryPoint = "git_libgit2_opts", CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Library, EntryPoint = "git_libgit2_opts", CallingConvention = CallingConvention.Cdecl)]
     private static extern int SetOption(int option, int value);
 
-    [DllImport(_library, EntryPoint = "git_libgit2_opts", CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Library, EntryPoint = "git_libgit2_opts", CallingConvention = CallingConvention.Cdecl)]
     private static extern int SetOptionOnAppleSilicon(int option, nint unused1, nint unused2, nint unused3,
         nint unused4, nint unused5, nint unused6, nint unused7, int value);
 }
