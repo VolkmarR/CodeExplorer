@@ -78,19 +78,12 @@ public sealed class DurabilityTests : IDisposable
         await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
         host.DeleteIndexFile("alpha");
 
-        await using var instance = await host.OpenIndexInstanceAsync();
-        await instance.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
         McpException thrown;
-        try
+        await using (await host.FailingCheckpointsAsync())
         {
             await using var client = await host.ConnectAsync("alpha");
             thrown = await Assert.ThrowsAsync<McpException>(() =>
                 TestHost.CallAsync(client, "project_overview", []));
-        }
-        finally
-        {
-            // Instance-wide, so it goes before anything else here checkpoints.
-            await instance.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
         }
 
         Assert.Contains("'alpha'", thrown.Message, StringComparison.Ordinal);

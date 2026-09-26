@@ -9,7 +9,6 @@ using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -183,9 +182,10 @@ public sealed class RefreshTests : IDisposable
     }
 
     /// <summary>
-    ///     The same refusal, seen from the refresh rather than its status: an <see cref="McpException" />
-    ///     naming no server path, the shape every refusal of a swap or a restore takes (#291). Held in the
-    ///     swap's report, which comes after the shadow's own checkpoint and before the file work.
+    ///     The same refusal, seen from the refresh rather than its status: an
+    ///     <see cref="ExplainedFailureException" /> naming no server path, which is what a read turns into
+    ///     the agent's <c>McpException</c> (#291). Held in the swap's report, which comes after the
+    ///     shadow's own checkpoint and before the file work.
     /// </summary>
     [Fact]
     public async Task A_swap_refused_for_a_write_ahead_log_throws_a_refusal_naming_no_server_path()
@@ -194,21 +194,21 @@ public sealed class RefreshTests : IDisposable
         _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
 
         using var straggler = await _host.OpenIndexInstanceAsync();
-        McpException error;
+        IAsyncDisposable? failing = null;
+        ExplainedFailureException error;
         try
         {
-            error = await Assert.ThrowsAsync<McpException>(() => RefreshHeldAtAsync(RefreshProgress.SwapPhase,
-                async () =>
+            error = await Assert.ThrowsAsync<ExplainedFailureException>(() => RefreshHeldAtAsync(
+                RefreshProgress.SwapPhase, async () =>
                 {
                     await straggler.ExecuteAsync("CREATE TABLE \"alpha$shadow\".main.straggler AS SELECT 1 AS one",
                         Ct);
-                    await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
+                    failing = await _host.FailingCheckpointsAsync();
                 }));
         }
         finally
         {
-            // Instance-wide, so it goes before anything else here checkpoints the live index.
-            await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
+            if (failing is not null) await failing.DisposeAsync();
         }
 
         Assert.Contains("'alpha'", error.Message, StringComparison.Ordinal);
@@ -227,26 +227,13 @@ public sealed class RefreshTests : IDisposable
         await _host.IndexedProjectAsync("alpha", Fixture());
         _host.DeleteIndexFile("alpha");
 
-        using var straggler = await _host.OpenIndexInstanceAsync();
-        await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'before_truncate'", Ct);
-        try
-        {
-            using (var response = await _host.RequestRefreshAsync("alpha"))
-                Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-            await _host.WaitForRefreshesAsync();
-        }
-        finally
-        {
-            // Instance-wide, so it goes before anything else here checkpoints.
-            await straggler.ExecuteAsync("SET GLOBAL debug_checkpoint_abort = 'none'", Ct);
-        }
+        string error;
+        await using (await _host.FailingCheckpointsAsync())
+            error = await FailedRefreshErrorAsync();
 
-        var status = await _host.RefreshStatusAsync("alpha");
-        Assert.Equal(RefreshState.Failed, status.State);
-        Assert.NotNull(status.Error);
-        Assert.Contains("'alpha'", status.Error, StringComparison.Ordinal);
-        Assert.Contains("not put in place", status.Error, StringComparison.Ordinal);
-        Assert.DoesNotContain(_host.DataDirectory, status.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("'alpha'", error, StringComparison.Ordinal);
+        Assert.Contains("not put in place", error, StringComparison.Ordinal);
+        Assert.DoesNotContain(_host.DataDirectory, error, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
