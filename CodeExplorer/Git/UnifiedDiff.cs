@@ -102,6 +102,13 @@ internal static class UnifiedDiff
             count = int.Parse(header[digits..end], System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        return count == 0 ? start : start - 1;
+        return OldPosition(start, count);
     }
+
+    /// <summary>
+    ///     The 0-based old position of a hunk's edit from the header's 1-based start <c>a</c> and old
+    ///     count <c>b</c>, by the rule <see cref="HunkStart" /> gives. Shared with
+    ///     <see cref="NativeDiff" />, which reads the same two numbers off libgit2's hunk struct.
+    /// </summary>
+    public static int OldPosition(int start, int count) => count == 0 ? start : start - 1;
 }

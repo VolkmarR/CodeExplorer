@@ -5,8 +5,10 @@ namespace CodeExplorer.Git;
 
 /// <summary>
 ///     A git object id as a value, so it can key a dictionary without a byte array per entry. Twenty
-///     bytes of SHA-1, which is what the bundled libgit2 is built for (see <see cref="BlobReader" />).
+///     bytes of SHA-1, which is what the bundled libgit2 is built for (see <see cref="BlobReader" />),
+///     laid out as libgit2's <c>git_oid</c> so a native struct can hold one.
 /// </summary>
+[StructLayout(LayoutKind.Sequential)]
 internal readonly record struct GitId(long Head, long Middle, int Tail)
 {
     public byte[] ToRaw()
@@ -27,22 +29,23 @@ internal readonly record struct GitId(long Head, long Middle, int Tail)
 internal readonly record struct TreeSide(GitId Id, int Mode, long Size)
 {
     public const int SubmoduleMode = 0xE000; // 0160000
-    public const int LinkMode = 0xA000; // 0120000
 
     public bool IsSubmodule => Mode == SubmoduleMode;
-    public bool IsLink => Mode == LinkMode;
 }
 
-/// <summary>A path that is not a directory and differs between two trees; a side is null where the path is absent.</summary>
-internal readonly record struct TreeChange(string Path, TreeSide? Old, TreeSide? New);
+/// <summary>
+///     A path that is not a directory and differs between two trees, as libgit2 classed it before
+///     rename detection; a side is null where the path is absent.
+/// </summary>
+internal readonly record struct TreeChange(string Path, ChangeKind Kind, TreeSide? Old, TreeSide? New);
 
 /// <summary>What a commit's diff came to: every changed path, and the recorded changes unless one is over the ceiling.</summary>
-/// <param name="Changes">Every non-directory path the commit changed, before rename detection, with its blobs sized.</param>
-/// <param name="Files">
+/// <param name="Changed">Every non-directory path the commit changed, before rename detection, with its blobs sized.</param>
+/// <param name="Recorded">
 ///     The changes as the history records them, renames detected and edits read; null when a blob
-///     in <paramref name="Changes" /> is over the ceiling, which the caller diffs around instead.
+///     in <paramref name="Changed" /> is over the ceiling, which the caller diffs around instead.
 /// </param>
-internal sealed record CommitChanges(List<TreeChange> Changes, List<ChangedPath>? Files);
+internal sealed record CommitChanges(List<TreeChange> Changed, List<ChangedPath>? Recorded);
 
 /// <summary>
 ///     A commit's diff through libgit2 directly, because LibGit2Sharp's cost a first history import a
@@ -66,22 +69,22 @@ internal sealed class NativeDiff : IDisposable
 {
     private const uint _includeTypeChange = 0x40; // GIT_DIFF_INCLUDE_TYPECHANGE, which LibGit2Sharp always sets
     private const uint _binary = 0x1; // GIT_DIFF_FLAG_BINARY
-    private const int _added = 1, _deleted = 2; // git_delta_t
 
     private readonly NativeRepository _repository;
-    private readonly nint _odb;
     private readonly Dictionary<GitId, long> _sizes = [];
+    private nint _odb;
     private DiffOptions _options;
 
     public NativeDiff(NativeRepository repository)
     {
         _repository = repository;
-        NativeRepository.Check(git_repository_odb(out _odb, repository), "open the object database");
         NativeRepository.Check(git_diff_options_init(ref _options, 1), "initialise diff options");
         _options.Flags |= _includeTypeChange;
         // No context lines, for the reason LocalCopy gives; it is also what makes a hunk one edit.
         _options.ContextLines = 0;
         _options.InterhunkLines = 0;
+        // Last, so nothing after it can throw and leave it open.
+        NativeRepository.Check(git_repository_odb(out _odb, repository), "open the object database");
     }
 
     /// <summary>
@@ -90,7 +93,7 @@ internal sealed class NativeDiff : IDisposable
     ///     on either side of any change is over <paramref name="maxBlobBytes" />: rename detection reads
     ///     the blobs it compares, so it may not run over a diff holding one.
     /// </summary>
-    public CommitChanges Describe(ObjectId? before, ObjectId after, long maxBlobBytes)
+    public CommitChanges Diff(ObjectId? before, ObjectId after, long maxBlobBytes)
     {
         nint diff = TreeToTree(before, after);
         try
@@ -101,9 +104,10 @@ internal sealed class NativeDiff : IDisposable
             for (int index = 0; index < count; index++)
             {
                 var delta = Marshal.PtrToStructure<Delta>(git_diff_get_delta(diff, (nuint)index));
-                var change = new TreeChange(Marshal.PtrToStringUTF8(delta.New.Path)!,
-                    delta.Status == _added ? null : Side(delta.Old),
-                    delta.Status == _deleted ? null : Side(delta.New));
+                var kind = (ChangeKind)delta.Status;
+                var change = new TreeChange(Marshal.PtrToStringUTF8(delta.New.Path)!, kind,
+                    kind == ChangeKind.Added ? null : Side(delta.Old),
+                    kind == ChangeKind.Deleted ? null : Side(delta.New));
                 oversized |= change.Old?.Size > maxBlobBytes || change.New?.Size > maxBlobBytes;
                 changes.Add(change);
             }
@@ -116,7 +120,12 @@ internal sealed class NativeDiff : IDisposable
         }
     }
 
-    public void Dispose() => git_odb_free(_odb);
+    public void Dispose()
+    {
+        if (_odb == 0) return;
+        git_odb_free(_odb);
+        _odb = 0;
+    }
 
     private nint TreeToTree(ObjectId? before, ObjectId after)
     {
@@ -179,11 +188,7 @@ internal sealed class NativeDiff : IDisposable
         return files;
     }
 
-    /// <summary>
-    ///     One edit per hunk, read off its header the way <see cref="UnifiedDiff.Edits" /> reads the
-    ///     rendered one: the old start is 1-based and names the line before an insertion that removes
-    ///     nothing, so it is the 0-based position of the edit in that case and one past it otherwise.
-    /// </summary>
+    /// <summary>One edit per hunk, placed off its header by the rule <see cref="UnifiedDiff.OldPosition" /> holds.</summary>
     private static List<LineEdit> Edits(nint patch)
     {
         int count = checked((int)git_patch_num_hunks(patch));
@@ -193,15 +198,16 @@ internal sealed class NativeDiff : IDisposable
             NativeRepository.Check(git_patch_get_hunk(out nint hunk, out _, patch, (nuint)index), "read a hunk");
             int oldStart = Marshal.ReadInt32(hunk), oldLines = Marshal.ReadInt32(hunk, 4);
             int newLines = Marshal.ReadInt32(hunk, 12);
-            edits.Add(new LineEdit(oldLines == 0 ? oldStart : oldStart - 1, oldLines, newLines));
+            edits.Add(new LineEdit(UnifiedDiff.OldPosition(oldStart, oldLines), oldLines, newLines));
         }
 
         return edits;
     }
 
+    /// <summary>A side of a delta, its blob sized from the header the first time its id is seen.</summary>
     private TreeSide Side(DiffFile file)
     {
-        var id = new GitId(file.IdHead, file.IdMiddle, file.IdTail);
+        var id = file.Id;
         if (file.Mode == TreeSide.SubmoduleMode) return new TreeSide(id, file.Mode, 0);
         if (!_sizes.TryGetValue(id, out long size))
         {
@@ -238,13 +244,11 @@ internal sealed class NativeDiff : IDisposable
         public nint NewPrefix;
     }
 
-    // git_diff_file: the id's twenty bytes read as three fields, then the path, size, flags and mode.
+    // git_diff_file: the id's twenty bytes, then the path, size, flags and mode.
     [StructLayout(LayoutKind.Sequential)]
     private struct DiffFile
     {
-        public long IdHead;
-        public long IdMiddle;
-        public int IdTail;
+        public GitId Id;
         public nint Path;
         public long Size;
         public uint Flags;
