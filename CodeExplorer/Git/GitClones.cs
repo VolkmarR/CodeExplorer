@@ -41,15 +41,16 @@ public sealed class GitClones(
     // entry per repository for the life of the process, which is bounded by the control database.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
 
-    // Every transfer still running, as the continuation that releases its gate; see Settled.
-    private readonly ConcurrentDictionary<Task, byte> _transfers = new();
-
     /// <summary>
     ///     Completes once every transfer running now has returned from libgit2 and released its gate,
     ///     including one a cancelled refresh stopped waiting for, which runs on to the stall limit at the
-    ///     latest (#289). Never faults.
+    ///     latest (#289). Each gate is taken and handed straight back.
     /// </summary>
-    public Task Settled => Task.WhenAll(_transfers.Keys);
+    public Task Settled => Task.WhenAll(_cloneGates.Values.Select(async gate =>
+    {
+        await gate.WaitAsync();
+        gate.Release();
+    }));
 
     // Absolute, because libgit2 resolves a relative data directory before it names a path in an error,
     // and the path has to be written the same way to be recognised and kept out of a message (#232).
@@ -117,38 +118,15 @@ public sealed class GitClones(
     {
         var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
-        Task<string?> transfer;
-        try
-        {
-            // Both branches are synchronous libgit2 over the network; a worker thread keeps them off
-            // the request thread. A clone is already up to date, so it is never followed by a fetch.
-            transfer = !IsCopyOf(repository, path)
-                ? Task.Run(() => Clone(repository, path, cancellationToken), cancellationToken)
-                : Task.Run(() => Fetch(repository, path, cancellationToken), cancellationToken);
-        }
-        catch
-        {
-            gate.Release();
-            throw;
-        }
-
+        // Both branches are synchronous libgit2 over the network; a worker thread keeps them off the
+        // request thread. A clone is already up to date, so it is never followed by a fetch.
+        var transfer = Task.Run(() => IsCopyOf(repository, path)
+            ? Fetch(repository, path, cancellationToken)
+            : Clone(repository, path, cancellationToken), cancellationToken);
         // The gate is the transfer's and not this call's: it is released when libgit2 returns, however
         // long after the refresh has stopped waiting, so no clone starts over a folder one still writes.
-        // Not fire-and-forget: the release is kept in _transfers until it has run, and Settled awaits it.
-        var settled = transfer.ContinueWith(t =>
-        {
-            gate.Release();
-            // After a cancellation nothing else awaits the transfer, so its failure is logged here; one
-            // the refresh waited for is reported by the refresh, and a cancellation is no failure.
-            if (t.Exception is { } failure && cancellationToken.IsCancellationRequested
-                                            && logger.IsEnabled(LogLevel.Warning))
-                logger.LogWarning(failure.GetBaseException(), "The transfer of repository {Repository} of project "
-                                                              + "{Project}, abandoned by a cancelled refresh, failed",
-                    repository.Slug, repository.ProjectSlug);
-        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        _transfers[settled] = 0;
-        _ = settled.ContinueWith(t => _transfers.TryRemove(t, out _), CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        // Not fire-and-forget: Settled awaits every gate, and so this release.
+        _ = ReleaseAfterAsync(transfer, gate, repository, cancellationToken);
 
         // Waited on apart from the transfer, because a cancellation reaches libgit2 only through a
         // progress callback, and a remote that has gone quiet fires none: the transfer would run on to
@@ -181,6 +159,32 @@ public sealed class GitClones(
         {
             clone.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>Releases the transfer's gate once libgit2 has returned, whether or not anyone still waits.</summary>
+    private async Task ReleaseAfterAsync(Task transfer, SemaphoreSlim gate, ProjectRepository repository,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await transfer;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && cancellationToken.IsCancellationRequested)
+        {
+            // Safe to swallow once logged: after a cancellation nothing else awaits the transfer, and there
+            // is no refresh left to report it to. A failure the refresh did wait for is thrown there.
+            if (logger.IsEnabled(LogLevel.Warning))
+                logger.LogWarning(ex, "The transfer of repository {Repository} of project {Project}, abandoned by "
+                                      + "a cancelled refresh, failed", repository.Slug, repository.ProjectSlug);
+        }
+        catch
+        {
+            // Safe to swallow: the refresh awaits the same task and reports its failure or its cancellation.
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 

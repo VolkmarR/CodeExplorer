@@ -207,7 +207,7 @@ public sealed class StalledRemoteTests : IDisposable
                 request.Append(Encoding.ASCII.GetString(buffer, 0, read));
             }
 
-            if (upfront.Length > 0) socket.Send(Encoding.ASCII.GetBytes(upfront));
+            socket.Send(Encoding.ASCII.GetBytes(upfront));
             foreach (var piece in Encoding.ASCII.GetBytes(dripped).Chunk(12))
             {
                 Thread.Sleep(600);
