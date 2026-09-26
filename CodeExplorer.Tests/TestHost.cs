@@ -176,13 +176,24 @@ public sealed class TestHost : IDisposable
     ///     in that window opens the same path, and DuckDB.NET, which keeps one native instance per path
     ///     while any connection to it is open, hands it the old instance: the old server's projects, attach
     ///     state and all, whatever the file on disk now holds. Waiting on the files rather than on the
-    ///     host, because nothing the factory exposes completes when the entry point has finished.
+    ///     host, because nothing the factory exposes completes when the entry point has finished. A closed
+    ///     file is enough: DuckDB.NET closes the instance and drops it from its cache under one lock, and
+    ///     an open that arrives in between waits on that lock and then opens a fresh instance.
     /// </summary>
     private void Stop()
     {
         Factory.Dispose();
-        foreach (string file in new[] { ControlDatabaseFile, IndexFile("instance") }) AwaitClosed(file);
+        foreach (string file in new[] { ControlDatabaseFile, IndexInstanceFile }) AwaitClosed(file);
     }
+
+    /// <summary>
+    ///     Far past the 80 ms measured, so only a server that never lets go reaches it, and that one fails
+    ///     in <see cref="AwaitClosed" />, named, instead of as a wrong answer from the next server.
+    /// </summary>
+    private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>A few polls inside the shortest linger measured, 20 ms, without spinning a core.</summary>
+    private const int ClosePollMilliseconds = 5;
 
     /// <summary>
     ///     Returns once nothing holds <paramref name="path" /> open, or at once when it does not exist:
@@ -190,9 +201,7 @@ public sealed class TestHost : IDisposable
     /// </summary>
     private static void AwaitClosed(string path)
     {
-        // Far past the 80 ms measured, so only a server that never lets go reaches it, and that one
-        // fails here, named, instead of as a wrong answer from the next server.
-        var deadline = DateTime.UtcNow.AddSeconds(10);
+        var deadline = DateTime.UtcNow + CloseTimeout;
         while (true)
         {
             try
@@ -204,10 +213,13 @@ public sealed class TestHost : IDisposable
                 // Safe to swallow: no file is a file nothing holds.
                 return;
             }
-            catch (IOException) when (DateTime.UtcNow < deadline)
+            catch (IOException ex)
             {
+                if (DateTime.UtcNow >= deadline)
+                    throw new InvalidOperationException(
+                        $"The stopped server still held {path} after {CloseTimeout.TotalSeconds} s.", ex);
                 // Safe to swallow: the old server is still disposing, and the loop is the wait for it.
-                Thread.Sleep(5);
+                Thread.Sleep(ClosePollMilliseconds);
             }
         }
     }
@@ -249,6 +261,9 @@ public sealed class TestHost : IDisposable
 
     private string ControlDatabaseFile => Path.Combine(DataDirectory, "control.duckdb");
 
+    /// <summary>The index instance's default catalog, a file in the index folder like any project's.</summary>
+    private string IndexInstanceFile => IndexFile("instance");
+
     /// <summary>
     ///     A connection to the running server's control database, for a test that looks behind
     ///     <see cref="Control.ControlDatabase" />. DuckDB.NET keeps one native instance per file in a process,
@@ -269,8 +284,7 @@ public sealed class TestHost : IDisposable
     /// </summary>
     public async Task<DuckDBConnection> OpenIndexInstanceAsync()
     {
-        // The instance's default catalog is a file in the index folder like any project's.
-        var connection = new DuckDBConnection($"Data Source={IndexFile("instance")}");
+        var connection = new DuckDBConnection($"Data Source={IndexInstanceFile}");
         await connection.OpenAsync(Ct);
         return connection;
     }
