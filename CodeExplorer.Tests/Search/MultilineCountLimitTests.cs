@@ -44,6 +44,16 @@ public sealed class MultilineCountLimitTests
         Assert.DoesNotContain("in total", cut, StringComparison.Ordinal);
         Assert.DoesNotContain("big/d.txt", cut, StringComparison.Ordinal);
 
+        // The same cut on a page that shows lines.
+        string shown = await CallAsync(client, new Dictionary<string, object?>
+        {
+            ["query"] = @"Needle\s+Holder", ["multiline"] = true
+        });
+        Assert.Contains("At least 3 files match (at least 3 matching lines), all shown below", shown,
+            StringComparison.Ordinal);
+        Assert.Contains("1 more file was not searched", shown, StringComparison.Ordinal);
+        Assert.Contains("1: Needle", shown, StringComparison.Ordinal);
+
         // Only the file past the budget holds a match: a miss that is no proof of absence.
         string missed = await CallAsync(client, new Dictionary<string, object?>
         {

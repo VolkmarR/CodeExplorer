@@ -176,7 +176,7 @@ internal sealed partial class SearchTools(
             .Append(CultureInfo.InvariantCulture,
                 $" ({(cut ? "at least " : "")}{result.TotalLines} matching {ToolReply.Plural(result.TotalLines, "line")})")
             .Append(lastPage == 1
-                ? cut ? ", all counted shown below" : ", all shown below"
+                ? ", all shown below"
                 : string.Create(CultureInfo.InvariantCulture,
                     $"; showing {result.Files.Count} of them, page {result.Page} of {lastPage}"))
             .Append(CultureInfo.InvariantCulture, $" ({result.Engine} engine)\n");
