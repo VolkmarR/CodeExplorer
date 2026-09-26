@@ -504,6 +504,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
         // The recount drops the filters, so it reads a superset of what the count read: after a count the
         // budget cut, it would be cut too and could not say that nothing matches outside. Where it is cut
         // and finds nothing, whether anything matches outside is not known, which is not the same as none.
+        // Where it is cut and finds some, their number is a lower bound, reported as found: what the
+        // caller acts on is that the filters hid matches, and that much is certain.
         int? withoutFilters = null;
         int notSearchedOutside = 0;
         if (counts.Count == 0 && notSearched == 0 && request.HasFileFilters)
