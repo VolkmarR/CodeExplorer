@@ -59,6 +59,19 @@ public sealed partial class ControlDatabase : IDisposable
     // engine, so the wait is on the upload and not on the work.
     private readonly SemaphoreSlim _backupGate = new(1, 1);
 
+    // Held by a project delete, and by every write that hangs a row off a project's slug from the
+    // moment it asks whether that project exists until its row is committed. repositories and
+    // excluded_paths carry no foreign key (see Migrate), so nothing in the engine refuses a row whose
+    // project is gone: a delete committing between the check and the insert left the row behind with
+    // its credential, and a project created later under the slug inherited it and cloned the deleted
+    // project's remote with it — the class of GHSA-253f-grfp-cqq7. A single INSERT ... WHERE EXISTS
+    // would not close it: DuckDB is snapshot-isolated and detects only write-write conflicts, and a
+    // delete of the project row does not conflict with an insert into another table.
+    // In-process is complete here rather than replica-limited: DuckDB lets one process open a file for
+    // writing, so every writer of control.duckdb is in this one. Taken before _backupGate and
+    // _cacheGate and released before a backup starts, so an operator write never waits on an upload.
+    private readonly SemaphoreSlim _projectGate = new(1, 1);
+
     // DuckDB.NET has no connection pool. What it has is one native instance per file, reference
     // counted, and closed with the last connection to it — so a call that opened and closed its own
     // connection opened the whole database each time: the file, the WAL replay, the thread pool and a
@@ -211,6 +224,27 @@ public sealed partial class ControlDatabase : IDisposable
         // test's or a replica's, finds it closed.
         _anchor.Dispose();
         _backupGate.Dispose();
+        _projectGate.Dispose();
+    }
+
+    /// <summary>
+    ///     Awaited by a gated write once it has found its project and before it writes, so a test can
+    ///     hold it at the one point where a delete committing would leave its row orphaned. Null outside tests.
+    /// </summary>
+    internal Func<Task>? ProjectChecked { get; set; }
+
+    /// <summary>
+    ///     Called by a write that found the project gate held and is about to wait for it, so a test
+    ///     knows the write is queued without sleeping for it. Null outside tests.
+    /// </summary>
+    internal Action? ProjectGateQueued { get; set; }
+
+    /// <summary>Takes <see cref="_projectGate" />; the caller releases it in a <c>finally</c>.</summary>
+    private Task EnterProjectGateAsync(CancellationToken cancellationToken)
+    {
+        var entered = _projectGate.WaitAsync(cancellationToken);
+        if (!entered.IsCompleted) ProjectGateQueued?.Invoke();
+        return entered;
     }
 
     /// <summary>
@@ -347,6 +381,29 @@ public sealed partial class ControlDatabase : IDisposable
     public async Task<(AddRepositoryOutcome Outcome, ProjectRepository? Repository)> AddRepositoryAsync(
         string projectSlug, string? slug, string url, string? credential, CancellationToken cancellationToken)
     {
+        (AddRepositoryOutcome Outcome, ProjectRepository? Repository) added;
+        await EnterProjectGateAsync(cancellationToken);
+        try
+        {
+            added = await AddRepositoryGatedAsync(projectSlug, slug, url, credential, cancellationToken);
+        }
+        finally
+        {
+            _projectGate.Release();
+        }
+
+        if (added.Outcome == AddRepositoryOutcome.Created) await BackupAsync();
+        return added;
+    }
+
+    /// <summary>
+    ///     <see cref="AddRepositoryAsync" /> under the project gate, from the existence check to the
+    ///     insert, so a project delete lands wholly before it or wholly after.
+    /// </summary>
+    private async Task<(AddRepositoryOutcome Outcome, ProjectRepository? Repository)> AddRepositoryGatedAsync(
+        string projectSlug, string? slug, string url, string? credential, CancellationToken cancellationToken)
+    {
+        // Safe to answer from the cache here: a delete forgets the slug before it releases the gate.
         if (await FindAsync(projectSlug, cancellationToken) is not { } project)
             return (AddRepositoryOutcome.NoProject, null);
 
@@ -374,6 +431,8 @@ public sealed partial class ControlDatabase : IDisposable
 
         var repository = new ProjectRepository(projectSlug, slug, url.Trim(),
             string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));
+        if (ProjectChecked is { } projectChecked) await projectChecked();
+
         await using var connection = await OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -385,10 +444,9 @@ public sealed partial class ControlDatabase : IDisposable
         command.Parameters.Add(new DuckDBParameter("url", repository.Url));
         command.Parameters.Add(new DuckDBParameter("credential",
             (object?)repository.ProtectedCredential ?? DBNull.Value));
-        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1) return (AddRepositoryOutcome.SlugTaken, null);
-
-        await BackupAsync();
-        return (AddRepositoryOutcome.Created, repository);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
+            ? (AddRepositoryOutcome.Created, repository)
+            : (AddRepositoryOutcome.SlugTaken, null);
     }
 
     public async Task<IReadOnlyList<ProjectRepository>> ListRepositoriesAsync(
@@ -414,22 +472,36 @@ public sealed partial class ControlDatabase : IDisposable
     /// </summary>
     public async Task<bool> DeleteProjectAsync(string slug, CancellationToken cancellationToken)
     {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.Transaction = (DuckDBTransaction)transaction;
-        command.CommandText = "DELETE FROM repositories WHERE project_slug = $slug";
-        command.Parameters.Add(new DuckDBParameter("slug", slug));
-        await command.ExecuteNonQueryAsync(cancellationToken);
-        // Or a project created later under the same slug would open with this one's exclusions.
-        command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $slug";
-        await command.ExecuteNonQueryAsync(cancellationToken);
-        command.CommandText = "DELETE FROM projects WHERE slug = $slug";
-        int deleted = await command.ExecuteNonQueryAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        // Forgotten whether or not a row went: the next request then asks the database, which is the
-        // only thing that knows.
-        Forget(slug);
+        int deleted;
+        await EnterProjectGateAsync(cancellationToken);
+        try
+        {
+            await using (var connection = await OpenAsync(cancellationToken))
+            {
+                await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+                await using var command = connection.CreateCommand();
+                command.Transaction = (DuckDBTransaction)transaction;
+                command.CommandText = "DELETE FROM repositories WHERE project_slug = $slug";
+                command.Parameters.Add(new DuckDBParameter("slug", slug));
+                await command.ExecuteNonQueryAsync(cancellationToken);
+                // Or a project created later under the same slug would open with this one's exclusions.
+                command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $slug";
+                await command.ExecuteNonQueryAsync(cancellationToken);
+                command.CommandText = "DELETE FROM projects WHERE slug = $slug";
+                deleted = await command.ExecuteNonQueryAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+
+            // Forgotten whether or not a row went: the next request then asks the database, which is the
+            // only thing that knows. Inside the gate, so a gated write that asks next cannot be answered
+            // from the cache with the project just deleted.
+            Forget(slug);
+        }
+        finally
+        {
+            _projectGate.Release();
+        }
+
         if (deleted != 1) return false;
 
         await BackupAsync();
