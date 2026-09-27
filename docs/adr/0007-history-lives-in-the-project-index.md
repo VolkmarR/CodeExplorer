@@ -119,3 +119,16 @@ Attribution answers the ownership question and is honest about the other one; th
   a second version number to keep honest. The walk it costs is the one ADR-0007 measured at 32 s for
   a 4,300-commit repository, once per project, and it is user-visible on the first refresh after a
   deploy.
+
+## Revisited on 2026-09-27: shallow copies in a clone directory that survives
+
+"Clones are now full and permanent" assumed every clone would be made again after this deployed,
+which holds on Container Apps, whose disk is wiped when a replica stops, and the `SchemaVersion`
+bullet counted that as the cost of a full clone of every repository. A clone directory that survives
+a restart — IIS, a developer's machine — held the shallow clones made before this decision, and
+nothing replaced them: a fetch never deepens a shallow clone, and the history walk took each
+boundary commit for a root that added every file, attributing to it every line older than the copy.
+
+A shallow local copy is now cloned over on its next refresh, one full download each, and the history
+recorded from it is recognised by its oldest commit having a parent in the new copy, and imported
+again from the root the way a rewritten history is (#227).

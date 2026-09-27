@@ -169,6 +169,11 @@ the bare clones and DuckDB's spill files at the same time. A SrcRadix-sized code
 of index. `Refresh:MinimumFreeBytes` — 512 MB by default — is what refuses a rebuild that would run
 the disk out, and it is worth raising here.
 
+A data directory kept from a server older than ADR-0007 holds shallow clones. Each is cloned over
+with its full history on its repository's next refresh, which is one full download per repository
+and a clone directory that grows accordingly, and that repository's history is then imported again
+from its first commit.
+
 ## 5. Settings
 
 `web.config` is the natural place for them on IIS, because they travel with the site rather than with
