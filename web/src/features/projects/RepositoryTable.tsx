@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { MoreHorizontal, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import type { ProjectDetail } from '@/features/projects/api'
@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/table'
 import { toast } from '@/components/ui/toast'
 import { invalidateProject } from '@/features/projects/queries'
+import { isRefreshRunning, refreshStatusQuery } from '@/features/refresh/queries'
 
 /** What a row says in place of a value the last build has not produced yet. */
 const NOT_INDEXED = 'not indexed yet'
@@ -50,6 +51,12 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
   // Which repository the confirm dialog is asking about, or none. The slug and not a boolean: the
   // dialog names the repository, and one dialog serves every row.
   const [removing, setRemoving] = useState<string | null>(null)
+
+  // The server refuses a removal while a refresh of the project is queued or running, since the
+  // refresh reads the local copy the removal deletes. The item is disabled for the same span rather
+  // than left to fail; the refusal still reaches the error panel if the status here is stale.
+  const { data: status } = useSuspenseQuery(refreshStatusQuery(slug))
+  const refreshing = isRefreshRunning(status)
 
   const remove = useMutation({
     mutationFn: (repository: string) => removeRepository(slug, repository),
@@ -172,11 +179,11 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem
                           variant="destructive"
-                          disabled={remove.isPending}
+                          disabled={remove.isPending || refreshing}
                           onClick={() => setRemoving(repository.slug)}
                         >
                           <Trash2 />
-                          Remove repository
+                          {refreshing ? 'Remove after the refresh' : 'Remove repository'}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
