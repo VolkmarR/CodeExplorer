@@ -104,6 +104,14 @@ public sealed class RefreshService(
         configuration.GetValue("Refresh:MinimumFreeBytes", _defaultMinimumFreeBytes);
 
     private readonly ConcurrentDictionary<string, RefreshStatus> _statuses = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     How many repository removals of each project are running now, read and written under
+    ///     <see cref="_sync" />. A count and not a set: two operators may remove two repositories of one
+    ///     project at once, and the first to finish must not lift the refusal the second still needs.
+    /// </summary>
+    private readonly Dictionary<string, int> _removals = new(StringComparer.Ordinal);
+
     private readonly Lock _sync = new();
 
     /// <summary>
@@ -141,6 +149,14 @@ public sealed class RefreshService(
                     + $"Poll GET /api/projects/{project.Slug}/refresh for its progress instead of starting a second one.",
                     StatusCodes.Status409Conflict));
 
+            // The other half of RemoveUnlessRefreshingAsync's refusal, under the same lock so neither
+            // can slip in between the other's check and its start.
+            if (_removals.ContainsKey(project.Slug))
+                return new RefreshRequest(current, new RefreshRefusal(
+                    $"A repository of project '{project.Slug}' is being removed. "
+                    + "Refresh again once the removal has finished.",
+                    StatusCodes.Status409Conflict));
+
             if (InsufficientDisk(project.Slug) is { } refusal) return new RefreshRequest(current, refusal);
 
             var queued = new RefreshStatus(project.Slug, RefreshState.Queued, "Waiting for the rebuild slot",
@@ -151,6 +167,50 @@ public sealed class RefreshService(
             Pending = Pending.ContinueWith(_ => RunAsync(project), CancellationToken.None,
                 TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
             return new RefreshRequest(queued);
+        }
+    }
+
+    /// <summary>
+    ///     Runs <paramref name="removal" /> — a repository of the project leaving it — unless a refresh
+    ///     of that project is queued or running, and refuses <see cref="Request" /> for the project until
+    ///     it has finished. Null when the removal ran; the refusal when it did not run at all.
+    ///     A refresh reads its repository list once, when its slot comes up, and then holds each local
+    ///     copy open while it reads it. A removal landing under a running refresh either deleted a copy
+    ///     the refresh had open — a 500 on Windows once the control row was already gone, a failed
+    ///     build elsewhere — or deleted one the refresh had not reached yet, which the fetch then cloned
+    ///     back with full history and nothing ever removed again. Queued is refused as well as Running,
+    ///     because a queued refresh reads the list whenever the slot frees, which can be mid-removal.
+    ///     The check and the mark are one step under <see cref="_sync" />, as <see cref="Request" />'s
+    ///     are, so the two exclude each other in both directions. The removal itself runs outside the
+    ///     lock: it waits on the control database and the disk.
+    ///     This replica's statuses are all it can see, which is enough while the storage design is one
+    ///     replica; excluding a refresh on another replica is #300.
+    /// </summary>
+    public async Task<RefreshRefusal?> RemoveUnlessRefreshingAsync(string slug, Func<Task> removal)
+    {
+        lock (_sync)
+        {
+            var current = Status(slug);
+            if (current.State is RefreshState.Queued or RefreshState.Running)
+                return new RefreshRefusal(
+                    $"A refresh of project '{slug}' is {(current.State == RefreshState.Queued ? "queued" : "running")}, and it reads the project's repositories and their local copies. "
+                    + $"Remove the repository after it has finished; poll GET /api/projects/{slug}/refresh for its progress.",
+                    StatusCodes.Status409Conflict);
+            _removals[slug] = _removals.GetValueOrDefault(slug) + 1;
+        }
+
+        try
+        {
+            await removal();
+            return null;
+        }
+        finally
+        {
+            // However the removal ended, or the project could never be refreshed again on this replica.
+            lock (_sync)
+            {
+                if (--_removals[slug] == 0) _removals.Remove(slug);
+            }
         }
     }
 
