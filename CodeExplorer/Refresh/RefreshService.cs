@@ -97,6 +97,9 @@ public sealed class RefreshService(
     ///     measurement because the real figure depends on how much was committed since the last
     ///     refresh. A project whose clones are missing entirely gets the floor instead, which is the
     ///     one case where this system genuinely cannot know the size before downloading it (ADR-0007).
+    ///     A shallow copy left from before ADR-0007 is that case too, since it is cloned over with full
+    ///     history and not fetched into, and it is left sized as a fetch: its quarter only adds to what
+    ///     a missing clone is asked for, and it is deleted before the clone starts.
     /// </summary>
     private const int _cloneGrowthDivisor = 4;
 

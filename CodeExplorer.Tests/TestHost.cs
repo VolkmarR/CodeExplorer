@@ -513,6 +513,28 @@ public sealed class TestHost : IDisposable
     public string ClonePath(string project, string repository) =>
         Path.Combine(DataDirectory, "clones", project, repository + ".git");
 
+    /// <summary>
+    ///     Makes the local copy of a repository shallow at its HEAD commit, as every copy was before
+    ///     ADR-0007 (depth 1), cloning the fixture there first when there is no copy yet. libgit2's local
+    ///     transport refuses a shallow fetch ("shallow fetch is not supported by the local transport"),
+    ///     so the copy is cloned full and made shallow the way git records it: a <c>shallow</c> file
+    ///     naming the boundary commit. libgit2 reads it as a graft, so the boundary has no parent and the
+    ///     copy reports itself shallow, exactly as a real one does; the older objects the pack still
+    ///     holds are out of reach of any walk.
+    /// </summary>
+    /// <param name="project">The project the repository belongs to.</param>
+    /// <param name="repository">The repository whose local copy this is.</param>
+    /// <param name="fixture">The fixture it was added from, whose path is the stored URL.</param>
+    /// <returns>The copy's path.</returns>
+    public string MakeLocalCopyShallow(string project, string repository, string fixture)
+    {
+        string path = ClonePath(project, repository);
+        if (!Directory.Exists(path)) Repository.Clone(FixturePath(fixture), path, new CloneOptions { IsBare = true });
+        using var clone = new Repository(path);
+        File.WriteAllText(Path.Combine(path, "shallow"), clone.Head.Tip.Sha + "\n");
+        return path;
+    }
+
     /// <summary>The <c>.git</c> directory of a fixture, which is non-bare.</summary>
     public string FixtureGitPath(string name) => Path.Combine(FixturePath(name), ".git");
 
