@@ -276,7 +276,7 @@ public sealed class GitClones(
     ///     one. Where the clone directory outlives the server (IIS, a developer's machine), such a copy
     ///     would be fetched into forever, and the history walk would take its boundary commit for a
     ///     root that added every file, attributing each line older than the copy to it. One full
-    ///     download replaces it.
+    ///     download replaces it; <c>HistoryBuilder</c> then re-imports the history recorded from it.
     /// </summary>
     private bool IsUsableCopyOf(ProjectRepository repository, string path)
     {
