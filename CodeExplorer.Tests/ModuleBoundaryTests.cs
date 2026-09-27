@@ -105,6 +105,7 @@ public sealed partial class ModuleBoundaryTests
         "Operator -> Git",
         "Operator -> Infrastructure",
         "Operator -> Reading",
+        "Operator -> Refresh",
         "Reading -> Index",
         "Reading -> Infrastructure",
         "Reading -> Language",

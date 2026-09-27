@@ -36,10 +36,15 @@ internal static class OperatorEndpoints
 
         project.MapDelete("/repositories/{repository}",
             async (Project project, string repository, ProjectOverview overview, CancellationToken ct) =>
-                await overview.DeleteRepositoryAsync(project, repository, ct)
-                    ? Results.NoContent()
-                    : Results.NotFound(new
-                        { error = $"Project '{project.Slug}' has no repository with slug '{repository}'." }));
+                await overview.DeleteRepositoryAsync(project, repository, ct) switch
+                {
+                    // The refusal carries its own status code, as a refused refresh does.
+                    { Refused: { } refused } => Results.Json(new { error = refused.Message },
+                        statusCode: refused.StatusCode),
+                    { Found: true } => Results.NoContent(),
+                    _ => Results.NotFound(new
+                        { error = $"Project '{project.Slug}' has no repository with slug '{repository}'." })
+                });
     }
 
     /// <summary>A removal that cannot fail once the project is bound answers 204, which a Task alone would not.</summary>
