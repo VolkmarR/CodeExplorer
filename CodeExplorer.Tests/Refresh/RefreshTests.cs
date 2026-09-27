@@ -309,6 +309,91 @@ public sealed class RefreshTests : IDisposable
     }
 
     /// <summary>
+    ///     A removal under a running refresh deleted a local copy the refresh held open, or one it had
+    ///     not reached yet and then cloned back for nothing to remove again. Refused, it removes neither
+    ///     the repository nor its copy.
+    /// </summary>
+    [Fact]
+    public async Task A_repository_is_not_removed_while_a_refresh_of_its_project_runs()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+
+        using (var inFlight = await _host.OpenIndexAsync("alpha"))
+        {
+            using (var first = await _host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+            await WaitForSwapAsync(_host, "alpha");
+
+            using var removed = await RemoveRepositoryAsync("alpha", "one");
+
+            Assert.Equal(HttpStatusCode.Conflict, removed.StatusCode);
+            string message = await ErrorAsync(removed);
+            Assert.Contains("is running", message, StringComparison.Ordinal);
+            Assert.Contains("/api/projects/alpha/refresh", message, StringComparison.Ordinal);
+        }
+
+        await _host.WaitForRefreshesAsync();
+        Assert.Equal("one", Assert.Single((await DetailAsync("alpha")).Repositories).Slug);
+        Assert.True(Directory.Exists(_host.ClonePath("alpha", "one")));
+    }
+
+    /// <summary>
+    ///     Queued is refused as well as running: a queued refresh reads its repositories whenever the
+    ///     slot frees, which may be in the middle of the removal.
+    /// </summary>
+    [Fact]
+    public async Task A_repository_is_not_removed_while_a_refresh_of_its_project_is_queued()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        await _host.IndexedProjectAsync("beta", Fixture("two"));
+
+        using (var inFlight = await _host.OpenIndexAsync("alpha"))
+        {
+            using (var first = await _host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+            await WaitForSwapAsync(_host, "alpha");
+            using (var second = await _host.RequestRefreshAsync("beta"))
+                Assert.Equal(HttpStatusCode.Accepted, second.StatusCode);
+            Assert.Equal(RefreshState.Queued, (await _host.RefreshStatusAsync("beta")).State);
+
+            using var removed = await RemoveRepositoryAsync("beta", "two");
+
+            Assert.Equal(HttpStatusCode.Conflict, removed.StatusCode);
+            Assert.Contains("is queued", await ErrorAsync(removed), StringComparison.Ordinal);
+        }
+
+        await _host.WaitForRefreshesAsync();
+        Assert.Equal("two", Assert.Single((await DetailAsync("beta")).Repositories).Slug);
+        Assert.True(Directory.Exists(_host.ClonePath("beta", "two")));
+    }
+
+    [Fact]
+    public async Task A_refresh_of_one_project_does_not_hold_up_removing_a_repository_of_another()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        await _host.IndexedProjectAsync("beta", new()
+        {
+            ["two"] = Fixture("two")["two"],
+            ["three"] = Fixture("three")["three"]
+        });
+
+        using (var inFlight = await _host.OpenIndexAsync("alpha"))
+        {
+            using (var first = await _host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+            await WaitForSwapAsync(_host, "alpha");
+
+            using var removed = await RemoveRepositoryAsync("beta", "two");
+
+            Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+            Assert.Equal("three", Assert.Single((await DetailAsync("beta")).Repositories).Slug);
+            Assert.False(Directory.Exists(_host.ClonePath("beta", "two")));
+        }
+
+        await _host.WaitForRefreshesAsync();
+    }
+
+    /// <summary>
     ///     The other direction: a refresh asked for while a repository is leaving would read the list and
     ///     the copies mid-removal. Once the removal ends, however it ends, the project refreshes again —
     ///     a removal that failed must not leave the project refused on this replica for good.
@@ -1041,6 +1126,20 @@ public sealed class RefreshTests : IDisposable
             if (settled(status)) return status;
             await Task.Delay(10, Ct);
         }
+    }
+
+    private async Task<HttpResponseMessage> RemoveRepositoryAsync(string project, string repository)
+    {
+        using var http = _host.CreateClient();
+        return await http.DeleteAsync($"/api/projects/{project}/repositories/{repository}", Ct);
+    }
+
+    private async Task<ProjectDetail> DetailAsync(string project)
+    {
+        using var http = _host.CreateClient();
+        var detail = await http.GetFromJsonAsync<ProjectDetail>($"/api/projects/{project}", Ct);
+        Assert.NotNull(detail);
+        return detail;
     }
 
     private static async Task<string> ErrorAsync(HttpResponseMessage response)

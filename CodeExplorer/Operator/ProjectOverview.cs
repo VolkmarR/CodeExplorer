@@ -2,6 +2,7 @@ using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
+using CodeExplorer.Refresh;
 
 namespace CodeExplorer.Operator;
 
@@ -91,6 +92,12 @@ public sealed record OverviewFilter(int Days, string? Repository, bool ShowExclu
 /// </summary>
 public sealed record ExcludedPathSuggestionsDetail(IReadOnlyList<ExcludedPathSuggestion> Suggestions, string? Unavailable);
 
+/// <summary>
+///     Where removing a repository got to. <paramref name="Refused" /> set means nothing was removed;
+///     otherwise <paramref name="Found" /> false is a project with no such repository.
+/// </summary>
+public sealed record RepositoryRemoval(bool Found, RefreshRefusal? Refused = null);
+
 /// <summary>A project as its own page shows it.</summary>
 public sealed record ProjectDetail(
     string Slug,
@@ -111,6 +118,7 @@ public sealed class ProjectOverview(
     ControlDatabase control,
     IndexReaders readers,
     GitClones clones,
+    RefreshService refreshes,
     IConfiguration configuration,
     ILogger<ProjectOverview> logger)
 {
@@ -224,15 +232,24 @@ public sealed class ProjectOverview(
 
     /// <summary>
     ///     Removes one repository and its local copy. Its files stay searchable until the next build,
-    ///     which is why the project page reports the build time beside what the build found. False when
-    ///     the project has no such repository.
+    ///     which is why the project page reports the build time beside what the build found. Refused,
+    ///     with nothing removed, while a refresh of the project is queued or running, because the
+    ///     refresh reads that local copy
+    ///     (<see cref="CodeExplorer.Refresh.RefreshService.RemoveUnlessRefreshingAsync" />).
     /// </summary>
-    public async Task<bool> DeleteRepositoryAsync(Project project, string slug, CancellationToken cancellationToken)
+    public async Task<RepositoryRemoval> DeleteRepositoryAsync(Project project, string slug,
+        CancellationToken cancellationToken)
     {
-        if (!await control.DeleteRepositoryAsync(project.Slug, slug, cancellationToken)) return false;
-
-        await clones.RemoveAsync(project.Slug, slug, cancellationToken);
-        return true;
+        var found = false;
+        var refused = await refreshes.RemoveUnlessRefreshingAsync(project.Slug, async () =>
+        {
+            found = await control.DeleteRepositoryAsync(project.Slug, slug, cancellationToken);
+            // Not the caller's token once the row is gone, for the reason DeleteAsync gives: nothing
+            // would ever remove a copy left behind by an abandoned request, and it would hold disk and
+            // count against the free-space gate of every later refresh.
+            if (found) await clones.RemoveAsync(project.Slug, slug, CancellationToken.None);
+        });
+        return new RepositoryRemoval(found, refused);
     }
 
     /// <param name="slug">The project to read.</param>

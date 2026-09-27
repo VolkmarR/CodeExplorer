@@ -284,3 +284,17 @@ check answers RE2's rejection and lets every other failure throw. The arrows are
 Not `Infrastructure/`: the check is a statement run on a caller's connection through `Reading/`'s
 query helpers, and what `Re2` otherwise holds is how a caller's pattern is read by the engine, which
 is no more host plumbing than the glob translation already beside it in `GlobRegex`.
+
+## Revisited on 2026-09-27: `Operator/` reaches `Refresh/`
+
+Removing a repository while a refresh of its project was queued or running raced it: the removal
+deleted a local copy the refresh held open, or one the refresh had not reached yet and then cloned
+back with full history for nothing to remove again. The two now exclude each other, and the check has
+to sit under the lock that already decides whether a refresh may start, which is `RefreshService`'s.
+So `ProjectOverview`, which composes the removal, hands it to that service to run, and `Operator/`
+gains one arrow, to `Refresh/`. It closes no cycle: `Refresh/` names nothing in `Operator/`. Doing
+the check in the endpoint instead would not have avoided it, since the operator endpoints are in
+`Operator/` too, and `Program.cs` no longer holds handlers of its own.
+
+The table in the #153 revisit stands with one change: `Operator/` may reference `Control/`, `Git/`,
+`Infrastructure/`, `Reading/` and `Refresh/`.
