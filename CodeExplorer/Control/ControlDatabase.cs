@@ -37,6 +37,18 @@ public enum AddRepositoryOutcome
     ProjectIsFull
 }
 
+/// <summary>Outcome of replacing a project's excluded paths (#216).</summary>
+public enum ExcludedPathsOutcome
+{
+    Saved,
+
+    /// <summary>The list broke a limit or held a pattern that cannot be matched; the problem says which.</summary>
+    Refused,
+
+    /// <summary>The project was deleted after the request was bound to it.</summary>
+    NoProject
+}
+
 /// <summary>
 ///     Owns <c>control.duckdb</c>: projects, repositories and credentials (ADR-0004). It is a
 ///     plain file next to the project indexes and is never shadow-rebuilt. It is opened standalone, not
@@ -534,42 +546,65 @@ public sealed partial class ControlDatabase : IDisposable
     ///     the sentence saying which limit it broke. Replaced whole in one transaction, because the form
     ///     sends the whole list and two saves interleaving row by row would store neither.
     /// </summary>
-    public async Task<(IReadOnlyList<string>? Saved, string? Problem)> SetExcludedPathsAsync(string projectSlug,
-        IEnumerable<string>? requested, CancellationToken cancellationToken)
+    public async Task<(ExcludedPathsOutcome Outcome, IReadOnlyList<string>? Saved, string? Problem)>
+        SetExcludedPathsAsync(string projectSlug, IEnumerable<string>? requested, CancellationToken cancellationToken)
     {
         var (patterns, problem) = ExcludedPaths.Normalize(requested);
-        if (patterns is null) return (null, problem);
+        if (patterns is null) return (ExcludedPathsOutcome.Refused, null, problem);
 
         await using (var connection = await OpenAsync(cancellationToken))
         {
             // Compiled here by the engine that will run it, one pattern at a time so the refusal can
             // name the one at fault. A reversed range such as `[z-a]` is a class GLOB would accept
             // and RE2 refuses; stored, it would fail every overview load until someone removed it.
+            // Outside the project gate: it reads nothing of the project, and a delete need not wait on it.
             foreach (string pattern in patterns)
                 if (await ExcludedPaths.RefusedAsync(connection, pattern, cancellationToken) is { } refused)
-                    return (null, $"'{pattern}' is not a pattern that can be matched: {refused}");
+                    return (ExcludedPathsOutcome.Refused, null,
+                        $"'{pattern}' is not a pattern that can be matched: {refused}");
 
-            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-            await using var command = connection.CreateCommand();
-            command.Transaction = (DuckDBTransaction)transaction;
-            command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $project";
-            command.Parameters.Add(new DuckDBParameter("project", projectSlug));
-            await command.ExecuteNonQueryAsync(cancellationToken);
-            command.CommandText = "INSERT INTO excluded_paths VALUES ($project, $position, $pattern)";
-            for (int position = 0; position < patterns.Count; position++)
+            await EnterProjectGateAsync(cancellationToken);
+            try
             {
-                command.Parameters.Clear();
-                command.Parameters.Add(new DuckDBParameter("project", projectSlug));
-                command.Parameters.Add(new DuckDBParameter("position", position));
-                command.Parameters.Add(new DuckDBParameter("pattern", patterns[position]));
-                await command.ExecuteNonQueryAsync(cancellationToken);
-            }
+                // Asked again although the route bound the project, because a delete may have committed
+                // since, and rows written for it now would open a project later created under the slug.
+                if (await FindAsync(projectSlug, cancellationToken) is null)
+                    return (ExcludedPathsOutcome.NoProject, null, null);
+                if (ProjectChecked is { } projectChecked) await projectChecked();
 
-            await transaction.CommitAsync(cancellationToken);
+                await ReplaceExcludedPathsAsync(connection, projectSlug, patterns, cancellationToken);
+            }
+            finally
+            {
+                _projectGate.Release();
+            }
         }
 
         await BackupAsync();
-        return (patterns, null);
+        return (ExcludedPathsOutcome.Saved, patterns, null);
+    }
+
+    /// <summary>The write of <see cref="SetExcludedPathsAsync" />, called under the project gate.</summary>
+    private static async Task ReplaceExcludedPathsAsync(DuckDBConnection connection, string projectSlug,
+        IReadOnlyList<string> patterns, CancellationToken cancellationToken)
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (DuckDBTransaction)transaction;
+        command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $project";
+        command.Parameters.Add(new DuckDBParameter("project", projectSlug));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        command.CommandText = "INSERT INTO excluded_paths VALUES ($project, $position, $pattern)";
+        for (int position = 0; position < patterns.Count; position++)
+        {
+            command.Parameters.Clear();
+            command.Parameters.Add(new DuckDBParameter("project", projectSlug));
+            command.Parameters.Add(new DuckDBParameter("position", position));
+            command.Parameters.Add(new DuckDBParameter("pattern", patterns[position]));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     /// <summary>Forgets one repository of a project. False when the project or the repository is unknown.</summary>

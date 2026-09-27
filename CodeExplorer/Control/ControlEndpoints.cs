@@ -85,8 +85,11 @@ internal static class ControlEndpoints
             async (Project project, ExcludedPathsBody request, ControlDatabase control, CancellationToken ct) =>
                 await control.SetExcludedPathsAsync(project.Slug, request.Patterns, ct) switch
                 {
-                    ({ } saved, _) => Results.Ok(new ExcludedPathsBody(saved)),
-                    (_, var problem) => Results.BadRequest(new { error = problem })
+                    (ExcludedPathsOutcome.Saved, { } saved, _) => Results.Ok(new ExcludedPathsBody(saved)),
+                    // Bound a moment ago and gone now, as for a repository above.
+                    (ExcludedPathsOutcome.NoProject, _, _) => Results.NotFound(new
+                        { error = BoundProject.NotFound(project.Slug) }),
+                    (_, _, var problem) => Results.BadRequest(new { error = problem })
                 });
     }
 }

@@ -41,6 +41,19 @@ public sealed class ProjectDeleteRaceTests : IDisposable
     }
 
     [Fact]
+    public async Task Excluded_paths_saved_while_their_project_is_deleted_go_with_the_project()
+    {
+        await _host.CreateProjectAsync("alpha");
+
+        var (outcome, _, _) = await RaceDeleteAsync(() =>
+            Control.SetExcludedPathsAsync("alpha", ["**/*.rc"], Ct));
+
+        Assert.Equal(ExcludedPathsOutcome.Saved, outcome);
+        Assert.Empty(await Control.ExcludedPathsAsync("alpha", Ct));
+        await AssertRecreatedProjectStartsEmptyAsync();
+    }
+
+    [Fact]
     public async Task A_repository_is_added_to_a_project_that_exists()
     {
         await _host.CreateProjectAsync("alpha");
@@ -68,6 +81,21 @@ public sealed class ProjectDeleteRaceTests : IDisposable
         Assert.Equal(AddRepositoryOutcome.NoProject, outcome);
         Assert.Null(added);
         Assert.Empty(await Control.ListRepositoriesAsync("alpha", Ct));
+    }
+
+    [Fact]
+    public async Task Excluded_paths_are_saved_for_a_project_that_exists_and_refused_for_one_that_does_not()
+    {
+        await _host.CreateProjectAsync("alpha");
+
+        var (saved, patterns, _) = await Control.SetExcludedPathsAsync("alpha", ["**/*.rc"], Ct);
+        var (missing, _, _) = await Control.SetExcludedPathsAsync("ghost", ["**/*.rc"], Ct);
+
+        Assert.Equal(ExcludedPathsOutcome.Saved, saved);
+        Assert.Equal(["**/*.rc"], patterns);
+        Assert.Equal(["**/*.rc"], await Control.ExcludedPathsAsync("alpha", Ct));
+        Assert.Equal(ExcludedPathsOutcome.NoProject, missing);
+        Assert.Empty(await Control.ExcludedPathsAsync("ghost", Ct));
     }
 
     /// <summary>
