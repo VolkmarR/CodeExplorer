@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
+using CodeExplorer.Control;
+using CodeExplorer.Git;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Operator;
@@ -794,6 +796,32 @@ public sealed class TestHost : IDisposable
         await Services.GetRequiredService<OverviewBuilder>().FillAsync(shadow, false, Ct);
         await shadow.CompleteAsync(false, _ => { }, Ct);
         await PublishAsync(shadow);
+    }
+
+    /// <summary>
+    ///     Builds and swaps in a project's index from its local copies as they lie on disk, through the
+    ///     build a refresh runs but without the fetch before it — the index a server built from copies
+    ///     it no longer would read as they are, such as a shallow one from before ADR-0007.
+    /// </summary>
+    public async Task BuildFromLocalCopiesAsync(string project)
+    {
+        var repositories = await Services.GetRequiredService<ControlDatabase>().ListRepositoriesAsync(project, Ct);
+        var opened = repositories
+            .Select(repository => new OpenedRepository(repository,
+                new LocalCopy(new Repository(ClonePath(project, repository.Slug)))))
+            .ToList();
+        try
+        {
+            using var shadow = await Indexes.CreateShadowAsync(project, Ct);
+            await Services.GetRequiredService<IndexBuilder>().FillAsync(shadow, opened, repositories, false, _ => { },
+                Ct);
+            await PublishAsync(shadow);
+        }
+        finally
+        {
+            // Closed, or Windows keeps the pack files and the refresh after this cannot clone over them.
+            foreach (var open in opened) open.LocalCopy.Dispose();
+        }
     }
 
     /// <summary>

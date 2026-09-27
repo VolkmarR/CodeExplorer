@@ -3,6 +3,7 @@ using CodeExplorer.Index;
 using CodeExplorer.Refresh;
 using LibGit2Sharp;
 using Xunit;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer.Tests;
 
@@ -362,6 +363,56 @@ public sealed class HistoryTests : IDisposable
             SELECT f.path || ' ' || c.subject FROM lines l JOIN files f USING (file_id)
             JOIN commits c USING (commit_id) ORDER BY l.line_number
             """));
+        await AssertAttributionIsWhatAFreshBuildWritesAsync("alpha");
+    }
+
+    /// <summary>
+    ///     A clone directory that outlived a server from before ADR-0007 holds a shallow copy, and the
+    ///     history built from it takes the boundary commit for a root that wrote every line. The next
+    ///     refresh clones over the copy with its full history and must re-import the repository from its
+    ///     real root: the newest recorded commit is still on HEAD's line, so appending alone would find
+    ///     only the new commit and keep the false root and its attribution for good.
+    ///     The first index is built from the copy as it lies, because a refresh no longer reads a shallow
+    ///     copy; it is the index an older server left behind.
+    /// </summary>
+    [Fact]
+    public async Task A_history_recorded_from_a_shallow_copy_is_re_imported_from_the_root_once_the_copy_is_full()
+    {
+        string source = _host.CreateEmptyGitRepository("one");
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond\nthird\n" },
+            "Add the validator", "Ada", "ada@example.invalid", 0);
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond-changed\nthird\n" },
+            "Tighten the check", "Grace", "grace@example.invalid", 1);
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "one", source);
+        string copy = _host.MakeLocalCopyShallow("alpha", "one", "one");
+        await _host.BuildFromLocalCopiesAsync("alpha");
+
+        const string changes =
+            "SELECT c.subject || ' ' || f.change_kind FROM commit_files f JOIN commits c USING (commit_id) ORDER BY commit_id";
+        const string authors =
+            "SELECT c.author_name FROM lines l JOIN commits c USING (commit_id) ORDER BY l.line_number";
+        // The bug, reproduced: the boundary is recorded as the root that added the file, and every line
+        // is Grace's, the two she did not write included.
+        Assert.Equal(["Tighten the check added"], await _host.ScalarsAsync("alpha", changes));
+        Assert.Equal(["Grace", "Grace", "Grace"], await _host.ScalarsAsync("alpha", authors));
+
+        _host.CommitToGitRepositoryAs("one",
+            new Dictionary<string, string> { ["src/Check.cs"] = "first\nsecond-changed\nthird-changed\n" },
+            "Rename the third line", "Linus", "linus@example.invalid", 2);
+        await _host.RefreshAsync("alpha");
+
+        // Cloned over and not fetched into: the local transport, unlike a real remote, unshallows a copy it
+        // fetches into, so only the log says which of the two made this copy full.
+        _host.Logs.Only(LogLevel.Warning, "is shallow");
+        using (var repository = new Repository(copy)) Assert.False(repository.Info.IsShallow);
+        // The earliest commit is the root, the one that added the file, and the boundary is an ordinary
+        // modification of it again.
+        Assert.Equal(["Add the validator added", "Tighten the check modified", "Rename the third line modified"],
+            await _host.ScalarsAsync("alpha", changes));
+        Assert.Equal(["Ada", "Grace", "Linus"], await _host.ScalarsAsync("alpha", authors));
         await AssertAttributionIsWhatAFreshBuildWritesAsync("alpha");
     }
 

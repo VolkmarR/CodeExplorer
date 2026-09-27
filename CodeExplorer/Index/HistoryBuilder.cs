@@ -112,6 +112,12 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     ///     the default branch. Appending would keep commits HEAD no longer has and replay onto the
     ///     attribution of a tip that is gone, so the repository's rows are deleted and the walk, which
     ///     already holds the whole line, is imported as a first build would import it (#227).
+    ///     The opposite case is a history recorded from a shallow copy, which every copy was until
+    ///     ADR-0007: its oldest recorded commit is the shallow boundary, recorded as a root that added
+    ///     every file. The full copy that replaces it still holds the newest recorded commit, so the walk
+    ///     stops there and would keep that false root, and every line older than the shallow copy
+    ///     attributed to it, for good. An oldest recorded commit with a parent in the copy is how that
+    ///     history is recognised, and it is deleted and imported from the root in the same way.
     ///     Returns the new commits with the ids they were given, oldest first, for the replay.
     /// </summary>
     private List<(int Id, RecordedCommit Commit)> AppendCommits(ShadowIndex shadow, string slug, LocalCopy copy,
@@ -119,7 +125,22 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
     {
         var (connection, catalog) = (shadow.Connection, shadow.Catalog);
         string inRepository = $"repo_slug = {IndexQuery.Literal(slug)}";
-        string? newest = NewestRecorded(connection, inRepository, cancellationToken);
+        string? newest = RecordedSha(connection, inRepository, "DESC", cancellationToken);
+        // Asked on every refresh and not only after a re-clone, so a build that failed after the re-clone
+        // still leaves the next one to repair the history; it costs one query and one commit lookup.
+        if (newest is not null
+            && RecordedSha(connection, inRepository, "ASC", cancellationToken) is { } oldest
+            && copy.HasParent(oldest))
+        {
+            if (logger.IsEnabled(LogLevel.Information))
+                logger.LogInformation(
+                    "History of repository {Repository} of project {Project} was recorded from a shallow local "
+                    + "copy: its oldest recorded commit {Commit} has a parent now. Re-importing it from the root",
+                    slug, shadow.Slug, oldest);
+            Forget(connection, inRepository, cancellationToken);
+            newest = null;
+        }
+
         var fresh = new List<RecordedCommit>();
         foreach (var commit in copy.History(newest, maxFileBytes, cancellationToken))
         {
@@ -501,14 +522,18 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    /// <summary>The SHA of the repository's newest recorded commit, or null when it has none yet.</summary>
-    private static string? NewestRecorded(DuckDBConnection connection, string inRepository,
+    /// <summary>
+    ///     The SHA of the repository's newest recorded commit for <paramref name="order" /> <c>DESC</c>,
+    ///     its oldest for <c>ASC</c>, or null when it has none yet.
+    /// </summary>
+    private static string? RecordedSha(DuckDBConnection connection, string inRepository, string order,
         CancellationToken cancellationToken)
     {
         using var command = connection.CreateCommand();
         // The highest id is the newest commit because ids are handed out oldest first and never
         // renumbered (AppendCommits); an author date could not say this, a rebase moves it backwards.
-        command.CommandText = $"SELECT sha FROM commits WHERE {inRepository} ORDER BY commit_id DESC LIMIT 1";
+        // The order is one of two literals from this class, never input, so it is safe to inline.
+        command.CommandText = $"SELECT sha FROM commits WHERE {inRepository} ORDER BY commit_id {order} LIMIT 1";
         cancellationToken.ThrowIfCancellationRequested();
         return command.ExecuteScalar() as string;
     }

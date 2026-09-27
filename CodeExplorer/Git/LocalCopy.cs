@@ -198,6 +198,14 @@ public sealed class LocalCopy : IDisposable
     }
 
     /// <summary>
+    ///     Whether the copy holds this commit with a parent. A commit history recorded as a root has
+    ///     none by definition, unless it was recorded from a shallow copy, where the walk ends at the
+    ///     shallow boundary as though it were a root; asked of the full copy that replaced it, the
+    ///     boundary has its parents back (ADR-0007). False for a commit the copy does not hold.
+    /// </summary>
+    public bool HasParent(string sha) => _repository.Lookup<Commit>(sha) is { } commit && commit.Parents.Any();
+
+    /// <summary>
     ///     The stored name of a change, the enum name lower-cased. The kinds a tree diff produces are
     ///     spelled out so that no path allocates one; anything else keeps the general expression.
     /// </summary>
