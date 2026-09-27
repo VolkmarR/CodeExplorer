@@ -21,6 +21,8 @@ namespace CodeExplorer.Git;
 ///     Full and no longer shallow since ADR-0007: history is what the index is built to answer from,
 ///     and a clone kept between refreshes is what stops every refresh re-downloading it. That makes
 ///     the clones the largest thing on the ephemeral disk, which <see cref="Footprint" /> is here for.
+///     A shallow copy made before ADR-0007, in a clone directory that outlived the server that made it,
+///     is replaced by a full clone on its next refresh (<see cref="IsUsableCopyOf" />).
 /// </summary>
 public sealed class GitClones(
     IConfiguration configuration,
@@ -120,7 +122,7 @@ public sealed class GitClones(
         await gate.WaitAsync(cancellationToken);
         // Both branches are synchronous libgit2 over the network; a worker thread keeps them off the
         // request thread. A clone is already up to date, so it is never followed by a fetch.
-        var transfer = Task.Run(() => IsCopyOf(repository, path)
+        var transfer = Task.Run(() => IsUsableCopyOf(repository, path)
             ? Fetch(repository, path, cancellationToken)
             : Clone(repository, path, cancellationToken), cancellationToken);
         // The gate is the transfer's and not this call's: it is released when libgit2 returns, however
@@ -261,24 +263,40 @@ public sealed class GitClones(
     }
 
     /// <summary>
-    ///     Whether the folder is this repository's local copy: a valid repository whose origin is the
-    ///     stored URL. A fetch goes to the folder's own origin, so a folder a removal left behind
+    ///     Whether the folder is a local copy of this repository that a fetch can bring up to date: a
+    ///     valid repository whose origin is the stored URL, holding full history. Anything else is
+    ///     cloned over.
+    ///     The origin, because a fetch goes to the folder's own origin, so a folder a removal left behind
     ///     (<see cref="RemoveAsync" /> says how) and a repository added later under the same slug would
     ///     otherwise share it, and one cloned from a local path would read the server's disk past the
     ///     check in <see cref="OpenRefreshedAsync" /> (GHSA-5373-pppr-q3q9). Nothing changes a stored
     ///     URL, so a mismatch is always such a folder, and it is cloned over rather than repointed:
     ///     repointing would keep the other repository's objects and tags.
+    ///     The full history, because every copy was shallow until ADR-0007 and a fetch never deepens
+    ///     one. Where the clone directory outlives the server (IIS, a developer's machine), such a copy
+    ///     would be fetched into forever, and the history walk would take its boundary commit for a
+    ///     root that added every file, attributing each line older than the copy to it. One full
+    ///     download replaces it.
     /// </summary>
-    private bool IsCopyOf(ProjectRepository repository, string path)
+    private bool IsUsableCopyOf(ProjectRepository repository, string path)
     {
         if (!Repository.IsValid(path)) return false;
         using var clone = new Repository(path);
-        if (clone.Network.Remotes["origin"]?.Url == repository.Url) return true;
+        if (clone.Network.Remotes["origin"]?.Url != repository.Url)
+        {
+            if (logger.IsEnabled(LogLevel.Warning))
+                logger.LogWarning("The folder at {Path} is not the local copy of repository {Repository} of project "
+                                  + "{Project}, whose URL it does not name, and is cloned over", path,
+                    repository.Slug, repository.ProjectSlug);
+            return false;
+        }
+
+        if (!clone.Info.IsShallow) return true;
 
         if (logger.IsEnabled(LogLevel.Warning))
-            logger.LogWarning("The folder at {Path} is not the local copy of repository {Repository} of project "
-                              + "{Project}, whose URL it does not name, and is cloned over", path, repository.Slug,
-                repository.ProjectSlug);
+            logger.LogWarning("The local copy of repository {Repository} of project {Project} at {Path} is shallow, "
+                              + "as every copy made before ADR-0007 was, and is cloned over with its full history",
+                repository.Slug, repository.ProjectSlug, path);
         return false;
     }
 

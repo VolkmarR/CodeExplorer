@@ -2,17 +2,18 @@ using System.Net;
 using System.Net.Http.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Refresh;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace CodeExplorer.Tests;
 
 /// <summary>
 ///     Repositories added through the operator API, and the local copy a refresh makes of them: a
-///     shallow bare clone that nothing but the refresh reads (CONTEXT.md, Local copy). Fixtures are
-///     local repositories built with LibGit2Sharp, so the suite never touches the network; ADR-0003
-///     records that the local transport cannot serve a shallow clone, which is why the clone depth is
-///     not asserted here. What the index built from a clone answers is asserted where the tools are
-///     tested.
+///     full bare clone that nothing but the refresh reads (CONTEXT.md, Local copy; ADR-0007). Fixtures
+///     are local repositories built with LibGit2Sharp, so the suite never touches the network; the
+///     local transport cannot serve a shallow clone (ADR-0003), so the shallow copy an older server
+///     left behind is made by hand (<see cref="TestHost.MakeLocalCopyShallow" />). What the index built
+///     from a clone answers is asserted where the tools are tested.
 /// </summary>
 public sealed class RepositoryTests : IDisposable
 {
@@ -43,6 +44,38 @@ public sealed class RepositoryTests : IDisposable
         // Bare: the clone directory has objects but no working copy of README.md.
         Assert.True(Directory.Exists(Path.Combine(cloneDir, "objects")));
         Assert.False(File.Exists(Path.Combine(cloneDir, "README.md")));
+    }
+
+    /// <summary>
+    ///     A local copy that is this repository's and full is fetched into, and one left shallow by a
+    ///     server from before ADR-0007 is cloned over, since a fetch never deepens it. A file dropped into
+    ///     the copy tells the two apart: a fetch leaves it, a clone over the folder deletes it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_full_local_copy_is_fetched_into_and_a_shallow_one_is_cloned_over(bool shallow)
+    {
+        string source = _host.CreateGitRepository("source", new Dictionary<string, string> { ["README.md"] = "hello" });
+        _host.CommitToGitRepository("source", new Dictionary<string, string> { ["README.md"] = "hello again" });
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "main", source);
+        await _host.RefreshAsync("alpha");
+        string copy = _host.ClonePath("alpha", "main");
+        if (shallow) _host.MakeLocalCopyShallow("alpha", "main", "source");
+        string marker = Path.Combine(copy, "marker");
+        await File.WriteAllTextAsync(marker, "", TestContext.Current.CancellationToken);
+
+        await _host.RefreshAsync("alpha");
+
+        Assert.Equal(!shallow, File.Exists(marker));
+        using (var repository = new LibGit2Sharp.Repository(copy))
+        {
+            Assert.False(repository.Info.IsShallow);
+            Assert.Equal(2, repository.Commits.Count());
+        }
+
+        if (shallow) _host.Logs.Only(LogLevel.Warning, "is shallow");
     }
 
     [Fact]
