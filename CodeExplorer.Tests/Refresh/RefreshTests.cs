@@ -308,6 +308,66 @@ public sealed class RefreshTests : IDisposable
         Assert.Equal(RefreshState.Succeeded, (await _host.RefreshStatusAsync("beta")).State);
     }
 
+    /// <summary>
+    ///     The other direction: a refresh asked for while a repository is leaving would read the list and
+    ///     the copies mid-removal. Once the removal ends, however it ends, the project refreshes again —
+    ///     a removal that failed must not leave the project refused on this replica for good.
+    ///     Driven through the service with a removal the test holds open, because a real one is over
+    ///     long before a request could land inside it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_refresh_is_refused_while_a_repository_is_being_removed_and_taken_on_after(bool removalFails)
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var removal = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", async () =>
+        {
+            await release.Task;
+            if (removalFails) throw new IOException("The local copy could not be deleted.");
+        });
+
+        using (var refused = await _host.RequestRefreshAsync("alpha"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            Assert.Contains("is being removed", await ErrorAsync(refused), StringComparison.Ordinal);
+        }
+
+        release.SetResult();
+        if (removalFails) await Assert.ThrowsAsync<IOException>(() => removal);
+        else Assert.Null(await removal);
+
+        using (var taken = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, taken.StatusCode);
+        await _host.WaitForRefreshesAsync();
+    }
+
+    /// <summary>
+    ///     Two operators removing two repositories of one project: the first to finish must not lift the
+    ///     refusal the second still needs.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_stays_refused_until_the_last_of_two_removals_has_finished()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", () => releaseFirst.Task);
+        var second = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", () => releaseSecond.Task);
+
+        releaseFirst.SetResult();
+        Assert.Null(await first);
+        using (var refused = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+
+        releaseSecond.SetResult();
+        Assert.Null(await second);
+        using (var taken = await _host.RequestRefreshAsync("alpha"))
+            Assert.Equal(HttpStatusCode.Accepted, taken.StatusCode);
+        await _host.WaitForRefreshesAsync();
+    }
+
     [Fact]
     public async Task A_refresh_is_refused_when_the_disk_would_not_hold_the_shadow_index()
     {
