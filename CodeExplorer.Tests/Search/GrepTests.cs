@@ -78,6 +78,16 @@ public sealed class GrepTests : IDisposable
         string backreference = await GrepAsync(client,
             new Dictionary<string, object?> { ["query"] = "(e)\\1", ["regex"] = true });
         Assert.Contains("backreference", backreference);
+
+        string nine = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "Needle\\9", ["regex"] = true });
+        Assert.Contains("backreference (\\9)", nine);
+
+        // \116 is RE2's octal escape for N, not a backreference followed by digits.
+        string octal = await GrepAsync(client,
+            new Dictionary<string, object?> { ["query"] = "\\116eedle", ["regex"] = true, ["caseSensitive"] = true });
+        Assert.DoesNotContain("backreference", octal);
+        Assert.Contains("one/src/Orders.cs", octal);
     }
 
     [Theory]
