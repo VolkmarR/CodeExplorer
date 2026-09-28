@@ -37,11 +37,13 @@ public static class Re2
         }
 
         // \1..\9 is a backreference; \0 is not one, and neither is \\1, an escaped backslash followed by
-        // a digit, or a \1 quoted by \Q...\E.
+        // a digit, or a \1 quoted by \Q...\E. Nor is \1..\7 followed by another octal digit: RE2 reads
+        // \101 and \12 as octal character codes, and refusing them sent a caller off rewriting a
+        // pattern RE2 compiles. A lone \1..\7, and \8 or \9 always, is what RE2 refuses.
         for (int i = 0; i + 1 < pattern.Length; i++)
         {
             if (pattern[i] != '\\') continue;
-            if (pattern[i + 1] is >= '1' and <= '9')
+            if (pattern[i + 1] is >= '1' and <= '9' && !IsOctalEscape(pattern, i))
                 return $"The pattern uses a backreference (\\{pattern[i + 1]}), which RE2 does not support. "
                        + "Repeat the text instead of referring back to a group.";
             i = EscapeEnd(pattern, i);
@@ -49,6 +51,12 @@ public static class Re2
 
         return null;
     }
+
+    /// <summary>Whether the backslash at <paramref name="start" /> opens an octal escape RE2 accepts, such as <c>\101</c>.</summary>
+    private static bool IsOctalEscape(string pattern, int start) =>
+        start + 2 < pattern.Length
+        && pattern[start + 1] is >= '1' and <= '7'
+        && pattern[start + 2] is >= '0' and <= '7';
 
     /// <summary>
     ///     True when a DuckDB failure is RE2 refusing the caller's pattern rather than the index being
