@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Infrastructure;
@@ -221,13 +222,26 @@ public sealed class ProjectOverview(
     /// </summary>
     public async Task DeleteAsync(Project project, CancellationToken cancellationToken)
     {
-        await control.DeleteProjectAsync(project.Slug, cancellationToken);
+        ExceptionDispatchInfo? unbackedUp = null;
+        try
+        {
+            await control.DeleteProjectAsync(project.Slug, cancellationToken);
+        }
+        catch (BackupFailedException ex)
+        {
+            // The row is gone and only its backup failed, so the rest of the delete still runs: stopping
+            // here left the index and copies for a project created later under the slug. Thrown once
+            // they are gone, so the operator still learns the store did not take the change.
+            unbackedUp = ExceptionDispatchInfo.Capture(ex);
+        }
+
         // Not the caller's token from here on: the project is already gone from the control database,
         // so a delete abandoned now would leave its index and durable copy behind for a project created
         // later under the slug to open (GHSA-253f-grfp-cqq7). The discard may wait for a refresh's
         // durable store and for the drain.
         await readers.DiscardAsync(project.Slug, CancellationToken.None);
         await clones.RemoveAsync(project.Slug, null, CancellationToken.None);
+        unbackedUp?.Throw();
     }
 
     /// <summary>
