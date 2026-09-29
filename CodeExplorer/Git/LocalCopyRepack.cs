@@ -6,6 +6,9 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer.Git;
 
+/// <summary>When a fetch is followed by a repack, as <see cref="LocalCopyRepack.Settings" /> read it.</summary>
+internal sealed record RepackSettings(int PackThreshold, int LooseObjectThreshold);
+
 /// <summary>
 ///     Folds a local copy's small packs and its loose objects into one pack once fetches have left too
 ///     many of them. Every fetch adds a pack and libgit2 has no gc, so since ADR-0007 made the copies full
@@ -81,12 +84,24 @@ internal sealed class LocalCopyRepack
     private readonly int _looseObjectThreshold;
     private readonly ILogger _logger;
 
-    public LocalCopyRepack(IConfiguration configuration, ILogger logger)
+    public LocalCopyRepack(RepackSettings settings, ILogger logger)
     {
-        _packThreshold = Threshold(configuration, PackThresholdSetting, DefaultPackThreshold);
-        _looseObjectThreshold = Threshold(configuration, LooseObjectThresholdSetting, DefaultLooseObjectThreshold);
+        _packThreshold = settings.PackThreshold;
+        _looseObjectThreshold = settings.LooseObjectThreshold;
         _logger = logger;
     }
+
+    /// <summary>
+    ///     The repack's settings, or <see cref="InvalidOperationException" /> naming the one that is not
+    ///     usable. Called by <c>Program.cs</c> before the host is built, as the tenant's and the key
+    ///     ring's settings are read, so a mistyped threshold stops the server with the setting's name.
+    ///     Read first by the <see cref="GitClones" /> field that builds this class, it made that
+    ///     singleton unconstructable instead: the server started, and the project page, a project
+    ///     delete and a repository removal all failed with it, not only the next refresh.
+    /// </summary>
+    public static RepackSettings Settings(IConfiguration configuration) =>
+        new(Threshold(configuration, PackThresholdSetting, DefaultPackThreshold),
+            Threshold(configuration, LooseObjectThresholdSetting, DefaultLooseObjectThreshold));
 
     /// <summary>
     ///     A zero or a negative count would repack after every fetch or never mean anything, and the

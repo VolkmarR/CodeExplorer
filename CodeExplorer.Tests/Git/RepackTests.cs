@@ -227,17 +227,21 @@ public sealed class RepackTests : IDisposable
     }
 
     /// <summary>
-    ///     A zero would mean a repack after every fetch, or never, and the operator meant neither; it is
-    ///     refused with the setting's name, the moment the class that reads it is built.
+    ///     A zero would mean a repack after every fetch, or never, and the operator meant neither; the
+    ///     server refuses to start over it, naming the setting. Thrown first by GitClones, it let the
+    ///     server start and then failed every page and removal that needed that singleton.
     /// </summary>
-    [Fact]
-    public void A_threshold_of_zero_is_refused_with_the_setting_named()
+    [Theory]
+    [InlineData("Git:RepackPackThreshold")]
+    [InlineData("Git:RepackLooseObjectThreshold")]
+    public void A_threshold_of_zero_stops_the_server_from_starting_with_the_setting_named(string setting)
     {
-        using var host = new TestHost(SearchEngine.Substring, repackPackThreshold: 0);
+        using var host = setting == "Git:RepackPackThreshold"
+            ? new TestHost(SearchEngine.Substring, repackPackThreshold: 0)
+            : new TestHost(SearchEngine.Substring, repackLooseObjectThreshold: 0);
 
-        var refused = Assert.Throws<InvalidOperationException>(() =>
-            host.Services.GetRequiredService<CodeExplorer.Git.GitClones>());
-        Assert.Contains("Git:RepackPackThreshold", refused.Message, StringComparison.Ordinal);
+        var refused = Assert.Throws<InvalidOperationException>(() => host.Services);
+        Assert.Contains(setting, refused.Message, StringComparison.Ordinal);
     }
 
     /// <summary>

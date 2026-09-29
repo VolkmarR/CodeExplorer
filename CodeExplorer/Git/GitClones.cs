@@ -64,9 +64,9 @@ public sealed class GitClones(
     // Set when the one class that talks to a remote is built, which is before its first transfer.
     private readonly int _stallSeconds = TransferStallLimit.Apply(configuration);
 
-    // Read here, with the stall limit, so a threshold the operator mistyped stops the first refresh
-    // with the setting's name rather than being found months later when a copy would have crossed it.
-    private readonly LocalCopyRepack _repack = new(configuration, logger);
+    // Already read once at startup (Program.cs), which is what refuses a mistyped threshold; read again
+    // here rather than handed in, because this class's constructor is public and the settings are not.
+    private readonly LocalCopyRepack _repack = new(LocalCopyRepack.Settings(configuration), logger);
 
     /// <summary>
     ///     Opens the repository with its local copy brought up to date: a fetch when it is already
