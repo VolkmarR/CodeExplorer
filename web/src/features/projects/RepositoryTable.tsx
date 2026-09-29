@@ -54,8 +54,10 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
 
   // The server refuses a removal while a refresh of the project is queued or running, since the
   // refresh reads the local copy the removal deletes. The item is disabled for the same span rather
-  // than left to fail; the refusal still reaches the error panel if the status here is stale.
-  const { data: status } = useSuspenseQuery(refreshStatusQuery(slug))
+  // than left to fail; the refusal still reaches the error panel if the status here is stale. Read
+  // without an interval of its own: ProjectCard on the same page already polls the entry, and a
+  // second observer's timer added a second poll while a refresh ran (see refreshStatusQuery).
+  const { data: status } = useSuspenseQuery({ ...refreshStatusQuery(slug), refetchInterval: false })
   const refreshing = isRefreshRunning(status)
 
   const remove = useMutation({
