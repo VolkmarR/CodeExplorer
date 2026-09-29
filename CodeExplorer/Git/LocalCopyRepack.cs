@@ -7,7 +7,7 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 namespace CodeExplorer.Git;
 
 /// <summary>When a fetch is followed by a repack, as <see cref="LocalCopyRepack.Settings" /> read it.</summary>
-internal sealed record RepackSettings(int PackThreshold, int LooseObjectThreshold);
+internal sealed record RepackSettings(bool Enabled, int PackThreshold, int LooseObjectThreshold);
 
 /// <summary>
 ///     Folds a local copy's small packs and its loose objects into one pack once fetches have left too
@@ -36,6 +36,12 @@ internal sealed record RepackSettings(int PackThreshold, int LooseObjectThreshol
 /// </summary>
 internal sealed class LocalCopyRepack
 {
+    /// <summary>
+    ///     On by default. The one way to switch the repack off: a copy is repacked when it crosses
+    ///     either threshold, so raising one leaves the other to fire.
+    /// </summary>
+    public const string EnabledSetting = "Git:RepackEnabled";
+
     public const string PackThresholdSetting = "Git:RepackPackThreshold";
 
     public const string LooseObjectThresholdSetting = "Git:RepackLooseObjectThreshold";
@@ -80,12 +86,14 @@ internal sealed class LocalCopyRepack
     // visible to libgit2, so removing it before the .pack never leaves an index naming a missing file.
     private static readonly string[] _companions = [".idx", ".pack", ".rev", ".bitmap", ".mtimes", ".promisor"];
 
+    private readonly bool _enabled;
     private readonly int _packThreshold;
     private readonly int _looseObjectThreshold;
     private readonly ILogger _logger;
 
     public LocalCopyRepack(RepackSettings settings, ILogger logger)
     {
+        _enabled = settings.Enabled;
         _packThreshold = settings.PackThreshold;
         _looseObjectThreshold = settings.LooseObjectThreshold;
         _logger = logger;
@@ -100,12 +108,14 @@ internal sealed class LocalCopyRepack
     ///     delete and a repository removal all failed with it, not only the next refresh.
     /// </summary>
     public static RepackSettings Settings(IConfiguration configuration) =>
-        new(Threshold(configuration, PackThresholdSetting, DefaultPackThreshold),
+        new(configuration.GetValue(EnabledSetting, true),
+            Threshold(configuration, PackThresholdSetting, DefaultPackThreshold),
             Threshold(configuration, LooseObjectThresholdSetting, DefaultLooseObjectThreshold));
 
     /// <summary>
     ///     A zero or a negative count would repack after every fetch or never mean anything, and the
-    ///     operator who wrote it meant neither; an unreachable number is how a repack is switched off.
+    ///     operator who wrote it meant neither. Neither threshold switches the repack off however high it
+    ///     is set, since the other still fires; <see cref="EnabledSetting" /> does.
     /// </summary>
     private static int Threshold(IConfiguration configuration, string setting, int fallback)
     {
@@ -118,7 +128,8 @@ internal sealed class LocalCopyRepack
 
     /// <summary>
     ///     Repacks the copy at <paramref name="path" /> when it holds more packs or more loose objects
-    ///     than configured, and otherwise only clears a staging folder a crashed repack left. Never
+    ///     than configured and the repack is not switched off, and otherwise only clears a staging folder
+    ///     a crashed repack left, which a server switched off since still has to give back. Never
     ///     throws: a copy that could not be repacked is still the copy the fetch just brought up to date.
     /// </summary>
     /// <param name="repository">The repository, which the log lines name.</param>
@@ -137,6 +148,7 @@ internal sealed class LocalCopyRepack
             // After every fetch and not only a due one: a staging folder is a whole pack's worth of disk,
             // and the copy may not cross a threshold again for months.
             LocalCopyFiles.DeleteDirectory(staging);
+            if (!_enabled) return;
 
             int packs = PackCount(objects);
             int loose = LooseObjectCount(objects);
