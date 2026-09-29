@@ -45,6 +45,9 @@ bool loopbackOnly = builder.RestrictHostsWithoutTenant(authentication);
 // plain `dotnet run` with an empty appsettings needs no Azure and still keeps a durable copy.
 builder.Services.AddSingleton<DurableStore>();
 builder.Services.AddSingleton<ControlDatabase>();
+// Read here and not first by GitClones, so a mistyped repack setting stops the server naming it:
+// thrown from that singleton, it took down every page and removal that needs one, not only a refresh.
+_ = LocalCopyRepack.Settings(builder.Configuration);
 builder.Services.AddSingleton<GitClones>();
 builder.Services.AddSingleton<DurableIndex>();
 builder.Services.AddSingleton<ProjectIndexes>();
