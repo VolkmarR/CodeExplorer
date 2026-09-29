@@ -99,6 +99,46 @@ public sealed class ProjectDeleteRaceTests : IDisposable
     }
 
     /// <summary>
+    ///     Rows the race left in a database before the gate closed it, written behind the control
+    ///     database's back because nothing through it can orphan a row any more.
+    /// </summary>
+    [Fact]
+    public async Task A_project_created_over_rows_a_deleted_one_left_behind_starts_without_them()
+    {
+        // Resolved first, which starts the server and so creates the file the connection opens.
+        var control = Control;
+        await using (var connection = await _host.OpenControlDatabaseAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = $"""
+                                   INSERT INTO repositories VALUES ('alpha', 'one', '{Remote}', 'protected-token');
+                                   INSERT INTO excluded_paths VALUES ('alpha', 0, '**/*.rc');
+                                   """;
+            await command.ExecuteNonQueryAsync(Ct);
+        }
+
+        Assert.Equal(CreateProjectOutcome.Created, await control.CreateAsync("alpha", "Alpha", false, Ct));
+
+        // Inherited, the repository would be cloned with the deleted project's credential.
+        Assert.Empty(await control.ListRepositoriesAsync("alpha", Ct));
+        Assert.Empty(await control.ExcludedPathsAsync("alpha", Ct));
+    }
+
+    /// <summary>A create refused because the slug is taken is rolled back, and must not clear the owner's rows.</summary>
+    [Fact]
+    public async Task A_create_refused_for_a_taken_slug_leaves_that_project_s_rows_alone()
+    {
+        await _host.CreateProjectAsync("alpha");
+        Assert.Equal(AddRepositoryOutcome.Created, (await Control.AddRepositoryAsync("alpha", "one", Remote, "token", Ct)).Outcome);
+        Assert.Equal(ExcludedPathsOutcome.Saved, (await Control.SetExcludedPathsAsync("alpha", ["**/*.rc"], Ct)).Outcome);
+
+        Assert.Equal(CreateProjectOutcome.SlugTaken, await Control.CreateAsync("alpha", "Alpha again", false, Ct));
+
+        Assert.Equal(["one"], (await Control.ListRepositoriesAsync("alpha", Ct)).Select(r => r.Slug));
+        Assert.Equal(["**/*.rc"], await Control.ExcludedPathsAsync("alpha", Ct));
+    }
+
+    /// <summary>
     ///     Runs <paramref name="write" /> against project alpha, holds it once it has found the project,
     ///     deletes the project, and releases the write when the delete has finished or is queued
     ///     behind it. Answers the write's result once both are done.
