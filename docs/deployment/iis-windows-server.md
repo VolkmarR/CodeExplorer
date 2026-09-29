@@ -207,6 +207,16 @@ bounds each wait, not the transfer, so raise it only for a remote that is slow t
 large pack. It must be between 1 and 2147483: zero would be libgit2's "no limit", the hang the
 setting exists to end, so it is refused with an error naming the setting rather than honoured.
 
+`Git:RepackPackThreshold` — 50 by default — and `Git:RepackLooseObjectThreshold` — 5000 by default —
+decide when a refresh repacks a local copy. Every fetch adds a pack and nothing else ever folds them
+together, and this server keeps its clones for good, so here the repack does fire: on a copy fetched
+into more times than the pack threshold, or holding more loose objects than the other one, right after
+the fetch that took it over. It rewrites the copy as one pack, which reads faster and takes less disk,
+and on a large repository it takes minutes and over a GiB of memory, billed to that repository's fetch
+phase in the refresh status. It is skipped, with a warning in the log, while the drive has less free
+space than the copy's objects take. Both must be at least 1; to switch the repack off, set one past
+anything a copy will reach.
+
 `Index:MaxFileBytes` — 25 MiB by default — is the largest file a refresh reads. A larger file is
 listed with the reason but not indexed, and a commit that added or changed one is recorded in history
 with no line counts rather than diffed, so a refresh inflates no file larger than this, a dump or a
