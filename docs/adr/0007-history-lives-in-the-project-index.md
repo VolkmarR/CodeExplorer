@@ -179,8 +179,12 @@ sorted and counted per first byte as its fan-out says. Resolving HEAD through li
 at first, and it proved nothing: the old packs were still in place to answer. That full pass over
 the new index is one read and one set lookup per object. Only then are the folded packs and the
 loose objects deleted, with their read-only attribute cleared first. A failure before the check
-leaves the copy as it was. One after it leaves a whole copy with some old files beside the new pack,
-which the next repack folds. Nothing a repack does fails the refresh. It is skipped while the disk
+leaves the copy as it was. One after it leaves a whole copy with some old files beside the new pack.
+Those packs are listed in a file beside the copy's staging folder, each with the pack that took its
+objects, and every later fetch deletes them while that pack is still there, without waiting for the
+next repack. Left to it, a folded pack kept the copy about twice its size until a threshold was
+crossed again. Loose objects left behind wait for the next repack, since new loose objects can land
+in the same folders. Nothing a repack does fails the refresh. It is skipped while the disk
 has less free space than what it folds occupies plus `Refresh:MinimumFreeBytes`, measured on the
 filesystem that holds the copy, so the free-space gate does not reserve room for
 it: the repack borrows that room for a moment and returns more than it borrowed.
