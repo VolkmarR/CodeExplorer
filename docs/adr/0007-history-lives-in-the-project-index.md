@@ -137,7 +137,7 @@ again from the root the way a rewritten history is (#227).
 
 "Permanent" had a cost nobody paid down. Every fetch adds a pack and libgit2 has no gc, so a copy
 kept between refreshes only fragments. On IIS, where clones are never wiped, a copy of 4,380 commits
-had reached 353 packs and 41,344 loose objects in 457 MiB. Repacked into one pack it took 250 MiB,
+had reached 353 packs and 41,344 loose objects in 457 MiB. Repacked into one pack it took 242 MiB,
 read every blob at HEAD in 4.0 s instead of 5.7 s, and walked its history with a tree diff per
 commit in 36.7 s instead of 47.9 s.
 
@@ -145,18 +145,37 @@ A fetch is now followed by a repack when the copy holds more than `Git:RepackPac
 (50) or `Git:RepackLooseObjectThreshold` loose objects (5000). A first clone never is, since it
 arrives as one pack. The repack uses LibGit2Sharp's `ObjectDatabase.Pack`, never the git CLI, and
 runs under the clone's gate before the refresh opens the copy, because Windows refuses to delete a
-pack libgit2 has mapped. Every `*.pack` counts and is replaced, not only libgit2's `pack-*`: that
-copy also held four `loose-*` packs from git maintenance. It is not cheap: on that copy it took
-about two minutes on 20 cores (libgit2 spreads the delta search over every core by default; one
-thread took 159 to 199 s) and peaked at 1.4 GiB of memory. That is why the thresholds are high. On Container Apps under scale to zero,
-where every clone is fresh, it rarely fires at all.
+pack libgit2 has mapped. Every `*.pack` counts, not only libgit2's `pack-*`: that copy also held
+four `loose-*` packs from git maintenance.
+
+Which packs are folded follows git's `repack --geometric=2`. Walking down from the pack holding the
+most objects, a pack stays while it holds at least twice everything smaller than it, loose objects
+included, and the first that does not is folded together with every pack below it and the loose
+objects. The first repack of a fragmented copy folds everything: that copy's largest pack held
+145,575 objects, less than twice the rest, which overlap. Each later repack folds only what was
+fetched since. Five small fetch packs added after the first repack were folded in 0.2 s at a
+25 MiB peak, and the 242 MiB pack was left alone. A split that would still leave more packs than
+the threshold folds everything instead, or the copy would be due again after the next fetch.
+
+The packbuilder is handed the object ids one by one, read from the folded packs' indexes and the
+loose objects' file names. `Pack(options)` enumerates the whole object database instead, which
+meets each object once per pack holding it (636,445 index entries for 256,719 objects) and also
+takes along the packs that are meant to stay. On that copy, writing the same 242 MiB pack, handing
+over the ids cut peak private memory from 1,097 to 616 MiB and the time from 112 s to 76 s. The
+end-to-end run took 115 s at 613 MiB, so the timings are noisy. libgit2 spreads the delta search
+over every core by default, and one thread took half as long again for the same memory.
+`pack.windowMemory` and `pack.deltaCacheSize` saved under 100 MiB more, which is not enough to
+write them into every clone's config. The thresholds are high because the first repack is still
+over a minute. On Container Apps under scale to zero, where every clone is fresh, it rarely fires
+at all.
 
 The order of the swap is the decision. A first attempt deleted the old packs before the new one was
 in place, a delete failed half-way, and the copy was left missing objects. So the new pack is written
-outside `objects/pack`, moved in (`.pack`, then the `.idx` that makes it visible), checked against
-the builder's object count and its own checksum, and only then are the old packs and loose objects
-deleted, with their read-only attribute cleared first. A failure before the check leaves the copy as
-it was. One after it leaves a whole copy with some old files beside the new pack, which the next
-repack deletes. Nothing a repack does fails the refresh. It is skipped while the disk has less free
-space than the copy's objects take, so the free-space gate does not reserve room for it: the repack
-borrows that room for a moment and returns more than it borrowed.
+outside `objects/pack`, moved in (`.pack`, then the `.idx` that makes it visible), and checked: its
+header and index must count what the builder wrote, which must be the number of distinct ids it was
+handed, and it must end in the checksum its index records. Only then are the folded packs and the
+loose objects deleted, with their read-only attribute cleared first. A failure before the check
+leaves the copy as it was. One after it leaves a whole copy with some old files beside the new pack,
+which the next repack folds. Nothing a repack does fails the refresh. It is skipped while the disk
+has less free space than what it folds occupies, so the free-space gate does not reserve room for
+it: the repack borrows that room for a moment and returns more than it borrowed.

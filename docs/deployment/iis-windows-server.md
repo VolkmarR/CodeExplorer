@@ -211,10 +211,13 @@ setting exists to end, so it is refused with an error naming the setting rather 
 decide when a refresh repacks a local copy. Every fetch adds a pack and nothing else ever folds them
 together, and this server keeps its clones for good, so here the repack does fire: on a copy fetched
 into more times than the pack threshold, or holding more loose objects than the other one, right after
-the fetch that took it over. It rewrites the copy as one pack, which reads faster and takes less disk,
-and on a large repository it takes minutes and over a GiB of memory, billed to that repository's fetch
-phase in the refresh status. It is skipped, with a warning in the log, while the drive has less free
-space than the copy's objects take. Both must be at least 1; to switch the repack off, set one past
+the fetch that took it over. It folds the small packs and the loose objects into one pack, which reads
+faster and takes less disk, and leaves alone a large pack an earlier repack wrote. The first repack of
+a large, fragmented copy folds everything: for a repository of 4,380 commits that took one to two
+minutes and about 600 MB of memory at its peak. Later repacks fold only what was fetched since and
+cost in proportion to it. The time is billed to that repository's fetch phase in the refresh status.
+The repack is skipped, with a warning in the log, while the drive has less free space than what it
+would fold takes. Both must be at least 1; to switch the repack off, set one past
 anything a copy will reach.
 
 `Index:MaxFileBytes` — 25 MiB by default — is the largest file a refresh reads. A larger file is
