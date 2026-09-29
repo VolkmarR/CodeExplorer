@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using CodeExplorer.Control;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Operator;
@@ -7,6 +8,7 @@ using CodeExplorer.Reading;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
 using Xunit;
 
@@ -414,6 +416,34 @@ public sealed class DurabilityTests : IDisposable
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         // Left behind, it would restore a deleted project's files under a slug someone reused.
         Assert.False(Directory.Exists(host.DurableIndexDirectory("alpha")));
+    }
+
+    [Fact]
+    public async Task A_project_delete_whose_backup_fails_still_removes_its_index_and_local_copies()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+        var project = await host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct);
+        Assert.NotNull(project);
+        // A store that refuses the backup: the local store copies over this file, and cannot over a
+        // read-only one.
+        File.SetAttributes(host.DurableControlBackup, FileAttributes.ReadOnly);
+        try
+        {
+            await Assert.ThrowsAsync<BackupFailedException>(() =>
+                host.Services.GetRequiredService<ProjectOverview>().DeleteAsync(project, Ct));
+        }
+        finally
+        {
+            File.SetAttributes(host.DurableControlBackup, FileAttributes.Normal);
+        }
+
+        // The row went before the backup failed, so what hangs off it must go too: left behind, a project
+        // created later under the slug would open this one's index and copies (GHSA-253f-grfp-cqq7).
+        Assert.Null(await host.Services.GetRequiredService<ControlDatabase>().FindAsync("alpha", Ct));
+        Assert.False(host.Indexes.HasIndex("alpha"));
+        Assert.False(Directory.Exists(host.DurableIndexDirectory("alpha")));
+        Assert.False(Directory.Exists(host.ClonePath("alpha", "one")));
     }
 
     [Fact]

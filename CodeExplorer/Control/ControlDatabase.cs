@@ -632,6 +632,7 @@ public sealed partial class ControlDatabase : IDisposable
     ///     this worth doing at all is that it is the only copy of the credentials.
     ///     Not the caller's cancellation token: the write it follows is already committed, and a browser
     ///     closing a tab must not be what leaves the store holding the state before it.
+    ///     A failure is thrown as <see cref="BackupFailedException" />, which says the write stands.
     /// </summary>
     private async Task BackupAsync()
     {
@@ -646,6 +647,10 @@ public sealed partial class ControlDatabase : IDisposable
 
             await _store.StoreAsync(_backupName, SnapshotPath, CancellationToken.None);
             Delete(SnapshotPath);
+        }
+        catch (Exception ex)
+        {
+            throw new BackupFailedException(ex);
         }
         finally
         {
