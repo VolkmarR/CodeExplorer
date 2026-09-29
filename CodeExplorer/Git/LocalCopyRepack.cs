@@ -157,7 +157,7 @@ internal sealed class LocalCopyRepack
         using (var clone = new Repository(path))
             written = clone.ObjectDatabase.Pack(new PackBuilderOptions(staging)).WrittenObjectsCount;
 
-        string pack = Directory.GetFiles(staging, "pack-*.pack").Single();
+        string pack = Directory.GetFiles(staging, "*.pack").Single();
         string index = Path.ChangeExtension(pack, ".idx");
         string name = Path.GetFileNameWithoutExtension(pack);
         var placed = new List<string>();
@@ -266,12 +266,17 @@ internal sealed class LocalCopyRepack
                      StringComparison.Ordinal)))
             TryDelete(file, failures);
 
+        // Any name and not only pack-*: git maintenance's loose-objects task writes loose-*.pack, and
+        // the measured copy held four of them, one of 106 MiB, which a repack that looked only for
+        // libgit2's names left beside the new pack. Only the kinds git writes beside a pack are
+        // touched, so a temporary file of an interrupted fetch is never mistaken for one.
         var packs = old
-            .Where(file => Path.GetFileName(file).StartsWith("pack-", StringComparison.Ordinal))
+            .Where(file => Array.IndexOf(_companions, Path.GetExtension(file)) >= 0
+                           && !Path.GetFileName(file).StartsWith("multi-pack-index", StringComparison.Ordinal))
             .GroupBy(Path.GetFileNameWithoutExtension, StringComparer.Ordinal)
             .Where(group => group.Key != repacked && !kept.Contains(group.Key));
         foreach (var files in packs)
-        foreach (string file in files.OrderBy(DeletionOrder))
+        foreach (string file in files.OrderBy(file => Array.IndexOf(_companions, Path.GetExtension(file))))
             TryDelete(file, failures);
 
         foreach (string directory in LooseDirectories(objects))
@@ -288,13 +293,6 @@ internal sealed class LocalCopyRepack
         }
 
         return failures;
-    }
-
-    /// <summary>Where a pack's file comes in <see cref="_companions" />, and after all of them when git added a kind since.</summary>
-    private static int DeletionOrder(string file)
-    {
-        int at = Array.IndexOf(_companions, Path.GetExtension(file));
-        return at >= 0 ? at : _companions.Length;
     }
 
     private static void TryDelete(string file, List<Exception> failures)
@@ -315,7 +313,7 @@ internal sealed class LocalCopyRepack
     {
         string packDirectory = Path.Combine(objects, "pack");
         return Directory.Exists(packDirectory)
-            ? Directory.EnumerateFiles(packDirectory, "pack-*.pack")
+            ? Directory.EnumerateFiles(packDirectory, "*.pack")
                 .Count(pack => !File.Exists(Path.ChangeExtension(pack, ".keep")))
             : 0;
     }
