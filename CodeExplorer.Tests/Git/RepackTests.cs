@@ -144,16 +144,18 @@ public sealed class RepackTests : IDisposable
     /// <summary>
     ///     An old pack that cannot be deleted once the new one is in place — held open here, as libgit2
     ///     holds a pack it has mapped — leaves a copy that is whole and a refresh that succeeds, and says
-    ///     so to the operator. The next repack deletes what this one could not. Windows only, because
-    ///     only Windows refuses to delete a file held open.
+    ///     so to the operator. The next fetch deletes it once it is released, well below the threshold:
+    ///     left to the next repack, it doubled the copy until one ran. Windows only, because only Windows
+    ///     refuses to delete a file held open.
     /// </summary>
     [Fact]
-    public async Task An_old_pack_that_cannot_be_deleted_leaves_a_whole_copy_that_a_later_repack_finishes()
+    public async Task An_old_pack_that_cannot_be_deleted_is_deleted_by_the_next_fetch()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete a file held open.");
         await CyclesAsync(_host, PackThreshold);
         string copy = _host.ClonePath("alpha", "main");
         string held = Directory.GetFiles(Path.Combine(copy, "objects", "pack"), "pack-*.pack")[0];
+        string record = Path.Combine(copy, "codeexplorer-repack-leftovers");
 
         using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
@@ -161,24 +163,49 @@ public sealed class RepackTests : IDisposable
             await _host.RefreshAsync("alpha");
 
             Assert.True(File.Exists(held));
+            Assert.True(File.Exists(record));
             Assert.Equal(0, LooseObjects(copy));
             AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
             _host.Logs.Only(LogLevel.Warning, "could not be deleted");
         }
 
-        // The held pack lost its index first and is invisible to libgit2 meanwhile; it still counts as a
-        // pack, so two more fetches take the copy past the threshold again. It holds nothing libgit2 can
-        // see, so it is folded with them, and the pack the first repack wrote is large enough to stay.
         string[] repacked = Directory.GetFiles(Path.Combine(copy, "objects", "pack"), "*.idx");
-        for (int cycle = PackThreshold + 2; cycle <= PackThreshold + 3; cycle++)
-        {
-            _host.CommitToGitRepository("main", Files(cycle));
-            await _host.RefreshAsync("alpha");
-        }
+        _host.CommitToGitRepository("main", Files(PackThreshold + 2));
+        await _host.RefreshAsync("alpha");
 
+        // The repacked pack and the one this fetch brought, which is under the threshold, so no repack
+        // ran: the fetch deleted the leftover on its own.
         Assert.False(File.Exists(held));
+        Assert.False(File.Exists(record));
         Assert.True(File.Exists(Assert.Single(repacked)));
         Assert.Equal(2, Packs(copy));
+        AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
+    }
+
+    /// <summary>
+    ///     A leftover is deleted only while the pack that took its objects is there. Here that pack is
+    ///     gone, as a later repack folding it would leave it, so nothing says the leftover's objects are
+    ///     anywhere else: it stays, and the line naming it is forgotten.
+    /// </summary>
+    [Fact]
+    public async Task A_leftover_whose_superseding_pack_is_gone_is_kept()
+    {
+        await CyclesAsync(_host, 1);
+        string copy = _host.ClonePath("alpha", "main");
+        string pack = Directory.GetFiles(Path.Combine(copy, "objects", "pack"), "*.pack").Single();
+        string record = Path.Combine(copy, "codeexplorer-repack-leftovers");
+        await File.WriteAllLinesAsync(record,
+        [
+            $"pack-0000000000000000000000000000000000000000\t{Path.GetFileName(pack)}",
+            "..\t../../HEAD"
+        ], Ct);
+
+        _host.CommitToGitRepository("main", Files(2));
+        await _host.RefreshAsync("alpha");
+
+        Assert.True(File.Exists(pack));
+        Assert.True(File.Exists(Path.Combine(copy, "HEAD")));
+        Assert.False(File.Exists(record));
         AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
     }
 

@@ -32,7 +32,8 @@ internal sealed record RepackSettings(bool Enabled, int PackThreshold, int Loose
 ///     copy missing objects: the new pack is written outside <c>objects/pack</c>, moved in, checked, and
 ///     only then are the folded packs and the loose objects deleted. A failure before the check leaves
 ///     the copy as it was; one after it leaves a valid copy with some old files still beside the new
-///     pack, which the next repack folds. Nothing a repack does fails the refresh it runs in.
+///     pack, which the next fetch deletes (<see cref="DeleteLeftovers" />). Nothing a repack does fails
+///     the refresh it runs in.
 /// </summary>
 internal sealed class LocalCopyRepack
 {
@@ -65,6 +66,13 @@ internal sealed class LocalCopyRepack
     ///     exists, goes when the copy is removed, and is never read by libgit2 as part of the copy.
     /// </summary>
     internal const string StagingDirectoryName = "codeexplorer-repack";
+
+    /// <summary>
+    ///     What a repack folded and could not delete, which <see cref="DeleteLeftovers" /> tries again.
+    ///     A file beside the staging folder and not in it, since the staging folder is cleared on every
+    ///     fetch; outside <c>objects</c> for the same reasons it is.
+    /// </summary>
+    internal const string LeftoversFileName = "codeexplorer-repack-leftovers";
 
     /// <summary>
     ///     git's <c>--geometric=2</c>: a pack stays while it holds at least twice what is smaller than it,
@@ -137,8 +145,9 @@ internal sealed class LocalCopyRepack
 
     /// <summary>
     ///     Repacks the copy at <paramref name="path" /> when it holds more packs or more loose objects
-    ///     than configured and the repack is not switched off, and otherwise only clears a staging folder
-    ///     a crashed repack left, which a server switched off since still has to give back. Never
+    ///     than configured and the repack is not switched off. Either way it first clears a staging folder
+    ///     a crashed repack left and the folded files an earlier repack could not delete, which a server
+    ///     switched off since still has to give back. Never
     ///     throws: a copy that could not be repacked is still the copy the fetch just brought up to date.
     /// </summary>
     /// <param name="repository">The repository, which the log lines name.</param>
@@ -157,6 +166,7 @@ internal sealed class LocalCopyRepack
             // After every fetch and not only a due one: a staging folder is a whole pack's worth of disk,
             // and the copy may not cross a threshold again for months.
             LocalCopyFiles.DeleteDirectory(staging);
+            DeleteLeftovers(path, objects);
             if (!_enabled) return;
 
             int packs = PackCount(objects);
@@ -304,13 +314,15 @@ internal sealed class LocalCopyRepack
         TryDeleteDirectory(staging);
         var folded = plan.Folded.Select(pack => Path.GetFileName(pack)).Where(pack => pack != name)
             .ToHashSet(StringComparer.Ordinal);
-        var failures = RemoveOld(old, folded, objects);
+        var (failures, leftovers) = RemoveOld(old, folded, objects);
+        RecordLeftovers(path, name, leftovers);
         if (failures.Count > 0)
         {
             if (_logger.IsEnabled(LogLevel.Warning))
                 _logger.LogWarning(failures[0], "The local copy of repository {Repository} of project {Project} at "
                                                 + "{Path} was repacked, but {Count} of its old files could not be "
-                                                + "deleted; the copy is whole, and a later repack deletes them",
+                                                + "deleted; the copy is whole, every fetch tries the folded packs again, and "
+                                                + "the next repack folds any loose objects left",
                     repository.Slug, repository.ProjectSlug, path, failures.Count);
             return;
         }
@@ -485,9 +497,16 @@ internal sealed class LocalCopyRepack
     /// <param name="old">What <c>objects/pack</c> held before the new pack was written.</param>
     /// <param name="folded">The folded packs' names without their extension.</param>
     /// <param name="objects">The copy's object folder, whose loose objects go.</param>
-    private static List<Exception> RemoveOld(string[] old, HashSet<string> folded, string objects)
+    /// <returns>
+    ///     Every failure, and the file names of the folded packs' files among them, which
+    ///     <see cref="DeleteLeftovers" /> tries again. A loose object left behind is not listed: its folder
+    ///     can take new loose objects the new pack does not hold, and the next repack folds it anyway.
+    /// </returns>
+    private static (List<Exception> Failures, List<string> Leftovers) RemoveOld(string[] old,
+        HashSet<string> folded, string objects)
     {
         var failures = new List<Exception>();
+        var leftovers = new List<string>();
 
         // A multi-pack index describes the old packs, some of which are about to be gone. libgit2 stops
         // using one whose packs are missing, so it goes first, and no reader ever meets it half-true.
@@ -504,7 +523,8 @@ internal sealed class LocalCopyRepack
             .Where(group => folded.Contains(group.Key!));
         foreach (var files in packs)
         foreach (string file in files.OrderBy(file => Array.IndexOf(_companions, Path.GetExtension(file))))
-            TryDelete(file, failures);
+            if (!TryDelete(file, failures))
+                leftovers.Add(Path.GetFileName(file));
 
         foreach (string directory in LooseDirectories(objects))
         {
@@ -519,21 +539,88 @@ internal sealed class LocalCopyRepack
             }
         }
 
-        return failures;
+        return (failures, leftovers);
     }
 
-    private static void TryDelete(string file, List<Exception> failures)
+    /// <summary>Deletes one file, or adds why not to <paramref name="failures" /> and answers false.</summary>
+    private static bool TryDelete(string file, List<Exception> failures)
     {
         try
         {
             LocalCopyFiles.DeleteFile(file);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Safe to swallow: answered as a failure, and the file's objects are in the new pack.
             failures.Add(ex);
+            return false;
         }
     }
+
+    /// <summary>
+    ///     Deletes what an earlier repack folded and could not delete — on Windows a pack something held
+    ///     open, on any system one an antivirus had — and forgets what is gone. Each file is listed with
+    ///     the pack that took its objects, and is deleted only while that pack's <c>.pack</c> and
+    ///     <c>.idx</c> are both there: once a later repack has folded that pack in turn, nothing says the
+    ///     leftover's objects are anywhere else, so the line is dropped and the file is left to be folded
+    ///     again like any other pack. Only the kinds of file git writes beside a pack are ever named, and
+    ///     only by a bare name inside <c>objects/pack</c>, so a spoiled list deletes nothing else.
+    ///     Run on every fetch, before the counts, because a repack runs only above a threshold: left to the
+    ///     next one, a folded pack kept its copy about twice its size for months, and still counted.
+    /// </summary>
+    private static void DeleteLeftovers(string path, string objects)
+    {
+        string record = Path.Combine(path, LeftoversFileName);
+        if (!File.Exists(record)) return;
+
+        string packDirectory = Path.Combine(objects, "pack");
+        var pending = new List<string>();
+        foreach (string line in File.ReadAllLines(record))
+        {
+            if (line.Split('\t') is not [var superseding, var file] || !IsBareName(superseding) || !IsBareName(file)
+                || Array.IndexOf(_companions, Path.GetExtension(file)) < 0
+                || Path.GetFileNameWithoutExtension(file) == superseding
+                || !File.Exists(Path.Combine(packDirectory, superseding + ".pack"))
+                || !File.Exists(Path.Combine(packDirectory, superseding + ".idx")))
+                continue;
+
+            try
+            {
+                LocalCopyFiles.DeleteFile(Path.Combine(packDirectory, file));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Safe to swallow: still listed, so the next fetch tries again, and its objects are in
+                // the pack that superseded it.
+                pending.Add(line);
+            }
+        }
+
+        WriteLeftovers(record, pending);
+    }
+
+    /// <summary>
+    ///     Adds what this repack could not delete to what earlier ones still could not, each against the
+    ///     pack it wrote. Nothing is listed without a new pack, since only a pack written with every
+    ///     object of the file makes that file safe to delete.
+    /// </summary>
+    private static void RecordLeftovers(string path, string? written, List<string> leftovers)
+    {
+        string record = Path.Combine(path, LeftoversFileName);
+        var lines = File.Exists(record) ? File.ReadAllLines(record).ToList() : [];
+        if (written is not null) lines.AddRange(leftovers.Select(file => $"{written}\t{file}"));
+        WriteLeftovers(record, lines.Distinct(StringComparer.Ordinal).ToList());
+    }
+
+    private static void WriteLeftovers(string record, List<string> lines)
+    {
+        if (lines.Count == 0) LocalCopyFiles.DeleteFile(record);
+        else File.WriteAllLines(record, lines);
+    }
+
+    private static bool IsBareName(string name) =>
+        name.Length > 0 && name != "." && name != ".." && name.IndexOfAny(['/', '\\', ':']) < 0;
 
     /// <summary>More packs than configured, not counting one marked <c>.keep</c>, which a repack leaves.</summary>
     private static int PackCount(string objects)
