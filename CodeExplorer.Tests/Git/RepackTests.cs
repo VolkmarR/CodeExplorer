@@ -144,6 +144,41 @@ public sealed class RepackTests : IDisposable
     }
 
     /// <summary>
+    ///     A pack under a name libgit2 does not write is still an old pack: git maintenance's
+    ///     loose-objects task names its packs <c>loose-*</c>, with a <c>.rev</c> beside each, and a real
+    ///     copy the git CLI had touched held four of them after a repack that looked only for
+    ///     <c>pack-*</c>. A pack marked <c>.keep</c> is the one thing a repack leaves.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_pack_under_another_name_is_repacked_and_one_marked_keep_is_left(bool keep)
+    {
+        await CyclesAsync(_host, 1);
+        string copy = _host.ClonePath("alpha", "main");
+        string packDirectory = Path.Combine(copy, "objects", "pack");
+        string first = Path.ChangeExtension(Directory.GetFiles(packDirectory, "*.pack").Single(), null);
+        string renamed = Path.Combine(packDirectory, "loose-" + Path.GetFileName(first)["pack-".Length..]);
+        File.Move(first + ".pack", renamed + ".pack");
+        File.Move(first + ".idx", renamed + ".idx");
+        await File.WriteAllTextAsync(renamed + ".rev", "", Ct);
+        if (keep) await File.WriteAllTextAsync(renamed + ".keep", "", Ct);
+
+        // The kept pack is not counted either, so it takes one more fetch to cross the threshold.
+        for (int cycle = 2; cycle <= PackThreshold + (keep ? 2 : 1); cycle++)
+        {
+            _host.CommitToGitRepository("main", Files(cycle));
+            await _host.RefreshAsync("alpha");
+        }
+
+        Assert.Equal(keep, File.Exists(renamed + ".pack"));
+        Assert.Equal(keep, File.Exists(renamed + ".rev"));
+        if (!keep) AssertRepacked(copy);
+        else Assert.Equal(2, Packs(copy));
+        AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
+    }
+
+    /// <summary>
     ///     A zero would mean a repack after every fetch, or never, and the operator meant neither; it is
     ///     refused with the setting's name, the moment the class that reads it is built.
     /// </summary>
@@ -227,7 +262,7 @@ public sealed class RepackTests : IDisposable
     }
 
     private static int Packs(string copy) =>
-        Directory.GetFiles(Path.Combine(copy, "objects", "pack"), "pack-*.pack").Length;
+        Directory.GetFiles(Path.Combine(copy, "objects", "pack"), "*.pack").Length;
 
     private static int LooseObjects(string copy) =>
         Directory.EnumerateDirectories(Path.Combine(copy, "objects"), "??")
