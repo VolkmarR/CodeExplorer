@@ -132,3 +132,31 @@ boundary commit for a root that added every file, attributing to it every line o
 A shallow local copy is now cloned over on its next refresh, one full download each, and the history
 recorded from it is recognised by its oldest commit having a parent in the new copy, and imported
 again from the root the way a rewritten history is (#227).
+
+## Revisited on 2026-09-29: local copies are repacked
+
+"Permanent" had a cost nobody paid down. Every fetch adds a pack and libgit2 has no gc, so a copy
+kept between refreshes only fragments. On IIS, where clones are never wiped, a copy of 4,380 commits
+had reached 353 packs and 41,344 loose objects in 457 MiB. Repacked into one pack it took 250 MiB,
+read every blob at HEAD in 4.0 s instead of 5.7 s, and walked its history with a tree diff per
+commit in 36.7 s instead of 47.9 s.
+
+A fetch is now followed by a repack when the copy holds more than `Git:RepackPackThreshold` packs
+(50) or `Git:RepackLooseObjectThreshold` loose objects (5000). A first clone never is, since it
+arrives as one pack. The repack uses LibGit2Sharp's `ObjectDatabase.Pack`, never the git CLI, and
+runs under the clone's gate before the refresh opens the copy, because Windows refuses to delete a
+pack libgit2 has mapped. Every `*.pack` counts and is replaced, not only libgit2's `pack-*`: that
+copy also held four `loose-*` packs from git maintenance. It is not cheap: on that copy it took
+about two minutes on 20 cores (libgit2 spreads the delta search over every core by default; one
+thread took 159 to 199 s) and peaked at 1.4 GiB of memory. That is why the thresholds are high. On Container Apps under scale to zero,
+where every clone is fresh, it rarely fires at all.
+
+The order of the swap is the decision. A first attempt deleted the old packs before the new one was
+in place, a delete failed half-way, and the copy was left missing objects. So the new pack is written
+outside `objects/pack`, moved in (`.pack`, then the `.idx` that makes it visible), checked against
+the builder's object count and its own checksum, and only then are the old packs and loose objects
+deleted, with their read-only attribute cleared first. A failure before the check leaves the copy as
+it was. One after it leaves a whole copy with some old files beside the new pack, which the next
+repack deletes. Nothing a repack does fails the refresh. It is skipped while the disk has less free
+space than the copy's objects take, so the free-space gate does not reserve room for it: the repack
+borrows that room for a moment and returns more than it borrowed.
