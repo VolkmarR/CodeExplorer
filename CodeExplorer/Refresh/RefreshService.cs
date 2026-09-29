@@ -92,10 +92,12 @@ public sealed class RefreshService(
 
     /// <summary>
     ///     What a fetch into an existing clone is assumed to add, as a fraction of what that clone
-    ///     already occupies. A fetch transfers a delta and then repacks, and a repack can hold the old
-    ///     and the new pack at once — a quarter is the judgement, and it is a guess rather than a
-    ///     measurement because the real figure depends on how much was committed since the last
-    ///     refresh. A project whose clones are missing entirely gets the floor instead, which is the
+    ///     already occupies. A fetch transfers a delta as one more pack — a quarter is the judgement, and
+    ///     it is a guess rather than a measurement because the real figure depends on how much was
+    ///     committed since the last refresh. The repack a fetch can make due briefly holds the old and
+    ///     the new pack at once, and is not reserved here: it checks for that room itself and is skipped
+    ///     without it, and it ends with the clone smaller than it started (<c>LocalCopyRepack</c>). A
+    ///     project whose clones are missing entirely gets the floor instead, which is the
     ///     one case where this system genuinely cannot know the size before downloading it (ADR-0007).
     ///     A shallow copy left from before ADR-0007 is that case too, since it is cloned over with full
     ///     history and not fetched into, and it is left sized as a fetch: its quarter only adds to what

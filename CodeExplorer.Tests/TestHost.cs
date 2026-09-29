@@ -77,11 +77,21 @@ public sealed class TestHost : IDisposable
     ///     Lowered to a few kilobytes so a fixture can cross <c>Index:MaxFileBytes</c> without committing
     ///     the 25 MiB the shipped default would take.
     /// </param>
+    /// <param name="repackPackThreshold">
+    ///     Lowered to a few packs so a handful of commit-and-refresh cycles cross it, where the shipped
+    ///     fifty would take fifty.
+    /// </param>
+    /// <param name="repackLooseObjectThreshold">
+    ///     The same for loose objects, which the clone of a local fixture starts out as.
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
         bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
         int? maxCommitPaths = null, int? transferStallSeconds = null, bool allowLocalRepositories = true,
-        string? allowedHosts = null, long? maxFileBytes = null)
+        string? allowedHosts = null, long? maxFileBytes = null, int? repackPackThreshold = null,
+        int? repackLooseObjectThreshold = null)
     {
+        _repackPackThreshold = repackPackThreshold;
+        _repackLooseObjectThreshold = repackLooseObjectThreshold;
         _allowLocalRepositories = allowLocalRepositories;
         _allowedHosts = allowedHosts;
         _engine = engine;
@@ -105,6 +115,8 @@ public sealed class TestHost : IDisposable
     private readonly int? _maxCommitPaths;
     private readonly int? _transferStallSeconds;
     private readonly long? _maxFileBytes;
+    private readonly int? _repackPackThreshold;
+    private readonly int? _repackLooseObjectThreshold;
     private bool _allowLocalRepositories;
     private readonly string? _allowedHosts;
 
@@ -147,6 +159,10 @@ public sealed class TestHost : IDisposable
                 builder.UseSetting("Git:TransferStallSeconds", stall.ToString(CultureInfo.InvariantCulture));
             if (_maxFileBytes is { } fileBytes)
                 builder.UseSetting("Index:MaxFileBytes", fileBytes.ToString(CultureInfo.InvariantCulture));
+            if (_repackPackThreshold is { } packs)
+                builder.UseSetting("Git:RepackPackThreshold", packs.ToString(CultureInfo.InvariantCulture));
+            if (_repackLooseObjectThreshold is { } loose)
+                builder.UseSetting("Git:RepackLooseObjectThreshold", loose.ToString(CultureInfo.InvariantCulture));
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
             if (_allowLocalRepositories) builder.UseSetting(RepositoryUrl.AllowLocalSetting, "true");
             if (_allowedHosts is { } hosts) builder.UseSetting(RequestOrigin.AllowedHostsSetting, hosts);

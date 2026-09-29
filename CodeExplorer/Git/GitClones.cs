@@ -64,6 +64,10 @@ public sealed class GitClones(
     // Set when the one class that talks to a remote is built, which is before its first transfer.
     private readonly int _stallSeconds = TransferStallLimit.Apply(configuration);
 
+    // Read here, with the stall limit, so a threshold the operator mistyped stops the first refresh
+    // with the setting's name rather than being found months later when a copy would have crossed it.
+    private readonly LocalCopyRepack _repack = new(configuration, logger);
+
     /// <summary>
     ///     Opens the repository with its local copy brought up to date: a fetch when it is already
     ///     cloned, and the clone itself when it is not, which is already current. This is the
@@ -121,9 +125,10 @@ public sealed class GitClones(
         var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
         // Both branches are synchronous libgit2 over the network; a worker thread keeps them off the
-        // request thread. A clone is already up to date, so it is never followed by a fetch.
+        // request thread. A clone is already up to date, so it is never followed by a fetch, and it
+        // arrives as one pack, so it is never repacked either.
         var transfer = Task.Run(() => IsUsableCopyOf(repository, path)
-            ? Fetch(repository, path, cancellationToken)
+            ? FetchAndRepack(repository, path, cancellationToken)
             : Clone(repository, path, cancellationToken), cancellationToken);
         // The gate is the transfer's and not this call's: it is released when libgit2 returns, however
         // long after the refresh has stopped waiting, so no clone starts over a folder one still writes.
@@ -195,8 +200,10 @@ public sealed class GitClones(
     ///     none yet. The free-space gate sizes a refresh against it (ADR-0007): a clone that exists
     ///     grows by a fetch, and one that does not exist yet is about to download an entire object
     ///     store, and those are different amounts of room to insist on.
-    ///     Walked rather than remembered, because a clone is deleted and repacked behind this class's
-    ///     back and a cached figure would be wrong in the direction that fills the disk.
+    ///     Walked rather than remembered, because a clone is deleted behind this class's back and shrinks
+    ///     when it is repacked (<see cref="LocalCopyRepack" />), and a cached figure would be wrong in the
+    ///     direction that fills the disk. A repack's staging folder is inside the clone, so the pack it
+    ///     is writing counts too.
     /// </summary>
     public long Footprint(string projectSlug)
     {
@@ -341,6 +348,20 @@ public sealed class GitClones(
         return head is DirectReference || (head is null && clone.Info.IsHeadDetached)
             ? FollowBranch(clone, repository, tip, "refs/remotes/origin/")
             : null;
+    }
+
+    /// <summary>
+    ///     The fetch, then the repack a fetch can make due (<see cref="LocalCopyRepack" />). Both inside
+    ///     the transfer, and so under the clone's gate and before the refresh opens the copy: the
+    ///     repack deletes pack files, which Windows refuses while anything has them mapped, and the
+    ///     fetch's own <see cref="Repository" /> is disposed by the time it starts. Its time is part of
+    ///     the fetch phase the refresh status reports for the repository.
+    /// </summary>
+    private string? FetchAndRepack(ProjectRepository repository, string path, CancellationToken cancellationToken)
+    {
+        string? note = Fetch(repository, path, cancellationToken);
+        _repack.RunIfDue(repository, path, cancellationToken);
+        return note;
     }
 
     /// <summary>
