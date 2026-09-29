@@ -214,35 +214,43 @@ public sealed class ProjectOverview(
     }
 
     /// <summary>
-    ///     Removes a project everywhere. The control database goes first, so nothing can start a clone
-    ///     or a build against a project that is on its way out; a running refresh relies on the order
-    ///     too, since it counts discards before it looks the project up. A project already gone from the control
-    ///     database — two operators deleting at once — still has its index and copies removed, which is
-    ///     what the second one asked for too.
+    ///     Removes a project everywhere. Refused, with nothing removed, while a refresh of the project
+    ///     is queued or running (<see cref="CodeExplorer.Refresh.RefreshService.RemoveUnlessRefreshingAsync" />):
+    ///     the refresh fetches into and repacks the local copies this deletes, and on Windows a delete
+    ///     meeting a pack it has mapped failed with the row and the index already gone and the clone
+    ///     half deleted. Null when the project was removed.
+    ///     The control database goes first, so nothing can start a clone or a build against a project
+    ///     that is on its way out. A refresh this replica runs can no longer be running meanwhile, but
+    ///     the order and the discard count are kept for one the refusal cannot see — its statuses are
+    ///     this replica's alone (#300) — which counts discards before it looks the project up
+    ///     (GHSA-253f-grfp-cqq7). A project already gone from the control database — two operators
+    ///     deleting at once — still has its index and copies removed, which is what the second one asked
+    ///     for too.
     /// </summary>
-    public async Task DeleteAsync(Project project, CancellationToken cancellationToken)
-    {
-        ExceptionDispatchInfo? unbackedUp = null;
-        try
+    public async Task<RefreshRefusal?> DeleteAsync(Project project, CancellationToken cancellationToken) =>
+        await refreshes.RemoveUnlessRefreshingAsync(project.Slug, "the project", async () =>
         {
-            await control.DeleteProjectAsync(project.Slug, cancellationToken);
-        }
-        catch (BackupFailedException ex)
-        {
-            // The row is gone and only its backup failed, so the rest of the delete still runs: stopping
-            // here left the index and copies for a project created later under the slug. Thrown once
-            // they are gone, so the operator still learns the store did not take the change.
-            unbackedUp = ExceptionDispatchInfo.Capture(ex);
-        }
+            ExceptionDispatchInfo? unbackedUp = null;
+            try
+            {
+                await control.DeleteProjectAsync(project.Slug, cancellationToken);
+            }
+            catch (BackupFailedException ex)
+            {
+                // The row is gone and only its backup failed, so the rest of the delete still runs:
+                // stopping here left the index and copies for a project created later under the slug.
+                // Thrown once they are gone, so the operator still learns the store did not take the change.
+                unbackedUp = ExceptionDispatchInfo.Capture(ex);
+            }
 
-        // Not the caller's token from here on: the project is already gone from the control database,
-        // so a delete abandoned now would leave its index and durable copy behind for a project created
-        // later under the slug to open (GHSA-253f-grfp-cqq7). The discard may wait for a refresh's
-        // durable store and for the drain.
-        await readers.DiscardAsync(project.Slug, CancellationToken.None);
-        await clones.RemoveAsync(project.Slug, null, CancellationToken.None);
-        unbackedUp?.Throw();
-    }
+            // Not the caller's token from here on: the project is already gone from the control database,
+            // so a delete abandoned now would leave its index and durable copy behind for a project
+            // created later under the slug to open (GHSA-253f-grfp-cqq7). The discard may wait for a
+            // restore holding the writer gate and for the drain of in-flight queries.
+            await readers.DiscardAsync(project.Slug, CancellationToken.None);
+            await clones.RemoveAsync(project.Slug, null, CancellationToken.None);
+            unbackedUp?.Throw();
+        });
 
     /// <summary>
     ///     Removes one repository and its local copy. Its files stay searchable until the next build,
@@ -255,7 +263,7 @@ public sealed class ProjectOverview(
         CancellationToken cancellationToken)
     {
         var found = false;
-        var refused = await refreshes.RemoveUnlessRefreshingAsync(project.Slug, async () =>
+        var refused = await refreshes.RemoveUnlessRefreshingAsync(project.Slug, "the repository", async () =>
         {
             ExceptionDispatchInfo? unbackedUp = null;
             try

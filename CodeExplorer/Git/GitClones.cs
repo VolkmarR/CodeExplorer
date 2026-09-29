@@ -243,9 +243,12 @@ public sealed class GitClones(
         await gate.WaitAsync(cancellationToken);
         try
         {
-            // The gate is keyed by clone path, so removing a project does not exclude a clone of one of
-            // its repositories running under a different key. The control database forgot them first,
-            // so nothing can start a new clone; one already in flight loses the race and leaves a folder.
+            // The gate is keyed by clone path, so removing a project does not exclude a fetch or a repack
+            // of one of its repositories running under a different key. That exclusion is the caller's:
+            // a project delete and a repository removal are refused while the project's refresh is
+            // queued or running (RefreshService.RemoveUnlessRefreshingAsync), and the refresh is the only
+            // thing that transfers. A transfer a cancelled refresh abandoned at shutdown can still be
+            // in flight; it loses the race and leaves a folder.
             await Task.Run(() => LocalCopyFiles.DeleteDirectory(path), cancellationToken);
         }
         finally

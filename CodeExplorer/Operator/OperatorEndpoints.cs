@@ -31,8 +31,11 @@ internal static class OperatorEndpoints
         project.MapGet("/excluded-paths/suggestions", (Project project, ProjectOverview overview,
             CancellationToken ct) => overview.SuggestExcludedPathsAsync(project, ct));
 
-        project.MapDelete("", (Project project, ProjectOverview overview, CancellationToken ct) =>
-            NoContentAfter(overview.DeleteAsync(project, ct)));
+        project.MapDelete("", async (Project project, ProjectOverview overview, CancellationToken ct) =>
+            await overview.DeleteAsync(project, ct) is { } refused
+                // The refusal carries its own status code, as a refused refresh does.
+                ? Results.Json(new { error = refused.Message }, statusCode: refused.StatusCode)
+                : Results.NoContent());
 
         project.MapDelete("/repositories/{repository}",
             async (Project project, string repository, ProjectOverview overview, CancellationToken ct) =>
@@ -45,12 +48,5 @@ internal static class OperatorEndpoints
                     _ => Results.NotFound(new
                         { error = $"Project '{project.Slug}' has no repository with slug '{repository}'." })
                 });
-    }
-
-    /// <summary>A removal that cannot fail once the project is bound answers 204, which a Task alone would not.</summary>
-    private static async Task<IResult> NoContentAfter(Task removal)
-    {
-        await removal;
-        return Results.NoContent();
     }
 }

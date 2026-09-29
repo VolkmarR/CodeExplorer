@@ -34,7 +34,9 @@ public sealed class ProjectRefresh(
         // Read before the project is: a delete counted after this is one the publish below refuses to
         // build over, and one counted before it has already taken the project out of the control
         // database, which the check that follows sees. A refresh that outlived a delete used to put the
-        // deleted project's index and durable copy back (GHSA-253f-grfp-cqq7).
+        // deleted project's index and durable copy back (GHSA-253f-grfp-cqq7). RefreshService now
+        // refuses a project delete while this runs, so this is the second line, for a delete that
+        // refusal cannot see: its statuses are one replica's (#300), and this class can be run without it.
         long discards = indexes.DiscardCount(project.Slug);
         // Re-read and not taken from the caller: a queued refresh can have been waiting while the
         // operator deleted the project, or deleted it and created another under the slug, whose record
