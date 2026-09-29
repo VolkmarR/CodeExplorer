@@ -367,6 +367,101 @@ public sealed class RefreshTests : IDisposable
         Assert.True(Directory.Exists(_host.ClonePath("beta", "two")));
     }
 
+    /// <summary>
+    ///     A project delete under a running refresh deleted the local copies the refresh was fetching
+    ///     into and repacking: on Windows the delete met a mapped pack and answered 500 with the row and
+    ///     the index already gone and the clone half deleted. Refused, it removes nothing, and once the
+    ///     refresh has finished the same delete goes through.
+    /// </summary>
+    [Fact]
+    public async Task A_project_is_not_deleted_while_its_refresh_runs()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+
+        using (var inFlight = await _host.OpenIndexAsync("alpha"))
+        {
+            using (var first = await _host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+            await WaitForSwapAsync(_host, "alpha");
+
+            using var deleted = await DeleteProjectAsync("alpha");
+
+            Assert.Equal(HttpStatusCode.Conflict, deleted.StatusCode);
+            string message = await ErrorAsync(deleted);
+            Assert.Contains("is running", message, StringComparison.Ordinal);
+            Assert.Contains("Remove the project after it has finished", message, StringComparison.Ordinal);
+            Assert.Contains("/api/projects/alpha/refresh", message, StringComparison.Ordinal);
+        }
+
+        await _host.WaitForRefreshesAsync();
+        Assert.Equal("one", Assert.Single((await DetailAsync("alpha")).Repositories).Slug);
+        Assert.True(File.Exists(_host.IndexFile("alpha")));
+        Assert.True(Directory.Exists(_host.ClonePath("alpha", "one")));
+
+        using var idle = await DeleteProjectAsync("alpha");
+        Assert.Equal(HttpStatusCode.NoContent, idle.StatusCode);
+        Assert.False(Directory.Exists(_host.ProjectClones("alpha")));
+    }
+
+    /// <summary>Queued is refused as well, for the reason a repository removal is.</summary>
+    [Fact]
+    public async Task A_project_is_not_deleted_while_its_refresh_is_queued()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        await _host.IndexedProjectAsync("beta", Fixture("two"));
+
+        using (var inFlight = await _host.OpenIndexAsync("alpha"))
+        {
+            using (var first = await _host.RequestRefreshAsync("alpha"))
+                Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+            await WaitForSwapAsync(_host, "alpha");
+            using (var second = await _host.RequestRefreshAsync("beta"))
+                Assert.Equal(HttpStatusCode.Accepted, second.StatusCode);
+            Assert.Equal(RefreshState.Queued, (await _host.RefreshStatusAsync("beta")).State);
+
+            using var deleted = await DeleteProjectAsync("beta");
+
+            Assert.Equal(HttpStatusCode.Conflict, deleted.StatusCode);
+            Assert.Contains("is queued", await ErrorAsync(deleted), StringComparison.Ordinal);
+        }
+
+        await _host.WaitForRefreshesAsync();
+        Assert.Equal("two", Assert.Single((await DetailAsync("beta")).Repositories).Slug);
+        Assert.True(Directory.Exists(_host.ClonePath("beta", "two")));
+    }
+
+    /// <summary>
+    ///     The other direction: a refresh asked for while the project is being deleted is refused until
+    ///     the delete ends. The delete is held in the discard of its index, which waits for the query the
+    ///     test keeps open, after the control database has forgotten the project; the request is made
+    ///     through the service, because the endpoint no longer finds the project to refresh by then.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_is_refused_while_its_project_is_being_deleted()
+    {
+        await _host.IndexedProjectAsync("alpha", Fixture());
+        var control = _host.Services.GetRequiredService<ControlDatabase>();
+        var project = (await control.FindAsync("alpha", Ct))!;
+
+        Task<HttpResponseMessage> deleting;
+        using (var inFlight = await _host.OpenIndexAsync("alpha"))
+        {
+            deleting = DeleteProjectAsync("alpha");
+            while (await control.FindAsync("alpha", Ct) is not null) await Task.Delay(10, Ct);
+            Assert.False(deleting.IsCompleted);
+
+            var refused = _host.Refreshes.Request(project).Refused;
+
+            Assert.NotNull(refused);
+            Assert.Equal((int)HttpStatusCode.Conflict, refused.StatusCode);
+            Assert.Contains("is being removed", refused.Message, StringComparison.Ordinal);
+        }
+
+        using var deleted = await deleting;
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        Assert.False(Directory.Exists(_host.ProjectClones("alpha")));
+    }
+
     [Fact]
     public async Task A_refresh_of_one_project_does_not_hold_up_removing_a_repository_of_another()
     {
@@ -407,7 +502,7 @@ public sealed class RefreshTests : IDisposable
     {
         await _host.IndexedProjectAsync("alpha", Fixture());
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var removal = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", async () =>
+        var removal = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", "the repository", async () =>
         {
             await release.Task;
             if (removalFails) throw new IOException("The local copy could not be deleted.");
@@ -438,8 +533,8 @@ public sealed class RefreshTests : IDisposable
         await _host.IndexedProjectAsync("alpha", Fixture());
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var first = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", () => releaseFirst.Task);
-        var second = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", () => releaseSecond.Task);
+        var first = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", "the repository", () => releaseFirst.Task);
+        var second = _host.Refreshes.RemoveUnlessRefreshingAsync("alpha", "the repository", () => releaseSecond.Task);
 
         releaseFirst.SetResult();
         Assert.Null(await first);
@@ -1126,6 +1221,12 @@ public sealed class RefreshTests : IDisposable
             if (settled(status)) return status;
             await Task.Delay(10, Ct);
         }
+    }
+
+    private async Task<HttpResponseMessage> DeleteProjectAsync(string project)
+    {
+        using var http = _host.CreateClient();
+        return await http.DeleteAsync($"/api/projects/{project}", Ct);
     }
 
     private async Task<HttpResponseMessage> RemoveRepositoryAsync(string project, string repository)

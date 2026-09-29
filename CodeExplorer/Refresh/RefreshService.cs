@@ -103,9 +103,10 @@ public sealed class RefreshService(
     private readonly ConcurrentDictionary<string, RefreshStatus> _statuses = new(StringComparer.Ordinal);
 
     /// <summary>
-    ///     How many repository removals of each project are running now, read and written under
-    ///     <see cref="_sync" />. A count and not a set: two operators may remove two repositories of one
-    ///     project at once, and the first to finish must not lift the refusal the second still needs.
+    ///     How many removals of each project, or of its repositories, are running now, read and written
+    ///     under <see cref="_sync" />. A count and not a set: two operators may remove two repositories of
+    ///     one project at once, or delete it twice, and the first to finish must not lift the refusal the
+    ///     second still needs.
     /// </summary>
     private readonly Dictionary<string, int> _removals = new(StringComparer.Ordinal);
 
@@ -150,7 +151,7 @@ public sealed class RefreshService(
             // can slip in between the other's check and its start.
             if (_removals.ContainsKey(project.Slug))
                 return new RefreshRequest(current, new RefreshRefusal(
-                    $"A repository of project '{project.Slug}' is being removed. "
+                    $"Project '{project.Slug}', or a repository of it, is being removed. "
                     + "Refresh again once the removal has finished.",
                     StatusCodes.Status409Conflict));
 
@@ -168,22 +169,30 @@ public sealed class RefreshService(
     }
 
     /// <summary>
-    ///     Runs <paramref name="removal" /> — a repository of the project leaving it — unless a refresh
-    ///     of that project is queued or running, and refuses <see cref="Request" /> for the project until
-    ///     it has finished. Null when the removal ran; the refusal when it did not run at all.
-    ///     A refresh reads its repository list once, when its slot comes up, and then holds each local
-    ///     copy open while it reads it. A removal landing under a running refresh either deleted a copy
-    ///     the refresh had open — a 500 on Windows once the control row was already gone, a failed
-    ///     build elsewhere — or deleted one the refresh had not reached yet, which the fetch then cloned
-    ///     back with full history and nothing ever removed again. Queued is refused as well as Running,
-    ///     because a queued refresh reads the list whenever the slot frees, which can be mid-removal.
+    ///     Runs <paramref name="removal" /> — a repository leaving the project, or the project itself
+    ///     being deleted — unless a refresh of that project is queued or running, and refuses
+    ///     <see cref="Request" /> for the project until it has finished. Null when the removal ran; the
+    ///     refusal when it did not run at all.
+    ///     A refresh reads its repository list once, when its slot comes up, and then fetches, repacks
+    ///     and holds open each local copy while it reads it. A removal landing under a running refresh
+    ///     either deleted a copy the refresh had open or was repacking — a 500 on Windows once the
+    ///     control row was already gone, with the clone half deleted, a failed build elsewhere — or
+    ///     deleted one the refresh had not reached yet, which the fetch then cloned back with full
+    ///     history and nothing ever removed again. A project delete is the same removal of every copy at
+    ///     once; <c>GitClones</c> gates each copy by its own path, so its gate never excluded the fetch.
+    ///     Queued is refused as well as Running, because a queued refresh reads the list whenever the
+    ///     slot frees, which can be mid-removal.
     ///     The check and the mark are one step under <see cref="_sync" />, as <see cref="Request" />'s
     ///     are, so the two exclude each other in both directions. The removal itself runs outside the
     ///     lock: it waits on the control database and the disk.
     ///     This replica's statuses are all it can see, which is enough while the storage design is one
     ///     replica; excluding a refresh on another replica is #300.
     /// </summary>
-    public async Task<RefreshRefusal?> RemoveUnlessRefreshingAsync(string slug, Func<Task> removal)
+    /// <param name="slug">The project whose refresh excludes the removal.</param>
+    /// <param name="removing">What is removed, as the refusal names it: "the repository", "the project".</param>
+    /// <param name="removal">The removal, run outside the lock.</param>
+    public async Task<RefreshRefusal?> RemoveUnlessRefreshingAsync(string slug, string removing,
+        Func<Task> removal)
     {
         lock (_sync)
         {
@@ -191,7 +200,7 @@ public sealed class RefreshService(
             if (current.State is RefreshState.Queued or RefreshState.Running)
                 return new RefreshRefusal(
                     $"A refresh of project '{slug}' is {(current.State == RefreshState.Queued ? "queued" : "running")}, and it reads the project's repositories and their local copies. "
-                    + $"Remove the repository after it has finished; poll GET /api/projects/{slug}/refresh for its progress.",
+                    + $"Remove {removing} after it has finished; poll GET /api/projects/{slug}/refresh for its progress.",
                     StatusCodes.Status409Conflict);
             _removals[slug] = _removals.GetValueOrDefault(slug) + 1;
         }

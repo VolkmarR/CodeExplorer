@@ -7,6 +7,7 @@ import { ExcludedPathsForm } from '@/features/projects/ExcludedPathsForm'
 import { ProjectCard } from '@/features/projects/ProjectCard'
 import { RepositoryTable } from '@/features/projects/RepositoryTable'
 import { projectQuery, projectsQuery } from '@/features/projects/queries'
+import { isRefreshRunning, refreshStatusQuery } from '@/features/refresh/queries'
 import { toast } from '@/components/ui/toast'
 
 /**
@@ -26,6 +27,14 @@ export function ProjectSettings() {
   const { data: project } = useSuspenseQuery(projectQuery(slug))
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+
+  // The server refuses a delete while a refresh of the project is queued or running, since the
+  // refresh fetches into and repacks the local copies the delete removes. The button is disabled for
+  // the same span rather than left to fail; the refusal still reaches the error panel if the status
+  // here is stale. Read from the cache without an interval of its own: ProjectCard on this page
+  // already polls it, and each observer's interval is a second poll (see refreshStatusQuery).
+  const { data: status } = useSuspenseQuery({ ...refreshStatusQuery(slug), refetchInterval: false })
+  const refreshing = isRefreshRunning(status)
 
   const remove = useMutation({
     mutationFn: () => removeProject(slug),
@@ -59,7 +68,7 @@ export function ProjectSettings() {
             </p>
           </div>
           <ConfirmDialog
-            trigger="Delete project"
+            trigger={refreshing ? 'Delete after the refresh' : 'Delete project'}
             title={`Delete ${project.name}?`}
             description={
               <>
@@ -71,7 +80,7 @@ export function ProjectSettings() {
               </>
             }
             action="Delete project"
-            disabled={remove.isPending}
+            disabled={remove.isPending || refreshing}
             onConfirm={() => remove.mutate()}
           />
         </section>

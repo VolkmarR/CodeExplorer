@@ -40,6 +40,10 @@ const INTERVALS = {
  * run side by side and the requests are the sum rather than the faster of them. That is a poll and a
  * fifth of a poll a second on the one page that is open while a rebuild is watched, which is the
  * rate the counter needs anyway; nowhere else is more than one watcher mounted.
+ *
+ * A component that only needs to know whether a refresh is running, on a page where a watcher is
+ * already mounted, reads the same entry with `{ ...refreshStatusQuery(slug), refetchInterval: false }`:
+ * the watcher's polls still reach it through the cache, and it adds no timer of its own.
  */
 export function refreshStatusQuery(slug: string, watcher: keyof typeof INTERVALS = 'page') {
   return queryOptions({
