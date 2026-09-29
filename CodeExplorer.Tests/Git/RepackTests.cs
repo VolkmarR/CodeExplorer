@@ -46,6 +46,51 @@ public sealed class RepackTests : IDisposable
         Assert.Equal(await AnswersAsync(reference), await AnswersAsync(_host));
     }
 
+    /// <summary>
+    ///     A copy already holding one large pack — the one an earlier repack wrote — folds only the
+    ///     small packs fetched since, as git's <c>--geometric=2</c> would: the large pack holds more than
+    ///     twice what they do, so its files stay as they were, and the next repack costs what was fetched
+    ///     rather than the whole history again.
+    /// </summary>
+    [Fact]
+    public async Task A_large_pack_stays_and_only_the_packs_fetched_since_are_folded()
+    {
+        using var reference = new TestHost(SearchEngine.Substring);
+        foreach (var host in new[] { _host, reference })
+        {
+            await host.CreateProjectAsync("alpha");
+            await host.AddRepositoryAsync("alpha", "main", host.CreateGitRepository("main", Large()));
+            await host.RefreshAsync("alpha");
+        }
+
+        string copy = _host.ClonePath("alpha", "main");
+        string packDirectory = Path.Combine(copy, "objects", "pack");
+        using (var clone = new Repository(copy))
+            clone.ObjectDatabase.Pack(new PackBuilderOptions(packDirectory));
+        foreach (string loose in Directory.EnumerateDirectories(Path.Combine(copy, "objects"), "??"))
+            TestHost.DeleteTree(loose);
+        string large = Path.ChangeExtension(Directory.GetFiles(packDirectory, "*.pack").Single(), null);
+        var packs = new List<int>();
+        for (int cycle = 1; cycle <= PackThreshold; cycle++)
+        {
+            foreach (var host in new[] { _host, reference })
+            {
+                host.CommitToGitRepository("main", Files(cycle));
+                await host.RefreshAsync("alpha");
+            }
+
+            packs.Add(Packs(copy));
+        }
+
+        Assert.Equal<int>([2, 3, 2], packs);
+        Assert.True(File.Exists(large + ".pack"));
+        Assert.True(File.Exists(large + ".idx"));
+        Assert.Equal(4, Directory.GetFiles(packDirectory).Length);
+        Assert.Equal(0, LooseObjects(copy));
+        AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
+        Assert.Equal(await AnswersAsync(reference), await AnswersAsync(_host));
+    }
+
     [Fact]
     public async Task A_copy_at_the_threshold_is_not_repacked()
     {
@@ -106,7 +151,9 @@ public sealed class RepackTests : IDisposable
         }
 
         // The held pack lost its index first and is invisible to libgit2 meanwhile; it still counts as a
-        // pack, so two more fetches take the copy past the threshold again.
+        // pack, so two more fetches take the copy past the threshold again. It holds nothing libgit2 can
+        // see, so it is folded with them, and the pack the first repack wrote is large enough to stay.
+        string[] repacked = Directory.GetFiles(Path.Combine(copy, "objects", "pack"), "*.idx");
         for (int cycle = PackThreshold + 2; cycle <= PackThreshold + 3; cycle++)
         {
             _host.CommitToGitRepository("main", Files(cycle));
@@ -114,7 +161,8 @@ public sealed class RepackTests : IDisposable
         }
 
         Assert.False(File.Exists(held));
-        AssertRepacked(copy);
+        Assert.True(File.Exists(Assert.Single(repacked)));
+        Assert.Equal(2, Packs(copy));
         AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
     }
 
@@ -225,6 +273,17 @@ public sealed class RepackTests : IDisposable
         [$"src/File{cycle}.cs"] = $"class C{cycle} {{}}",
         ["src/Shared.cs"] = string.Concat(Enumerable.Range(0, cycle + 1).Select(line => $"// line {line}\n"))
     };
+
+    /// <summary>
+    ///     A first commit many times the size of any later one, so the pack holding it outweighs twice
+    ///     the few packs fetched after it.
+    /// </summary>
+    private static Dictionary<string, string> Large()
+    {
+        var files = Files(0);
+        for (int module = 0; module < 40; module++) files[$"lib/Module{module}.cs"] = $"class Module{module} {{}}";
+        return files;
+    }
 
     /// <summary>One pack, its index beside it and nothing else, no loose object and no staging folder.</summary>
     private static void AssertRepacked(string copy)
