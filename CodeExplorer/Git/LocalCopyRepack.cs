@@ -446,6 +446,38 @@ internal sealed class LocalCopyRepack
         if (!ListsExactly(pack + ".idx", written, added))
             throw new InvalidDataException(
                 "The new pack's index does not list exactly the objects that were named to the pack builder.");
+
+        if (!HashesToItsTrailer(pack + ".pack"))
+            throw new InvalidDataException("The new pack's content, read back from disk, does not match its checksum.");
+    }
+
+    /// <summary>
+    ///     Whether the pack as it lies on disk hashes to the checksum it ends with. The trailer check above
+    ///     compares two checksums the builder computed from what it held in memory, so bytes spoiled on
+    ///     their way to the disk passed it; read back, they do not. The folded packs and loose objects are
+    ///     deleted on the strength of this pack, so it is worth one sequential read of it — well under a
+    ///     second for the measured copy's 242 MiB, beside the minute its writing took.
+    /// </summary>
+    private static bool HashesToItsTrailer(string pack)
+    {
+        using var stream = new FileStream(pack, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
+        long content = stream.Length - _idLength;
+        if (content < 12) return false;
+
+        using var sha1 = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA1);
+        var buffer = new byte[1 << 20];
+        for (long left = content; left > 0;)
+        {
+            int read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, left));
+            if (read == 0) return false;
+            sha1.AppendData(buffer, 0, read);
+            left -= read;
+        }
+
+        Span<byte> trailer = stackalloc byte[_idLength];
+        stream.ReadExactly(trailer);
+        return sha1.GetHashAndReset().AsSpan().SequenceEqual(trailer);
     }
 
     /// <summary>
