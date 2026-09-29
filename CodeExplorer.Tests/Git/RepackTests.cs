@@ -101,6 +101,22 @@ public sealed class RepackTests : IDisposable
     }
 
     /// <summary>
+    ///     Switched off, a copy past both thresholds is left as the fetches made it. Raising one threshold
+    ///     cannot do this, because a copy is repacked when it crosses either.
+    /// </summary>
+    [Fact]
+    public async Task A_repack_switched_off_leaves_a_copy_past_both_thresholds_alone()
+    {
+        using var host = new TestHost(SearchEngine.Substring, repackPackThreshold: PackThreshold,
+            repackLooseObjectThreshold: 1, repackEnabled: false);
+
+        var packs = await CyclesAsync(host, PackThreshold + 1);
+
+        Assert.Equal<int>([1, 2, 3, 4], packs);
+        Assert.True(LooseObjects(host.ClonePath("alpha", "main")) > 1);
+    }
+
+    /// <summary>
     ///     A first clone is never repacked, however far past a threshold it arrives: from a real remote it
     ///     is one pack already, and it is the fetch that makes a copy due. The fetch after it, bringing
     ///     nothing new, then repacks the same copy on its loose objects alone.

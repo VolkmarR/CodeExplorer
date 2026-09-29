@@ -217,8 +217,9 @@ a large, fragmented copy folds everything: for a repository of 4,380 commits tha
 minutes and about 600 MB of memory at its peak. Later repacks fold only what was fetched since and
 cost in proportion to it. The time is billed to that repository's fetch phase in the refresh status.
 The repack is skipped, with a warning in the log, while the drive has less free space than what it
-would fold takes. Both must be at least 1, or the server refuses to start and names the setting;
-to switch the repack off, set one past anything a copy will reach.
+would fold takes. Both must be at least 1, or the server refuses to start and names the setting.
+Crossing either threshold is enough, so raising one does not switch the repack off; set
+`Git:RepackEnabled` to `false` for that. It is on by default.
 
 `Index:MaxFileBytes` — 25 MiB by default — is the largest file a refresh reads. A larger file is
 listed with the reason but not indexed, and a commit that added or changed one is recorded in history

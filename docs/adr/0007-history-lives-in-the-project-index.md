@@ -142,7 +142,8 @@ read every blob at HEAD in 4.0 s instead of 5.7 s, and walked its history with a
 commit in 36.7 s instead of 47.9 s.
 
 A fetch is now followed by a repack when the copy holds more than `Git:RepackPackThreshold` packs
-(50) or `Git:RepackLooseObjectThreshold` loose objects (5000). A first clone never is, since it
+(50) or `Git:RepackLooseObjectThreshold` loose objects (5000). Either is enough, so neither
+threshold switches the repack off; `Git:RepackEnabled` does. A first clone never is, since it
 arrives as one pack. The repack uses LibGit2Sharp's `ObjectDatabase.Pack`, never the git CLI, and
 runs under the clone's gate before the refresh opens the copy, because Windows refuses to delete a
 pack libgit2 has mapped. Every `*.pack` counts, not only libgit2's `pack-*`: that copy also held

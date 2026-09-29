@@ -84,12 +84,14 @@ public sealed class TestHost : IDisposable
     /// <param name="repackLooseObjectThreshold">
     ///     The same for loose objects, which the clone of a local fixture starts out as.
     /// </param>
+    /// <param name="repackEnabled">Off only where the switch is the subject; the shipped default is on.</param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
         bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
         int? maxCommitPaths = null, int? transferStallSeconds = null, bool allowLocalRepositories = true,
         string? allowedHosts = null, long? maxFileBytes = null, int? repackPackThreshold = null,
-        int? repackLooseObjectThreshold = null)
+        int? repackLooseObjectThreshold = null, bool repackEnabled = true)
     {
+        _repackEnabled = repackEnabled;
         _repackPackThreshold = repackPackThreshold;
         _repackLooseObjectThreshold = repackLooseObjectThreshold;
         _allowLocalRepositories = allowLocalRepositories;
@@ -117,6 +119,7 @@ public sealed class TestHost : IDisposable
     private readonly long? _maxFileBytes;
     private readonly int? _repackPackThreshold;
     private readonly int? _repackLooseObjectThreshold;
+    private readonly bool _repackEnabled;
     private bool _allowLocalRepositories;
     private readonly string? _allowedHosts;
 
@@ -163,6 +166,7 @@ public sealed class TestHost : IDisposable
                 builder.UseSetting("Git:RepackPackThreshold", packs.ToString(CultureInfo.InvariantCulture));
             if (_repackLooseObjectThreshold is { } loose)
                 builder.UseSetting("Git:RepackLooseObjectThreshold", loose.ToString(CultureInfo.InvariantCulture));
+            if (!_repackEnabled) builder.UseSetting("Git:RepackEnabled", "false");
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
             if (_allowLocalRepositories) builder.UseSetting(RepositoryUrl.AllowLocalSetting, "true");
             if (_allowedHosts is { } hosts) builder.UseSetting(RequestOrigin.AllowedHostsSetting, hosts);
