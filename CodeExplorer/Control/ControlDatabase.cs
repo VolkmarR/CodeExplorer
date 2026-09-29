@@ -71,8 +71,9 @@ public sealed partial class ControlDatabase : IDisposable
     // engine, so the wait is on the upload and not on the work.
     private readonly SemaphoreSlim _backupGate = new(1, 1);
 
-    // Held by a project delete, and by every write that hangs a row off a project's slug from the
-    // moment it asks whether that project exists until its row is committed. repositories and
+    // Held by a project delete, by a create while it clears what a deleted project left under the slug,
+    // and by every write that hangs a row off a project's slug from the moment it asks whether that
+    // project exists until its row is committed. repositories and
     // excluded_paths carry no foreign key (see Migrate), so nothing in the engine refuses a row whose
     // project is gone: a delete committing between the check and the insert left the row behind with
     // its credential, and a project created later under the slug inherited it and cloned the deleted
@@ -116,10 +117,12 @@ public sealed partial class ControlDatabase : IDisposable
 
     private readonly IDataProtector _protector;
     private readonly DurableStore _store;
+    private readonly ILogger<ControlDatabase> _logger;
 
     public ControlDatabase(IConfiguration configuration, IDataProtectionProvider dataProtection, DurableStore store,
         ILogger<ControlDatabase> logger)
     {
+        _logger = logger;
         _protector = dataProtection.CreateProtector(KeyRing.CredentialPurpose);
         _store = store;
         _localAllowed = RepositoryUrl.LocalAllowed(configuration);
@@ -277,8 +280,42 @@ public sealed partial class ControlDatabase : IDisposable
 
         if (string.IsNullOrWhiteSpace(name)) return CreateProjectOutcome.MissingName;
 
+        await EnterProjectGateAsync(cancellationToken);
+        try
+        {
+            if (!await InsertProjectAsync(slug, name.Trim(), singleRepository, cancellationToken))
+                return CreateProjectOutcome.SlugTaken;
+
+            // Nothing positive can be cached for a slug that was free a statement ago, so this is the
+            // belt to the delete below: the rule is that every writer forgets, not that the one that
+            // matters does.
+            Forget(slug);
+        }
+        finally
+        {
+            _projectGate.Release();
+        }
+
+        await BackupAsync();
+        return CreateProjectOutcome.Created;
+    }
+
+    /// <summary>
+    ///     Inserts the project row, and clears any repository or excluded path a project deleted earlier
+    ///     under the slug left behind, in one transaction. False when the slug is taken, which rolls back
+    ///     and so leaves the existing project's rows alone. Such rows came from a write racing a delete
+    ///     before the project gate closed that race; the gate keeps new ones from appearing, and this is
+    ///     what stops one already in a deployed database from handing its stored credential to the new
+    ///     project's first refresh (GHSA-253f-grfp-cqq7). Under the project gate, so no gated write can
+    ///     add a row between the clear and the commit.
+    /// </summary>
+    private async Task<bool> InsertProjectAsync(string slug, string name, bool singleRepository,
+        CancellationToken cancellationToken)
+    {
         await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
+        command.Transaction = (DuckDBTransaction)transaction;
         // ON CONFLICT DO NOTHING keeps the existence check and the insert one statement, so two
         // concurrent creates cannot both succeed.
         command.CommandText = """
@@ -286,17 +323,26 @@ public sealed partial class ControlDatabase : IDisposable
                               VALUES ($slug, $name, $single) ON CONFLICT DO NOTHING
                               """;
         command.Parameters.Add(new DuckDBParameter("slug", slug));
-        command.Parameters.Add(new DuckDBParameter("name", name.Trim()));
+        command.Parameters.Add(new DuckDBParameter("name", name));
         command.Parameters.Add(new DuckDBParameter("single", singleRepository));
-        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1) return CreateProjectOutcome.SlugTaken;
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
 
-        // Nothing positive can be cached for a slug that was free a statement ago, so this is the
-        // belt to the delete below: the rule is that every writer forgets, not that the one that
-        // matters does.
-        Forget(slug);
+        command.Parameters.Clear();
+        command.Parameters.Add(new DuckDBParameter("slug", slug));
+        command.CommandText = "DELETE FROM repositories WHERE project_slug = $slug";
+        int orphans = await command.ExecuteNonQueryAsync(cancellationToken);
+        command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $slug";
+        orphans += await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
-        await BackupAsync();
-        return CreateProjectOutcome.Created;
+        if (orphans > 0 && _logger.IsEnabled(LogLevel.Warning))
+            _logger.LogWarning("Creating project {Project} removed {Rows} repository and excluded-path rows a "
+                              + "project deleted earlier under the slug had left behind", slug, orphans);
+        return true;
     }
 
     /// <summary>
