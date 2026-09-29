@@ -82,15 +82,6 @@ public sealed class RefreshService(
     ILogger<RefreshService> logger)
 {
     /// <summary>
-    ///     Default for <c>Refresh:MinimumFreeBytes</c>, the least free space a refresh is granted; what a
-    ///     shadow index costs beyond it is <see cref="ProjectIndexes.RoomForShadow" />'s judgement. A
-    ///     project with no index yet has nothing to scale from, so the floor stands in — 512 MiB out of
-    ///     the 8 GiB ceiling ADR-0003 measured, which is a first build of a large repository and still
-    ///     leaves room for the other projects.
-    /// </summary>
-    private const long _defaultMinimumFreeBytes = 512L * 1024 * 1024;
-
-    /// <summary>
     ///     What a fetch into an existing clone is assumed to add, as a fraction of what that clone
     ///     already occupies. A fetch transfers a delta as one more pack — a quarter is the judgement, and
     ///     it is a guess rather than a measurement because the real figure depends on how much was
@@ -105,8 +96,9 @@ public sealed class RefreshService(
     /// </summary>
     private const int _cloneGrowthDivisor = 4;
 
-    private readonly long _minimumFreeBytes =
-        configuration.GetValue("Refresh:MinimumFreeBytes", _defaultMinimumFreeBytes);
+    // The least free space a refresh is granted; what a shadow index costs beyond it is
+    // ProjectIndexes.RoomForShadow's judgement, and the default's is FreeSpace's.
+    private readonly long _minimumFreeBytes = FreeSpace.Minimum(configuration);
 
     private readonly ConcurrentDictionary<string, RefreshStatus> _statuses = new(StringComparer.Ordinal);
 
