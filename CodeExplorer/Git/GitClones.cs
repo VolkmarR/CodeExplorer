@@ -243,7 +243,7 @@ public sealed class GitClones(
             // The gate is keyed by clone path, so removing a project does not exclude a clone of one of
             // its repositories running under a different key. The control database forgot them first,
             // so nothing can start a new clone; one already in flight loses the race and leaves a folder.
-            await Task.Run(() => Delete(path), cancellationToken);
+            await Task.Run(() => LocalCopyFiles.DeleteDirectory(path), cancellationToken);
         }
         finally
         {
@@ -254,19 +254,6 @@ public sealed class GitClones(
         // repository ever removed. A clone starting now takes a fresh gate for a path that no longer
         // exists in the control database, which is the same race the comment above describes.
         _cloneGates.TryRemove(path, out _);
-    }
-
-    /// <summary>
-    ///     libgit2 marks pack files read-only, and <c>Directory.Delete</c> refuses a read-only file; the
-    ///     attributes are cleared first rather than left to fail on the first pack.
-    /// </summary>
-    private static void Delete(string path)
-    {
-        if (!Directory.Exists(path)) return;
-
-        foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories))
-            file.Attributes = FileAttributes.Normal;
-        Directory.Delete(path, true);
     }
 
     /// <summary>
@@ -311,7 +298,7 @@ public sealed class GitClones(
     private string? Clone(ProjectRepository repository, string path, CancellationToken cancellationToken)
     {
         // A folder that exists but is not a valid repository is a clone that failed half-way; start over.
-        Delete(path);
+        LocalCopyFiles.DeleteDirectory(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         var options = new CloneOptions { IsBare = true };
@@ -329,7 +316,7 @@ public sealed class GitClones(
         {
             // Judged before the delete, whose time would otherwise count as the remote's silence.
             var failure = TransferFailed("Cloning", repository, path, ex, watch);
-            Delete(path);
+            LocalCopyFiles.DeleteDirectory(path);
             cancellationToken.ThrowIfCancellationRequested();
             throw failure;
         }

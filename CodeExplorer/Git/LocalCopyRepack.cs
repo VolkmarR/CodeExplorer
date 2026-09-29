@@ -121,7 +121,7 @@ internal sealed class LocalCopyRepack
         {
             // After every fetch and not only a due one: a staging folder is a whole pack's worth of disk,
             // and the copy may not cross a threshold again for months.
-            DeleteDirectory(staging);
+            LocalCopyFiles.DeleteDirectory(staging);
 
             int packs = PackCount(objects);
             int loose = LooseObjectCount(objects);
@@ -426,7 +426,7 @@ internal sealed class LocalCopyRepack
         {
             try
             {
-                DeleteDirectory(directory);
+                LocalCopyFiles.DeleteDirectory(directory);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -442,7 +442,7 @@ internal sealed class LocalCopyRepack
     {
         try
         {
-            DeleteFile(file);
+            LocalCopyFiles.DeleteFile(file);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -478,30 +478,11 @@ internal sealed class LocalCopyRepack
     private static long Size(string directory) =>
         new DirectoryInfo(directory).EnumerateFiles("*", SearchOption.AllDirectories).Sum(file => file.Length);
 
-    /// <summary>
-    ///     libgit2 writes packs and loose objects read-only, and Windows refuses to delete a read-only
-    ///     file, so the attribute is cleared first.
-    /// </summary>
-    private static void DeleteFile(string file)
-    {
-        if (!File.Exists(file)) return;
-        File.SetAttributes(file, FileAttributes.Normal);
-        File.Delete(file);
-    }
-
-    private static void DeleteDirectory(string directory)
-    {
-        if (!Directory.Exists(directory)) return;
-        foreach (var file in new DirectoryInfo(directory).EnumerateFiles("*", SearchOption.AllDirectories))
-            file.Attributes = FileAttributes.Normal;
-        Directory.Delete(directory, true);
-    }
-
     private void TryDeleteDirectory(string directory)
     {
         try
         {
-            DeleteDirectory(directory);
+            LocalCopyFiles.DeleteDirectory(directory);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
