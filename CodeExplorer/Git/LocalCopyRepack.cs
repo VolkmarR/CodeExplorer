@@ -102,6 +102,12 @@ internal sealed class LocalCopyRepack
     }
 
     /// <summary>
+    ///     Called with the new pack's path, without its extension, once its files are in
+    ///     <c>objects/pack</c> and before they are checked, so a test can spoil them there. Null outside tests.
+    /// </summary>
+    internal Action<string>? PackPlaced { get; set; }
+
+    /// <summary>
     ///     The repack's settings, or <see cref="InvalidOperationException" /> naming the one that is not
     ///     usable. Called by <c>Program.cs</c> before the host is built, as the tenant's and the key
     ///     ring's settings are read, so a mistyped threshold stops the server with the setting's name.
@@ -279,7 +285,8 @@ internal sealed class LocalCopyRepack
                 // The .pack before the .idx, because the index is what makes libgit2 read the pack.
                 Place(pack, packDirectory, placed);
                 Place(index, packDirectory, placed);
-                Verify(path, Path.Combine(packDirectory, name), written);
+                PackPlaced?.Invoke(Path.Combine(packDirectory, name));
+                Verify(Path.Combine(packDirectory, name), written, added);
             }
             catch
             {
@@ -394,12 +401,16 @@ internal sealed class LocalCopyRepack
     }
 
     /// <summary>
-    ///     Refuses a pack that is not whole before the old ones go. Cheap, because the copy can hold
-    ///     millions of objects: the pack's header and its index's fan-out table must both count what the
-    ///     builder wrote, the pack must end in the checksum its index recorded for it, so a truncated
-    ///     pack fails, and the copy must still open and resolve HEAD's commit and tree with it in place.
+    ///     Refuses a pack that is not whole before the old ones go. The pack's header and its index's
+    ///     fan-out table must both count what the builder wrote, the pack must end in the checksum its
+    ///     index recorded for it, so a truncated pack fails, and the index must list exactly the objects
+    ///     that were named to the builder (<see cref="ListsExactly" />).
+    ///     That last check replaced resolving HEAD's commit and tree through libgit2, which proved nothing:
+    ///     it ran with every old pack still in place, so libgit2 answered from them whatever the new pack
+    ///     held, and HEAD's objects need not be among the folded ones at all when a large pack is kept.
+    ///     What must be in the new pack is what is about to be deleted, and that is the named set.
     /// </summary>
-    private static void Verify(string path, string pack, long written)
+    private static void Verify(string pack, long written, HashSet<ObjectKey> added)
     {
         using (var handle = File.OpenHandle(pack + ".pack"))
         using (var indexHandle = File.OpenHandle(pack + ".idx"))
@@ -420,9 +431,48 @@ internal sealed class LocalCopyRepack
                     $"The new pack does not hold the {written} objects the pack builder wrote, or is incomplete.");
         }
 
-        using var clone = new Repository(path);
-        if (clone.Head.Tip is { } tip && clone.Lookup<Tree>(tip.Tree.Id) is null)
-            throw new InvalidDataException("The local copy cannot resolve HEAD's tree with the new pack in place.");
+        if (!ListsExactly(pack + ".idx", written, added))
+            throw new InvalidDataException(
+                "The new pack's index does not list exactly the objects that were named to the pack builder.");
+    }
+
+    /// <summary>
+    ///     Whether the index lists every object in <paramref name="added" /> and nothing else, the way
+    ///     libgit2 will look them up. Every name must be in the set and each must sort strictly after the
+    ///     one before, so none repeats; with as many names as the set holds, which the caller has checked,
+    ///     that makes the two the same. The fan-out table must count them per first byte as they are, or
+    ///     a lookup that narrows by it would miss objects the names do hold.
+    ///     A full pass rather than a sample, because it is cheap beside the pack it checks: one sequential
+    ///     read of 20 bytes and one set lookup per object, the read <see cref="AddIndexed" /> has already
+    ///     done for every folded index, where writing the pack deltas and compresses every object. A
+    ///     sample would pass an index that lost the one object it did not ask about.
+    /// </summary>
+    private static bool ListsExactly(string index, long count, HashSet<ObjectKey> added)
+    {
+        using var stream = new FileStream(index, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+        var fanOut = new byte[256 * 4];
+        stream.Position = _fanOutOffset;
+        stream.ReadExactly(fanOut);
+
+        Span<byte> previous = stackalloc byte[_idLength];
+        Span<byte> id = stackalloc byte[_idLength];
+        var perFirstByte = new long[256];
+        for (long i = 0; i < count; i++)
+        {
+            stream.ReadExactly(id);
+            if ((i > 0 && id.SequenceCompareTo(previous) <= 0) || !added.Contains(ObjectKey.Of(id))) return false;
+            perFirstByte[id[0]]++;
+            id.CopyTo(previous);
+        }
+
+        long cumulative = 0;
+        for (int first = 0; first < 256; first++)
+        {
+            cumulative += perFirstByte[first];
+            if (BinaryPrimitives.ReadUInt32BigEndian(fanOut.AsSpan(first * 4)) != cumulative) return false;
+        }
+
+        return true;
     }
 
     /// <summary>

@@ -174,7 +174,10 @@ The order of the swap is the decision. A first attempt deleted the old packs bef
 in place, a delete failed half-way, and the copy was left missing objects. So the new pack is written
 outside `objects/pack`, moved in (`.pack`, then the `.idx` that makes it visible), and checked: its
 header and index must count what the builder wrote, which must be the number of distinct ids it was
-handed, and it must end in the checksum its index records. Only then are the folded packs and the
+handed, it must end in the checksum its index records, and its index must list exactly those ids,
+sorted and counted per first byte as its fan-out says. Resolving HEAD through libgit2 was the check
+at first, and it proved nothing: the old packs were still in place to answer. That full pass over
+the new index is one read and one set lookup per object. Only then are the folded packs and the
 loose objects deleted, with their read-only attribute cleared first. A failure before the check
 leaves the copy as it was. One after it leaves a whole copy with some old files beside the new pack,
 which the next repack folds. Nothing a repack does fails the refresh. It is skipped while the disk

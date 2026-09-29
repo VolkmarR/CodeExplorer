@@ -68,6 +68,9 @@ public sealed class GitClones(
     // here rather than handed in, because this class's constructor is public and the settings are not.
     private readonly LocalCopyRepack _repack = new(LocalCopyRepack.Settings(configuration), logger);
 
+    /// <summary>The repack, for a test that reaches its seam.</summary>
+    internal LocalCopyRepack Repack => _repack;
+
     /// <summary>
     ///     Opens the repository with its local copy brought up to date: a fetch when it is already
     ///     cloned, and the clone itself when it is not, which is already current. This is the

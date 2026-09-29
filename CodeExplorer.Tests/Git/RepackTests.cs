@@ -183,6 +183,47 @@ public sealed class RepackTests : IDisposable
     }
 
     /// <summary>
+    ///     A new pack whose index does not list what was folded is refused before anything old goes, and
+    ///     taken back out. The index here counts the right number of objects and records the pack's own
+    ///     checksum, so only the check that its names are the folded objects can see it; resolving HEAD
+    ///     through libgit2, which the check replaced, answered from the old packs still beside it.
+    /// </summary>
+    [Fact]
+    public async Task A_new_pack_whose_index_lists_other_objects_is_refused_and_the_old_ones_stay()
+    {
+        await CyclesAsync(_host, PackThreshold);
+        string copy = _host.ClonePath("alpha", "main");
+        string packDirectory = Path.Combine(copy, "objects", "pack");
+        int loose = LooseObjects(copy);
+        string? spoiled = null;
+        _host.Services.GetRequiredService<CodeExplorer.Git.GitClones>().Repack.PackPlaced = pack =>
+        {
+            spoiled = pack;
+            // The first name's last byte changed: still sorted, still counted, and no longer an object
+            // that was folded.
+            string index = pack + ".idx";
+            File.SetAttributes(index, FileAttributes.Normal);
+            using var stream = new FileStream(index, FileMode.Open, FileAccess.ReadWrite);
+            stream.Position = 8 + (256 * 4) + 19;
+            int last = stream.ReadByte();
+            stream.Position--;
+            stream.WriteByte((byte)(last ^ 1));
+        };
+
+        _host.CommitToGitRepository("main", Files(PackThreshold + 1));
+        await _host.RefreshAsync("alpha");
+
+        Assert.NotNull(spoiled);
+        Assert.False(File.Exists(spoiled + ".idx"));
+        Assert.False(File.Exists(spoiled + ".pack"));
+        Assert.Equal(PackThreshold + 1, Packs(copy));
+        Assert.Equal(PackThreshold + 1, Directory.GetFiles(packDirectory, "*.idx").Length);
+        Assert.Equal(loose, LooseObjects(copy));
+        AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
+        _host.Logs.Only(LogLevel.Warning, "could not be repacked");
+    }
+
+    /// <summary>
     ///     A staging folder is what a repack leaves when the process dies under it: a pack half written,
     ///     outside <c>objects</c>. The next fetch removes it whether or not it repacks, and the copy
     ///     is read as before.
