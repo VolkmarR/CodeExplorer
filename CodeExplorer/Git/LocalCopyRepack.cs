@@ -7,7 +7,7 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 namespace CodeExplorer.Git;
 
 /// <summary>When a fetch is followed by a repack, as <see cref="LocalCopyRepack.Settings" /> read it.</summary>
-internal sealed record RepackSettings(bool Enabled, int PackThreshold, int LooseObjectThreshold);
+internal sealed record RepackSettings(bool Enabled, int PackThreshold, int LooseObjectThreshold, long MinimumFreeBytes);
 
 /// <summary>
 ///     Folds a local copy's small packs and its loose objects into one pack once fetches have left too
@@ -89,6 +89,7 @@ internal sealed class LocalCopyRepack
     private readonly bool _enabled;
     private readonly int _packThreshold;
     private readonly int _looseObjectThreshold;
+    private readonly long _minimumFreeBytes;
     private readonly ILogger _logger;
 
     public LocalCopyRepack(RepackSettings settings, ILogger logger)
@@ -96,6 +97,7 @@ internal sealed class LocalCopyRepack
         _enabled = settings.Enabled;
         _packThreshold = settings.PackThreshold;
         _looseObjectThreshold = settings.LooseObjectThreshold;
+        _minimumFreeBytes = settings.MinimumFreeBytes;
         _logger = logger;
     }
 
@@ -110,7 +112,8 @@ internal sealed class LocalCopyRepack
     public static RepackSettings Settings(IConfiguration configuration) =>
         new(configuration.GetValue(EnabledSetting, true),
             Threshold(configuration, PackThresholdSetting, DefaultPackThreshold),
-            Threshold(configuration, LooseObjectThresholdSetting, DefaultLooseObjectThreshold));
+            Threshold(configuration, LooseObjectThresholdSetting, DefaultLooseObjectThreshold),
+            FreeSpace.Minimum(configuration));
 
     /// <summary>
     ///     A zero or a negative count would repack after every fetch or never mean anything, and the
@@ -159,19 +162,23 @@ internal sealed class LocalCopyRepack
 
             // The new pack is written beside the old objects, so for a moment the copy needs room for
             // both. It is at most about what the folded packs and the loose objects occupy now — the
-            // measured copy packed 457 MiB into 242 — so that is what must be free. The free-space gate
-            // does not reserve it: it sizes a refresh by what it keeps, and a repack gives back more
-            // than it borrows (ADR-0007).
+            // measured copy packed 457 MiB into 242 — so that is what must be free, on top of the least
+            // free space a refresh is granted: a repack allowed down to the last byte would leave every
+            // project's next refresh refused, and the index writes beside it failing, for upkeep. The
+            // free-space gate does not reserve it: it sizes a refresh by what it keeps, and a repack gives
+            // back more than it borrows (ADR-0007).
             long folded = plan.Folded.Sum(pack => FileLength(pack + ".pack"))
                           + LooseDirectories(objects).Sum(Size);
-            long free = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!).AvailableFreeSpace;
-            if (free < folded)
+            long free = FreeSpace.Available(path);
+            // Subtracted rather than added, so a margin configured as large as a long cannot overflow.
+            if (free - folded < _minimumFreeBytes)
             {
                 if (_logger.IsEnabled(LogLevel.Warning))
                     _logger.LogWarning("The local copy of repository {Repository} of project {Project} at {Path} "
                                        + "holds {Packs} packs and {Loose} loose objects but was not repacked: "
-                                       + "that needs up to {Needed} bytes free and {Free} are", repository.Slug,
-                        repository.ProjectSlug, path, packs, loose, folded, free);
+                                       + "that needs up to {Needed} bytes free beside the {Minimum} kept free for "
+                                       + "refreshes, and {Free} are", repository.Slug, repository.ProjectSlug, path,
+                        packs, loose, folded, _minimumFreeBytes, free);
                 return;
             }
 

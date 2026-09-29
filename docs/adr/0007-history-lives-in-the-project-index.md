@@ -178,5 +178,6 @@ handed, and it must end in the checksum its index records. Only then are the fol
 loose objects deleted, with their read-only attribute cleared first. A failure before the check
 leaves the copy as it was. One after it leaves a whole copy with some old files beside the new pack,
 which the next repack folds. Nothing a repack does fails the refresh. It is skipped while the disk
-has less free space than what it folds occupies, so the free-space gate does not reserve room for
+has less free space than what it folds occupies plus `Refresh:MinimumFreeBytes`, measured on the
+filesystem that holds the copy, so the free-space gate does not reserve room for
 it: the repack borrows that room for a moment and returns more than it borrowed.

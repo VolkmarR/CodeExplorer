@@ -257,9 +257,10 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     on top; twice the live size is the judgement. A project with no index yet has nothing to scale
     ///     from, so <paramref name="floor" /> stands in, and it is the least any refresh is granted.
     ///     In the container the volume is the ephemeral disk every project, every clone and the shadow
-    ///     file share, with a ceiling nothing can raise (ADR-0003). It is found from the path root,
-    ///     which is the drive on Windows and the root mount on Linux — the container has one writable
-    ///     filesystem, so that is the same volume.
+    ///     file share, with a ceiling nothing can raise (ADR-0003). It is the filesystem that holds the
+    ///     index folder (<see cref="FreeSpace.Available" />), and no longer the path root, which on Linux
+    ///     is always <c>/</c> and measured the image's own filesystem wherever the data directory is a
+    ///     mounted volume.
     /// </summary>
     /// <param name="slug">The project a refresh would rebuild.</param>
     /// <param name="floor">The least free space a refresh is granted, set by the caller's configuration.</param>
@@ -268,7 +269,7 @@ public sealed partial class ProjectIndexes : IDisposable
         // One FileInfo answers both questions; File.Exists followed by a second FileInfo stats twice.
         var file = new FileInfo(FilePath(slug));
         long live = file.Exists ? file.Length : 0;
-        long free = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(_directory))!).AvailableFreeSpace;
+        long free = FreeSpace.Available(_directory);
         return new DiskRoom(free, Math.Max(floor, live * 2));
     }
 
