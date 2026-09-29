@@ -251,6 +251,41 @@ public sealed class RepackTests : IDisposable
     }
 
     /// <summary>
+    ///     A new pack whose bytes were spoiled on their way to the disk is refused too. One byte in the
+    ///     middle of its object data changed: the header, the index and the checksum both of them record
+    ///     all still agree, so only reading the pack back and hashing it can tell.
+    /// </summary>
+    [Fact]
+    public async Task A_new_pack_spoiled_on_disk_is_refused_and_the_old_ones_stay()
+    {
+        await CyclesAsync(_host, PackThreshold);
+        string copy = _host.ClonePath("alpha", "main");
+        int loose = LooseObjects(copy);
+        string? spoiled = null;
+        _host.Services.GetRequiredService<CodeExplorer.Git.GitClones>().Repack.PackPlaced = pack =>
+        {
+            spoiled = pack;
+            string file = pack + ".pack";
+            File.SetAttributes(file, FileAttributes.Normal);
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.ReadWrite);
+            stream.Position = stream.Length / 2;
+            int middle = stream.ReadByte();
+            stream.Position--;
+            stream.WriteByte((byte)(middle ^ 0xff));
+        };
+
+        _host.CommitToGitRepository("main", Files(PackThreshold + 1));
+        await _host.RefreshAsync("alpha");
+
+        Assert.NotNull(spoiled);
+        Assert.False(File.Exists(spoiled + ".pack"));
+        Assert.Equal(PackThreshold + 1, Packs(copy));
+        Assert.Equal(loose, LooseObjects(copy));
+        AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
+        _host.Logs.Only(LogLevel.Warning, "could not be repacked");
+    }
+
+    /// <summary>
     ///     A staging folder is what a repack leaves when the process dies under it: a pack half written,
     ///     outside <c>objects</c>. The next fetch removes it whether or not it repacks, and the copy
     ///     is read as before.
