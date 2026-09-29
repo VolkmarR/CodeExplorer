@@ -446,6 +446,34 @@ public sealed class DurabilityTests : IDisposable
         Assert.False(Directory.Exists(host.ClonePath("alpha", "one")));
     }
 
+    /// <summary>
+    ///     The same for one repository: its row goes before the backup fails, so its local copy must go
+    ///     too, or it stays on disk with nothing that would ever lead to it again.
+    /// </summary>
+    [Fact]
+    public async Task A_repository_removal_whose_backup_fails_still_removes_its_local_copy()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+        var control = host.Services.GetRequiredService<ControlDatabase>();
+        var project = await control.FindAsync("alpha", Ct);
+        Assert.NotNull(project);
+        Assert.True(Directory.Exists(host.ClonePath("alpha", "one")));
+        File.SetAttributes(host.DurableControlBackup, FileAttributes.ReadOnly);
+        try
+        {
+            await Assert.ThrowsAsync<BackupFailedException>(() =>
+                host.Services.GetRequiredService<ProjectOverview>().DeleteRepositoryAsync(project, "one", Ct));
+        }
+        finally
+        {
+            File.SetAttributes(host.DurableControlBackup, FileAttributes.Normal);
+        }
+
+        Assert.Empty(await control.ListRepositoriesAsync("alpha", Ct));
+        Assert.False(Directory.Exists(host.ClonePath("alpha", "one")));
+    }
+
     [Fact]
     public async Task Deleting_a_project_that_was_never_indexed_is_not_an_error()
     {

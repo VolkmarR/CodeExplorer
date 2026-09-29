@@ -257,11 +257,24 @@ public sealed class ProjectOverview(
         var found = false;
         var refused = await refreshes.RemoveUnlessRefreshingAsync(project.Slug, async () =>
         {
-            found = await control.DeleteRepositoryAsync(project.Slug, slug, cancellationToken);
+            ExceptionDispatchInfo? unbackedUp = null;
+            try
+            {
+                found = await control.DeleteRepositoryAsync(project.Slug, slug, cancellationToken);
+            }
+            catch (BackupFailedException ex)
+            {
+                // The row is gone and only its backup failed, as in DeleteAsync: stopping here left the
+                // full clone on disk with no row that would ever lead to it again. Thrown once it is gone.
+                found = true;
+                unbackedUp = ExceptionDispatchInfo.Capture(ex);
+            }
+
             // Not the caller's token once the row is gone, for the reason DeleteAsync gives: nothing
             // would ever remove a copy left behind by an abandoned request, and it would hold disk and
             // count against the free-space gate of every later refresh.
             if (found) await clones.RemoveAsync(project.Slug, slug, CancellationToken.None);
+            unbackedUp?.Throw();
         });
         return new RepositoryRemoval(found, refused);
     }
