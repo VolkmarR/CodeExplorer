@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using CodeExplorer.Index;
 using CodeExplorer.Refresh;
-using Microsoft.Extensions.Logging;
+using LibGit2Sharp;
 using Xunit;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer.Tests;
 
@@ -69,7 +71,7 @@ public sealed class RepositoryTests : IDisposable
         await _host.RefreshAsync("alpha");
 
         Assert.Equal(!shallow, File.Exists(marker));
-        using (var repository = new LibGit2Sharp.Repository(copy))
+        using (var repository = new Repository(copy))
         {
             Assert.False(repository.Info.IsShallow);
             Assert.Equal(2, repository.Commits.Count());
@@ -147,4 +149,152 @@ public sealed class RepositoryTests : IDisposable
         Assert.Equal(HttpStatusCode.Conflict, dup.StatusCode);
     }
 
+    /// <summary>
+    ///     A branch whose lock file fits under Windows' 260 characters in <c>refs/heads/</c> and not in
+    ///     <c>refs/remotes/origin/</c>, eight characters longer, is fetched into the copy. Before the copy's
+    ///     refspec was its fetch's, libgit2 wrote every branch under both names, and the longer one failed
+    ///     the whole fetch with "path too long"; <c>core.longpaths</c> does not lift libgit2's limit. The
+    ///     name is sized from this run's clone path, since temp paths differ between machines.
+    /// </summary>
+    [Fact]
+    public async Task A_branch_too_long_to_track_under_refs_remotes_is_still_fetched()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows limits libgit2's paths to 260 characters.");
+        string source = _host.CreateGitRepository("source", new Dictionary<string, string> { ["README.md"] = "hello" });
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "main", source);
+        await _host.RefreshAsync("alpha");
+        string copy = _host.ClonePath("alpha", "main");
+        string branch = BranchFilling(copy, 254);
+        Assert.True(copy.Length + "/refs/remotes/origin/".Length + branch.Length + ".lock".Length > 260);
+        _host.CreateBranch("source", branch);
+
+        await _host.RefreshAsync("alpha");
+
+        using var repository = new Repository(copy);
+        Assert.Equal(_host.HeadOf("source"), repository.Refs["refs/heads/" + branch]?.TargetIdentifier);
+        AssertMirrorsBranchesOnly(repository);
+    }
+
+    /// <summary>
+    ///     A first clone leaves the copy as a fetch would: every branch of the remote a local branch,
+    ///     the refspec the fetch uses, nothing under <c>refs/remotes</c>. And a branch deleted upstream
+    ///     is still pruned once the prune has only the local branches to go by.
+    /// </summary>
+    [Fact]
+    public async Task A_first_clone_mirrors_every_branch_locally_and_a_fetch_prunes_one_deleted_upstream()
+    {
+        string source = _host.CreateGitRepository("source", new Dictionary<string, string> { ["README.md"] = "hello" });
+        _host.CreateBranch("source", "feature/one");
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "main", source);
+        await _host.RefreshAsync("alpha");
+        string copy = _host.ClonePath("alpha", "main");
+        using (var repository = new Repository(copy))
+        {
+            Assert.Equal(_host.HeadOf("source"), repository.Refs["refs/heads/feature/one"]?.TargetIdentifier);
+            AssertMirrorsBranchesOnly(repository);
+        }
+
+        using (var upstream = new Repository(source)) upstream.Branches.Remove("feature/one");
+        await _host.RefreshAsync("alpha");
+
+        using (var repository = new Repository(copy))
+        {
+            Assert.Null(repository.Refs["refs/heads/feature/one"]);
+            Assert.Equal("refs/heads/" + _host.BranchOf("source"), repository.Refs.Head.TargetIdentifier);
+            AssertMirrorsBranchesOnly(repository);
+        }
+    }
+
+    /// <summary>
+    ///     A copy made before its refspec was changed — git's default refspec configured and a
+    ///     remote-tracking ref for every branch, loose and packed, beside the local branches its fetches
+    ///     wrote — is changed over on its next fetch, and nothing a reader sees moves: the branches, HEAD
+    ///     and the index built from it are what they were.
+    /// </summary>
+    [Fact]
+    public async Task A_copy_tracking_its_remote_the_old_way_stops_on_its_next_fetch()
+    {
+        string source = _host.CreateGitRepository("source", new Dictionary<string, string> { ["README.md"] = "hello" });
+        _host.CreateBranch("source", "feature/one");
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "main", source);
+        await _host.RefreshAsync("alpha");
+        var before = await AnswersAsync();
+        string copy = _host.ClonePath("alpha", "main");
+        List<string> branches;
+        string head;
+        using (var repository = new Repository(copy))
+        {
+            repository.Network.Remotes.Update("origin",
+                r => r.FetchRefSpecs = ["+refs/heads/*:refs/remotes/origin/*"]);
+            branches = LocalBranches(repository);
+            head = repository.Refs.Head.TargetIdentifier;
+            repository.Refs.Add("refs/remotes/origin/" + _host.BranchOf("source"), _host.HeadOf("source"));
+            repository.Refs.Add("refs/remotes/origin/HEAD", "refs/remotes/origin/" + _host.BranchOf("source"));
+        }
+
+        // Packed as well as loose, because a ref in packed-refs has no file of its own to delete.
+        string packedRefs = Path.Combine(copy, "packed-refs");
+        var packed = File.Exists(packedRefs)
+            ? File.ReadAllLines(packedRefs).Where(line => !line.StartsWith('#')).ToList()
+            : [];
+        packed.Add($"{_host.HeadOf("source")} refs/remotes/origin/feature/one");
+        File.WriteAllLines(packedRefs, packed);
+        using (var repository = new Repository(copy))
+            Assert.Equal(3,
+                repository.Refs.Count(r => r.CanonicalName.StartsWith("refs/remotes/", StringComparison.Ordinal)));
+
+        await _host.RefreshAsync("alpha");
+
+        using (var repository = new Repository(copy))
+        {
+            AssertMirrorsBranchesOnly(repository);
+            Assert.Equal(branches, LocalBranches(repository));
+            Assert.Equal(head, repository.Refs.Head.TargetIdentifier);
+        }
+
+        if (File.Exists(packedRefs))
+            Assert.DoesNotContain("refs/remotes/",
+                await File.ReadAllTextAsync(packedRefs, TestContext.Current.CancellationToken),
+                StringComparison.Ordinal);
+        Assert.Equal(before, await AnswersAsync());
+    }
+
+    /// <summary>The copy's one refspec is the fetch's own, and no remote-tracking ref is left in it.</summary>
+    private static void AssertMirrorsBranchesOnly(Repository repository)
+    {
+        Assert.Equal("+refs/heads/*:refs/heads/*",
+            Assert.Single(repository.Network.Remotes["origin"].FetchRefSpecs).Specification);
+        Assert.Empty(repository.Refs.Where(r => r.CanonicalName.StartsWith("refs/remotes/", StringComparison.Ordinal))
+            .Select(r => r.CanonicalName));
+    }
+
+    /// <summary>Every local branch of the copy with its tip, in order.</summary>
+    private static List<string> LocalBranches(Repository repository) =>
+    [
+        .. repository.Refs.Where(r => r.CanonicalName.StartsWith("refs/heads/", StringComparison.Ordinal))
+            .Select(r => $"{r.CanonicalName} {r.TargetIdentifier}").Order(StringComparer.Ordinal)
+    ];
+
+    /// <summary>What the index built from the copy answers: every file, and every commit with its subject.</summary>
+    private async Task<List<string>[]> AnswersAsync() =>
+    [
+        await _host.ScalarsAsync("alpha", "SELECT qualified_path FROM files ORDER BY qualified_path"),
+        await _host.ScalarsAsync("alpha", "SELECT sha || ' ' || subject FROM commits ORDER BY sha")
+    ];
+
+    /// <summary>
+    ///     A branch name that makes <c>{copy}/refs/heads/{name}.lock</c> exactly <paramref name="lockLength" />
+    ///     characters, in folders of under a hundred, since NTFS limits a single name to 255.
+    /// </summary>
+    private static string BranchFilling(string copy, int lockLength)
+    {
+        int length = lockLength - (copy.Length + "/refs/heads/".Length + ".lock".Length);
+        var name = new StringBuilder("x");
+        while (name.Length < length)
+            name.Append(name.Length % 100 == 99 && name.Length < length - 1 ? '/' : 'n');
+        return name.ToString();
+    }
 }
