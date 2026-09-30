@@ -169,6 +169,16 @@ the bare clones and DuckDB's spill files at the same time. A SrcRadix-sized code
 of index. `Refresh:MinimumFreeBytes` — 512 MB by default — is what refuses a rebuild that would run
 the disk out, and it is worth raising here.
 
+Keep the data directory's path short, such as `C:\CodeExplorer\data`. libgit2 keeps Windows'
+260-character path limit, and setting `core.longpaths` does not lift it. A local copy lives at
+`<data>\clones\<project>\<repository>.git`, and a fetch writes each branch through a lock file at
+`<copy>\refs\heads\<branch>.lock`, so the copy's path plus `\refs\heads\` (12 characters), the branch
+name and `.lock` (5) must stay under 260. A branch over the limit fails the whole fetch for its
+repository with `path too long`. The first clone writes each branch under `refs\remotes\origin\` once
+before the copy moves it to `refs\heads\`, which is 8 characters longer, so a first clone needs 8
+characters more room. For example, `C:\CodeExplorer\data\clones\radix\srcradix.git` is 46 characters,
+which leaves 196 for a branch name on fetches and 188 on the first clone.
+
 A data directory kept from a server older than ADR-0007 holds shallow clones. Each is cloned over
 with its full history on its repository's next refresh, which is one full download per repository
 and a clone directory that grows accordingly, and that repository's history is then imported again
