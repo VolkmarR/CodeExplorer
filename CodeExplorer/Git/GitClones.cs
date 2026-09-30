@@ -335,12 +335,80 @@ public sealed class GitClones(
         // refs/remotes/origin/HEAD for a detached one too. So the remote is asked, once per first clone,
         // which is one ref advertisement beside a download of the whole history. Unanswered, a clone
         // libgit2 left detached is still decided, and one it put on a branch keeps it.
+        // Decided before MirrorBranchesOnly, while the remote-tracking refs libgit2's clone wrote are
+        // still there to choose among: at this point they are the only place the other branches exist.
         using var clone = new Repository(path);
-        if (clone.Head.Tip is not { Sha: var tip }) return null;
-        var head = AdvertisedReferences(repository, cancellationToken)?.FirstOrDefault(r => r.CanonicalName == "HEAD");
-        return head is DirectReference || (head is null && clone.Info.IsHeadDetached)
-            ? FollowBranch(clone, repository, tip, "refs/remotes/origin/")
-            : null;
+        string? note = null;
+        if (clone.Head.Tip is { Sha: var tip })
+        {
+            var head = AdvertisedReferences(repository, cancellationToken)
+                ?.FirstOrDefault(r => r.CanonicalName == "HEAD");
+            if (head is DirectReference || (head is null && clone.Info.IsHeadDetached))
+                note = FollowBranch(clone, repository, tip, "refs/remotes/origin/");
+        }
+
+        MirrorBranchesOnly(clone, keepBranches: true);
+        return note;
+    }
+
+    /// <summary>
+    ///     The refspec a local copy is fetched with and configured with: every branch of the remote onto
+    ///     the local branch of the same name, forced. See <see cref="Fetch" /> for why local branches.
+    /// </summary>
+    private const string _mirrorRefSpec = "+refs/heads/*:refs/heads/*";
+
+    /// <summary>
+    ///     Makes the copy's configured refspec <see cref="_mirrorRefSpec" /> and deletes every ref under
+    ///     <c>refs/remotes/</c>, so that a fetch writes each branch once. <c>Repository.Clone</c> configures
+    ///     git's default <c>+refs/heads/*:refs/remotes/origin/*</c>, which its <c>CloneOptions</c> offer no
+    ///     way to change, and libgit2 applies the configured refspec on every fetch as well as the one it
+    ///     is handed, updating remote-tracking refs opportunistically. So every branch was written twice,
+    ///     the second time under a name eight characters longer, and on Windows a branch whose
+    ///     <c>refs/remotes/origin/</c> lock file passed 260 characters failed the whole fetch with "path
+    ///     too long": libgit2 keeps that limit, and <c>core.longpaths</c> does not lift it. Nothing reads
+    ///     the remote-tracking refs once a first clone has chosen its branch: the tree walk and the history
+    ///     read HEAD, which names a local branch.
+    ///     Run after every first clone and before every fetch, so a copy made before this is changed over
+    ///     on its next refresh and one made since holds them only for the moment after its clone. Checked
+    ///     rather than rewritten, so a copy already right costs a read of its config and nothing is written.
+    ///     The first clone itself still writes each branch under <c>refs/remotes/origin/</c>, because the
+    ///     clone is libgit2's: a branch too long for that name fails the first clone, and only a shorter
+    ///     data directory helps there (docs/deployment/iis-windows-server.md).
+    /// </summary>
+    /// <param name="clone">The local copy.</param>
+    /// <param name="keepBranches">
+    ///     True after a first clone, where the remote-tracking refs are the only copy of every branch but
+    ///     the one HEAD names: each becomes the local branch a fetch would have written. False before a
+    ///     fetch, which writes those itself and prunes, so a stale remote-tracking ref is not brought back
+    ///     as a branch.
+    /// </param>
+    private static void MirrorBranchesOnly(Repository clone, bool keepBranches)
+    {
+        using (var origin = clone.Network.Remotes["origin"])
+        {
+            if (origin is not null
+                && !origin.FetchRefSpecs.Select(r => r.Specification).SequenceEqual([_mirrorRefSpec]))
+                clone.Network.Remotes.Update("origin", r => r.FetchRefSpecs = [_mirrorRefSpec]);
+        }
+
+        // All of refs/remotes and not only origin's: the copy has no other remote, so anything there is a
+        // remote-tracking ref nothing reads. Listed first, because the loop deletes what it walks.
+        const string tracking = "refs/remotes/origin/";
+        var remoteTracking = clone.Refs
+            .Where(r => r.CanonicalName.StartsWith("refs/remotes/", StringComparison.Ordinal))
+            .ToList();
+        foreach (var reference in remoteTracking)
+        {
+            // Only a direct ref is a branch; refs/remotes/origin/HEAD is symbolic and names one of them.
+            if (keepBranches && reference is DirectReference { CanonicalName: var name, TargetIdentifier: var tip }
+                             && name.StartsWith(tracking, StringComparison.Ordinal))
+            {
+                string branch = "refs/heads/" + name[tracking.Length..];
+                if (clone.Refs[branch] is null) clone.Refs.Add(branch, tip);
+            }
+
+            clone.Refs.Remove(reference);
+        }
     }
 
     /// <summary>
@@ -363,7 +431,9 @@ public sealed class GitClones(
     ///     and that is what the tree walk reads, so a fetch that only moved <c>refs/remotes</c> would
     ///     download the commits and index none of them. It is forced because there is no working copy
     ///     and nothing to merge — the remote's history replaces ours outright, including after a force
-    ///     push. Answers the note <see cref="AlignHead" /> wrote, if any.
+    ///     push. The copy is configured with the same refspec first (<see cref="MirrorBranchesOnly" />):
+    ///     handing libgit2 this one does not stop it applying the configured one too. Answers the note
+    ///     <see cref="AlignHead" /> wrote, if any.
     /// </summary>
     private string? Fetch(ProjectRepository repository, string path, CancellationToken cancellationToken)
     {
@@ -377,9 +447,10 @@ public sealed class GitClones(
             logger.LogInformation("Fetching repository {Repository} of project {Project}",
                 repository.Slug, repository.ProjectSlug);
         using var clone = new Repository(path);
+        MirrorBranchesOnly(clone, keepBranches: false);
         try
         {
-            Commands.Fetch(clone, "origin", ["+refs/heads/*:refs/heads/*"], options, null);
+            Commands.Fetch(clone, "origin", [_mirrorRefSpec], options, null);
         }
         catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
         {
@@ -465,8 +536,9 @@ public sealed class GitClones(
     /// <param name="detachedAt">The commit the remote's HEAD is detached at.</param>
     /// <param name="branchPrefix">
     ///     Where the clone holds the remote's branches: <c>refs/heads/</c> after a fetch, which mirrors
-    ///     them, and <c>refs/remotes/origin/</c> after a first clone, because libgit2's bare clone still
-    ///     maps them there. The chosen one is written as a local branch for HEAD to name.
+    ///     them, and <c>refs/remotes/origin/</c> right after a first clone, because libgit2's bare clone
+    ///     maps them there until <see cref="MirrorBranchesOnly" /> moves them. The chosen one is written as
+    ///     a local branch for HEAD to name.
     /// </param>
     private string? FollowBranch(Repository clone, ProjectRepository repository, string detachedAt,
         string branchPrefix)
@@ -501,8 +573,9 @@ public sealed class GitClones(
     /// <summary>
     ///     What the remote advertises, or null when it could not be reached. Separate
     ///     from the fetch because the refspec writes branches only: nothing in a fetch carries the
-    ///     remote's HEAD, and <c>refs/remotes/origin/HEAD</c> in the clone is written once at clone
-    ///     time and never updated, so it is stale exactly when this is needed.
+    ///     remote's HEAD, and the <c>refs/remotes/origin/HEAD</c> a clone writes is deleted with the other
+    ///     remote-tracking refs (<see cref="MirrorBranchesOnly" />); it was never updated after the clone,
+    ///     so it was stale exactly when this is needed.
     /// </summary>
     private List<GitReference>? AdvertisedReferences(ProjectRepository repository,
         CancellationToken cancellationToken)
