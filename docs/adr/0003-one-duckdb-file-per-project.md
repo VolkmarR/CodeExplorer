@@ -121,3 +121,21 @@ contention.
 
 Measured on this machine, over 200 calls after a warm-up: `repo_info` on a warm project went from
 26.0 ms to 15.2 ms.
+
+## Revisited on 2026-10-01: one replica, by design
+
+Everything above assumes one server process owning the disk, and that is a design decision, not a
+deployment default. The application runs at a maximum scale of one: one replica on Container Apps,
+one worker process on IIS. What keeps a refresh, a repack, a repository removal and a project delete
+of the same project apart is in process — `RefreshService` refuses the one while the other runs, and
+`ControlDatabase` and `GitClones` gate their writes — and a gate in one process sees nothing another
+process does. That is complete only because no second process runs.
+
+The one exception is a deploy. Container Apps keeps the old revision serving until the new one is
+ready, so for that window two replicas are up, each with its own control database restored from the
+same backup. It is rare and short, and the design accepts it instead of coordinating across replicas
+— the cross-replica guard #300 proposed, an incarnation id compared before a refresh stores and
+swaps, is not built. The deployment guides say what to avoid while a deploy runs: no refresh and no
+change to projects, repositories or settings until the new revision serves alone. IIS gets the same
+guarantee from its application pool settings, which forbid a second worker process and an
+overlapped recycle.

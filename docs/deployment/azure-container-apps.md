@@ -103,6 +103,13 @@ that allows one rebuild at a time is in process (ADR-0003). A second replica wou
 of `control.duckdb`, restored from the same blob and written back over the first one's changes.
 Scale out is a change to the storage design, not a slider.
 
+The application is designed for one replica, and only one. The in-process gates that keep a
+refresh, a repack and a delete of the same project apart see this replica alone, and that is
+enough because no second replica runs beside it. The one time two do is a deploy: the old revision
+keeps serving until the new one is ready, so for that window both are up. It is rare and short, and
+the design accepts it rather than coordinating across replicas; see "Upgrading" for what to avoid
+while it lasts.
+
 `--cpu 2 --memory 4Gi` is the top of the Consumption plan, and the reason to ask for it is not CPU:
 Container Apps allocates ephemeral storage by vCPU, "over 1 vCPU" is the top of that table, and the
 8 GiB it yields is the hard ceiling ADR-0003 budgets — indexes, the shadow file during a rebuild,
@@ -273,6 +280,13 @@ Two consequences worth stating once:
 `az acr build` a new tag, then `az containerapp update -g $RG -n $APP --image
 $ACR.azurecr.io/codeexplorer:<tag>`. Container Apps replaces the revision, so the new replica starts
 with an empty disk and restores lazily as ADR-0003 intends.
+
+While the revision is replaced, the old and the new replica run side by side until the new one is
+ready — the only time the application is not a single replica. Neither sees the other's refreshes or
+the other's copy of the control database. So during a deploy, change nothing: no refresh, no project
+or repository created or deleted, no setting saved. A refresh the old replica finishes then can still
+store its project's durable copy, and a change made on one replica can be overwritten by the other's
+control-database backup. Wait until the new revision serves alone, then refresh what you need.
 
 A release that raises `SchemaVersion` makes the first warm-up after it long, because every project is
 rebuilt rather than restored (ADR-0007). Deploy those before a warm-up window rather than during one.

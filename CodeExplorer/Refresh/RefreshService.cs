@@ -185,8 +185,8 @@ public sealed class RefreshService(
     ///     The check and the mark are one step under <see cref="_sync" />, as <see cref="Request" />'s
     ///     are, so the two exclude each other in both directions. The removal itself runs outside the
     ///     lock: it waits on the control database and the disk.
-    ///     This replica's statuses are all it can see, which is enough while the storage design is one
-    ///     replica; excluding a refresh on another replica is #300.
+    ///     This replica's statuses are all it can see, which is enough because the application runs as
+    ///     one replica by design; two overlap only while a new version deploys (ADR-0003).
     /// </summary>
     /// <param name="slug">The project whose refresh excludes the removal.</param>
     /// <param name="removing">What is removed, as the refusal names it: "the repository", "the project".</param>

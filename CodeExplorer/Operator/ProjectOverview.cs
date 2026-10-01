@@ -222,7 +222,8 @@ public sealed class ProjectOverview(
     ///     The control database goes first, so nothing can start a clone or a build against a project
     ///     that is on its way out. A refresh this replica runs can no longer be running meanwhile, but
     ///     the order and the discard count are kept for one the refusal cannot see — its statuses are
-    ///     this replica's alone (#300) — which counts discards before it looks the project up
+    ///     this replica's alone, and a deploy briefly runs two (ADR-0003) — which counts discards before
+    ///     it looks the project up
     ///     (GHSA-253f-grfp-cqq7). A project already gone from the control database — two operators
     ///     deleting at once — still has its index and copies removed, which is what the second one asked
     ///     for too.
