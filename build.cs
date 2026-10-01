@@ -1,14 +1,18 @@
 #:sdk Cake.Sdk@6.3.0
 
-// Packages the two deployments `docs/deployment/` describes, from one checkout:
+// Packages the three deployments `docs/deployment/` describes, from one checkout:
 //
-//   Package-Container  the image `azure-container-apps.md` deploys, built by the `Dockerfile`.
-//   Package-Zip        the folder `iis-windows-server.md` unpacks into C:\CodeExplorer.
+//   Package-Container   the image `azure-container-apps.md` deploys, built by the `Dockerfile`.
+//   Package-Zip         the folder `iis-windows-server.md` unpacks into C:\CodeExplorer.
+//   Package-Evaluation  the self-contained folder `local-evaluation.md` unpacks on one Windows PC,
+//                       with the stdio proxy Claude Desktop starts. Not part of the default target.
 //
-// They share no steps on purpose. The `Dockerfile` builds the UI and bakes the `fts` extension
-// inside its own stages, so a container package is one `docker build` and nothing here may
+// The first two share no steps on purpose. The `Dockerfile` builds the UI and bakes the `fts`
+// extension inside its own stages, so a container package is one `docker build` and nothing here may
 // duplicate it; the zip has to do both itself, on this machine, because there is no second stage to
-// do it in. That asymmetry is the whole reason the two targets look so different in length.
+// do it in. That asymmetry is the whole reason the two targets look so different in length. The
+// evaluation package is the zip's sibling: the same UI build and the same `fts` bake, around a
+// different publish.
 
 var target = Argument("target", "Package");
 var configuration = Argument("configuration", "Release");
@@ -32,6 +36,18 @@ var bakeFts = !HasArgument("no-fts");
 var zipStage = artifacts + Directory("zip");
 var publishDirectory = zipStage + Directory("app");
 var extensionDirectory = zipStage + Directory("duckdb/extensions");
+
+// Laid out as local-evaluation.md's paths: `app` holds both programs, so the proxy finds the server
+// and the settings file beside itself, and `data` appears beside `app` on the server's first start.
+var evaluationStage = artifacts + Directory("evaluation");
+var evaluationApp = evaluationStage + Directory("app");
+var evaluationExtensions = evaluationStage + Directory("duckdb/extensions");
+// The proxy publishes on its own and only its executable is copied into `app`: two publishes into
+// one folder would let the second overwrite whatever file names they share.
+var proxyStage = artifacts + Directory("proxy");
+
+// What a self-contained win-x64 publish of the server must hold; Publish-Evaluation says why each one.
+string[] evaluationRequired = ["CodeExplorer.exe", "duckdb.dll", "hostfxr.dll"];
 
 Task("Clean")
     .Does(() =>
@@ -78,30 +94,8 @@ Task("Install-Fts")
     .IsDependentOn("Publish")
     .Does(() =>
 {
-    if (!bakeFts)
-    {
-        Warning("--no-fts: the zip carries no extension. Run section 2 of docs/deployment/iis-windows-server.md on the server before it serves anything.");
-        return;
-    }
-
-    // Run through the published application rather than fetching the extension some other way: it is
-    // stamped with the DuckDB version and the platform of the build that will load it, and only
-    // these binaries on this machine know both. Which is also why this cannot run on the container
-    // image's Linux — its copy is `linux_amd64` and a Windows host ignores it.
-    if (!IsRunningOnWindows())
-    {
-        throw new CakeException("The Windows zip has to be packaged on Windows: the fts extension is platform-stamped and a Linux build bakes a copy no Windows host will load. Use --no-fts to package without it and install it on the server.");
-    }
-
-    DotNetExecute(publishDirectory + File("CodeExplorer.dll"), $"--install-fts \"{MakeAbsolute(extensionDirectory)}\"");
-
-    // The install reaches the network and the app deliberately does not swallow a failure, so this is
-    // belt and braces — but it is also the one assertion that distinguishes "installed" from
-    // "installed for the wrong platform", which is invisible until the server starts.
-    if (GetSubDirectories(extensionDirectory).SelectMany(GetSubDirectories).All(d => d.GetDirectoryName() != "windows_amd64"))
-    {
-        throw new CakeException($"No windows_amd64 extension under {extensionDirectory} after the install.");
-    }
+    InstallFts(publishDirectory + File("CodeExplorer.dll"), extensionDirectory,
+        "--no-fts: the zip carries no extension. Run section 2 of docs/deployment/iis-windows-server.md on the server before it serves anything.");
 });
 
 Task("Package-Zip")
@@ -114,6 +108,88 @@ Task("Package-Zip")
 
     var package = artifacts + File($"codeexplorer-{version}-win-x64.zip");
     Zip(zipStage, package);
+    Information($"Packaged {package}");
+});
+
+Task("Publish-Evaluation")
+    .IsDependentOn("Build-Web")
+    .Does(() =>
+{
+    // Self-contained for win-x64, unlike the IIS zip: the evaluator's PC has no hosting bundle and
+    // nobody to install one, so the runtime travels in `app`. The IIS publish above stays portable
+    // and framework-dependent, as its guide documents.
+    DotNetPublish("CodeExplorer/CodeExplorer.csproj", new DotNetPublishSettings
+    {
+        Configuration = configuration,
+        OutputDirectory = evaluationApp,
+        Runtime = "win-x64",
+        SelfContained = true,
+        NoLogo = true,
+    });
+
+    // A RID-specific publish flattens the `runtimes` tree the portable one carries, so the native
+    // DuckDB library sits beside the executable rather than under runtimes\win-x64\native, and the
+    // portable task's check would look in the wrong place. hostfxr.dll is what a self-contained
+    // publish carries and a framework-dependent one does not: its absence is a package that would ask
+    // the PC for a .NET install it does not have.
+    foreach (var required in evaluationRequired)
+    {
+        if (!FileExists(evaluationApp + File(required)))
+        {
+            throw new CakeException($"The evaluation publish has no {required} in {evaluationApp}. The package would not run on a PC without .NET.");
+        }
+    }
+});
+
+Task("Publish-Proxy")
+    .IsDependentOn("Clean")
+    .Does(() =>
+{
+    // One file, its runtime inside it and trimmed to what it uses: it is the path a tester types into
+    // Claude Desktop's configuration, and it starts once per project each time Claude Desktop does.
+    // The project turns the trim and single-file analyzers on, so what would break trimmed fails the
+    // ordinary build first.
+    DotNetPublish("CodeExplorer.McpProxy/CodeExplorer.McpProxy.csproj", new DotNetPublishSettings
+    {
+        Configuration = configuration,
+        OutputDirectory = proxyStage,
+        Runtime = "win-x64",
+        SelfContained = true,
+        PublishSingleFile = true,
+        PublishTrimmed = true,
+        NoLogo = true,
+    });
+});
+
+Task("Package-Evaluation")
+    .IsDependentOn("Publish-Evaluation")
+    .IsDependentOn("Publish-Proxy")
+    .Does(() =>
+{
+    var proxy = evaluationApp + File("CodeExplorer.McpProxy.exe");
+    if (FileExists(proxy))
+    {
+        throw new CakeException($"The server's publish already holds {proxy}; copying the proxy over it would hide which one is in the package.");
+    }
+
+    CopyFile(proxyStage + File("CodeExplorer.McpProxy.exe"), proxy);
+    Information($"The proxy is {FileSize(proxy) / 1024.0 / 1024.0:0.0} MiB.");
+
+    // The settings the server, the proxy and start.cmd all read. In `app`, because the server loads
+    // appsettings.<environment>.json from its content root and the proxy looks beside itself.
+    CopyFile("deploy/evaluation/appsettings.Evaluation.json", evaluationApp + File("appsettings.Evaluation.json"));
+
+    InstallFts(evaluationApp + File("CodeExplorer.exe"), evaluationExtensions,
+        "--no-fts: the package carries no extension. Its server pins Index:SearchEngine to Fts, so it downloads the extension on its first start and will not start offline.");
+
+    CopyFile("deploy/evaluation/start.cmd", evaluationStage + File("start.cmd"));
+    CopyFile("deploy/evaluation/stop.cmd", evaluationStage + File("stop.cmd"));
+    CopyFile("deploy/evaluation/claude_desktop_config.example.json",
+        evaluationStage + File("claude_desktop_config.example.json"));
+    CopyFile("docs/deployment/local-evaluation.md", evaluationStage + File("README.md"));
+
+    var package = artifacts + File($"codeexplorer-{version}-evaluation-win-x64.zip");
+    Zip(evaluationStage, package);
     Information($"Packaged {package}");
 });
 
@@ -143,11 +219,55 @@ Task("Package-Container")
     }
 });
 
+// The two server deployments and not the evaluation package: that one is built for a tester when one
+// is wanted, and leaving it out keeps what CI's default target produces, and how long it takes, as it was.
 Task("Package")
     .IsDependentOn("Package-Container")
     .IsDependentOn("Package-Zip");
 
 RunTarget(target);
+
+// Bakes the `fts` extension into a package through the published application rather than fetching it
+// some other way: it is stamped with the DuckDB version and the platform of the build that will load
+// it, and only these binaries on this machine know both. Which is also why this cannot run on the
+// container image's Linux — its copy is `linux_amd64` and a Windows host ignores it. An `.exe` is the
+// self-contained evaluation publish and runs as it is; a `.dll` is the portable one and runs through
+// `dotnet`.
+void InstallFts(FilePath application, DirectoryPath extensions, string skipped)
+{
+    if (!bakeFts)
+    {
+        Warning(skipped);
+        return;
+    }
+
+    if (!IsRunningOnWindows())
+    {
+        throw new CakeException("A Windows package has to be packaged on Windows: the fts extension is platform-stamped and a Linux build bakes a copy no Windows host will load. Use --no-fts to package without it.");
+    }
+
+    string arguments = $"--install-fts \"{MakeAbsolute(extensions)}\"";
+    if (application.GetExtension() == ".exe")
+    {
+        int exitCode = StartProcess(MakeAbsolute(application), new ProcessSettings { Arguments = arguments });
+        if (exitCode != 0)
+        {
+            throw new CakeException($"{application} {arguments} exited with {exitCode}.");
+        }
+    }
+    else
+    {
+        DotNetExecute(application, arguments);
+    }
+
+    // The install reaches the network and the app deliberately does not swallow a failure, so this is
+    // belt and braces — but it is also the one assertion that distinguishes "installed" from
+    // "installed for the wrong platform", which is invisible until the server starts.
+    if (GetSubDirectories(extensions).SelectMany(GetSubDirectories).All(d => d.GetDirectoryName() != "windows_amd64"))
+    {
+        throw new CakeException($"No windows_amd64 extension under {extensions} after the install.");
+    }
+}
 
 // `pnpm` and `docker` are .cmd shims on Windows, and starting one directly fails with "file not
 // found": Process.Start does not apply PATHEXT. cmd does the lookup; everywhere else the command is

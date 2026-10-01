@@ -159,8 +159,8 @@ developer downloads the extension once rather than once per checkout.
 
 ## Deploying it
 
-Two hosts are written up, and they are the same deployable with a different set of the settings above
-turned on:
+Three forms are written up, and they are the same deployable with a different set of the settings
+above turned on:
 
 - [`docs/deployment/azure-container-apps.md`](docs/deployment/azure-container-apps.md) — the shape
   ADR-0003 and ADR-0004 were written against: the image, Blob Storage and Key Vault, Entra, the
@@ -169,17 +169,27 @@ turned on:
   on-premises install: publishing, the application pool settings DuckDB's one-process-per-file needs,
   installing the `fts` extension for Windows, and where the Data Protection key ring lands when there
   is no blob container to persist it to.
+- [`docs/deployment/local-evaluation.md`](docs/deployment/local-evaluation.md) — one Windows PC, for
+  someone evaluating CodeExplorer from Claude Desktop: a self-contained folder that needs no .NET, git
+  or Node.js, authentication off and nothing but loopback answered, and `CodeExplorer.McpProxy`, the
+  stdio proxy Claude Desktop starts because it cannot be pointed at an HTTP endpoint. Written for a
+  tester rather than an operator.
 
-Neither is covered by the tests, for the reason the Azure half of the settings above is not: nothing
-in them reaches an account or a server.
+None is covered by the tests, for the reason the Azure half of the settings above is not: nothing
+in them reaches an account or a server. The proxy is the exception, and its tests drive it against
+the in-process server.
 
-`build.cs` packages both, from a clean checkout:
+`build.cs` packages all three, from a clean checkout:
 
 ```
-.\build.ps1                              # both
-.\build.ps1 --target=Package-Container   # the image, tagged with the commit and latest
-.\build.ps1 --target=Package-Zip         # artifacts/codeexplorer-<commit>-win-x64.zip
+.\build.ps1                               # the image and the IIS zip
+.\build.ps1 --target=Package-Container    # the image, tagged with the commit and latest
+.\build.ps1 --target=Package-Zip          # artifacts/codeexplorer-<commit>-win-x64.zip
+.\build.ps1 --target=Package-Evaluation   # artifacts/codeexplorer-<commit>-evaluation-win-x64.zip
 ```
+
+The default target leaves the evaluation package out: it is built when a tester needs one, and what
+CI's default run produces stays what it was.
 
 It is a [Cake.Sdk](https://cakebuild.net/docs/running-builds/runners/cake-sdk) file-based build:
 `#:sdk Cake.Sdk` at the top of a `.cs` file and no project around it, so the only prerequisite is the
@@ -194,17 +204,23 @@ that will load it — so packaging a Windows zip on Linux would bake a copy no W
 target refuses to run there rather than shipping one, and `--no-fts` is how you say you will install
 it on the server instead.
 
+The evaluation package bakes the extension the same way, around a different publish: self-contained
+for win-x64, so the PC needs no .NET, with the proxy published beside it as one trimmed file and the
+scripts and settings from `deploy/evaluation/` added at the top.
+
 ## Layout
 
-| Path                 | What it is                                                        |
-| -------------------- | ----------------------------------------------------------------- |
-| `CodeExplorer/`      | The host: endpoints, storage, MCP tools. One folder per module.    |
-| `CodeExplorer.Tests/`| xunit.v3 against a real DuckDB, mirroring those folders.           |
-| `web/`               | The operator UI. Outside the solution; builds into `wwwroot`.      |
-| `docs/adr/`          | The decisions the code follows from.                               |
-| `docs/deployment/`   | One guide per host: Azure Container Apps, IIS on Windows Server.   |
-| `Dockerfile`         | UI, API and the baked `fts` extension in one build.                |
-| `build.cs`           | Cake.Sdk: packages the image and the Windows zip.                   |
-| `build.ps1`          | A wrapper around it. Passes its arguments through, nothing else.    |
+| Path                     | What it is                                                         |
+| ------------------------ | ------------------------------------------------------------------ |
+| `CodeExplorer/`          | The host: endpoints, storage, MCP tools. One folder per module.    |
+| `CodeExplorer.McpProxy/` | The stdio proxy Claude Desktop starts. Base class library only.    |
+| `CodeExplorer.Tests/`    | xunit.v3 against a real DuckDB, mirroring those folders.           |
+| `web/`                   | The operator UI. Outside the solution; builds into `wwwroot`.      |
+| `docs/adr/`              | The decisions the code follows from.                               |
+| `docs/deployment/`       | One guide per form: Azure Container Apps, IIS, local evaluation.   |
+| `deploy/evaluation/`     | The evaluation package's scripts, settings and Claude Desktop entry. |
+| `Dockerfile`             | UI, API and the baked `fts` extension in one build.                |
+| `build.cs`               | Cake.Sdk: packages the image, the Windows zip and the evaluation zip. |
+| `build.ps1`              | A wrapper around it. Passes its arguments through, nothing else.   |
 
 `CONTEXT.md` holds the vocabulary; `CODING_STANDARDS.md` holds the rules tooling cannot check.
