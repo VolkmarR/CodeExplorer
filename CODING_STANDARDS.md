@@ -20,9 +20,12 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
 
 ## Layout
 
-- Two C# projects: `CodeExplorer` (host, endpoints, storage, MCP tools) and `CodeExplorer.Tests`.
-  The web app is `web/`, a Vite+ build into `CodeExplorer/wwwroot`, and stays out of the solution
-  file.
+- Three C# projects: `CodeExplorer` (host, endpoints, storage, MCP tools), `CodeExplorer.McpProxy`
+  (the stdio proxy the evaluation package gives Claude Desktop) and `CodeExplorer.Tests`. The proxy
+  references neither the server nor any package, only the base class library: its stdout is the
+  protocol stream, and it ships as one trimmed file. It is no module of the server, and its tests sit
+  in `CodeExplorer.Tests/McpProxy/` because they drive it against the in-process server. The web app
+  is `web/`, a Vite+ build into `CodeExplorer/wwwroot`, and stays out of the solution file.
 - **Modular monolith (ADR-0005).** Inside the host, one folder per module, named after the concept
   in `CONTEXT.md` it owns: `Control/` (projects, repositories, credentials), `Git/` (local copies),
   `Index/`, `Reading/` (how an index is read: the reader, the shared statements and the row records

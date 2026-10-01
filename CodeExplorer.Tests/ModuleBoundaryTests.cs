@@ -188,10 +188,28 @@ public sealed partial class ModuleBoundaryTests
     ///     are where the module is and a reader looking for them has one place to look. A folder here
     ///     naming no module is a stray; the files at this project's root are the harness the whole
     ///     suite shares and are in no module, as <c>Program.cs</c> is.
+    ///     A program of the solution other than the server is tested here too, in one folder named after
+    ///     its project — <c>McpProxy/</c> for <c>CodeExplorer.McpProxy</c> — because its tests drive it
+    ///     against this suite's in-process server. It is no module of the server and the sweep above
+    ///     does not walk it: it references nothing of the server's, so there is no arrow to guard.
     /// </summary>
     [Fact]
     public void The_test_project_mirrors_the_module_folders() =>
-        Assert.Equal(Modules, TestFolders());
+        Assert.Equal(Modules.Concat(OtherPrograms()).Order(StringComparer.Ordinal), TestFolders());
+
+    /// <summary>
+    ///     Every project folder beside the server's, by its name after <c>CodeExplorer.</c>, except this
+    ///     one. Read off the tree like <see cref="Modules" />, so a new program arrives expected to have
+    ///     its tests in a folder of its own.
+    /// </summary>
+    private static IEnumerable<string> OtherPrograms() =>
+        // Filtered by name as well as by pattern: Windows matches "CodeExplorer.*" against the server's
+        // own folder too, reading the dot as the start of an empty extension.
+        Directory.EnumerateDirectories(Path.Combine(SourceTree.Server(), ".."), "CodeExplorer.*")
+            .Select(folder => Path.GetFileName(folder)!)
+            .Where(name => name.StartsWith("CodeExplorer.", StringComparison.Ordinal) && name != "CodeExplorer.Tests")
+            .Where(name => Directory.EnumerateFiles(Path.Combine(SourceTree.Server(), "..", name), "*.csproj").Any())
+            .Select(name => name["CodeExplorer.".Length..]);
 
     /// <summary>
     ///     Every folder of this project holding tests, as a path relative to its root: relative and not
