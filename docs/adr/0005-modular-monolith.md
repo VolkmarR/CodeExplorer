@@ -298,3 +298,22 @@ the check in the endpoint instead would not have avoided it, since the operator 
 
 The table in the #153 revisit stands with one change: `Operator/` may reference `Control/`, `Git/`,
 `Infrastructure/`, `Reading/` and `Refresh/`.
+
+## Revisited on 2026-10-01: a second program beside the server, not a module in it
+
+The local evaluation package (`docs/deployment/local-evaluation.md`) has to reach Claude Desktop,
+whose configuration accepts only a process to start and talk to over stdio. The proxy that
+forwards that stdio to a project's HTTP endpoint is `CodeExplorer.McpProxy`, a console project of
+its own, and not a folder of the server.
+
+- **Not a mode of `CodeExplorer.exe`.** It was first written as a `--mcp-stdio` switch, answered in
+  `Program.cs` before the host was built, the way `--install-fts` is. That kept one executable, but
+  the process speaking the protocol on its stdout was then one that carries ASP.NET Core, a console
+  logger and every package of the server, and a single stray write from any of them is a corrupted
+  message. A program that references none of them cannot make that write.
+- **Not a module.** It shares no type with the server — it speaks HTTP to it, as any client does —
+  so `ModuleBoundaryTests` does not walk it and the table above gains no row. What guards its
+  boundary is its project file, which references no project and no package, and a test asserts that.
+- **Its tests are in `CodeExplorer.Tests/McpProxy/`**, because they drive it against the in-process
+  server the suite already hosts. The mirror rule reads it off the tree: each `CodeExplorer.*`
+  project beside the server's expects one test folder named after it.

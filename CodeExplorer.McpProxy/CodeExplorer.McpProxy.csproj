@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+        The stdio proxy Claude Desktop starts (docs/deployment/local-evaluation.md). The base class
+        library and nothing else: no reference to the server and no package, so it cannot pick up a
+        logger that writes to the stdout carrying the protocol, and it publishes as one trimmed file.
+        The two analyzers are on in every build, not only in the publish, so a reflection-bound API
+        fails `dotnet build` under TreatWarningsAsErrors rather than only the package.
+    -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+        <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+        <!-- Nothing here formats for a culture, and it keeps the ICU data out of the single file. -->
+        <InvariantGlobalization>true</InvariantGlobalization>
+    </PropertyGroup>
+
+</Project>
