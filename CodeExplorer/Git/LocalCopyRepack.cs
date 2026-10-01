@@ -110,12 +110,6 @@ internal sealed class LocalCopyRepack
     }
 
     /// <summary>
-    ///     Called with the new pack's path, without its extension, once its files are in
-    ///     <c>objects/pack</c> and before they are checked, so a test can spoil them there. Null outside tests.
-    /// </summary>
-    internal Action<string>? PackPlaced { get; set; }
-
-    /// <summary>
     ///     The repack's settings, or <see cref="InvalidOperationException" /> naming the one that is not
     ///     usable. Called by <c>Program.cs</c> before the host is built, as the tenant's and the key
     ///     ring's settings are read, so a mistyped threshold stops the server with the setting's name.
@@ -295,7 +289,6 @@ internal sealed class LocalCopyRepack
                 // The .pack before the .idx, because the index is what makes libgit2 read the pack.
                 Place(pack, packDirectory, placed);
                 Place(index, packDirectory, placed);
-                PackPlaced?.Invoke(Path.Combine(packDirectory, name));
                 Verify(Path.Combine(packDirectory, name), written, added);
             }
             catch

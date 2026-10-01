@@ -1,6 +1,5 @@
 using CodeExplorer.Index;
 using LibGit2Sharp;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
@@ -207,82 +206,6 @@ public sealed class RepackTests : IDisposable
         Assert.True(File.Exists(Path.Combine(copy, "HEAD")));
         Assert.False(File.Exists(record));
         AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
-    }
-
-    /// <summary>
-    ///     A new pack whose index does not list what was folded is refused before anything old goes, and
-    ///     taken back out. The index here counts the right number of objects and records the pack's own
-    ///     checksum, so only the check that its names are the folded objects can see it; resolving HEAD
-    ///     through libgit2, which the check replaced, answered from the old packs still beside it.
-    /// </summary>
-    [Fact]
-    public async Task A_new_pack_whose_index_lists_other_objects_is_refused_and_the_old_ones_stay()
-    {
-        await CyclesAsync(_host, PackThreshold);
-        string copy = _host.ClonePath("alpha", "main");
-        string packDirectory = Path.Combine(copy, "objects", "pack");
-        int loose = LooseObjects(copy);
-        string? spoiled = null;
-        _host.Services.GetRequiredService<CodeExplorer.Git.GitClones>().Repack.PackPlaced = pack =>
-        {
-            spoiled = pack;
-            // The first name's last byte changed: still sorted, still counted, and no longer an object
-            // that was folded.
-            string index = pack + ".idx";
-            File.SetAttributes(index, FileAttributes.Normal);
-            using var stream = new FileStream(index, FileMode.Open, FileAccess.ReadWrite);
-            stream.Position = 8 + (256 * 4) + 19;
-            int last = stream.ReadByte();
-            stream.Position--;
-            stream.WriteByte((byte)(last ^ 1));
-        };
-
-        _host.CommitToGitRepository("main", Files(PackThreshold + 1));
-        await _host.RefreshAsync("alpha");
-
-        Assert.NotNull(spoiled);
-        Assert.False(File.Exists(spoiled + ".idx"));
-        Assert.False(File.Exists(spoiled + ".pack"));
-        Assert.Equal(PackThreshold + 1, Packs(copy));
-        Assert.Equal(PackThreshold + 1, Directory.GetFiles(packDirectory, "*.idx").Length);
-        Assert.Equal(loose, LooseObjects(copy));
-        AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
-        _host.Logs.Only(LogLevel.Warning, "could not be repacked");
-    }
-
-    /// <summary>
-    ///     A new pack whose bytes were spoiled on their way to the disk is refused too. One byte in the
-    ///     middle of its object data changed: the header, the index and the checksum both of them record
-    ///     all still agree, so only reading the pack back and hashing it can tell.
-    /// </summary>
-    [Fact]
-    public async Task A_new_pack_spoiled_on_disk_is_refused_and_the_old_ones_stay()
-    {
-        await CyclesAsync(_host, PackThreshold);
-        string copy = _host.ClonePath("alpha", "main");
-        int loose = LooseObjects(copy);
-        string? spoiled = null;
-        _host.Services.GetRequiredService<CodeExplorer.Git.GitClones>().Repack.PackPlaced = pack =>
-        {
-            spoiled = pack;
-            string file = pack + ".pack";
-            File.SetAttributes(file, FileAttributes.Normal);
-            using var stream = new FileStream(file, FileMode.Open, FileAccess.ReadWrite);
-            stream.Position = stream.Length / 2;
-            int middle = stream.ReadByte();
-            stream.Position--;
-            stream.WriteByte((byte)(middle ^ 0xff));
-        };
-
-        _host.CommitToGitRepository("main", Files(PackThreshold + 1));
-        await _host.RefreshAsync("alpha");
-
-        Assert.NotNull(spoiled);
-        Assert.False(File.Exists(spoiled + ".pack"));
-        Assert.Equal(PackThreshold + 1, Packs(copy));
-        Assert.Equal(loose, LooseObjects(copy));
-        AssertHoldsEveryObject(copy, _host.FixtureGitPath("main"));
-        _host.Logs.Only(LogLevel.Warning, "could not be repacked");
     }
 
     /// <summary>

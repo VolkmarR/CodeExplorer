@@ -65,6 +65,12 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
   laptop and a substring scan on CI, and the two rank results differently.
 - Cover the states a client can catch the server in, not just the happy path: project restoring,
   rebuild in progress, a swap mid-query.
+- **No test hooks in committed code.** A seam added to production code only so a test can pause it
+  or change what it does at an exact point — an internal `Func<Task>?` or `Action?` it calls
+  mid-method, set through `InternalsVisibleTo` — may be added to reproduce a race or a failure while
+  fixing it. It is removed again, together with every test that needs it, before the change is
+  committed. Say in the pull request how the issue was reproduced and that the fix was checked
+  against that reproduction; keep only the tests that reach the behaviour without the hook.
 
 ## Performance
 
