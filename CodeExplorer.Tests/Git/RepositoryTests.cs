@@ -177,6 +177,32 @@ public sealed class RepositoryTests : IDisposable
     }
 
     /// <summary>
+    ///     A path too long sends the operator to the data directory, not to the URL and the credential,
+    ///     which are fine. A first clone is how to reach it: libgit2's clone still writes each branch
+    ///     under <c>refs/remotes/origin/</c> before any of this server's code runs, and that copy is too
+    ///     long here although the branch's own ref would fit.
+    /// </summary>
+    [Fact]
+    public async Task A_path_too_long_names_the_data_directory_and_not_the_credential()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows limits libgit2's paths to 260 characters.");
+        string copy = _host.ClonePath("alpha", "main");
+        string branch = BranchFilling(copy, 254);
+        string source = _host.CreateGitRepository("source", new Dictionary<string, string> { ["README.md"] = "hello" });
+        _host.CreateBranch("source", branch);
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "main", source);
+
+        string error = await _host.FailedRefreshErrorAsync("alpha");
+
+        Assert.Contains("path too long", error);
+        Assert.Contains("Storage:DataDirectory", error);
+        Assert.Contains($"{copy.Length} characters", error);
+        Assert.DoesNotContain("credential", error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(copy, error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     ///     A first clone leaves the copy as a fetch would: every branch of the remote a local branch,
     ///     the refspec the fetch uses, nothing under <c>refs/remotes</c>. And a branch deleted upstream
     ///     is still pruned once the prune has only the local branches to go by.

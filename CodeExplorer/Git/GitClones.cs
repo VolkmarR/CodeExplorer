@@ -632,7 +632,8 @@ public sealed class GitClones(
     ///     The sentence a failed clone or fetch is reported with. A remote that went quiet for the stall
     ///     limit is told apart from one that answered with an error, because the two are fixed in
     ///     different places: a quiet one is down or overloaded, an erroring one usually has the wrong URL
-    ///     or credential.
+    ///     or credential. A path too long is told apart from both, because it is fixed in neither place
+    ///     (<see cref="IsPathTooLong" />).
     ///     The URL carries no password (RepositoryUrl refuses one), and the token only ever reached
     ///     libgit2 through CredentialsProvider, so neither the URL nor libgit2's message can hold it. The
     ///     exception is not attached as InnerException, so nothing beyond this text is serialised.
@@ -648,8 +649,13 @@ public sealed class GitClones(
             ? $"the remote stopped responding and sent nothing for {_stallSeconds} seconds. Ask the operator to "
               + $"check that the remote is reachable and up, then try again; {TransferStallLimit.Setting} raises "
               + "the limit for a remote that is slow to start sending."
-            : $"{WithoutPath(ex.Message, path).TrimEnd('.')}. Ask the operator to check the URL and the stored "
-              + "credential for this repository, then try again.";
+            : IsPathTooLong(ex)
+                ? $"{WithoutPath(ex.Message, path).TrimEnd('.')}. A path in the local copy would pass the 260 "
+                  + $"characters Windows allows and libgit2 keeps to; the local copy's own path is {path.Length} "
+                  + "characters, and a branch's ref is written beneath it. Ask the operator to move "
+                  + $"{_dataDirectorySetting} to a shorter path, then try again."
+                : $"{WithoutPath(ex.Message, path).TrimEnd('.')}. Ask the operator to check the URL and the stored "
+                  + "credential for this repository, then try again.";
         // The message and not the exception: RefreshService logs the failure with its stack already,
         // and what only this line can add is libgit2's own words with the path still in them.
         if (logger.IsEnabled(LogLevel.Warning))
@@ -657,6 +663,20 @@ public sealed class GitClones(
                 verb, repository.Slug, repository.ProjectSlug, path, ex.Message);
         return new McpException($"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: {reason}");
     }
+
+    /// <summary>The setting that moves every local copy, which is the remedy for a path too long.</summary>
+    private const string _dataDirectorySetting = "Storage:DataDirectory";
+
+    /// <summary>
+    ///     A failure on this side of the transfer that the URL and the credential have nothing to do
+    ///     with: libgit2 keeps Windows' 260-character limit on every path it writes, <c>core.longpaths</c>
+    ///     or not, so a deep data directory and a long branch name fail the transfer. Told apart so the
+    ///     operator is sent to the data directory rather than to a credential that is fine. Matched on
+    ///     libgit2's own words, which it writes itself and does not translate, unlike the operating
+    ///     system's.
+    /// </summary>
+    private static bool IsPathTooLong(Exception ex) =>
+        ex.Message.StartsWith("path too long", StringComparison.Ordinal);
 
     /// <summary>
     ///     The message with the local copy's path written as "the local copy", and then any other path
