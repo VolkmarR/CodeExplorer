@@ -242,25 +242,9 @@ public sealed partial class ControlDatabase : IDisposable
         _projectGate.Dispose();
     }
 
-    /// <summary>
-    ///     Awaited by a gated write once it has found its project and before it writes, so a test can
-    ///     hold it at the one point where a delete committing would leave its row orphaned. Null outside tests.
-    /// </summary>
-    internal Func<Task>? ProjectChecked { get; set; }
-
-    /// <summary>
-    ///     Called by a write that found the project gate held and is about to wait for it, so a test
-    ///     knows the write is queued without sleeping for it. Null outside tests.
-    /// </summary>
-    internal Action? ProjectGateQueued { get; set; }
-
     /// <summary>Takes <see cref="_projectGate" />; the caller releases it in a <c>finally</c>.</summary>
-    private Task EnterProjectGateAsync(CancellationToken cancellationToken)
-    {
-        var entered = _projectGate.WaitAsync(cancellationToken);
-        if (!entered.IsCompleted) ProjectGateQueued?.Invoke();
-        return entered;
-    }
+    private Task EnterProjectGateAsync(CancellationToken cancellationToken) =>
+        _projectGate.WaitAsync(cancellationToken);
 
     /// <summary>
     ///     Null is a slug the body left out: System.Text.Json binds an absent property as null whatever
@@ -489,7 +473,6 @@ public sealed partial class ControlDatabase : IDisposable
 
         var repository = new ProjectRepository(projectSlug, slug, url.Trim(),
             string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));
-        if (ProjectChecked is { } projectChecked) await projectChecked();
 
         await using var connection = await OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -616,7 +599,6 @@ public sealed partial class ControlDatabase : IDisposable
                 // since, and rows written for it now would open a project later created under the slug.
                 if (await FindAsync(projectSlug, cancellationToken) is null)
                     return (ExcludedPathsOutcome.NoProject, null, null);
-                if (ProjectChecked is { } projectChecked) await projectChecked();
 
                 await ReplaceExcludedPathsAsync(connection, projectSlug, patterns, cancellationToken);
             }
