@@ -74,6 +74,9 @@ builder.Services.AddSingleton<WarmUp>();
 // hosted service that runs it. It does nothing unless Refresh:WarmUpOnStart is set.
 builder.Services.AddSingleton<WarmUpService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<WarmUpService>());
+// The same pairing for the tool-call counts the web UI shows: hosted so it listens from startup.
+builder.Services.AddSingleton<ToolStatistics>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ToolStatistics>());
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMcpServer().WithHttpTransport()
     // Each filter is registered once for every tool, present and future.

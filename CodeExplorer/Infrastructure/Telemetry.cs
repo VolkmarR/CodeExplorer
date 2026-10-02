@@ -15,6 +15,8 @@ namespace CodeExplorer.Infrastructure;
 ///     Nothing here needs telemetry to be switched on: an <see cref="ActivitySource" /> with no
 ///     listener returns a null activity and a <see cref="Meter" /> with no listener discards a
 ///     measurement, so the whole path costs a few nanoseconds when no OTLP endpoint is configured.
+///     The one exception is <see cref="ToolDuration" />, which <see cref="ToolStatistics" /> always
+///     listens to for the web UI: one measurement per tool call, which is nothing beside the call.
 /// </summary>
 public static class Telemetry
 {

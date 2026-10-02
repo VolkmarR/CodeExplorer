@@ -15,8 +15,13 @@ internal static class OperatorEndpoints
         api.MapGet("/projects",
             (ProjectOverview overview, CancellationToken ct) => overview.ListAsync(ct));
 
+        // In memory and since this replica started, so neither reads an index or the control database.
+        api.MapGet("/tool-calls", (ToolStatistics statistics) => statistics.Activity());
+
         // The project is bound from the route (BoundProject): an unknown slug never reaches these.
         var project = api.MapProject();
+
+        project.MapGet("/tool-calls", (Project project, ToolStatistics statistics) => statistics.For(project.Slug));
 
         project.MapGet("", (Project project, ProjectOverview overview, CancellationToken ct) =>
             overview.FindAsync(project, ct));

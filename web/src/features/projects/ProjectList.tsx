@@ -5,6 +5,7 @@ import { IndexStatus } from '@/features/projects/IndexStatus'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { projectsQuery } from '@/features/projects/queries'
+import { ToolActivityNote } from '@/features/toolCalls/ToolActivityNote'
 
 /** Stretches the title link over its whole card, so the card is one target. */
 const CARD_LINK = 'after:absolute after:inset-0 hover:underline'
@@ -93,8 +94,9 @@ export function ProjectList() {
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="flex-row flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                   <IndexStatus status={project.index} />
+                  <ToolActivityNote project={project.slug} />
                 </CardContent>
               </Card>
             </li>
