@@ -8,6 +8,12 @@ export function formatCount(count: number): string {
   return count.toLocaleString()
 }
 
+/** A duration in seconds, in milliseconds below one second, where nearly every tool call is. */
+export function formatSeconds(seconds: number): string {
+  if (seconds < 1) return `${Math.round(seconds * 1000)} ms`
+  return `${seconds.toFixed(seconds < 10 ? 2 : 1)} s`
+}
+
 /** A share from 0 to 1 as a whole percentage. */
 export function formatPercent(share: number): string {
   return `${Math.round(share * 100)}%`

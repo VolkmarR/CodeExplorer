@@ -14,6 +14,7 @@ export const VIEWS = [
   'search',
   'history',
   'churn',
+  'tool-calls',
   'settings',
 ] as const
 

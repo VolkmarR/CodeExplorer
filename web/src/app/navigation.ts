@@ -1,6 +1,7 @@
 import {
   Activity,
   BarChart3,
+  Bot,
   Clock,
   Flame,
   FolderTree,
@@ -75,6 +76,12 @@ export const PROJECT_VIEWS = [
     label: 'Churn',
     link: { search: churnSearch(CHURN_DEFAULTS), to: '/projects/$project/churn' },
     view: 'churn',
+  },
+  {
+    Icon: Bot,
+    label: 'Tool calls',
+    link: { to: '/projects/$project/tool-calls' },
+    view: 'tool-calls',
   },
   {
     Icon: Settings,

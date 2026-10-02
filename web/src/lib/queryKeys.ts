@@ -24,3 +24,14 @@ export function projectKey(slug: string) {
 export function refreshKey(slug: string) {
   return ['refresh', slug] as const
 }
+
+/**
+ * Tool-call counts are their own root for the same reason: they live in the server's memory and are
+ * not part of the index, so nothing that invalidates a project after a build should refetch them.
+ * The project list's summary sits under the root and each project's page beside it.
+ */
+export const toolActivityKey = ['tool-calls'] as const
+
+export function toolCallsKey(slug: string) {
+  return ['tool-calls', slug] as const
+}

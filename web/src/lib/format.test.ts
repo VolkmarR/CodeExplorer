@@ -4,6 +4,7 @@ import {
   fileName,
   formatBytes,
   formatCount,
+  formatSeconds,
   shortSha,
   splitFileName,
   utcDayParts,
@@ -21,6 +22,13 @@ test('a UTC day is read as that day, not the one the browser zone makes of it', 
  * invariant two callers rely on is worth pinning, because a change made for one of them looks
  * harmless from the other.
  */
+
+test('a tool call is in milliseconds below a second and in seconds above', () => {
+  expect(formatSeconds(0.0042)).toBe('4 ms')
+  expect(formatSeconds(0.9994)).toBe('999 ms')
+  expect(formatSeconds(1.234)).toBe('1.23 s')
+  expect(formatSeconds(12.34)).toBe('12.3 s')
+})
 
 test('a dotfile is all stem, because the whole name is the name', () => {
   expect(splitFileName('main/.gitignore')).toEqual({ extension: '', stem: '.gitignore' })
