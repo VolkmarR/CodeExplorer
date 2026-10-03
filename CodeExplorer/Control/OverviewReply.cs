@@ -20,17 +20,15 @@ internal static class OverviewReply
         IndexOverview overview)
     {
         var text = new StringBuilder();
-        text.Append(CultureInfo.InvariantCulture,
-            $"Project '{project.Slug}' ({project.Name}): {repositories.Count} {ToolReply.Plural(repositories.Count, "repository", "repositories")}, "
-            + $"{repositories.Sum(r => r.FileCount):N0} files, {repositories.Sum(r => r.LineCount):N0} lines.\n");
+        text.Append(Headline(project, repositories.Count, "", repositories.Sum(r => r.FileCount),
+            repositories.Sum(r => r.LineCount)));
 
         // No URL: what the server cloned from is often a path on its own disk, which an agent cannot
         // open and should not quote. The slug is how every tool names the repository.
         text.Append("\nRepositories\n");
         foreach (var repository in repositories)
             text.Append(CultureInfo.InvariantCulture,
-                $"  {repository.Slug}  at {repository.HeadCommit[..Math.Min(12, repository.HeadCommit.Length)]}  "
-                + $"{repository.FileCount:N0} {ToolReply.Plural(repository.FileCount, "file")}, {repository.LineCount:N0} {ToolReply.Plural(repository.LineCount, "line")}\n");
+                $"  {repository.Slug}  at {Commit(repository)}  {Size(repository)}\n");
 
         AppendLanguages(text, overview);
         AppendTree(text, overview);
@@ -39,6 +37,26 @@ internal static class OverviewReply
         AppendAuthors(text, overview);
         return ToolReply.Cap(text.ToString(), "Use list_tree, hot_files or git_log for the section you want in full.");
     }
+
+    /// <summary>
+    ///     The first line of both replies about the project: what it is, how many repositories it has
+    ///     and how much is in them, with its line break. <paramref name="qualifier" /> is what
+    ///     <c>repo_info</c> adds after the count, which lists repositories that are not indexed yet as
+    ///     well and so has to say which ones it counted.
+    /// </summary>
+    public static string Headline(Project project, int repositories, string qualifier, long files, long lines) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"Project '{project.Slug}' ({project.Name}): {repositories} {ToolReply.Plural(repositories, "repository", "repositories")}{qualifier}, "
+            + $"{files:N0} files, {lines:N0} lines.\n");
+
+    /// <summary>The commit a repository was indexed at, as long as both replies print it.</summary>
+    public static string Commit(IndexedRepository repository) =>
+        repository.HeadCommit[..Math.Min(12, repository.HeadCommit.Length)];
+
+    /// <summary>One repository's files and lines, as both replies count them.</summary>
+    public static string Size(IndexedRepository repository) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"{repository.FileCount:N0} {ToolReply.Plural(repository.FileCount, "file")}, {repository.LineCount:N0} {ToolReply.Plural(repository.LineCount, "line")}");
 
     private static void AppendLanguages(StringBuilder text, IndexOverview overview)
     {
