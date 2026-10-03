@@ -115,15 +115,13 @@ public sealed partial class ProjectIndexes
             // attach of the live catalog — one that would quietly re-bind a connection ADR-0003 says the
             // swap must strand — and a store that is unreachable leaves the old index serving.
             await _durable.StoreAsync(shadow.Connection, slug, cancellationToken);
-            string catalog = ShadowCatalog(slug);
-            string refusal = NotPutInPlace(slug, "new index",
-                "The index that was serving still is; refresh the project to try again.");
-            await CheckpointAsync(shadow.Connection, slug, catalog, refusal, cancellationToken);
-            shadow.Dispose();
-
-            report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.SwapPhase));
-            await ReplaceFileAsync(slug, "the new index was swapped in anyway",
-                MoveIntoPlace(slug, catalog, ShadowPath(slug), refusal, cancellationToken), cancellationToken);
+            await PutInPlaceAsync(shadow.Connection, () =>
+                {
+                    shadow.Dispose();
+                    report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.SwapPhase));
+                }, slug, ShadowCatalog(slug), ShadowPath(slug),
+                NotPutInPlace(slug, "new index", "The index that was serving still is; refresh the project to try again."),
+                "the new index was swapped in anyway", cancellationToken);
             // The shadow built its own full-text index, so a restore it replaced has nothing to settle.
             _withoutFullText.TryRemove(slug, out _);
             return true;
@@ -138,6 +136,34 @@ public sealed partial class ProjectIndexes
     public async Task<bool> StillHoldsAsync(string slug, PublishCondition condition,
         CancellationToken cancellationToken) =>
         DiscardCount(slug) == condition.Discards && await condition.ProjectExists(cancellationToken);
+
+    /// <summary>
+    ///     Makes a finished file the project's live one, the same way for a swap and for both restores:
+    ///     <see cref="CheckpointAsync" /> on the connection that filled it, then <paramref name="release" />,
+    ///     then <see cref="MoveIntoPlace" /> under <see cref="ReplaceFileAsync" />. One method, because
+    ///     the order is the durability: the checkpoint before the drain so the flush holds no reader out,
+    ///     and inside the move the new catalog's detach, the refusal of a log left beside it, the live
+    ///     catalog's detach and the one overwriting move. Run by a caller holding the writer gate.
+    /// </summary>
+    /// <param name="filled">The connection that filled the file, still attached to it.</param>
+    /// <param name="release">
+    ///     Run between the checkpoint and the move, and not when the checkpoint refuses: what closes
+    ///     <paramref name="filled" />, and anything the caller reports as the move starts.
+    /// </param>
+    /// <param name="slug">The project whose live file is replaced.</param>
+    /// <param name="catalog">The catalog the finished file is attached under.</param>
+    /// <param name="path">The finished file.</param>
+    /// <param name="refusal">Thrown when the file is not written out; see <see cref="NotPutInPlace" />.</param>
+    /// <param name="timedOut">Logged when the drain gives up; see <see cref="ReplaceFileAsync" />.</param>
+    /// <param name="cancellationToken">Threaded through the checkpoint, the drain and the move.</param>
+    private async Task PutInPlaceAsync(DuckDBConnection filled, Action release, string slug, string catalog,
+        string path, string refusal, string timedOut, CancellationToken cancellationToken)
+    {
+        await CheckpointAsync(filled, slug, catalog, refusal, cancellationToken);
+        release();
+        await ReplaceFileAsync(slug, timedOut, MoveIntoPlace(slug, catalog, path, refusal, cancellationToken),
+            cancellationToken);
+    }
 
     /// <summary>
     ///     The file work of a swap and of a restore: a finished file, attached under its own catalog, made

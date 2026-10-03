@@ -96,11 +96,9 @@ public sealed partial class ProjectIndexes
                 await AttachEmptyAsync(connection, catalog, path, cancellationToken);
                 await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
                 await CopyWithFullTextAsync(connection, slug, cancellationToken);
-                await CheckpointAsync(connection, slug, catalog, refusal, cancellationToken);
+                await PutInPlaceAsync(connection, connection.Dispose, slug, catalog, path, refusal,
+                    "the restored index was put in place anyway", cancellationToken);
             }
-
-            await ReplaceFileAsync(slug, "the restored index was put in place anyway",
-                MoveIntoPlace(slug, catalog, path, refusal, cancellationToken), cancellationToken);
         }
     }
 
@@ -169,11 +167,9 @@ public sealed partial class ProjectIndexes
             {
                 await AttachEmptyAsync(connection, catalog, path, cancellationToken);
                 await _durable.LoadAsync(connection, copy, fullText, cancellationToken);
-                await CheckpointAsync(connection, slug, catalog, refusal, cancellationToken);
+                await PutInPlaceAsync(connection, connection.Dispose, slug, catalog, path, refusal,
+                    "the restored index was put in place anyway", cancellationToken);
             }
-
-            await ReplaceFileAsync(slug, "the restored index was put in place anyway",
-                MoveIntoPlace(slug, catalog, path, refusal, cancellationToken), cancellationToken);
 
             if (_logger.IsEnabled(LogLevel.Information))
                 _logger.LogInformation("Restored project {Project} from its durable copy", slug);
