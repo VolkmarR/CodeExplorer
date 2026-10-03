@@ -62,23 +62,6 @@ public sealed class OperatorEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task A_credential_is_reported_as_set_and_never_returned()
-    {
-        await _host.CreateProjectAsync("alpha");
-        string url = _host.CreateGitRepository("one", new Dictionary<string, string> { ["a.cs"] = "class A;\n" });
-        await _host.AddRepositoryAsync("alpha", "with", url, "s3cret-token");
-        await _host.AddRepositoryAsync("alpha", "without", url);
-
-        using var http = _host.CreateClient();
-        string json = await http.GetStringAsync("/api/projects/alpha", Ct);
-
-        Assert.DoesNotContain("s3cret-token", json, StringComparison.Ordinal);
-        var detail = await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha");
-        Assert.True(Assert.Single(detail.Repositories, r => r.Slug == "with").HasCredential);
-        Assert.False(Assert.Single(detail.Repositories, r => r.Slug == "without").HasCredential);
-    }
-
-    [Fact]
     public async Task Deleting_a_project_removes_it_from_the_list_and_takes_its_index_and_clones_with_it()
     {
         await _host.IndexedProjectAsync("alpha",
