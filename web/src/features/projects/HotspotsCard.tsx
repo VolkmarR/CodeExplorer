@@ -3,7 +3,7 @@ import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { HotspotScatter } from '@/features/projects/HotspotScatter'
 import { FilePathLink } from '@/components/FilePathLink'
 import { ShareBar } from '@/components/ShareBar'
-import { formatCount } from '@/lib/format'
+import { formatCount, formatCountOf } from '@/lib/format'
 import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -57,7 +57,7 @@ export function HotspotsCard({
                         {formatCount(file.commits)}&times;
                       </span>
                       <span className="w-24 shrink-0 text-right tabular-nums text-muted-foreground">
-                        {formatCount(file.lines)} lines
+                        {formatCountOf(file.lines, 'line')}
                       </span>
                       <FilePathLink
                         project={project}

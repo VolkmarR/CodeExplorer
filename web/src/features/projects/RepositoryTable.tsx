@@ -3,7 +3,7 @@ import { MoreHorizontal, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import type { ProjectDetail } from '@/features/projects/api'
 import { removeRepository } from '@/features/projects/api'
-import { formatCount, formatTime, shortSha } from '@/lib/format'
+import { formatCountOf, formatTime, shortSha } from '@/lib/format'
 import { shortUrl } from './repositoryUrl'
 import { CommitLine } from '@/components/CommitLine'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -141,7 +141,7 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
                         ) : (
                           <span className="flex flex-wrap items-baseline gap-x-2 whitespace-nowrap">
                             <span className="text-muted-foreground tabular-nums">
-                              {formatCount(repository.commits)} commits
+                              {formatCountOf(repository.commits, 'commit')}
                             </span>
                             <CommitLine
                               commit={repository.newestCommit}
@@ -161,7 +161,7 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
                   <TableCell className="text-right text-sm text-muted-foreground tabular-nums">
                     {repository.fileCount === null
                       ? NOT_INDEXED
-                      : `${formatCount(repository.fileCount)} files, ${formatCount(repository.lineCount ?? 0)} lines`}
+                      : `${formatCountOf(repository.fileCount, 'file')}, ${formatCountOf(repository.lineCount ?? 0, 'line')}`}
                   </TableCell>
                   <TableCell className="text-right">
                     {/* A menu rather than the bare Remove button this used to be: the row already

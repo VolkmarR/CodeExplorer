@@ -8,6 +8,20 @@ export function formatCount(count: number): string {
   return count.toLocaleString()
 }
 
+/**
+ * A count and what it counts, "1 file" and "2 files". Written once because two dozen call sites each
+ * spelled the plural out, and some forgot the grouping or printed "1 files". The plural is `noun`
+ * with an `s` unless it is named.
+ */
+export function formatCountOf(count: number, noun: string, plural?: string): string {
+  return `${formatCount(count)} ${nounFor(count, noun, plural)}`
+}
+
+/** The noun alone, for the one place that styles the number apart from it: the search's stats. */
+export function nounFor(count: number, noun: string, plural = `${noun}s`): string {
+  return count === 1 ? noun : plural
+}
+
 /** A duration in seconds, in milliseconds below one second, where nearly every tool call is. */
 export function formatSeconds(seconds: number): string {
   if (seconds < 1) return `${Math.round(seconds * 1000)} ms`

@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { formatCount } from '@/lib/format'
+import { formatCountOf } from '@/lib/format'
 
 /**
  * How many files the project's excluded paths kept out of one section (#216). Said on every section
@@ -20,7 +20,7 @@ export function ExcludedNote({
   if (!files) return null
   return (
     <p className="pt-2 text-xs text-muted-foreground">
-      {formatCount(files)} {files === 1 ? 'file' : 'files'} of {what} left out by the{' '}
+      {formatCountOf(files, 'file')} of {what} left out by the{' '}
       <Link
         to="/projects/$project/settings"
         params={{ project }}

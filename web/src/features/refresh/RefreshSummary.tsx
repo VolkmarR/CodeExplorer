@@ -1,5 +1,5 @@
 import type { IndexSummary } from '@/features/refresh/api'
-import { formatCount } from '@/lib/format'
+import { formatCountOf } from '@/lib/format'
 
 /**
  * What a refresh produced. One bad repository does not fail the project, so what was left out is
@@ -11,8 +11,8 @@ export function RefreshSummary({ summary }: { summary: IndexSummary }) {
   return (
     <div className="rounded-lg border bg-card px-4 py-3 text-sm">
       <p>
-        Indexed {formatCount(summary.files)} files and {formatCount(summary.lines)} lines from{' '}
-        {summary.repositories} {summary.repositories === 1 ? 'repository' : 'repositories'}.
+        Indexed {formatCountOf(summary.files, 'file')} and {formatCountOf(summary.lines, 'line')}{' '}
+        from {formatCountOf(summary.repositories, 'repository', 'repositories')}.
       </p>
       {lines.length > 0 ? (
         <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">

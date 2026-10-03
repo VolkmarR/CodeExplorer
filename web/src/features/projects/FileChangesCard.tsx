@@ -68,6 +68,8 @@ export function FileChangesCard({
             <li key={p.start}>{describePeriod(p, changes.period)}</li>
           ))}
         </ol>
+        {/* The bars' colours and not DiffStat's: these totals are the legend for the bars above,
+            and they count files, where DiffStat's added and removed pair counts lines. */}
         <p className="pt-3 text-xs tabular-nums">
           <span className="text-primary">+{formatCount(totals.added)} added</span>
           {' · '}

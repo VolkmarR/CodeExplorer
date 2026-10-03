@@ -13,7 +13,7 @@ import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { RepositorySelect } from '@/features/projects/RepositorySelect'
-import { formatCount } from '@/lib/format'
+import { formatCount, nounFor } from '@/lib/format'
 
 /** Every repository: the select's value for "no scope", since Base UI wants a value and not undefined. */
 const ALL = ''
@@ -212,9 +212,9 @@ function SearchStats({ project, search }: { project: string; search: SearchParam
       <Badge variant="secondary">{result.engine}</Badge>
       <span>
         <span className="font-medium text-foreground">{formatCount(result.totalLines)}</span>{' '}
-        {result.totalLines === 1 ? 'match' : 'matches'} in{' '}
+        {nounFor(result.totalLines, 'match', 'matches')} in{' '}
         <span className="font-medium text-foreground">{formatCount(result.totalFiles)}</span>{' '}
-        {result.totalFiles === 1 ? 'file' : 'files'} · {formatCount(elapsedMs)} ms
+        {nounFor(result.totalFiles, 'file')} · {formatCount(elapsedMs)} ms
       </span>
     </p>
   )

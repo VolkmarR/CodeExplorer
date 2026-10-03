@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import type { OverviewFolder } from '@/features/projects/api'
-import { formatBytes, formatCount } from '@/lib/format'
+import { formatBytes, formatCountOf } from '@/lib/format'
 import { treeSearch } from '@/lib/urls/browseParams'
 
 /**
@@ -34,8 +34,7 @@ export function TopLevelRow({
         {label}
       </Link>
       <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
-        {formatCount(entry.files)} {entry.files === 1 ? 'file' : 'files'} &middot;{' '}
-        {formatBytes(entry.sizeBytes)}
+        {formatCountOf(entry.files, 'file')} &middot; {formatBytes(entry.sizeBytes)}
       </span>
     </div>
   )

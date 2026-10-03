@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { projectsQuery } from '@/features/projects/queries'
 import { ToolActivityNote } from '@/features/toolCalls/ToolActivityNote'
+import { formatCountOf } from '@/lib/format'
 
 /** Stretches the title link over its whole card, so the card is one target. */
 const CARD_LINK = 'after:absolute after:inset-0 hover:underline'
@@ -78,8 +79,7 @@ export function ProjectList() {
                   </CardTitle>
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-muted-foreground">
-                      {project.repositories}{' '}
-                      {project.repositories === 1 ? 'repository' : 'repositories'}
+                      {formatCountOf(project.repositories, 'repository', 'repositories')}
                     </span>
                     <Button
                       render={

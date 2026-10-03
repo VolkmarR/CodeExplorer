@@ -2,7 +2,7 @@ import type { OverviewAuthorsPerFile, OverviewChurn } from '@/features/projects/
 import { AUTHOR_SEGMENTS, AuthorSplit } from '@/features/projects/AuthorSplit'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { FilePathLink } from '@/components/FilePathLink'
-import { formatCount, formatPercent } from '@/lib/format'
+import { formatCountOf, formatPercent } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -57,12 +57,12 @@ export function AuthorsPerFileCard({
                 {authors.files.map((file) => (
                   <li key={file.qualifiedPath} className="flex items-center gap-3 px-4 py-2">
                     <span className="w-20 shrink-0 text-right tabular-nums text-muted-foreground">
-                      {formatCount(file.authors)} {file.authors === 1 ? 'author' : 'authors'}
+                      {formatCountOf(file.authors, 'author')}
                     </span>
                     <AuthorSplit shares={[file.first, file.second, file.third]} />
                     <span
                       className="w-10 shrink-0 text-right tabular-nums"
-                      title={`${formatCount(file.commits)} commits`}
+                      title={formatCountOf(file.commits, 'commit')}
                     >
                       {formatPercent(file.first)}
                     </span>

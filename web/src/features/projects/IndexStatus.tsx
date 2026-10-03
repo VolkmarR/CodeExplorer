@@ -1,5 +1,5 @@
 import type { ProjectIndexStatus } from '@/features/projects/api'
-import { formatCount, formatTime } from '@/lib/format'
+import { formatCountOf, formatTime } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 
 /**
@@ -15,7 +15,7 @@ export function IndexStatus({ status }: { status: ProjectIndexStatus }) {
     <span className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
       <Badge variant="secondary">{status.ftsIndexed ? 'full-text' : 'substring scan'}</Badge>
       <span>
-        {formatCount(status.files)} files, {formatCount(status.lines)} lines
+        {formatCountOf(status.files, 'file')}, {formatCountOf(status.lines, 'line')}
       </span>
       <span className="text-muted-foreground/70">built {formatTime(status.builtAt)}</span>
     </span>

@@ -10,7 +10,7 @@ import { churnQuery } from '@/features/churn/queries'
 import { projectQuery } from '@/features/projects/queries'
 import { PageCard } from '@/components/PageCard'
 import { WindowNote } from '@/components/WindowNote'
-import { formatDate } from '@/lib/format'
+import { formatCountOf, formatDate } from '@/lib/format'
 
 /**
  * Which files a project is moving, over a window. It is its own view rather than a panel beside the
@@ -109,7 +109,7 @@ function emptyReason(search: ChurnParameters, hasWindow: boolean, hidden: number
     return 'Churn is read from imported history, which arrives with a refresh. If the project has been refreshed and this is still empty, its repositories’ history could not be walked.'
   }
   if (hidden > 0) {
-    return `Every one of the ${hidden} paths that changed in this window is filtered out. Clear an extension, or widen the window.`
+    return `Every one of the ${formatCountOf(hidden, 'path')} that changed in this window is filtered out. Clear an extension, or widen the window.`
   }
   return search.directory === undefined
     ? 'No commit in this window changed a file. Widen the window to look further back.'

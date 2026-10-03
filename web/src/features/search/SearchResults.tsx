@@ -5,7 +5,7 @@ import { matchPattern } from '@/features/search/matchRanges'
 import { searchQuery } from '@/features/search/queries'
 import type { SearchParameters } from '@/lib/urls/searchParams'
 import { Pager } from '@/components/Pager'
-import { formatCount } from '@/lib/format'
+import { formatCountOf } from '@/lib/format'
 
 /**
  * A page of matches, each file linking through to its own content by qualified path — the repository
@@ -27,7 +27,7 @@ export function SearchResults({ project, search }: { project: string; search: Se
         {/* "Nothing matched" and "matches existed and the filters hid them" read the same and mean
             opposite things, so the server counts the unfiltered matches and the page says which. */}
         {result.filesMatchingWithoutFilters
-          ? `No matches under these filters. Without them, ${formatCount(result.filesMatchingWithoutFilters)} files match.`
+          ? `No matches under these filters. Without them, ${formatCountOf(result.filesMatchingWithoutFilters, 'file')} ${result.filesMatchingWithoutFilters === 1 ? 'matches' : 'match'}.`
           : 'No matches.'}
       </p>
     )
