@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Text.Json.Serialization;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
@@ -9,11 +8,7 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace CodeExplorer.Refresh;
 
-/// <summary>
-///     Where a project's refresh stands. Serialised by name rather than by ordinal, so the web UI
-///     compares against a word and inserting a state later does not silently re-label the others.
-/// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter<RefreshState>))]
+/// <summary>Where a project's refresh stands. The web UI compares against the member names.</summary>
 public enum RefreshState
 {
     /// <summary>No refresh has been asked for since this replica started. The index may still be built (#9).</summary>

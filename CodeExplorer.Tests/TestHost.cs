@@ -14,11 +14,13 @@ using DuckDB.NET.Data;
 using LibGit2Sharp;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -581,11 +583,14 @@ public sealed class TestHost : GitFixtures
     ///     A GET whose answer is JSON, read as <typeparamref name="T" /> and asserted present, through the
     ///     client the fixture steps use. A non-success status throws, so a test that reads an answer
     ///     cannot be passed by a refusal; a test whose subject is the status sends its own request.
+    ///     Read with the server's own HTTP options, so an enum comes back from the spelling the server
+    ///     wrote; what that spelling is, is <see cref="HttpJsonTests" />' question.
     /// </summary>
     public async Task<T> GetJsonAsync<T>(string path)
     {
         using var http = Fixture();
-        var value = await http.GetFromJsonAsync<T>(path, Ct);
+        var options = Services.GetRequiredService<IOptions<JsonOptions>>().Value.SerializerOptions;
+        var value = await http.GetFromJsonAsync<T>(path, options, Ct);
         Assert.NotNull(value);
         return value;
     }

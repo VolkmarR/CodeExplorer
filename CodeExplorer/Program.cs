@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
@@ -78,6 +79,16 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<WarmUpService>());
 builder.Services.AddSingleton<ToolStatistics>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ToolStatistics>());
 builder.Services.AddHttpContextAccessor();
+// Every enum the API sends goes out by its member name, written once here rather than as an attribute
+// on each enum: the web UI compares against a word, a state inserted later does not re-label the
+// others, and an endpoint can return a read's own record instead of a copy that only spells its enums
+// out. The member names as written and not camelCase: that is how the refresh state, the suggestion
+// rule and the change period already went out, so the web's unions for them stay as they were.
+// Property names keep the web defaults' camelCase. HTTP only: the MCP SDK serialises with options of
+// its own and every tool answers prose, and the stored overview row has its own (IndexOverview), so
+// neither moves with this.
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddMcpServer().WithHttpTransport()
     // Each filter is registered once for every tool, present and future.
     .WithRequestFilters(filters => filters

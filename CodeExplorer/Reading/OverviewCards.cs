@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json.Serialization;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer.Reading;
@@ -62,7 +61,6 @@ public sealed record OverviewCards(
     OverviewFileChanges FileChanges);
 
 /// <summary>How long one bar of the Files added and deleted card is, chosen from the window's length.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter<ChangePeriod>))]
 public enum ChangePeriod
 {
     /// <summary>A UTC calendar day.</summary>
