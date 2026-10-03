@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vite-plus/test'
-import { isNewlyFinished } from './useRefreshWatcher'
+import { isNewlyFinished } from '@/features/refresh/useRefreshWatcher'
 
 const P = 'acslib'
 
