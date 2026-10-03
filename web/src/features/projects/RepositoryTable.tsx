@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { MoreHorizontal, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import type { ProjectDetail } from '@/features/projects/api'
@@ -28,7 +28,6 @@ import {
 } from '@/components/ui/table'
 import { toast } from '@/components/ui/toast'
 import { invalidateProject } from '@/features/projects/queries'
-import { isRefreshRunning, refreshStatusQuery } from '@/features/refresh/queries'
 
 /** What a row says in place of a value the last build has not produced yet. */
 const NOT_INDEXED = 'not indexed yet'
@@ -43,7 +42,18 @@ const NOT_INDEXED = 'not indexed yet'
  * done once per repository and then never, and a form that is always open reads as something left
  * unfinished. It opens by itself while there is nothing in the table, since then it is the page.
  */
-export function RepositoryTable({ project }: { project: ProjectDetail }) {
+export function RepositoryTable({
+  project,
+  refreshing,
+}: {
+  project: ProjectDetail
+  /**
+   * Whether a refresh of the project is queued or running. The server refuses a removal then, since
+   * the refresh reads the local copy the removal deletes, so the item is disabled for the same span
+   * rather than left to fail; the refusal still reaches the error panel if the status is stale.
+   */
+  refreshing: boolean
+}) {
   const queryClient = useQueryClient()
   const { slug, repositories, singleRepository } = project
   const [adding, setAdding] = useState(false)
@@ -51,14 +61,6 @@ export function RepositoryTable({ project }: { project: ProjectDetail }) {
   // Which repository the confirm dialog is asking about, or none. The slug and not a boolean: the
   // dialog names the repository, and one dialog serves every row.
   const [removing, setRemoving] = useState<string | null>(null)
-
-  // The server refuses a removal while a refresh of the project is queued or running, since the
-  // refresh reads the local copy the removal deletes. The item is disabled for the same span rather
-  // than left to fail; the refusal still reaches the error panel if the status here is stale. Read
-  // without an interval of its own: ProjectCard on the same page already polls the entry, and a
-  // second observer's timer added a second poll while a refresh ran (see refreshStatusQuery).
-  const { data: status } = useSuspenseQuery({ ...refreshStatusQuery(slug), refetchInterval: false })
-  const refreshing = isRefreshRunning(status)
 
   const remove = useMutation({
     mutationFn: (repository: string) => removeRepository(slug, repository),

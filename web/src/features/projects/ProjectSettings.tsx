@@ -32,7 +32,8 @@ export function ProjectSettings() {
   // refresh fetches into and repacks the local copies the delete removes. The button is disabled for
   // the same span rather than left to fail; the refusal still reaches the error panel if the status
   // here is stale. Read from the cache without an interval of its own: ProjectCard on this page
-  // already polls it, and each observer's interval is a second poll (see refreshStatusQuery).
+  // already polls it, and each observer's interval is a second poll (see refreshStatusQuery). Read
+  // once here and handed to the repository table, whose removals are refused for the same span.
   const { data: status } = useSuspenseQuery({ ...refreshStatusQuery(slug), refetchInterval: false })
   const refreshing = isRefreshRunning(status)
 
@@ -51,7 +52,7 @@ export function ProjectSettings() {
     <ProjectCard project={slug}>
       <>
         {remove.error ? <ErrorPanel error={remove.error} /> : null}
-        <RepositoryTable project={project} />
+        <RepositoryTable project={project} refreshing={refreshing} />
         <ExcludedPathsForm project={slug} />
 
         <section
