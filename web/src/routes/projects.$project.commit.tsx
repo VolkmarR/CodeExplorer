@@ -1,12 +1,10 @@
 import { createFileRoute, notFound } from '@tanstack/react-router'
-import { RouteError } from '@/components/RouteError'
 import { validateCommitSearch } from '@/lib/urls/commitParams'
 import { CommitPage } from '@/features/history/CommitPage'
 import { commitQuery } from '@/features/history/queries'
 
 export const Route = createFileRoute('/projects/$project/commit')({
   component: CommitPage,
-  errorComponent: RouteError,
   // Only the SHA decides what to load; the origin is for the trail above the page and must not refetch.
   loaderDeps: ({ search }) => ({ sha: search.sha }),
   // A URL with no SHA names no commit, so this is not found — the same reading the file route gives
