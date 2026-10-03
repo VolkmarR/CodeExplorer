@@ -38,6 +38,22 @@ export function projectOverviewQuery(slug: string, parameters: OverviewParameter
   })
 }
 
+/**
+ * What the three overview pages load: the project, because the filter bar offers its repositories,
+ * and the overview they share — the same entry on all three, so moving between them with the same
+ * filters is a cache hit.
+ */
+export function ensureOverview(
+  queryClient: QueryClient,
+  slug: string,
+  parameters: OverviewParameters,
+) {
+  return Promise.all([
+    queryClient.ensureQueryData(projectQuery(slug)),
+    queryClient.ensureQueryData(projectOverviewQuery(slug, parameters)),
+  ])
+}
+
 /** The overview page's excluded paths, as the settings page edits them. */
 export function excludedPathsQuery(slug: string) {
   return queryOptions({
