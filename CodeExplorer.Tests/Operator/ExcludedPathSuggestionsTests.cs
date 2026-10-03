@@ -77,31 +77,79 @@ public sealed class ExcludedPathSuggestionsTests : IDisposable
     }
 
     [Fact]
-    public async Task A_well_known_generated_name_is_suggested_only_where_the_index_holds_one()
+    public async Task A_well_known_name_no_language_owns_is_suggested_only_where_the_index_holds_one()
     {
         await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
         {
             ["one"] = new()
             {
-                ["Form1.Designer.cs"] = "d\n", ["Tests/A.verified.txt"] = "v\n", ["Tests/B.verified.txt"] = "w\n",
+                ["Tests/A.verified.txt"] = "v\n", ["Tests/B.verified.txt"] = "w\n",
                 ["web/package-lock.json"] = "{}\n", ["Properties/AssemblyInfo.cs"] = "i\n", ["Main.cs"] = "m\n",
                 ["delphi/__history/Unit1.pas.~1~"] = "u\n", ["web/src/routeTree.gen.ts"] = "r\n",
-                ["app/ios/Podfile.lock"] = "p\n", ["xs/Form1.designer.prg"] = "f\n", ["xs/App.rc"] = "r\n",
-                ["xs/Report.tpl"] = "t\n", ["xs/Setup.inf"] = "s\n", ["xs/Order_vo.prg"] = "o\n"
+                ["web/dist/app.min.js"] = "b\n", ["web/src/__snapshots__/App.test.tsx.snap"] = "s\n",
+                ["app/ios/Podfile.lock"] = "p\n", ["xs/App.rc"] = "r\n", ["xs/Report.tpl"] = "t\n",
+                ["xs/Setup.inf"] = "s\n"
             }
         });
 
         var suggestions = await SuggestAsync("alpha");
 
-        // One of each ecosystem's names: .NET, X#, Delphi, React, React Native.
+        // One of each ecosystem's names: .NET, X#, Delphi, React, React Native — lock files, bundles,
+        // snapshots and IDE state among them. The snapshot folder covers the .snap in it, so *.snap
+        // adds nothing and is not offered.
         Assert.Equal(
             [
-                ("**/*.Designer.cs", 1), ("**/AssemblyInfo.*", 1), ("**/*.verified.txt", 2),
-                // Order_vo.prg is hand-written X#, so no name catches it.
-                ("**/*.designer.prg", 1), ("**/*.rc", 1), ("**/*.tpl", 1), ("**/*.inf", 1),
-                ("**/__history/**", 1), ("**/*.gen.ts", 1), ("**/package-lock.json", 1), ("**/Podfile.lock", 1)
+                ("**/AssemblyInfo.*", 1), ("**/*.verified.txt", 2), ("**/*.rc", 1), ("**/*.tpl", 1),
+                ("**/*.inf", 1), ("**/__history/**", 1), ("**/*.min.js", 1), ("**/__snapshots__/**", 1),
+                ("**/*.gen.ts", 1), ("**/package-lock.json", 1), ("**/Podfile.lock", 1)
             ],
             suggestions.Where(s => s.Rule == SuggestionRule.WellKnownName).Select(s => (s.Pattern, s.Files)));
+    }
+
+    [Fact]
+    public async Task Every_name_a_language_profile_calls_generated_is_suggested_where_the_index_holds_one()
+    {
+        await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                ["Form1.Designer.cs"] = "d\n", ["src/Foo.g.cs"] = "g\n", ["xs/Order_vo.prg"] = "o\n",
+                ["Main.cs"] = "m\n", ["xs/Order.prg"] = "p\n"
+            }
+        });
+
+        var suggestions = await SuggestAsync("alpha");
+
+        // The C# profile's three names and the X# profile's two, each offered once and only where a
+        // file carries it: nothing here is *.generated.cs or *.designer.prg.
+        Assert.Equal(
+            [
+                ("**/*_vo.prg", 1, "A name generated X# code is given"),
+                ("**/*.g.cs", 1, "A name generated C# code is given"),
+                ("**/*.designer.cs", 1, "A name generated C# code is given")
+            ],
+            suggestions.Where(s => s.Rule == SuggestionRule.WellKnownName).Select(s => (s.Pattern, s.Files, s.Reason)));
+    }
+
+    [Fact]
+    public async Task A_generated_name_is_matched_in_either_case_and_nothing_else_is()
+    {
+        await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["one"] = new()
+            {
+                // The Windows Forms designer writes Form1.Designer.cs; the profile spells it lower case.
+                ["Form1.Designer.cs"] = "d\n", ["sub/Form2.designer.cs"] = "d\n",
+                ["Designer.cs"] = "n\n", ["Form1.Designer.cs.bak"] = "n\n", ["DesignerHost.cs"] = "n\n"
+            }
+        });
+
+        var designer = Assert.Single(await SuggestAsync("alpha"), s => s.Pattern == "**/*.designer.cs");
+        Assert.Equal(2, designer.Files);
+
+        // Saved, it leaves both out: nothing named generated is offered again.
+        await _host.SetExcludedPathsAsync("alpha", [designer.Pattern]);
+        Assert.DoesNotContain(await SuggestAsync("alpha"), s => s.Rule == SuggestionRule.WellKnownName);
     }
 
     [Fact]

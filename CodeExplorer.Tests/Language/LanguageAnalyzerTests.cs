@@ -628,6 +628,23 @@ public sealed class LanguageAnalyzerTests
     }
 
     [Fact]
+    public void The_registry_names_each_language_that_answers_for_something_once()
+    {
+        // The overlay takes `cs` and the C# profile still answers for `csx`, so both are there.
+        var overlaid = Languages.Default.With(new StubAnalyzer());
+        Assert.Equal(["X#", "C#", "C# (parsed)"],
+            overlaid.Analyzers.Select(a => a.Language).Where(l => l is "X#" or "C#" or "C# (parsed)"));
+
+        // One that takes every extension the profile had leaves the profile answering for nothing.
+        var replaced = Languages.Default.With(new Language.TextAnalyzer(new LanguageProfile("C# 2", ["cs", "csx"])));
+        Assert.DoesNotContain("C#", replaced.Analyzers.Select(a => a.Language));
+
+        // Registered again, an analyser is still one language and not two.
+        var again = Languages.Default.With(Languages.Default.For("prg"));
+        Assert.Single(again.Analyzers, a => a.Language == "X#");
+    }
+
+    [Fact]
     public void Every_answer_says_how_it_was_reached()
     {
         var analyzer = Languages.Default.For("cs");
@@ -1100,6 +1117,8 @@ public sealed class LanguageAnalyzerTests
             new(ImportsOnLine.Nothing, Evidence.Parsed);
 
         public Answer<bool> IsGenerated(string qualifiedPath) => new(false, Evidence.Parsed);
+
+        public IReadOnlyList<string> GeneratedPaths => [];
 
         public IReadOnlyList<Answer<ReferenceKind>> Occurrences(FilePosition position, string line, string symbol) =>
             [new Answer<ReferenceKind>(ReferenceKind.Definition, Evidence.Parsed)];

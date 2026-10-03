@@ -267,6 +267,8 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
 
     public FilePosition Start => _start;
 
+    public IReadOnlyList<string> GeneratedPaths => _profile.GeneratedPathPatterns;
+
     public Answer<bool> IsGenerated(string qualifiedPath)
     {
         ArgumentNullException.ThrowIfNull(qualifiedPath);

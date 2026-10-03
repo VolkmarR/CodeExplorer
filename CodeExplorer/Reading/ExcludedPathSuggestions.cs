@@ -1,4 +1,5 @@
 using System.Globalization;
+using CodeExplorer.Language;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer.Reading;
@@ -43,15 +44,18 @@ internal static class ExcludedPathSuggestions
     /// <summary>
     ///     Names generated, locked or kept by a tool, which no one reads in a dashboard, grouped by the
     ///     ecosystem that writes them. Each is offered only where the index holds a file matching it.
+    ///     A language's generated code is not here: its profile names it
+    ///     (<see cref="CodeExplorer.Language.ILanguageAnalyzer.GeneratedPaths" />), and a second copy
+    ///     here had already drifted from it — <c>*.g.cs</c> and <c>*_vo.prg</c> were never offered.
+    ///     What is left belongs to no language: lock files, bundles, snapshots, IDE state.
     /// </summary>
     private static readonly string[] _wellKnown =
     [
         // .NET
-        "**/*.Designer.cs", "**/Connected Services/**/Reference.cs", "**/AssemblyInfo.*", "**/*.verified.txt",
+        "**/Connected Services/**/Reference.cs", "**/AssemblyInfo.*", "**/*.verified.txt",
         "**/*.received.txt", "**/packages.lock.json",
-        // X#: the Windows Forms designer's code, and the resource scripts, templates and setup files
-        // that come alongside the sources.
-        "**/*.designer.prg", "**/*.rc", "**/*.tpl", "**/*.inf",
+        // X#: the resource scripts, templates and setup files that come alongside the sources.
+        "**/*.rc", "**/*.tpl", "**/*.inf",
         // Delphi: compiled units, IDE state and the IDE's own backup copies of every saved file.
         "**/*.dcu", "**/*.identcache", "**/*.dproj.local", "**/*.dsk", "**/__history/**", "**/__recovery/**",
         // React and the web: minified and mapped bundles, test snapshots, generated route trees, lock files.
@@ -76,6 +80,8 @@ internal static class ExcludedPathSuggestions
         var accepted = new List<ExcludedPathSuggestion>();
         var candidates = new List<(string Pattern, SuggestionRule Rule, string Reason)>();
         candidates.AddRange(await GitAttributesAsync(connection, cancellationToken));
+        candidates.AddRange(Languages.Default.Analyzers.SelectMany(analyzer => analyzer.GeneratedPaths.Select(glob =>
+            (AtAnyDepth(glob), SuggestionRule.WellKnownName, $"A name generated {analyzer.Language} code is given"))));
         candidates.AddRange(_wellKnown.Select(p => (p, SuggestionRule.WellKnownName, "A well-known generated name")));
         foreach (var candidate in candidates)
             await OfferAsync(connection, existing, accepted, candidate, logger, cancellationToken);
@@ -125,6 +131,15 @@ internal static class ExcludedPathSuggestions
             accepted.Add(new ExcludedPathSuggestion(candidate.Pattern, candidate.Rule, candidate.Reason,
                 reader.Int32("files")));
     }
+
+    /// <summary>
+    ///     A profile's generated-path glob written the way every other suggested name is, <c>**/</c> in
+    ///     front. Only where the glob begins with a <c>*</c>, which already crosses every folder, so the
+    ///     prefix changes nothing it matches; any other glob is offered as the profile wrote it, since
+    ///     both match a qualified path whole and a prefix would widen it.
+    /// </summary>
+    private static string AtAnyDepth(string glob) =>
+        glob.StartsWith('*') && !glob.StartsWith("**/", StringComparison.Ordinal) ? "**/" + glob : glob;
 
     /// <summary>What is left out already: the setting and every suggestion accepted so far.</summary>
     private static ExcludedPaths Covering(IReadOnlyList<string> existing, List<ExcludedPathSuggestion> accepted) =>
