@@ -1,3 +1,4 @@
+import { positiveInteger, text, textOrEmpty } from '@/lib/urls/coerce'
 import { asView, type Origin } from '@/lib/urls/views'
 
 /**
@@ -15,15 +16,11 @@ export interface FileParameters {
 }
 
 export function validateFileSearch(search: Record<string, unknown>): FileParameters {
-  const line = Number(search.line)
   return {
     from: asView(search.from),
-    fromCommit:
-      typeof search.fromCommit === 'string' && search.fromCommit !== ''
-        ? search.fromCommit
-        : undefined,
-    line: Number.isInteger(line) && line > 0 ? line : undefined,
-    path: typeof search.path === 'string' ? search.path : '',
+    fromCommit: text(search.fromCommit),
+    line: positiveInteger(search.line),
+    path: textOrEmpty(search.path),
   }
 }
 

@@ -1,3 +1,5 @@
+import { positiveInteger, text, textOrEmpty } from '@/lib/urls/coerce'
+
 /**
  * What the browse view needs from the URL. The view has two modes and `glob` picks between them: empty
  * walks the tree a level at a time from `path`, set flattens the whole project to what matches. Both
@@ -35,18 +37,14 @@ export function treeSearch(path = ''): BrowseParameters {
  * select.
  */
 export function globSearch(glob: string, repository?: string, path = ''): BrowseParameters {
-  return { glob, page: 1, path, repository: repository === '' ? undefined : repository }
+  return { glob, page: 1, path, repository: text(repository) }
 }
 
 export function validateBrowseSearch(search: Record<string, unknown>): BrowseParameters {
-  const page = Number(search.page)
   return {
-    glob: typeof search.glob === 'string' ? search.glob : '',
-    page: Number.isInteger(page) && page > 0 ? page : 1,
-    path: typeof search.path === 'string' ? search.path : '',
-    repository:
-      typeof search.repository === 'string' && search.repository !== ''
-        ? search.repository
-        : undefined,
+    glob: textOrEmpty(search.glob),
+    page: positiveInteger(search.page) ?? 1,
+    path: textOrEmpty(search.path),
+    repository: text(search.repository),
   }
 }

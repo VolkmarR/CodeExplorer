@@ -1,3 +1,5 @@
+import { positiveInteger, text } from '@/lib/urls/coerce'
+
 /**
  * What the churn page needs from the URL: how far back to look, which repository or directory if not
  * all of them, whether the rows are files or directories, and which extensions are worth ranking. In
@@ -49,24 +51,18 @@ export const CHURN_DEFAULTS: ChurnParameters = { days: DEFAULT_CHURN_DAYS }
 
 /** A hand-edited or truncated URL still opens a sensible ranking rather than throwing. */
 export function validateChurnSearch(search: Record<string, unknown>): ChurnParameters {
-  const days = Number(search.days)
-  const depth = Number(search.depth)
+  const depth = positiveInteger(search.depth)
   return {
     // Any positive number is accepted rather than only the offered ones: the server clamps it, and a
     // link someone wrote by hand asking for 45 days is a reasonable question, not a broken URL.
-    days: Number.isInteger(days) && days > 0 ? days : DEFAULT_CHURN_DAYS,
+    days: positiveInteger(search.days) ?? DEFAULT_CHURN_DAYS,
     // Absent and not zero for "rank files": the server reads null as files, and a 0 in the URL would
     // be a depth it clamps up to 1, which is a different ranking than the one the link asked for.
-    depth: Number.isInteger(depth) && depth > 0 ? Math.min(depth, MAX_CHURN_DEPTH) : undefined,
+    depth: depth === undefined ? undefined : Math.min(depth, MAX_CHURN_DEPTH),
     directory: text(search.directory),
     extensions: text(search.extensions),
     repository: text(search.repository),
   }
-}
-
-/** A search param that is a string or is not there. The empty string is not there, like everywhere. */
-export function text(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined
 }
 
 /**
@@ -104,15 +100,10 @@ export function churnSearch(
   return {
     days: next.days,
     depth: next.depth,
-    directory: blank(next.directory),
-    extensions: blank(next.extensions),
+    directory: text(next.directory),
+    extensions: text(next.extensions),
     // A directory carries its own repository (ADR-0006), so holding both would let them disagree —
     // and it is the directory a reader walked into that says where they are.
-    repository: next.directory ? undefined : blank(next.repository),
+    repository: next.directory ? undefined : text(next.repository),
   }
-}
-
-/** The empty string as absence, so a cleared control leaves no `&extensions=` behind in the URL. */
-function blank(value: string | undefined): string | undefined {
-  return value === '' ? undefined : value
 }

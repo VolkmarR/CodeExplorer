@@ -1,3 +1,4 @@
+import { positiveInteger, textOrEmpty } from '@/lib/urls/coerce'
 import { asView, type Origin } from '@/lib/urls/views'
 
 /**
@@ -18,11 +19,11 @@ export interface CommitParameters {
 
 /** A hand-edited or truncated URL still opens, and the page says it names no commit rather than throwing. */
 export function validateCommitSearch(search: Record<string, unknown>): CommitParameters {
-  const page = Number(search.page)
+  const page = positiveInteger(search.page)
   return {
     from: asView(search.from),
-    page: Number.isInteger(page) && page > 1 ? page : undefined,
-    sha: typeof search.sha === 'string' ? search.sha : '',
+    page: page === 1 ? undefined : page,
+    sha: textOrEmpty(search.sha),
   }
 }
 

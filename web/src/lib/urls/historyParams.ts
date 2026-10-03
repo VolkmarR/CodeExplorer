@@ -1,3 +1,5 @@
+import { positiveInteger, text } from '@/lib/urls/coerce'
+
 /**
  * What the change log needs from the URL: which page, and which repository if not all of them. In
  * the URL and nowhere else, like search, so a page of history can be pasted and opens as the same
@@ -10,14 +12,7 @@ export interface HistoryParameters {
 
 /** A hand-edited or truncated URL still opens the first page of everything rather than throwing. */
 export function validateHistorySearch(search: Record<string, unknown>): HistoryParameters {
-  const page = Number(search.page)
-  return {
-    page: Number.isInteger(page) && page > 0 ? page : 1,
-    repository:
-      typeof search.repository === 'string' && search.repository !== ''
-        ? search.repository
-        : undefined,
-  }
+  return { page: positiveInteger(search.page) ?? 1, repository: text(search.repository) }
 }
 
 /**
@@ -28,5 +23,5 @@ export function validateHistorySearch(search: Record<string, unknown>): HistoryP
  * means by one, so it is translated here for the reason `globSearch` gives at length.
  */
 export function historySearch(repository?: string): HistoryParameters {
-  return { page: 1, repository: repository === '' ? undefined : repository }
+  return { page: 1, repository: text(repository) }
 }
