@@ -1,4 +1,5 @@
 using System.Text;
+using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
@@ -29,6 +30,21 @@ public sealed record FileFilter(
     ///     by every search before it opens the index, so a malformed filter is a sentence and not a miss.
     /// </summary>
     public string? Refusal => PathTerms.Refusal(Path, "path") ?? PathTerms.Refusal(Exclude, "exclude");
+
+    /// <summary>
+    ///     Opens the project's index for <see cref="Repository" /> and hands <paramref name="read" />
+    ///     these filters with the slug the index holds rather than the one the caller typed, because
+    ///     the subquery in <see cref="Sql" /> matches it exactly.
+    /// </summary>
+    internal Task<Outcome> OverIndexAsync(IndexReaders readers, string slug,
+        Func<IndexReader, FileFilter, CancellationToken, Task<Outcome>> read, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(readers);
+        ArgumentNullException.ThrowIfNull(read);
+        return readers.OverIndexAsync(slug, Repository,
+            (index, token) => read(index, this with { Repository = index.Repository?.Slug }, token),
+            cancellationToken);
+    }
 
     /// <summary>
     ///     The filters as a <c>WHERE</c> tail against the <c>files</c> alias <c>f</c>, starting with

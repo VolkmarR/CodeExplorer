@@ -101,15 +101,15 @@ public sealed class MatchList(IndexReaders readers)
         // parenthesis that was never wrong. A pattern that does not compile has no groups to count, so
         // it is compiled alone before the count refuses, and before a whole-word wrapping balances it.
         int groups = Re2.CaptureGroups(query);
-        return await readers.OverIndexAsync(slug, request.Filter.Repository,
-            (index, token) => PatternQuery.GuardedAsync(index.Connection, query,
+        return await request.Filter.OverIndexAsync(readers, slug,
+            (index, filter, token) => PatternQuery.GuardedAsync(index.Connection, query,
                 request.WholeWord || request.Group > groups,
-                () => QueryAsync(index, request, query, groups, token), token),
+                () => QueryAsync(index, request, filter, query, groups, token), token),
             cancellationToken);
     }
 
-    private static async Task<Outcome> QueryAsync(IndexReader index, MatchListRequest request, string query,
-        int groups, CancellationToken cancellationToken)
+    private static async Task<Outcome> QueryAsync(IndexReader index, MatchListRequest request, FileFilter filter,
+        string query, int groups, CancellationToken cancellationToken)
     {
         if (request.Group > groups)
             return new Problem(
@@ -117,8 +117,6 @@ public sealed class MatchList(IndexReaders readers)
                 + "Put parentheses around the part that varies, or use group=0 for the whole match.");
 
         var connection = index.Connection;
-        // The slug the index holds, not the one the caller typed: the filter's subquery matches it exactly.
-        var filter = request.Filter with { Repository = index.Repository?.Slug };
         int limit = Math.Clamp(request.Limit, 1, MaxLimit);
 
         // A whole word is tested with one form and extracted from another (SymbolText.WholeWordMatches),
