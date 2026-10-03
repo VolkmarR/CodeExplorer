@@ -11,13 +11,10 @@ import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
 import { tooltip } from '@tanstack/charts/tooltip'
 import { formatCount, formatCountOf, formatPercent } from '@/lib/format'
-import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { OverviewCard } from '@/features/projects/OverviewCard'
 
 /** Pairs listed per repository: the strongest under the heatmap, and for each repository it does not draw. */
 const PAIRS_SHOWN = 3
-
-const title = <CardTitle>Folders that change together</CardTitle>
 
 /**
  * The pairs of folders, within one repository, that the same commits keep touching (#213): boundaries
@@ -39,82 +36,73 @@ export function FolderCouplingCard({
 }) {
   const featured = featuredRepository(coupling, repository)
   const others = coupling.repositories.filter((r) => r !== featured)
-  if (!historyWindow(churn)) {
-    return (
-      <Card>
-        <CardHeader>{title}</CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
-        </CardContent>
-      </Card>
-    )
-  }
-
+  const heatmapRepository = featured && featured.pairs.length > 0 ? featured : undefined
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-baseline justify-between">
-        {title}
-        {featured && (
-          <span className="text-xs text-muted-foreground">{featured.repositorySlug}</span>
-        )}
-      </CardHeader>
-      <CardContent>
-        {!featured || featured.pairs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No commit in the window touched two folders of one repository.
-          </p>
-        ) : (
+    <OverviewCard
+      title="Folders that change together"
+      aside={featured?.repositorySlug}
+      history={churn}
+      // Only over a heatmap: it says how to read the shades.
+      note={
+        heatmapRepository ? (
           <>
-            <p className="pb-3 text-xs text-muted-foreground">
-              Folders the same commits touched, darker for more shared commits. A folder holding
-              nearly the whole repository is shown by its subfolders. One commit counts once however
-              many files it touched in a folder.
-            </p>
-            <Heatmap repository={featured} />
-            <RankedList className="mt-3">
-              {featured.pairs.slice(0, PAIRS_SHOWN).map((pair) => (
-                <RankedRow key={`${pair.first}\u0000${pair.second}`}>
-                  <span className="min-w-0 flex-1 truncate">
-                    {pair.first} + {pair.second}
-                  </span>
-                  <span className="tabular-nums text-muted-foreground">
-                    {formatCountOf(pair.commits, 'commit')}
-                  </span>
-                  <span
-                    className="w-10 text-right tabular-nums"
-                    title="Share of the quieter folder's commits"
-                  >
-                    {formatPercent(pairShare(featured, pair))}
-                  </span>
-                </RankedRow>
-              ))}
-            </RankedList>
+            Folders the same commits touched, darker for more shared commits. A folder holding
+            nearly the whole repository is shown by its subfolders. One commit counts once however
+            many files it touched in a folder.
           </>
-        )}
-        {others.length > 0 && (
-          <div className="pt-3 text-xs">
-            {others.map((other) => (
-              <p key={other.repositorySlug} className="py-0.5">
-                <span className="font-medium">{other.repositorySlug}</span>
-                <span className="text-muted-foreground">
-                  {': '}
-                  {other.pairs.length === 0
-                    ? 'no pairs'
-                    : other.pairs
-                        .slice(0, PAIRS_SHOWN)
-                        .map((p) => `${p.first} + ${p.second} (${formatCount(p.commits)})`)
-                        .join(', ')}
-                </span>
-              </p>
-            ))}
-          </div>
-        )}
-        <p className="pt-3 text-xs text-muted-foreground">
-          Commits touching more than {formatCountOf(coupling.maxCommitPaths, 'path')} are left out
-          (History:MaxCommitPaths): {formatCount(coupling.ceilingExcluded)} in this window.
+        ) : null
+      }
+    >
+      {!heatmapRepository ? (
+        <p className="text-sm text-muted-foreground">
+          No commit in the window touched two folders of one repository.
         </p>
-      </CardContent>
-    </Card>
+      ) : (
+        <>
+          <Heatmap repository={heatmapRepository} />
+          <RankedList className="mt-3">
+            {heatmapRepository.pairs.slice(0, PAIRS_SHOWN).map((pair) => (
+              <RankedRow key={`${pair.first}\u0000${pair.second}`}>
+                <span className="min-w-0 flex-1 truncate">
+                  {pair.first} + {pair.second}
+                </span>
+                <span className="tabular-nums text-muted-foreground">
+                  {formatCountOf(pair.commits, 'commit')}
+                </span>
+                <span
+                  className="w-10 text-right tabular-nums"
+                  title="Share of the quieter folder's commits"
+                >
+                  {formatPercent(pairShare(heatmapRepository, pair))}
+                </span>
+              </RankedRow>
+            ))}
+          </RankedList>
+        </>
+      )}
+      {others.length > 0 && (
+        <div className="pt-3 text-xs">
+          {others.map((other) => (
+            <p key={other.repositorySlug} className="py-0.5">
+              <span className="font-medium">{other.repositorySlug}</span>
+              <span className="text-muted-foreground">
+                {': '}
+                {other.pairs.length === 0
+                  ? 'no pairs'
+                  : other.pairs
+                      .slice(0, PAIRS_SHOWN)
+                      .map((p) => `${p.first} + ${p.second} (${formatCount(p.commits)})`)
+                      .join(', ')}
+              </span>
+            </p>
+          ))}
+        </div>
+      )}
+      <p className="pt-3 text-xs text-muted-foreground">
+        Commits touching more than {formatCountOf(coupling.maxCommitPaths, 'path')} are left out
+        (History:MaxCommitPaths): {formatCount(coupling.ceilingExcluded)} in this window.
+      </p>
+    </OverviewCard>
   )
 }
 
