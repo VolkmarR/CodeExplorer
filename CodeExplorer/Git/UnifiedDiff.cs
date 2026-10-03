@@ -16,102 +16,18 @@ namespace CodeExplorer.Git;
 public sealed record LineEdit(int OldLine, int Deleted, int Added);
 
 /// <summary>
-///     Reads the edits out of the unified-diff text libgit2 renders for one file. Only the hunk headers
-///     and the first character of each body line are looked at; the content itself is never needed,
-///     because attribution is about positions.
-///     The history walk no longer renders text: <see cref="NativeDiff" /> reads the same edits off
-///     libgit2's hunk structs (#292), placing each by <see cref="OldPosition" />. This reading of the
-///     rendered patch stays as the independent account the tests hold that one to.
+///     The one rule of the unified-diff hunk header that placing an edit needs. <see cref="NativeDiff" />
+///     reads the same two numbers off libgit2's hunk structs (#292), and the tests' reading of the
+///     rendered patch, which they hold that one to, places its hunks by this too.
 /// </summary>
 internal static class UnifiedDiff
 {
-    /// <summary>
-    ///     The edits in <paramref name="patch" />, oldest position first. Empty for an empty patch, which
-    ///     is what a pure rename or a mode change renders.
-    /// </summary>
-    public static IReadOnlyList<LineEdit> Edits(string patch)
-    {
-        var edits = new List<LineEdit>();
-        // Everything before the first hunk is the file header, whose "---" and "+++" lines would read
-        // as a delete and an add. Hunks start at a line beginning "@@".
-        int position = 0;
-        if (!patch.StartsWith("@@", StringComparison.Ordinal))
-        {
-            int first = patch.IndexOf("\n@@", StringComparison.Ordinal);
-            if (first < 0) return edits;
-            position = first + 1;
-        }
-
-        int oldLine = 0; // where in the old file the next body line sits
-        int deleted = 0, added = 0; // the edit being accumulated, if any
-        while (position < patch.Length)
-        {
-            int newline = patch.IndexOf('\n', position);
-            if (newline < 0) newline = patch.Length;
-            char kind = patch[position];
-            switch (kind)
-            {
-                case '@':
-                    Flush();
-                    oldLine = HunkStart(patch.AsSpan(position, newline - position));
-                    break;
-                case '-':
-                    deleted++;
-                    break;
-                case '+':
-                    added++;
-                    break;
-                case ' ':
-                    Flush();
-                    oldLine++;
-                    break;
-                // "\ No newline at end of file" is a note about the line before it, not a line.
-            }
-
-            position = newline + 1;
-        }
-
-        Flush();
-        return edits;
-
-        void Flush()
-        {
-            if (deleted == 0 && added == 0) return;
-            edits.Add(new LineEdit(oldLine, deleted, added));
-            oldLine += deleted;
-            deleted = 0;
-            added = 0;
-        }
-    }
-
     /// <summary>
     ///     The 0-based old position a hunk's body starts at, from its <c>@@ -a[,b] +c[,d] @@</c> header.
     ///     <c>a</c> is 1-based, so the body starts at <c>a - 1</c> — except when <c>b</c> is 0: a hunk
     ///     that removes nothing names the line <em>before</em> the insertion, so its body starts at
     ///     <c>a</c>. The spike that produced this code got that wrong first and attributed every added
     ///     file to nothing; it is the one rule of the format worth a sentence.
-    /// </summary>
-    private static int HunkStart(ReadOnlySpan<char> header)
-    {
-        int minus = header.IndexOf('-') + 1;
-        int end = minus;
-        while (end < header.Length && char.IsAsciiDigit(header[end])) end++;
-        int start = int.Parse(header[minus..end], System.Globalization.CultureInfo.InvariantCulture);
-        int count = 1;
-        if (end < header.Length && header[end] == ',')
-        {
-            int digits = ++end;
-            while (end < header.Length && char.IsAsciiDigit(header[end])) end++;
-            count = int.Parse(header[digits..end], System.Globalization.CultureInfo.InvariantCulture);
-        }
-
-        return OldPosition(start, count);
-    }
-
-    /// <summary>
-    ///     The 0-based old position of a hunk's edit from the header's 1-based start <c>a</c> and old
-    ///     count <c>b</c>, by the rule <see cref="HunkStart" /> gives. Shared with
-    ///     <see cref="NativeDiff" />, which reads the same two numbers off libgit2's hunk struct.
     /// </summary>
     public static int OldPosition(int start, int count) => count == 0 ? start : start - 1;
 }

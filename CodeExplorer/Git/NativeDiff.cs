@@ -21,7 +21,7 @@ internal readonly record struct GitId(long Head, long Middle, int Tail);
 ///     The edits are read from the hunks and not from rendered text. With no context lines each hunk
 ///     is exactly one edit — the run of lines it removes and the run it adds — so its header numbers
 ///     are the whole answer, and not a line of content crosses into managed code. LibGit2Sharp copied
-///     every line into three strings, and <see cref="UnifiedDiff.Edits" /> then threw them away.
+///     every line into three strings, and the reading of the rendered patch then threw them away.
 ///     The options are LibGit2Sharp's, so what is recorded is what its patch recorded: type changes
 ///     included, renames by the repository's <c>diff.renames</c>, the default Myers diff.
 ///     Sizes are kept by blob id for the whole walk, because each blob version is asked for twice: as
