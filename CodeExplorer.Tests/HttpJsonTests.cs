@@ -1,5 +1,10 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeExplorer.Index;
+using CodeExplorer.Language;
+using CodeExplorer.Reading;
+using CodeExplorer.Refresh;
+using CodeExplorer.Search;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -15,6 +20,31 @@ namespace CodeExplorer.Tests;
 public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJsonFixture>
 {
     private readonly TestHost _host = fixture.Host;
+
+    /// <summary>
+    ///     Every member of every enum the web holds a union for, spelled through the server's HTTP
+    ///     options. The endpoint tests below can reach only the members their fixture produces; this
+    ///     is the whole list the unions in <c>web/src</c> are written against.
+    /// </summary>
+    [Fact]
+    public void Every_enum_the_web_compares_against_is_sent_by_its_member_name()
+    {
+        Assert.Equal(["NeverRun", "Queued", "Running", "Succeeded", "Failed"], Spelled<RefreshState>());
+        Assert.Equal(["GitAttributes", "WellKnownName", "History"], Spelled<SuggestionRule>());
+        Assert.Equal(["Day", "Week", "Month"], Spelled<ChangePeriod>());
+        Assert.Equal(["Unprofiled", "Unreadable", "Read"], Spelled<DeclarationCoverage>());
+        Assert.Equal(["Declaration", "Implementation"], Spelled<DeclarationRole>());
+        Assert.Equal(["Text", "Parsed"], Spelled<Evidence>());
+        Assert.Equal(["Module", "Path"], Spelled<ImportShape>());
+    }
+
+    /// <summary>A value that is no member fails on the server rather than reaching the web as a number.</summary>
+    [Fact]
+    public void A_value_that_is_no_member_is_refused_rather_than_sent_as_a_number() =>
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize((Evidence)7, _host.HttpJsonOptions));
+
+    private List<string> Spelled<T>() where T : struct, Enum =>
+        [.. Enum.GetValues<T>().Select(value => JsonSerializer.Serialize(value, _host.HttpJsonOptions).Trim('"'))];
 
     [Fact]
     public async Task A_refresh_status_names_its_state()
