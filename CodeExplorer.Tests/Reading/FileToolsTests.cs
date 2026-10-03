@@ -564,6 +564,30 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
     }
 
     /// <summary>
+    ///     <c>repo_info</c> and <c>project_overview</c> are one format (OverviewReply), so a count past a
+    ///     thousand reads the same in both: it was "1200 lines" in one and "1,200 lines" in the other.
+    /// </summary>
+    [Fact]
+    public async Task Repo_info_writes_its_counts_the_way_project_overview_does()
+    {
+        // Its own server: it needs a file past a thousand lines, which the shared fixtures do not have.
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("big", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["main"] = new() { ["long.txt"] = string.Concat(Enumerable.Repeat("x\n", 1200)) }
+        }, true);
+        await using var client = await host.ConnectAsync("big");
+
+        string info = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
+        string overview = await CallAsync(client, "project_overview", new Dictionary<string, object?>());
+
+        Assert.Contains("1 repository indexed, 1 files, 1,200 lines.", info);
+        Assert.Contains("1 repository, 1 files, 1,200 lines.", overview);
+        Assert.Contains("1 file, 1,200 lines, commit ", info);
+        Assert.Contains("1 file, 1,200 lines\n", overview);
+    }
+
+    /// <summary>
     ///     How much history a repository holds and what it spans, which is the pair of facts an agent
     ///     otherwise establishes by bisecting the log: one measured evaluation spent 15 of its 28 calls
     ///     on `git_log(limit=1, page=N)` doing exactly that (#108).

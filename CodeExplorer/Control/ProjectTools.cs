@@ -57,8 +57,7 @@ internal sealed class ProjectTools(
         var indexed = status.Repositories;
 
         var text = new StringBuilder();
-        text.Append(CultureInfo.InvariantCulture,
-            $"Project '{project.Slug}' ({project.Name}): {indexed.Count} {ToolReply.Plural(indexed.Count, "repository", "repositories")} indexed, {status.Files} files, {status.Lines} lines.\n");
+        text.Append(OverviewReply.Headline(project, indexed.Count, " indexed", status.Files, status.Lines));
         // One time for the project: a refresh rebuilds every repository together (CONTEXT.md), so there
         // is no per-repository index time to report.
         text.Append(CultureInfo.InvariantCulture,
@@ -73,7 +72,7 @@ internal sealed class ProjectTools(
         foreach (var repository in indexed)
         {
             text.Append(repository.Slug.PadRight(width)).Append(CultureInfo.InvariantCulture,
-                $"  {repository.FileCount} {ToolReply.Plural(repository.FileCount, "file")}, {repository.LineCount} {ToolReply.Plural(repository.LineCount, "line")}, commit {repository.HeadCommit[..Math.Min(12, repository.HeadCommit.Length)]}, {repository.Url}\n");
+                $"  {OverviewReply.Size(repository)}, commit {OverviewReply.Commit(repository)}, {repository.Url}\n");
             text.Append(' ', width).Append("  ").Append(History(repository)).Append('\n');
         }
 
