@@ -22,6 +22,7 @@ import { vue } from '@tanstack/highlight/languages/vue'
 import { yaml } from '@tanstack/highlight/languages/yaml'
 import { splitFileName } from '@/lib/format'
 import { csharp } from '@/highlight/csharp'
+import { dfm } from '@/highlight/dfm'
 import { xml } from '@/highlight/xml'
 import { xsharp } from '@/highlight/xsharp'
 
@@ -65,6 +66,7 @@ const BUNDLED = [
   vue,
   yaml,
   csharp,
+  dfm,
   xsharp,
   xml,
 ] as const
@@ -102,6 +104,7 @@ const LANGUAGE_BY_EXTENSION: Record<string, BundledLanguage> = {
   csx: 'csharp',
   css: 'css',
   dockerfile: 'dockerfile',
+  dfm: 'dfm',
   env: 'env',
   go: 'go',
   h: 'cpp',
