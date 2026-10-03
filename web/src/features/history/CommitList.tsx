@@ -1,6 +1,5 @@
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import { commitSearch } from '@/lib/urls/commitParams'
-import type { HistoryParameters } from '@/lib/urls/historyParams'
 import type { CommitEntry, CommitList as CommitPage } from '@/features/history/api'
 import { DiffStat } from '@/components/DiffStat'
 import { Pager } from '@/components/Pager'
@@ -15,18 +14,13 @@ import { formatCountOf, formatDate, shortSha } from '@/lib/format'
 export function CommitList({
   project,
   log,
-  search,
   showRepository,
 }: {
   project: string
   log: CommitPage
-  search: HistoryParameters
   /** Whether rows name their repository: only when the page mixes more than one. */
   showRepository: boolean
 }) {
-  const navigate = useNavigate()
-  const lastPage = Math.max(1, Math.ceil(log.total / log.pageSize))
-
   return (
     <div className="space-y-4">
       <ul className="divide-y rounded-lg border bg-card">
@@ -43,17 +37,11 @@ export function CommitList({
       {/* Newer and older rather than previous and next: a page of a log is a stretch of time, and
           which way is "back" in one is the opposite of what a reader would guess. */}
       <Pager
-        page={search.page}
-        lastPage={lastPage}
+        page={log.page}
+        total={log.total}
+        pageSize={log.pageSize}
         previousLabel="Newer"
         nextLabel="Older"
-        onPage={(page) =>
-          void navigate({
-            params: { project },
-            search: { ...search, page },
-            to: '/projects/$project/history',
-          })
-        }
       />
     </div>
   )

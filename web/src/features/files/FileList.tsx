@@ -1,10 +1,11 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import { fileSearch } from '@/lib/urls/fileParams'
 import type { BrowseParameters } from '@/lib/urls/browseParams'
 import { browseQuery } from '@/features/files/queries'
 import { Pager } from '@/components/Pager'
 import { formatBytes, formatCount, formatCountOf } from '@/lib/format'
+import { pageSpan } from '@/lib/paging'
 import {
   Table,
   TableBody,
@@ -16,15 +17,13 @@ import {
 
 /** The files a glob matched, each linking through to its content by qualified path. */
 export function FileList({ project, search }: { project: string; search: BrowseParameters }) {
-  const navigate = useNavigate()
   const { data: listing } = useSuspenseQuery(browseQuery(project, search))
 
   if (listing.total === 0) {
     return <p className="text-sm text-muted-foreground">Nothing matches that glob.</p>
   }
 
-  const lastPage = Math.max(1, Math.ceil(listing.total / listing.pageSize))
-  const first = (listing.page - 1) * listing.pageSize + 1
+  const span = pageSpan(listing.page, listing.pageSize, listing.total)
 
   return (
     <div className="space-y-3">
@@ -32,9 +31,7 @@ export function FileList({ project, search }: { project: string; search: BrowseP
         {formatCountOf(listing.total, 'file')}
         {/* Which rows these are, not how many: a page in the middle of a wide match is otherwise
             indistinguishable from the whole of a narrow one. */}
-        {lastPage > 1
-          ? `, showing ${formatCount(first)}–${formatCount(first + listing.files.length - 1)}`
-          : ''}
+        {span.lastPage > 1 ? `, showing ${formatCount(span.first)}–${formatCount(span.last)}` : ''}
       </p>
       <div className="overflow-x-auto rounded-lg border bg-card">
         <Table>
@@ -77,19 +74,7 @@ export function FileList({ project, search }: { project: string; search: BrowseP
         </Table>
       </div>
 
-      {/* The page the server answered with rather than the one the URL asked for: a page past the
-          end comes back as the last one, and the pager must offer to leave where the reader is. */}
-      <Pager
-        page={listing.page}
-        lastPage={lastPage}
-        onPage={(page) =>
-          void navigate({
-            params: { project },
-            search: { ...search, page },
-            to: '/projects/$project/files',
-          })
-        }
-      />
+      <Pager page={listing.page} total={listing.total} pageSize={listing.pageSize} />
     </div>
   )
 }

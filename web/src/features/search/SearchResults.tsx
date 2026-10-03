@@ -1,5 +1,4 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
 import { SearchResultGroup } from '@/features/search/SearchResultGroup'
 import { matchPattern } from '@/features/search/matchRanges'
 import { searchQuery } from '@/features/search/queries'
@@ -15,10 +14,8 @@ import { formatCountOf } from '@/lib/format'
  * filters that decided it.
  */
 export function SearchResults({ project, search }: { project: string; search: SearchParameters }) {
-  const navigate = useNavigate()
   const { data } = useSuspenseQuery(searchQuery(project, search))
   const result = data.result
-  const lastPage = Math.max(1, Math.ceil(result.totalFiles / result.pageSize))
   const pattern = matchPattern(search)
 
   if (result.totalFiles === 0) {
@@ -43,17 +40,7 @@ export function SearchResults({ project, search }: { project: string; search: Se
         ))}
       </ul>
 
-      <Pager
-        page={search.page}
-        lastPage={lastPage}
-        onPage={(page) =>
-          void navigate({
-            params: { project },
-            search: { ...search, page },
-            to: '/projects/$project/search',
-          })
-        }
-      />
+      <Pager page={result.page} total={result.totalFiles} pageSize={result.pageSize} />
     </div>
   )
 }
