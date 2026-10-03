@@ -86,7 +86,7 @@ public sealed partial class ProjectIndexes : IDisposable
     // restore all replace the same file, and a restore does not hold the server's single rebuild slot
     // the way a refresh does. Per project and not one shared gate, because a wake that restores a
     // large index must not hold up a swap of a small one.
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _writerGates = new(StringComparer.Ordinal);
+    private readonly KeyedGate _writerGates = new();
 
     // How many times each project's index has been discarded, written only under its writer gate. See
     // DiscardCount; kept for the life of the process like the gates, and bounded the same way.
@@ -257,17 +257,8 @@ public sealed partial class ProjectIndexes : IDisposable
     ///     index in underneath the older one it is about to move into place; a publish across the check
     ///     and the durable store; a discard across the durable copy's removal.
     /// </summary>
-    private async Task<WriterHold> HoldWriterAsync(string slug, CancellationToken cancellationToken)
-    {
-        var gate = WriterGateFor(slug);
-        await gate.WaitAsync(cancellationToken);
-        return new WriterHold(gate);
-    }
-
-    private readonly struct WriterHold(SemaphoreSlim gate) : IDisposable
-    {
-        public void Dispose() => gate.Release();
-    }
+    private Task<Hold> HoldWriterAsync(string slug, CancellationToken cancellationToken) =>
+        _writerGates.HoldAsync(slug, cancellationToken);
 
     /// <summary>
     ///     Runs work that replaces or removes a project's file, with as few readers holding it as the
@@ -332,15 +323,8 @@ public sealed partial class ProjectIndexes : IDisposable
     /// </summary>
     private async Task UnderAttachGateAsync(Func<Task> work, CancellationToken cancellationToken)
     {
-        await _attachGate.WaitAsync(cancellationToken);
-        try
-        {
-            await work();
-        }
-        finally
-        {
-            _attachGate.Release();
-        }
+        using var held = await _attachGate.HoldAsync(cancellationToken);
+        await work();
     }
 
     /// <summary>
@@ -461,12 +445,6 @@ public sealed partial class ProjectIndexes : IDisposable
         File.Delete(path);
         File.Delete(path + ".wal");
     }
-
-    /// <summary>
-    ///     The gate that lets one writer of a project run at a time, created on first use. A semaphore
-    ///     that loses the <c>GetOrAdd</c> race was never waited on, so dropping it undisposed holds nothing.
-    /// </summary>
-    private SemaphoreSlim WriterGateFor(string slug) => _writerGates.GetOrAdd(slug, _ => new SemaphoreSlim(1, 1));
 
     /// <summary>
     ///     A slug is validated to lowercase letters, digits and hyphens before it reaches here, so quoting
