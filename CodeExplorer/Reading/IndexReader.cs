@@ -136,7 +136,7 @@ public sealed partial class IndexReader : IDisposable
     }
 
     /// <summary>The repository a slug names, in the spelling the index holds; null when none does.</summary>
-    public async Task<IndexedRepository?> FindRepositoryAsync(string slug, CancellationToken cancellationToken)
+    private async Task<IndexedRepository?> FindRepositoryAsync(string slug, CancellationToken cancellationToken)
     {
         var repositories = await RepositoriesAsync(cancellationToken);
         return repositories.FirstOrDefault(r => string.Equals(r.Slug, slug, StringComparison.OrdinalIgnoreCase));
@@ -147,7 +147,7 @@ public sealed partial class IndexReader : IDisposable
     ///     without advice, because what to do next depends on where the slug came from — a <c>repo</c>
     ///     argument is dropped, the first segment of a path is corrected.
     /// </summary>
-    public async Task<string> UnknownRepositoryAsync(string slug, CancellationToken cancellationToken) =>
+    private async Task<string> UnknownRepositoryAsync(string slug, CancellationToken cancellationToken) =>
         $"No repository '{slug}' in project '{ProjectSlug}'. Repositories: {await SlugsAsync(cancellationToken)}.";
 
     /// <summary>
@@ -155,7 +155,7 @@ public sealed partial class IndexReader : IDisposable
     ///     shapes are described in one place so a tool cannot explain one project's naming in the
     ///     other's words (ADR-0006).
     /// </summary>
-    public async Task<string> PathRuleAsync(CancellationToken cancellationToken) =>
+    private async Task<string> PathRuleAsync(CancellationToken cancellationToken) =>
         (await PathsAsync(cancellationToken)).SingleRepository
             ? "this project holds one repository, so a path is the path inside it."
             : $"a qualified path must start with a repository slug, then the path inside it. Repositories: {await SlugsAsync(cancellationToken)}.";
@@ -174,7 +174,7 @@ public sealed partial class IndexReader : IDisposable
     /// </summary>
     /// <param name="path">The path an agent wrote, as it wrote it.</param>
     /// <param name="cancellationToken">Threaded to the probe.</param>
-    public async Task<string?> FileSlugPrefixAdviceAsync(string path, CancellationToken cancellationToken)
+    private async Task<string?> FileSlugPrefixAdviceAsync(string path, CancellationToken cancellationToken)
     {
         if (await SlugPrefixAsync(path, cancellationToken) is not { } prefix) return null;
         return await FindFileAsync(prefix.Corrected, cancellationToken) is null
