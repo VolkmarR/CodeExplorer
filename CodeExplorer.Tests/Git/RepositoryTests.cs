@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using System.Text;
 using CodeExplorer.Index;
 using CodeExplorer.Refresh;
@@ -10,8 +9,9 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     Repositories added through the operator API, and the local copy a refresh makes of them: a
-///     full bare clone that nothing but the refresh reads (CONTEXT.md, Local copy; ADR-0007). Fixtures
+///     The local copy a refresh makes of a repository: a full bare clone that nothing but the refresh
+///     reads (CONTEXT.md, Local copy; ADR-0007). Adding the repository is <c>RepositoryEndpointTests</c>'
+///     subject, in <c>Control/</c> beside the endpoints. Fixtures
 ///     are local repositories built with LibGit2Sharp, so the suite never touches the network; the
 ///     local transport cannot serve a shallow clone (ADR-0003), so the shallow copy an older server
 ///     left behind is made by hand (<see cref="TestHost.MakeLocalCopyShallow" />). What the index built
@@ -100,53 +100,6 @@ public sealed class RepositoryTests : IDisposable
         Assert.Contains("credential", error, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(Secret, error);
         Assert.DoesNotContain("   at ", error);
-    }
-
-    [Fact]
-    public async Task Credential_is_write_only_through_the_api()
-    {
-        await _host.CreateProjectAsync("alpha");
-        using var http = _host.CreateClient();
-        var ct = TestContext.Current.CancellationToken;
-
-        using var created = await http.PostAsJsonAsync("/api/projects/alpha/repositories",
-            new { slug = "main", url = "https://example.invalid/repo.git", credential = Secret }, ct);
-        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-        string createdBody = await created.Content.ReadAsStringAsync(ct);
-        Assert.DoesNotContain(Secret, createdBody);
-        Assert.Contains("\"hasCredential\":true", createdBody);
-
-        string listBody = await http.GetStringAsync("/api/projects/alpha/repositories", ct);
-        Assert.DoesNotContain(Secret, listBody);
-        Assert.Contains("main", listBody);
-    }
-
-    [Fact]
-    public async Task Adding_a_repository_validates_project_slug_url_and_duplicates()
-    {
-        await _host.CreateProjectAsync("alpha");
-        using var http = _host.CreateClient();
-        var ct = TestContext.Current.CancellationToken;
-        var body = new { slug = "main", url = "https://example.invalid/repo.git" };
-
-        using var noProject = await http.PostAsJsonAsync("/api/projects/nope/repositories", body, ct);
-        Assert.Equal(HttpStatusCode.NotFound, noProject.StatusCode);
-
-        using var badSlug = await http.PostAsJsonAsync("/api/projects/alpha/repositories",
-            new { slug = "Bad Slug", body.url }, ct);
-        Assert.Equal(HttpStatusCode.BadRequest, badSlug.StatusCode);
-
-        // A token in the URL would land on disk in the clone's remote config; the API refuses it.
-        using var userInfo = await http.PostAsJsonAsync("/api/projects/alpha/repositories",
-            new { slug = "main", url = $"https://user:{Secret}@example.invalid/repo.git" }, ct);
-        Assert.Equal(HttpStatusCode.BadRequest, userInfo.StatusCode);
-        Assert.DoesNotContain(Secret, await userInfo.Content.ReadAsStringAsync(ct));
-
-        using var first = await http.PostAsJsonAsync("/api/projects/alpha/repositories", body, ct);
-        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
-
-        using var dup = await http.PostAsJsonAsync("/api/projects/alpha/repositories", body, ct);
-        Assert.Equal(HttpStatusCode.Conflict, dup.StatusCode);
     }
 
     /// <summary>
