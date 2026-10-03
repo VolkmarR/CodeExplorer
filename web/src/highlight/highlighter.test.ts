@@ -15,6 +15,22 @@ test('the extension decides the language, and an unknown one is plaintext', () =
   expect(languageFor('main/src/Api/Program.cs')).toBe('csharp')
   expect(languageFor('main/Source/Start.prg')).toBe('xsharp')
   expect(languageFor('main/Source/Header.xh')).toBe('xsharp')
+  for (const extension of [
+    'xml',
+    'csproj',
+    'xsproj',
+    'vbproj',
+    'props',
+    'targets',
+    'config',
+    'xaml',
+    'resx',
+    'nuspec',
+    'manifest',
+  ]) {
+    expect(languageFor(`main/src/Api/File.${extension}`)).toBe('xml')
+  }
+  expect(languageFor('main/src/Api/Directory.Build.PROPS')).toBe('xml')
   expect(languageFor('main/README')).toBe('plaintext')
   expect(languageFor('main/.gitignore')).toBe('plaintext')
 })
