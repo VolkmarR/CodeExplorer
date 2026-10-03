@@ -89,7 +89,7 @@ export function ProjectOverview({
             {/* Across the whole row: two years of months need the width to read as a trend. */}
             {cards ? (
               <div className="lg:col-span-2">
-                <FileChangesCard changes={cards.fileChanges} />
+                <FileChangesCard churn={overview.churn} changes={cards.fileChanges} />
               </div>
             ) : null}
             <MostChangedCard
