@@ -240,15 +240,15 @@ internal sealed partial class SearchTools
             text.Append(CultureInfo.InvariantCulture,
                 $"\n0 calls but {Count(ReferenceKind.TypeUse)} type uses, and \"{symbol}\" looks like an interface. A call names the METHOD, not the interface, so this cannot answer \"who uses it?\". Read one implementation for its member names, then run find_references on the method you care about.\n");
 
-        // What the footer may claim is decided by how the answers were reached and not by what was
-        // true when it was written (ADR-0008): once a parser-backed analyser is registered for a
-        // language, a reply that still called itself textual would be understating what it knows.
-        // Only the lead clause varies; the caveat after it is true either way and is stored once.
-        string how = result.References.All(r => r.Evidence == Evidence.Text)
-            ? "Classification is textual"
-            : "Classification is parsed where the language has a parser here and textual elsewhere";
+        // What the footer may claim is decided by how the answers were reached (EvidenceClause). "Line
+        // shape, no compiler" is said only where some answer was read from the line; a match is by name
+        // whoever classified it, so the rest of the caveat is said every time.
+        string how = EvidenceClause.Of(result.References.Select(r => r.Evidence),
+            "Classification is textual — line shape, no compiler.",
+            "Classification is parsed by a real parser for each language here, but matching is still by name.",
+            "Classification is parsed where the language has a parser here and textual elsewhere — line shape, no compiler.");
         text.Append(CultureInfo.InvariantCulture,
-            $"\n{how} — line shape, no compiler. An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n");
+            $"\n{how} An unrelated symbol of the same name is included, and a call made through an interface, a delegate or reflection is not. Strong evidence, not proof.\n");
         return text.ToString();
 
         void Section(string title, ReferenceKind kind)

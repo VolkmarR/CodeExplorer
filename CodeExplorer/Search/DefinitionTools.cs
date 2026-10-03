@@ -144,8 +144,13 @@ internal sealed partial class SearchTools
             Section(null, null);
         }
 
-        text.Append(
-            "\nDeclaration forms are read from line shape, not from a compiler, so an unrelated symbol of the same name is included and a form this does not know is missing. Strong evidence, not proof.\n");
+        // Read off the sites' own evidence (EvidenceClause) rather than written as a fact, which it was
+        // until a parser-backed analyser would have made it false.
+        text.Append('\n').Append(EvidenceClause.Of(result.Sites.Select(site => site.Evidence),
+            "Declaration forms are read from line shape, not from a compiler, so an unrelated symbol of the same name is included and a form this does not know is missing. Strong evidence, not proof.",
+            "Declarations are parsed by a real parser for each language here, but matched by name, so an unrelated symbol of the same name is included.",
+            "Declaration forms are parsed where the language has a parser here and read from line shape elsewhere, so an unrelated symbol of the same name is included and a form the textual half does not know is missing. Strong evidence, not proof."))
+            .Append('\n');
         return text.ToString();
 
         void Section(string? title, DeclarationRole? role)

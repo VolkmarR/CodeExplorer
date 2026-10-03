@@ -461,20 +461,12 @@ internal sealed partial class FileTools(
         "Read from the shape of each line, not from a compiler. A form no profile knows is one this "
         + "did not find rather than one that is not there. Strong evidence, not proof.";
 
-    /// <summary>
-    ///     How the declarations were reached, which is what the reply's last line claims (ADR-0008).
-    ///     Derived from the answers rather than written as a fact, and in three branches and not two:
-    ///     a reply that is entirely a parser's must not talk about a textual half that is not there,
-    ///     which is the sentence a two-way check prints the day the first parser is registered.
-    /// </summary>
-    private static string How(IReadOnlyList<FileDeclaration> declarations)
-    {
-        if (declarations.All(d => d.Evidence == Evidence.Text)) return _textualCaveat;
-        return declarations.All(d => d.Evidence == Evidence.Parsed)
-            ? "Parsed by a real parser for this language, so this is what the file declares and not what its lines look like."
-            : "Parsed where the language has a parser here and read from the shape of the line elsewhere; "
-              + "the textual half is strong evidence, not proof.";
-    }
+    /// <summary>How the declarations were reached, which is what the reply's last line claims.</summary>
+    private static string How(IReadOnlyList<FileDeclaration> declarations) =>
+        EvidenceClause.Of(declarations.Select(d => d.Evidence), _textualCaveat,
+            "Parsed by a real parser for this language, so this is what the file declares and not what its lines look like.",
+            "Parsed where the language has a parser here and read from the shape of the line elsewhere; "
+            + "the textual half is strong evidence, not proof.");
 
     private static string Format(DeclarationsResult result)
     {
