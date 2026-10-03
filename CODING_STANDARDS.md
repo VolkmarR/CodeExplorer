@@ -195,8 +195,9 @@ Two kinds of failure, two mechanisms. Never mix them.
   hand-mirrored from the C# records with no OpenAPI document to generate them from, and the feature
   that would see a mismatch is the one that should hold the declaration. `ApiContractTests` pins the
   JSON property names of every GET answer under `/api` in `CodeExplorer.Tests/ApiContract.txt`, so
-  a renamed, removed or added server property fails the server's suite; a pull request that changes
-  that snapshot changes the web type mirroring the route in the same pull request.
+  a property renamed, removed or added in one of those answers fails the server's suite; a pull
+  request that changes that snapshot changes the web type mirroring the route in the same pull
+  request. The answers to POST, PUT and DELETE, and the error body, are not in it.
   A shape two features read is imported from the feature that owns the concept — `CommitRef` from
   `features/history` — and a shared component under `components/`, which may not reach into a
   feature at all, declares the fields it renders as its own prop type. The one exception is the auth
