@@ -378,7 +378,7 @@ internal sealed partial class FileTools(
                  Lists the file extensions in this project with how many files and lines each has, most files first. Use it to pick a value for grep's `ext` filter and to see what the project is written in. Pass `repo` to scope it to one repository. Files without an extension are grouped as `(none)`; files committed but not indexed (binary, oversized) are counted separately.
                  """)]
     public async Task<string> ListExtensions(
-        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        [Description(ParameterText.Repository)]
         string? repo = null,
         CancellationToken cancellationToken = default)
     {
@@ -439,7 +439,7 @@ internal sealed partial class FileTools(
                  - A page holds at most 500 declarations. A file with more is paged with `offset`, so the back half of a long file is reachable without reading it; the reply says how many it listed and which line it reached.
                  """)]
     public async Task<string> ListDeclarations(
-        [Description("Qualified path of the file, e.g. \"main/src/Api/Orders.cs\".")]
+        [Description(ParameterText.TheFile)]
         string path,
         [Description(
             "Skip this many declarations, in file order, and list the page after them. Default 0. Pass the running total the previous reply listed to continue where it stopped.")]

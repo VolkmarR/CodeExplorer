@@ -31,7 +31,7 @@ internal sealed partial class HistoryTools
                  - History may not reach the beginning of the repository, and it is not the same as the code.
                  """)]
     public async Task<string> GitLog(
-        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        [Description(ParameterText.Repository)]
         string? repo = null,
         [Description(
             "Email address, whole or in part, e.g. \"grace@example.com\" or \"grace\". Matches the address and not the display name, case-insensitively. Default: every author.")]
@@ -43,8 +43,7 @@ internal sealed partial class HistoryTools
         int limit = _defaultCommits,
         [Description("1-based page of results, newest first.")]
         int page = 1,
-        [Description(
-            "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. A path HEAD no longer holds still scopes, because history recorded it. Default: the whole project.")]
+        [Description(ParameterText.CommitScope)]
         string? path = null,
         CancellationToken cancellationToken = default)
     {
@@ -159,12 +158,11 @@ internal sealed partial class HistoryTools
                  - It says who touched the code, never who wrote it: a reformat is a commit, so a mass change makes its author look expert in files they only reindented.
                  """)]
     public async Task<string> Authors(
-        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        [Description(ParameterText.Repository)]
         string? repo = null,
         [Description("Authors to return, 1-200. Default 30.")]
         int limit = _defaultAuthors,
-        [Description(
-            "Qualified path of a folder or a file to scope to, e.g. \"main/src/Api\" or \"main/src/Api/Orders.cs\". Matched by the path each commit recorded, so it begins where a file was last renamed. A path HEAD no longer holds still scopes, because history recorded it. Default: the whole project.")]
+        [Description(ParameterText.CommitScope)]
         string? path = null,
         CancellationToken cancellationToken = default)
     {

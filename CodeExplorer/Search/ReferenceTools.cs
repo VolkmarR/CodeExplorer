@@ -32,13 +32,11 @@ internal sealed partial class SearchTools
         [Description(
             "The identifier to look for, e.g. \"UpdateDeliveryNoteStatus\" or \"OrderEntity\". One name, matched whole and case-sensitively.")]
         string symbol,
-        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        [Description(ParameterText.Repository)]
         string? repo = null,
-        [Description(
-            "Only look in files whose qualified path matches; comma-separated terms are OR-ed. Same syntax as grep.")]
+        [Description(ParameterText.LookIn)]
         string? path = null,
-        [Description(
-            "Skip files whose qualified path matches any of these comma-separated terms, e.g. \"*.g.cs,/tests/\".")]
+        [Description(ParameterText.Exclude)]
         string? exclude = null,
         [Description("Only look in files with this extension, without the dot, e.g. \"cs\".")]
         string? ext = null,

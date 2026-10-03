@@ -30,13 +30,11 @@ internal sealed partial class SearchTools
         [Description(
             "The symbol to look for, e.g. \"OrderService\" or \"UpdateDeliveryNoteStatus\". One name, matched whole and case-sensitively.")]
         string symbol,
-        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        [Description(ParameterText.Repository)]
         string? repo = null,
-        [Description(
-            "Only look in files whose qualified path matches; comma-separated terms are OR-ed. Same syntax as grep.")]
+        [Description(ParameterText.LookIn)]
         string? path = null,
-        [Description(
-            "Skip files whose qualified path matches any of these comma-separated terms, e.g. \"*.g.cs,/tests/\".")]
+        [Description(ParameterText.Exclude)]
         string? exclude = null,
         [Description("Only look in files with this extension, without the dot, e.g. \"pas\".")]
         string? ext = null,
@@ -218,13 +216,12 @@ internal sealed partial class SearchTools
         int group = 0,
         [Description("Match case exactly. Default false.")]
         bool caseSensitive = false,
-        [Description("Repository slug to scope to. Default: every repository in the project.")]
+        [Description(ParameterText.Repository)]
         string? repo = null,
         [Description(
             "Only search files whose qualified path matches; comma-separated terms are OR-ed. Same syntax as grep.")]
         string? path = null,
-        [Description(
-            "Skip files whose qualified path matches any of these comma-separated terms, e.g. \"*.g.cs,/tests/\".")]
+        [Description(ParameterText.Exclude)]
         string? exclude = null,
         [Description("Only search files with this extension, without the dot, e.g. \"csproj\" or \"cs\".")]
         string? ext = null,
