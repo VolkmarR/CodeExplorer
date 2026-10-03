@@ -1,10 +1,9 @@
 import { Link } from '@tanstack/react-router'
 import { ChurnList } from '@/features/churn/ChurnList'
 import type { OverviewChurn } from '@/features/projects/api'
-import { OverviewCard } from '@/features/projects/OverviewCard'
+import { historyWindow, OverviewCard } from '@/features/projects/OverviewCard'
 import { formatDate } from '@/lib/format'
 import { CHURN_DEFAULTS, churnSearch } from '@/lib/urls/churnParams'
-import { historyWindow } from '@/features/projects/noHistory'
 
 /**
  * The same ranking the churn page shows, over the filter bar's window and without the project's
