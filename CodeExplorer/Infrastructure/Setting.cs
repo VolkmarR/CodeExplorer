@@ -1,13 +1,25 @@
 namespace CodeExplorer.Infrastructure;
 
 /// <summary>
-///     Reading a configured URL, which three settings now need and which each of them used to do its
-///     own way. Absent selects a local default everywhere here (ADR-0004), so absent is an answer and
-///     not a failure; what is worth spelling out once is the other case, where a value is present and
-///     unusable.
+///     Reading the settings more than one component reads: a configured URL, which three settings need
+///     and which each of them used to do its own way, and the data directory, which five components
+///     placed themselves under with their own copy of its name and default. Absent selects a local
+///     default everywhere here (ADR-0004), so absent is an answer and not a failure; what is worth
+///     spelling out once is the other case, where a value is present and unusable.
 /// </summary>
 public static class Setting
 {
+    /// <summary>The setting that moves everything this server keeps on disk.</summary>
+    public const string DataDirectoryKey = "Storage:DataDirectory";
+
+    /// <summary>
+    ///     The directory the control database, the indexes, the local copies, the local durable store
+    ///     and the scratch space live under. Absent, it is <c>data</c> beside the working directory, so
+    ///     a plain <c>dotnet run</c> needs no setting. The stdio proxy keeps its own copy of the name,
+    ///     because it references no project of the server (CODING_STANDARDS, Layout).
+    /// </summary>
+    public static string DataDirectory(IConfiguration configuration) => configuration[DataDirectoryKey] ?? "data";
+
     /// <summary>
     ///     The setting as an absolute URL, or null when it is absent. A value that is not a URL names
     ///     the setting rather than crashing with <c>UriFormatException</c>: the server refuses to start

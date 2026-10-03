@@ -65,7 +65,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     ///     disk is the one ceiling this app cannot raise.
     /// </summary>
     private readonly string _scratch =
-        Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "scratch");
+        Path.Combine(Setting.DataDirectory(configuration), "scratch");
 
     // One gate per project, so a fetch, a store and a remove of it never overlap (#229). A store replaces
     // the tables in the order a fetch reads them, so an overlap could read the older index_info and then

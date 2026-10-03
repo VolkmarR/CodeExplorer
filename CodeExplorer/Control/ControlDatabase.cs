@@ -129,7 +129,7 @@ public sealed partial class ControlDatabase : IDisposable
         _localAllowed = RepositoryUrl.LocalAllowed(configuration);
 
         // Absent configuration selects a local folder, so `dotnet run` needs no settings at all.
-        string directory = configuration["Storage:DataDirectory"] ?? "data";
+        string directory = Setting.DataDirectory(configuration);
         Directory.CreateDirectory(directory);
         _path = Path.Combine(directory, "control.duckdb");
         _connectionString = $"Data Source={_path}";

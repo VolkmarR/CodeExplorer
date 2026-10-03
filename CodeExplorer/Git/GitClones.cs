@@ -57,7 +57,7 @@ public sealed class GitClones(
     // Absolute, because libgit2 resolves a relative data directory before it names a path in an error,
     // and the path has to be written the same way to be recognised and kept out of a message (#232).
     private readonly string _cloneRoot =
-        Path.GetFullPath(Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "clones"));
+        Path.GetFullPath(Path.Combine(Setting.DataDirectory(configuration), "clones"));
     private readonly bool _localAllowed = RepositoryUrl.LocalAllowed(configuration);
     private readonly IDataProtector _protector = dataProtection.CreateProtector(KeyRing.CredentialPurpose);
 
@@ -650,7 +650,7 @@ public sealed class GitClones(
                 ? $"{WithoutPath(ex.Message, path).TrimEnd('.')}. A path in the local copy would pass the 260 "
                   + $"characters Windows allows and libgit2 keeps to; the local copy's own path is {path.Length} "
                   + "characters, and a branch's ref is written beneath it. Ask the operator to move "
-                  + $"{_dataDirectorySetting} to a shorter path, then try again."
+                  + $"{Setting.DataDirectoryKey} to a shorter path, then try again."
                 : $"{WithoutPath(ex.Message, path).TrimEnd('.')}. Ask the operator to check the URL and the stored "
                   + "credential for this repository, then try again.";
         // The message and not the exception: RefreshService logs the failure with its stack already,
@@ -660,9 +660,6 @@ public sealed class GitClones(
                 verb, repository.Slug, repository.ProjectSlug, path, ex.Message);
         return new McpException($"{verb} repository '{repository.Slug}' from '{repository.Url}' failed: {reason}");
     }
-
-    /// <summary>The setting that moves every local copy, which is the remedy for a path too long.</summary>
-    private const string _dataDirectorySetting = "Storage:DataDirectory";
 
     /// <summary>
     ///     A failure on this side of the transfer that the URL and the credential have nothing to do
