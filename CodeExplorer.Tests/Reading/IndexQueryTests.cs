@@ -52,4 +52,24 @@ public sealed class IndexQueryTests : IDisposable
         Assert.Single(Directory.EnumerateFiles(plans,
             "*-IndexQueryTests-A_list_reads_every_row_in_order_under_its_callers_label.sql.txt"));
     }
+
+    /// <summary>
+    ///     The control database and a build are off the path a slow answer is investigated from, so
+    ///     their list reads leave no dump even with the switch on.
+    /// </summary>
+    [Fact]
+    public async Task An_unexplained_list_reads_every_row_and_leaves_no_plan()
+    {
+        await using var connection = new DuckDBConnection($"Data Source={Path.Combine(_root, "unexplained.duckdb")}");
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        string plans = Path.Combine(_root, "plans");
+
+        List<long> rows;
+        using (QueryPlan.Recording(plans, _root))
+            rows = await connection.UnexplainedListAsync("SELECT range AS n FROM range(3) ORDER BY n", [],
+                reader => reader.GetInt64(0), TestContext.Current.CancellationToken);
+
+        Assert.Equal([0L, 1L, 2L], rows);
+        Assert.False(Directory.Exists(plans));
+    }
 }
