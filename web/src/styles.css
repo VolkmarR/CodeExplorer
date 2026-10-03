@@ -225,10 +225,19 @@
     @apply text-emerald-700 dark:text-emerald-300;
   }
 
-  .th-operator,
-  .th-variable,
-  .th-attr,
+  /* A markup file is mostly tags and attributes, so left at the operator grey an XML project file
+     read as uncoloured. The element name takes the type hue rather than the keyword one, so a JSX
+     `<Button>` reads as the component it names and stays apart from `return` beside it. */
   .th-tag {
+    @apply text-teal-700 dark:text-teal-300;
+  }
+
+  .th-attr {
+    @apply text-rose-700 dark:text-rose-300;
+  }
+
+  .th-operator,
+  .th-variable {
     @apply text-foreground/80;
   }
 }
