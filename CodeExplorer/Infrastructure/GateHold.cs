@@ -32,10 +32,11 @@ public sealed class Hold : IDisposable
 
 /// <summary>
 ///     One gate per key, each letting one holder in at a time, so work on one project never waits on
-///     work on another. A gate is created on first use and kept for the life of the process: the keys
-///     are project slugs, bounded by the control database, and a gate holds nothing but a count. A
-///     semaphore that loses the <c>GetOrAdd</c> race was never waited on, so dropping it undisposed
-///     holds nothing.
+///     work on another. A gate is created on first use and never removed, so a caller's keys must come
+///     from a bounded set: project slugs are, bounded by the control database, and a gate holds nothing
+///     but a count. Removal is left out on purpose, because dropping a gate that someone is waiting on
+///     lets the next caller take a fresh one beside them. A semaphore that loses the <c>GetOrAdd</c>
+///     race was never waited on, so dropping it undisposed holds nothing.
 /// </summary>
 public sealed class KeyedGate
 {

@@ -4,8 +4,8 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     The one disposable hold every gate in the server is taken through (<see cref="GateHold" />), and
-///     the per-key gate built on it (<see cref="KeyedGate" />). What a caller relies on is that a scope
+///     The disposable hold a gate is taken through when the task that takes it also releases it
+///     (<see cref="GateHold" />), and the per-key gate built on it (<see cref="KeyedGate" />). What a caller relies on is that a scope
 ///     releases exactly what it took: once, and nothing when the wait never ended.
 /// </summary>
 public sealed class GateHoldTests
