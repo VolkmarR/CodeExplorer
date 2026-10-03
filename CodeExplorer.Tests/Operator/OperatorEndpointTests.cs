@@ -153,6 +153,30 @@ public sealed class OperatorEndpointTests : IDisposable
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Fact]
+    public async Task An_unknown_api_path_is_a_not_found_with_an_error_and_not_the_web_ui()
+    {
+        using var host = new TestHost(SearchEngine.Substring, webUiPage: "<!doctype html><title>web ui</title>");
+        await host.CreateProjectAsync("alpha");
+        using var http = host.CreateClient();
+
+        // The page is served, so the SPA fallback is live and every assertion below is made against it.
+        using var page = await http.GetAsync("/projects/alpha", Ct);
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+        Assert.Contains("web ui", await page.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+
+        foreach (string path in new[] { "/api/no-such-endpoint", "/api/projects/alpha/no-such-endpoint" })
+        {
+            using var response = await http.GetAsync(path, Ct);
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            var body = await response.Content.ReadFromJsonAsync<ErrorBody>(Ct);
+            Assert.Contains(path, body?.Error, StringComparison.Ordinal);
+        }
+    }
+
+    private sealed record ErrorBody(string Error);
+
     private async Task<IReadOnlyList<ProjectSummary>> ListAsync()
     {
         using var http = _host.CreateClient();

@@ -12,10 +12,12 @@ using CodeExplorer.Reading;
 using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using LibGit2Sharp;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using ModelContextProtocol.Client;
@@ -85,12 +87,25 @@ public sealed class TestHost : IDisposable
     ///     The same for loose objects, which the clone of a local fixture starts out as.
     /// </param>
     /// <param name="repackEnabled">Off only where the switch is the subject; the shipped default is on.</param>
+    /// <param name="webUiPage">
+    ///     An <c>index.html</c> for the host to serve as the web UI, from a web root of its own. Absent
+    ///     everywhere else: <c>wwwroot</c> is a Vite build that exists on a developer's machine and not
+    ///     on CI, so a test that reaches the SPA fallback has to bring the page it falls back to.
+    /// </param>
     public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
         bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
         int? maxCommitPaths = null, int? transferStallSeconds = null, bool allowLocalRepositories = true,
         string? allowedHosts = null, long? maxFileBytes = null, int? repackPackThreshold = null,
-        int? repackLooseObjectThreshold = null, bool repackEnabled = true)
+        int? repackLooseObjectThreshold = null, bool repackEnabled = true, string? webUiPage = null)
     {
+        if (webUiPage is not null)
+        {
+            Directory.CreateDirectory(WebRoot);
+            File.WriteAllText(Path.Combine(WebRoot, "index.html"), webUiPage);
+            _servesWebUi = true;
+        }
+
+
         _repackEnabled = repackEnabled;
         _repackPackThreshold = repackPackThreshold;
         _repackLooseObjectThreshold = repackLooseObjectThreshold;
@@ -120,6 +135,7 @@ public sealed class TestHost : IDisposable
     private readonly int? _repackPackThreshold;
     private readonly int? _repackLooseObjectThreshold;
     private readonly bool _repackEnabled;
+    private readonly bool _servesWebUi;
     private bool _allowLocalRepositories;
     private readonly string? _allowedHosts;
 
@@ -170,6 +186,11 @@ public sealed class TestHost : IDisposable
             if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
             if (_allowLocalRepositories) builder.UseSetting(RepositoryUrl.AllowLocalSetting, "true");
             if (_allowedHosts is { } hosts) builder.UseSetting(RequestOrigin.AllowedHostsSetting, hosts);
+            // Through the static-file options and not UseWebRoot, which the minimal host reads before this
+            // callback runs and so ignores: the page served was the developer's own wwwroot build.
+            if (_servesWebUi)
+                builder.ConfigureServices(services => services.PostConfigure<StaticFileOptions>(options =>
+                    options.FileProvider = new PhysicalFileProvider(WebRoot)));
             if (!_authenticated) return;
 
             foreach ((string key, string value) in Tenant.Configuration) builder.UseSetting(key, value);
@@ -356,6 +377,9 @@ public sealed class TestHost : IDisposable
 
     /// <summary>The folder standing in for a blob container, which is what an unconfigured app uses.</summary>
     private string DurableDirectory => Path.Combine(_root, "durable");
+
+    /// <summary>The web root of a host given a <c>webUiPage</c>, in place of the project's own <c>wwwroot</c>.</summary>
+    private string WebRoot => Path.Combine(_root, "wwwroot");
 
     /// <summary>A project's index file, for a test asserting that a deletion took it or a build made it.</summary>
     public string IndexFile(string slug) => Path.Combine(DataDirectory, "indexes", slug + ".duckdb");
