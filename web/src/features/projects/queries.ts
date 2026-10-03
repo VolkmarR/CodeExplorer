@@ -69,7 +69,7 @@ export function excludedPathsQuery(slug: string) {
 export function excludedPathSuggestionsQuery(slug: string) {
   return queryOptions({
     queryFn: () => fetchExcludedPathSuggestions(slug),
-    queryKey: [...projectKey(slug), 'excluded-paths', 'suggestions'],
+    queryKey: [...excludedPathsQuery(slug).queryKey, 'suggestions'],
   })
 }
 

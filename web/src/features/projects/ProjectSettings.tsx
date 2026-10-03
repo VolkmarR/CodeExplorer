@@ -50,42 +50,40 @@ export function ProjectSettings() {
 
   return (
     <ProjectCard project={slug}>
-      <>
-        {remove.error ? <ErrorPanel error={remove.error} /> : null}
-        <RepositoryTable project={project} refreshing={refreshing} />
-        <ExcludedPathsForm project={slug} />
+      {remove.error ? <ErrorPanel error={remove.error} /> : null}
+      <RepositoryTable project={project} refreshing={refreshing} />
+      <ExcludedPathsForm project={slug} />
 
-        <section
-          aria-labelledby="danger-title"
-          className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-destructive/40 px-5 py-4"
-        >
-          <div>
-            <h2 id="danger-title" className="text-sm font-medium text-destructive">
-              Delete this project
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Removes the index and the local copies of its repositories. An agent connected to this
-              project stops getting answers.
-            </p>
-          </div>
-          <ConfirmDialog
-            trigger={refreshing ? 'Delete after the refresh' : 'Delete project'}
-            title={`Delete ${project.name}?`}
-            description={
-              <>
-                Its index and the local copies of{' '}
-                {project.repositories.length === 0
-                  ? 'its repositories'
-                  : project.repositories.map((r) => r.slug).join(', ')}{' '}
-                are removed. This cannot be undone.
-              </>
-            }
-            action="Delete project"
-            disabled={remove.isPending || refreshing}
-            onConfirm={() => remove.mutate()}
-          />
-        </section>
-      </>
+      <section
+        aria-labelledby="danger-title"
+        className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-destructive/40 px-5 py-4"
+      >
+        <div>
+          <h2 id="danger-title" className="text-sm font-medium text-destructive">
+            Delete this project
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Removes the index and the local copies of its repositories. An agent connected to this
+            project stops getting answers.
+          </p>
+        </div>
+        <ConfirmDialog
+          trigger={refreshing ? 'Delete after the refresh' : 'Delete project'}
+          title={`Delete ${project.name}?`}
+          description={
+            <>
+              Its index and the local copies of{' '}
+              {project.repositories.length === 0
+                ? 'its repositories'
+                : project.repositories.map((r) => r.slug).join(', ')}{' '}
+              are removed. This cannot be undone.
+            </>
+          }
+          action="Delete project"
+          disabled={remove.isPending || refreshing}
+          onConfirm={() => remove.mutate()}
+        />
+      </section>
     </ProjectCard>
   )
 }
