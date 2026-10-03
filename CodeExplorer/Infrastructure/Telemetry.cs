@@ -314,13 +314,38 @@ public static class Telemetry
         };
 
     /// <summary>The chokepoint for one index build, called from <c>IndexBuilder</c> and nowhere else.</summary>
-    public static BuildRecording IndexBuild(string slug) =>
-        new(slug, IndexSpan, _indexSeconds, new(_indexFileCount, FilesTag), new(_indexLineCount, LinesTag));
+    public static IndexBuildRecording IndexBuild(string slug) =>
+        new(new BuildRecording(slug, IndexSpan, _indexSeconds, new(_indexFileCount, FilesTag),
+            new(_indexLineCount, LinesTag)));
 
     /// <summary>The chokepoint for the history pass of one build, called from <c>HistoryBuilder</c> and nowhere else.</summary>
-    public static BuildRecording HistoryBuild(string slug) =>
-        new(slug, _historySpan, _historySeconds, new(_historyCommitCount, _commitsTag),
-            new(_historyFileCount, FilesTag));
+    public static HistoryBuildRecording HistoryBuild(string slug) =>
+        new(new BuildRecording(slug, _historySpan, _historySeconds, new(_historyCommitCount, _commitsTag),
+            new(_historyFileCount, FilesTag)));
+
+    /// <summary>The file pass's recording, whose counts are named so a caller cannot pass them swapped.</summary>
+    public sealed class IndexBuildRecording : IDisposable
+    {
+        private readonly BuildRecording _recording;
+
+        internal IndexBuildRecording(BuildRecording recording) => _recording = recording;
+
+        public void Dispose() => _recording.Dispose();
+
+        public void Built(long files, long lines) => _recording.Built(files, lines);
+    }
+
+    /// <summary>The history pass's recording, named for the same reason <see cref="IndexBuildRecording" /> is.</summary>
+    public sealed class HistoryBuildRecording : IDisposable
+    {
+        private readonly BuildRecording _recording;
+
+        internal HistoryBuildRecording(BuildRecording recording) => _recording = recording;
+
+        public void Dispose() => _recording.Dispose();
+
+        public void Built(long commits, long files) => _recording.Built(commits, files);
+    }
 
     /// <summary>
     ///     The chokepoint for one move of a project's durable copy, called from <c>DurableIndex</c> and
@@ -484,12 +509,14 @@ public static class Telemetry
     /// <summary>
     ///     One pass of a build: the file pass, from the first blob read to the last, or the history pass.
     ///     One class with the pass's instruments handed in, because the two were the same class twice
-    ///     and differed only in which span, histograms and tags they named.
+    ///     and differed only in which span, histograms and tags they named. Callers hold it through
+    ///     <see cref="IndexBuildRecording" /> or <see cref="HistoryBuildRecording" />, whose counts are
+    ///     named, since two bare longs here would take a swapped pair without complaint.
     ///     A history pass that appends nothing and blames nothing is the ordinary outcome of refreshing
     ///     a repository that did not change, and is recorded as a build rather than as an absence: the
     ///     useful question of that metric is how often a pass is the cheap kind.
     /// </summary>
-    public sealed class BuildRecording : IDisposable
+    internal sealed class BuildRecording : IDisposable
     {
         private readonly Operation _operation;
         private readonly Histogram<double> _seconds;
