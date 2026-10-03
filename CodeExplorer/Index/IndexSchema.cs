@@ -16,6 +16,19 @@ public sealed partial class ProjectIndexes
     public const int SchemaVersion = 10;
 
     /// <summary>
+    ///     Every table <see cref="_schema" /> creates, in the order it creates them. Declared here, beside
+    ///     the DDL, so that a table is added in one file: the durable copy stores and restores exactly
+    ///     this list (<see cref="DurableIndex" />), and a table missing from it would silently be missing
+    ///     from every restored index (ADR-0007). <c>DurabilityTests</c> compares the stored set against
+    ///     the tables a fresh build creates, which is what catches a table added to the DDL alone.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> Tables =
+    [
+        "index_info", "repositories", "files", "lines", "commits", "commit_files", "attribution",
+        "path_lineage", "imports", "project_overview"
+    ];
+
+    /// <summary>
     ///     Paths inside <c>files</c> stay repository-relative and <c>repo_id</c> scopes them; the
     ///     materialised <c>qualified_path</c> and <c>directory</c> keep the read paths join-free
     ///     (ADR-0003). A file that is committed but not indexed (binary, oversized) is still a row with
