@@ -13,8 +13,10 @@ namespace CodeExplorer.Search;
 ///     Both searches had a copy of each, word for word. A second copy of the refusals lets two tools
 ///     explain one malformed pattern two ways, which sends an agent off retrying it on the other, and
 ///     a second copy of the recount lets "your filters hid it" mean a different thing in each.
-///     Every statement that runs here is labelled with its caller's member, not with this class, so a
-///     query plan still names the search that asked (<see cref="QueryPlan" />).
+///     The searches run their own statements, and the recount here is labelled with its caller's
+///     member, so a query plan still names the search that asked (<see cref="QueryPlan" />). The
+///     compile alone is the one exception: it is <see cref="Re2.RejectionAsync" />'s statement and is
+///     labelled as such, as it was before it was shared.
 /// </summary>
 internal static class PatternQuery
 {
@@ -51,7 +53,10 @@ internal static class PatternQuery
     ///     and propagates.
     /// </summary>
     /// <param name="connection">The index's connection, for the compile.</param>
-    /// <param name="pattern">The caller's pattern, or null for a text query, which hands a parser nothing.</param>
+    /// <param name="pattern">
+    ///     The caller's pattern. Only a pattern search comes through here: a text query hands a parser
+    ///     nothing, so a DuckDB error on one is never the caller's to fix.
+    /// </param>
     /// <param name="compileAlone">
     ///     Whether the pattern is compiled on its own first (<see cref="Re2.RejectionAsync" />): needed
     ///     wherever the search runs a wrapped form of it, because a wrapper can balance what the caller
@@ -59,20 +64,19 @@ internal static class PatternQuery
     /// </param>
     /// <param name="search">The search, which runs its own statements so their plans carry its name.</param>
     /// <param name="cancellationToken">Threaded to the compile, as every async path here is.</param>
-    public static async Task<Outcome> GuardedAsync(DuckDBConnection connection, string? pattern, bool compileAlone,
+    public static async Task<Outcome> GuardedAsync(DuckDBConnection connection, string pattern, bool compileAlone,
         Func<Task<Outcome>> search, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(search);
         try
         {
-            if (pattern is not null && compileAlone
-                                    && await Re2.RejectionAsync(connection, pattern, "", cancellationToken) is { } rejection)
+            if (compileAlone && await Re2.RejectionAsync(connection, pattern, "", cancellationToken) is { } rejection)
                 return new Problem(Re2.Rejected(rejection));
             return await search();
         }
-        catch (DuckDBException ex) when (pattern is not null && Re2.IsPatternRejection(ex))
+        catch (DuckDBException ex) when (Re2.IsPatternRejection(ex))
         {
-            // Only a pattern hands caller text to a parser; anything else DuckDB raises here is
+            // The pattern is the only caller text a parser sees here; anything else DuckDB raises is
             // infrastructure and propagates.
             return new Problem(Re2.Rejected(ex));
         }

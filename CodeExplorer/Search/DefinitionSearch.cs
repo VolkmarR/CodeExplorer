@@ -101,7 +101,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
 
     private Task<Outcome> RunAsync(string slug, DefinitionRequest request, CancellationToken cancellationToken) =>
         SymbolMatch.RunAsync(readers, slug, request.Symbol, request.Filter, "find_definition",
-            (index, symbol, filter, token) => QueryAsync(index, symbol, filter, token), cancellationToken);
+            QueryAsync, cancellationToken);
 
     private static async Task<Outcome> QueryAsync(IndexReader index, string symbol, FileFilter filter,
         CancellationToken cancellationToken)

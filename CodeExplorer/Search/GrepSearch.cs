@@ -184,9 +184,10 @@ public sealed partial class GrepSearch(IndexReaders readers)
         CancellationToken cancellationToken)
     {
         var bounds = Bounds.From(request);
+        // A text query hands a parser nothing, so nothing it raises is about the query.
+        if (!regex) return SearchLinesAsync(index, request, query, regex, bounds, cancellationToken);
         // Only a wrapped pattern needs compiling alone first: whole words and multiline wrap it.
-        return PatternQuery.GuardedAsync(index.Connection, regex ? query : null,
-            request.WholeWord || request.Multiline,
+        return PatternQuery.GuardedAsync(index.Connection, query, request.WholeWord || request.Multiline,
             () => request.Multiline
                 ? SearchMultilineAsync(index.Connection, request, query, bounds, cancellationToken)
                 : SearchLinesAsync(index, request, query, regex, bounds, cancellationToken),
