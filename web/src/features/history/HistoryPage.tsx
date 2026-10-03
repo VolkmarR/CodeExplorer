@@ -87,7 +87,6 @@ export function HistoryPage() {
           <CommitList
             project={project}
             log={log}
-            search={search}
             showRepository={filterable && search.repository === undefined}
           />
         )}

@@ -1,33 +1,69 @@
+import { Link } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { formatCount } from '@/lib/format'
+import { pageSpan } from '@/lib/paging'
 
 /**
  * Where you are in a paged list and how to leave it. Every paged view in the app is one of these —
- * the file listing, the search results, the change log — and each had written its own, which is how
- * one of them came to count its pages with a thousands separator and the other two without.
+ * the file listing, the search results, the change log, a commit's files — and each had written its
+ * own, which is how one of them came to count its pages with a thousands separator and the others
+ * without.
  *
  * It renders nothing on a single page: a pager that says "Page 1 of 1" is a row of disabled buttons
  * asking to be read.
  *
- * Paging is a navigation and not a state change, so it hands the page number back rather than
- * navigating itself: which route and which other parameters travel with it is the caller's business,
- * and a pager that knew them would have to know every view that pages.
+ * `page` is the page the list answered with, never the one the URL asked for: a page past the end
+ * comes back as the last one, and the pager must offer to leave where the reader is.
+ *
+ * The buttons are links to the same view with only the page changed, so every other parameter
+ * travels with it without the pager knowing what they are, and a page can be opened in a new tab.
  */
 export function Pager({
   page,
-  lastPage,
+  total,
+  pageSize,
   previousLabel = 'Previous',
   nextLabel = 'Next',
-  onPage,
+  firstPageBare = false,
 }: {
   page: number
-  lastPage: number
+  total: number
+  pageSize: number
   /** What the two directions are called, where a view names them for what it holds — a log is older and newer. */
   previousLabel?: string
   nextLabel?: string
-  onPage: (page: number) => void
+  /** Leaves `page` out of the URL for the first page, for a view whose plain link is that page. */
+  firstPageBare?: boolean
 }) {
+  const { lastPage } = pageSpan(page, pageSize, total)
   if (lastPage <= 1) return null
+
+  function step(target: number, label: string, disabled: boolean) {
+    if (disabled) {
+      return (
+        <Button variant="outline" size="sm" disabled>
+          {label}
+        </Button>
+      )
+    }
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        render={
+          <Link
+            to="."
+            search={(previous: Record<string, unknown>) => ({
+              ...previous,
+              page: firstPageBare && target === 1 ? undefined : target,
+            })}
+          />
+        }
+      >
+        {label}
+      </Button>
+    )
+  }
 
   return (
     <div className="flex items-center gap-4 pt-1">
@@ -35,17 +71,8 @@ export function Pager({
         Page {formatCount(page)} of {formatCount(lastPage)}
       </span>
       <div className="ml-auto flex gap-2">
-        <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-          {previousLabel}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page >= lastPage}
-          onClick={() => onPage(page + 1)}
-        >
-          {nextLabel}
-        </Button>
+        {step(page - 1, previousLabel, page <= 1)}
+        {step(page + 1, nextLabel, page >= lastPage)}
       </div>
     </div>
   )

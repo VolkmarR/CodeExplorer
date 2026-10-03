@@ -1,6 +1,6 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
-import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
-import { commitFilesPage } from '@/features/history/commitFilesPage'
+import { useParams, useSearch } from '@tanstack/react-router'
+import { COMMIT_FILES_PAGE_SIZE, commitFilesPage } from '@/features/history/commitFilesPage'
 import { commitFilesQuery, commitQuery } from '@/features/history/queries'
 import { DiffStat } from '@/components/DiffStat'
 import { ErrorPanel } from '@/components/ErrorPanel'
@@ -24,7 +24,6 @@ import { formatCount, formatCountOf, formatDate, shortSha } from '@/lib/format'
 export function CommitPage() {
   const { project } = useParams({ from: '/projects/$project/commit' })
   const { sha, from, page } = useSearch({ from: '/projects/$project/commit' })
-  const navigate = useNavigate()
   const { data: commit } = useSuspenseQuery(commitQuery(project, sha))
   const files = useQuery(commitFilesQuery(project, sha))
   const shown = files.data ? commitFilesPage(files.data.files, page ?? 1) : undefined
@@ -69,8 +68,8 @@ export function CommitPage() {
             {shown.lastPage > 1 ? (
               <p className="text-sm text-muted-foreground">
                 Showing {formatCount(shown.first)}–
-                {formatCount(shown.first + shown.rows.length - 1)} of {formatCount(shown.total)}{' '}
-                files
+                {formatCount(shown.first + shown.rows.length - 1)} of{' '}
+                {formatCountOf(shown.total, 'file')}
               </p>
             ) : null}
             <ul className="space-y-0.5 font-mono text-xs">
@@ -94,18 +93,13 @@ export function CommitPage() {
                 </li>
               ))}
             </ul>
-            {/* The page drawn rather than the one the URL asked for: a page past the end is shown
-                as the last one, and the pager must offer to leave where the reader is. */}
+            {/* Page 1 stays out of the URL, so every link to a commit is the short one it was
+                before the list was paged. */}
             <Pager
               page={shown.page}
-              lastPage={shown.lastPage}
-              onPage={(next) =>
-                void navigate({
-                  params: { project },
-                  search: { from, page: next === 1 ? undefined : next, sha },
-                  to: '/projects/$project/commit',
-                })
-              }
+              total={shown.total}
+              pageSize={COMMIT_FILES_PAGE_SIZE}
+              firstPageBare
             />
           </div>
         ) : (
