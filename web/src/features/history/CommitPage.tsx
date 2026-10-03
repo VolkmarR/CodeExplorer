@@ -67,8 +67,7 @@ export function CommitPage() {
                 commit is otherwise indistinguishable from the whole of a narrow one. */}
             {shown.lastPage > 1 ? (
               <p className="text-sm text-muted-foreground">
-                Showing {formatCount(shown.first)}–
-                {formatCount(shown.first + shown.rows.length - 1)} of{' '}
+                Showing {formatCount(shown.first)}–{formatCount(shown.last)} of{' '}
                 {formatCountOf(shown.total, 'file')}
               </p>
             ) : null}
