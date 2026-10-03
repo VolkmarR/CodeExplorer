@@ -395,11 +395,8 @@ internal static class OverviewQueries
                                                     FROM split JOIN repositories r USING (repo_id)
                                                     GROUP BY ALL
                                                     """, [.. parameters, new("depth", _couplingDepth)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var rows = new List<(string Slug, string[] Dirs, int Files)>();
-        while (await reader.ReadAsync(cancellationToken))
-            rows.Add((reader.Text("repo_slug"), reader.GetFieldValue<List<string>>(1).ToArray(),
-                reader.Int32("files")));
+        var rows = await command.ListAsync(reader => (Slug: reader.Text("repo_slug"),
+            Dirs: reader.GetFieldValue<List<string>>(1).ToArray(), Files: reader.Int32("files")), cancellationToken);
 
         var prefixes = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var repository in rows.GroupBy(r => r.Slug, StringComparer.Ordinal))
@@ -625,11 +622,8 @@ internal static class OverviewQueries
                                                              h.qualified_path
                                                     LIMIT $limit
                                                     """, [.. parameters, new("limit", _hotspotsShown)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var files = new List<Hotspot>();
-        while (await reader.ReadAsync(cancellationToken))
-            files.Add(new Hotspot(reader.Text("qualified_path"), reader.Int32("commits"), reader.Int32("line_count"),
-                reader.Int64("score")));
+        var files = await command.ListAsync(reader => new Hotspot(reader.Text("qualified_path"),
+            reader.Int32("commits"), reader.Int32("line_count"), reader.Int64("score")), cancellationToken);
         if (!scope.Excluded.Any) return new OverviewHotspots(files, null);
 
         var (excluded, excludedParameters) = HotspotScope(paths, window, scope, true);
@@ -679,11 +673,9 @@ internal static class OverviewQueries
                                                     ORDER BY authors DESC, commits DESC, qualified_path
                                                     LIMIT $limit
                                                     """, [.. parameters, new("limit", _authoredFilesShown)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var files = new List<AuthoredFile>();
-        while (await reader.ReadAsync(cancellationToken))
-            files.Add(new AuthoredFile(reader.Text("qualified_path"), reader.Int32("authors"),
-                reader.Int32("commits"), reader.Double("first"), reader.Double("second"), reader.Double("third")));
+        var files = await command.ListAsync(reader => new AuthoredFile(reader.Text("qualified_path"),
+            reader.Int32("authors"), reader.Int32("commits"), reader.Double("first"), reader.Double("second"),
+            reader.Double("third")), cancellationToken);
         if (!scope.Excluded.Any) return new OverviewAuthorsPerFile(files, null);
 
         var (excluded, excludedParameters) = AuthoredScope(scope, true);
@@ -881,18 +873,16 @@ internal static class OverviewQueries
                                                     FROM tops JOIN repositories r USING (repo_id)
                                                     ORDER BY r.repo_id, folder NULLS LAST
                                                     """, parameters);
-        await using var reader = await command.ReaderAsync(cancellationToken);
         // Read whole before grouping: one row per top-level folder plus one per repository is a few
         // hundred rows at most, and grouping a list reads more plainly than tracking a repository change
         // across the reader loop. A root-file row's path is the repository's root.
-        var rows = new List<(string Slug, bool IsRoot, OverviewFolder Entry)>();
-        while (await reader.ReadAsync(cancellationToken))
+        var rows = await command.ListAsync(reader =>
         {
             string slug = reader.Text("repo_slug");
             string? folder = reader.TextOrNull("folder");
-            rows.Add((slug, folder is null, new OverviewFolder(paths.Format(slug, folder ?? ""),
-                reader.Int32("files"), reader.Int64("lines"), reader.Int64("bytes"))));
-        }
+            return (Slug: slug, IsRoot: folder is null, Entry: new OverviewFolder(paths.Format(slug, folder ?? ""),
+                reader.Int32("files"), reader.Int64("lines"), reader.Int64("bytes")));
+        }, cancellationToken);
 
         // Capped per repository and not across the project: one repository of a thousand folders would
         // otherwise spend the whole cap and drop every later repository's top level entirely, which is
@@ -925,12 +915,8 @@ internal static class OverviewQueries
                                                     ORDER BY size_bytes DESC, qualified_path
                                                     LIMIT $limit
                                                     """, [.. parameters, new("limit", _largestFilesShown)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var files = new List<OverviewFile>();
-        while (await reader.ReadAsync(cancellationToken))
-            files.Add(new OverviewFile(reader.Text("qualified_path"), reader.Int32("line_count"),
-                reader.Int64("size_bytes")));
-        return files;
+        return await command.ListAsync(reader => new OverviewFile(reader.Text("qualified_path"),
+            reader.Int32("line_count"), reader.Int64("size_bytes")), cancellationToken);
     }
 
     /// <summary>
@@ -970,13 +956,9 @@ internal static class OverviewQueries
                                                     ORDER BY commits DESC, author_email
                                                     LIMIT $limit
                                                     """, [.. parameters, new("limit", _authorsShown)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var authors = new List<OverviewAuthor>();
-        while (await reader.ReadAsync(cancellationToken))
-            authors.Add(new OverviewAuthor(reader.Text("author_name"), reader.Text("author_email"),
-                reader.Int32("commits"),
-                reader.EpochInstant("last_commit")));
-        return authors;
+        return await command.ListAsync(reader => new OverviewAuthor(reader.Text("author_name"),
+            reader.Text("author_email"), reader.Int32("commits"), reader.EpochInstant("last_commit")),
+            cancellationToken);
     }
 
     /// <summary>The files at HEAD in the scope that the exclusions match, which the file sections left out.</summary>

@@ -78,7 +78,6 @@ public sealed class ImportGraph(IndexReaders readers)
             // extension at all. Asked twice they could only ever disagree by accident.
             var (name, profiled) = Languages.Name(extension);
 
-            var edges = new List<ImportedFrom>();
             await using var command = index.Connection.Query("""
                                                              SELECT i.name, i.shape, i.line_number, i.unresolved,
                                                                     i.evidence, t.qualified_path AS target_path
@@ -89,11 +88,10 @@ public sealed class ImportGraph(IndexReaders readers)
                                                              LIMIT $limit
                                                              """,
                 [new DuckDBParameter("f", file.FileId), new("limit", RowCap.Limit(MaxEdges))]);
-            await using var reader = await command.ReaderAsync(token);
-            while (await reader.ReadAsync(token))
-                edges.Add(new ImportedFrom(reader.Text("name"), ImportColumns.Shape(reader.Text("shape")),
-                    reader.Int32("line_number"), reader.TextOrNull("target_path"),
-                    reader.TextOrNull("unresolved"), ImportColumns.Strength(reader.Text("evidence"))));
+            var edges = await command.ListAsync(reader => new ImportedFrom(reader.Text("name"),
+                ImportColumns.Shape(reader.Text("shape")), reader.Int32("line_number"),
+                reader.TextOrNull("target_path"), reader.TextOrNull("unresolved"),
+                ImportColumns.Strength(reader.Text("evidence"))), token);
 
             bool capped = RowCap.Trim(edges, MaxEdges);
             return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, file.Module,

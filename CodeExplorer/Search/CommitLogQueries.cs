@@ -222,16 +222,10 @@ public sealed partial class HistoryQueries
     }
 
     private static async Task<IReadOnlyList<RecordedChange>> ChangesAsync(DuckDBCommand command,
-        CancellationToken cancellationToken)
-    {
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var changes = new List<RecordedChange>();
-        while (await reader.ReadAsync(cancellationToken))
-            changes.Add(new RecordedChange(reader.Text("sha"), reader.Text("repo_slug"), reader.Text("author_name"),
-                reader.Text("author_email"),
-                reader.Timestamp("authored_at"), reader.Text("subject")));
-        return changes;
-    }
+        CancellationToken cancellationToken) =>
+        await command.ListAsync(reader => new RecordedChange(reader.Text("sha"), reader.Text("repo_slug"),
+            reader.Text("author_name"), reader.Text("author_email"), reader.Timestamp("authored_at"),
+            reader.Text("subject")), cancellationToken);
 
     /// <summary>
     ///     The authors of the commits in scope, most commits first, with the newest name each address
@@ -334,10 +328,7 @@ public sealed partial class HistoryQueries
     {
         var (scope, parameters) = IndexQueries.CommitScope(repositorySlug);
         await using var command = LoggedQuery(index.Connection, scope, parameters, limit, skip, newestFirst: true);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var commits = new List<LoggedCommit>();
-        while (await reader.ReadAsync(cancellationToken)) commits.Add(Logged(reader));
-        return commits;
+        return await command.ListAsync(Logged, cancellationToken);
     }
 
     /// <summary>

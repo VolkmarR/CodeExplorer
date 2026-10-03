@@ -475,16 +475,14 @@ public sealed partial class IndexReader : IDisposable
         // EXISTS rather than a count: the question is whether a repository was walked at all, and a
         // semi-join stops at the first commit where count(*) reads every one of them. Matched on the
         // slug, not the id, because that is what commits records (ADR-0007).
-        await using var command = Connection.Query("""
-                                                   SELECT r.slug,
-                                                          EXISTS (SELECT 1 FROM commits c WHERE c.repo_slug = r.slug)
-                                                              AS walked
-                                                   FROM repositories r
-                                                   ORDER BY r.repo_id
-                                                   """, []);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var all = new List<(string Slug, bool Walked)>();
-        while (await reader.ReadAsync(cancellationToken)) all.Add((reader.Text("slug"), reader.Flag("walked")));
+        var all = await Connection.ListAsync("""
+                                             SELECT r.slug,
+                                                    EXISTS (SELECT 1 FROM commits c WHERE c.repo_slug = r.slug)
+                                                        AS walked
+                                             FROM repositories r
+                                             ORDER BY r.repo_id
+                                             """, [], reader => (Slug: reader.Text("slug"), Walked: reader.Flag("walked")),
+            cancellationToken);
         // One repository cannot be contrasted with another, so there is nothing to say about it here;
         // that a project has no history at all is a different sentence, said before this is reached.
         if (all.Count < 2) return HistoryCoverage.NothingToSay;
@@ -497,16 +495,11 @@ public sealed partial class IndexReader : IDisposable
 
     /// <summary>Files anywhere in the project with this leaf name, for a "did you mean" after a miss.</summary>
     public async Task<IReadOnlyList<string>> FilesNamedAsync(string name, int limit,
-        CancellationToken cancellationToken)
-    {
-        await using var command = Connection.Query(
+        CancellationToken cancellationToken) =>
+        await Connection.ListAsync(
             "SELECT qualified_path FROM files WHERE lower(name) = lower($n) ORDER BY qualified_path LIMIT $limit",
-            [new DuckDBParameter("n", name), new("limit", limit)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var result = new List<string>();
-        while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("qualified_path"));
-        return result;
-    }
+            [new DuckDBParameter("n", name), new("limit", limit)], reader => reader.Text("qualified_path"),
+            cancellationToken);
 
     private async Task<string> SlugsAsync(CancellationToken cancellationToken) =>
         string.Join(", ", (await RepositoriesAsync(cancellationToken)).Select(r => r.Slug));
@@ -546,7 +539,9 @@ public sealed partial class IndexReader : IDisposable
         // The history each repository has, joined on the slug rather than the id, because that is what
         // commits records (ADR-0007). A repository with no commits keeps a null newest commit and a zero
         // count, which the page draws as "no history" rather than as a repository that never changed.
-        await using var command = connection.Query(
+        // The history columns are read only here. The other caller, LoadShapeAsync, is the path every
+        // tool takes to learn the repository names, and it has no use for a join onto commits.
+        return await connection.ListAsync(
             """
             SELECT r.slug, r.url, r.head_commit, r.file_count, r.line_count,
                    coalesce(h.commits, 0) AS commits, h.sha, h.author_name, h.authored_at, h.subject,
@@ -561,20 +556,13 @@ public sealed partial class IndexReader : IDisposable
                               min(authored_at) AS first_at, max(authored_at) AS last_at
                        FROM commits GROUP BY repo_slug) h ON h.repo_slug = r.slug
             ORDER BY r.repo_id
-            """, []);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var result = new List<IndexedRepository>();
-        // The history columns are read only here. The other caller, LoadShapeAsync, is the path every
-        // tool takes to learn the repository names, and it has no use for a join onto commits.
-        while (await reader.ReadAsync(cancellationToken))
-            result.Add(ReadRepository(reader) with
+            """, [], reader => ReadRepository(reader) with
             {
                 Commits = reader.Int64("commits"),
                 NewestCommit = reader.Attribution(),
                 FirstCommitAt = reader.TimestampOrNull("first_at"),
                 LastCommitAt = reader.TimestampOrNull("last_at")
-            });
-        return result;
+            }, cancellationToken);
     }
 
     private static IndexedRepository ReadRepository(DbDataReader reader) => new(

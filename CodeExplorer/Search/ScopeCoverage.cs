@@ -62,14 +62,9 @@ internal static class ScopeCoverage
     ///     checks for gaps, and read twice it was two statements for one answer (#173).
     /// </summary>
     public static async Task<IReadOnlyList<string>> ExtensionsAsync(DuckDBConnection connection,
-        CancellationToken cancellationToken)
-    {
-        var extensions = new List<string>();
-        await using var command = connection.Query("SELECT DISTINCT extension FROM files", []);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken)) extensions.Add(reader.Text("extension"));
-        return extensions;
-    }
+        CancellationToken cancellationToken) =>
+        await connection.ListAsync("SELECT DISTINCT extension FROM files", [], reader => reader.Text("extension"),
+            cancellationToken);
 
     /// <summary>
     ///     The languages a search could not read among the files its own predicate matches, most files
@@ -128,7 +123,7 @@ internal static class ScopeCoverage
         // The extension test is written first so the planner can drop the files that cannot
         // contribute before the line predicate is evaluated over them: the question here is only
         // which of these extensions hold the name, never how often.
-        var found = new List<(string Language, int Files, CoverageGap Gap)>();
+        List<(string Language, int Files, CoverageGap Gap)> found;
         await using (var command = connection.Query($"""
                                                      SELECT f.extension, count(DISTINCT l.file_id)::INTEGER AS files
                                                      FROM lines l JOIN files f USING (file_id)
@@ -137,14 +132,11 @@ internal static class ScopeCoverage
                                                      GROUP BY f.extension
                                                      ORDER BY files DESC, f.extension
                                                      """, counted))
-        await using (var reader = await command.ReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken))
+            found = await command.ListAsync(reader =>
             {
                 string extension = reader.Text("extension");
-                found.Add((Languages.Name(extension).Name, reader.Int32("files"), gaps[extension]));
-            }
-        }
+                return (Language: Languages.Name(extension).Name, Files: reader.Int32("files"), Gap: gaps[extension]);
+            }, cancellationToken);
 
         // Folded by the name a reply prints and not by the extension it was counted under: `.html`
         // and `.htm` are one language and would otherwise be named twice in one sentence, each with

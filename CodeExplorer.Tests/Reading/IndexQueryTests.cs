@@ -31,4 +31,25 @@ public sealed class IndexQueryTests : IDisposable
 
         Assert.Equal(text, await command.ExecuteScalarAsync(TestContext.Current.CancellationToken));
     }
+
+    /// <summary>
+    ///     A list read is still a read of its caller: the plan dump is named for the method that wrote
+    ///     the statement, not for the helper that ran it, or every list read would share one label.
+    /// </summary>
+    [Fact]
+    public async Task A_list_reads_every_row_in_order_under_its_callers_label()
+    {
+        await using var connection = new DuckDBConnection($"Data Source={Path.Combine(_root, "list.duckdb")}");
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        string plans = Path.Combine(_root, "plans");
+
+        List<long> rows;
+        using (QueryPlan.Recording(plans, _root))
+            rows = await connection.ListAsync("SELECT range AS n FROM range(3) ORDER BY n", [],
+                reader => reader.GetInt64(0), TestContext.Current.CancellationToken);
+
+        Assert.Equal([0L, 1L, 2L], rows);
+        Assert.Single(Directory.EnumerateFiles(plans,
+            "*-IndexQueryTests-A_list_reads_every_row_in_order_under_its_callers_label.sql.txt"));
+    }
 }
