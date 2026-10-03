@@ -297,6 +297,34 @@ public sealed class DurabilityTests : IDisposable
     }
 
     /// <summary>
+    ///     The settle that gives such an index its full-text index is the third path that puts a file in
+    ///     place, and the one whose refusal no refresh reaches on its own: it would need the checkpoint to
+    ///     fail after the restore's and not before it. Called directly for that, with DuckDB's fault switch
+    ///     on for the settle alone. The refusal is the settle's own sentence, and the restored file is
+    ///     left where it was rather than moved over.
+    /// </summary>
+    [Fact]
+    public async Task A_settle_that_cannot_write_its_file_out_is_refused_in_its_own_words()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\nvoid Needle() {}\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
+
+        ExplainedFailureException thrown;
+        await using (await host.FailingCheckpointsAsync())
+            thrown = await Assert.ThrowsAsync<ExplainedFailureException>(() =>
+                host.Indexes.SettleRestoreAsync("alpha", Ct));
+
+        Assert.Contains("'alpha'", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("still serves", thrown.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(host.DataDirectory, thrown.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(host.Indexes.HasIndex("alpha"));
+        Assert.True(File.Exists(Path.ChangeExtension(host.IndexFile("alpha"), ".restore.duckdb")));
+    }
+
+    /// <summary>
     ///     A restore that fails inside a refresh names the restore, not "Starting" (#290): an operator
     ///     reading the status has to be able to tell that the durable copy was what failed. The failure
     ///     is the lines table held open exclusively, so its transfer fails part-way through the fetch.
