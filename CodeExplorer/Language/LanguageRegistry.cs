@@ -56,6 +56,16 @@ public sealed class LanguageRegistry
     }
 
     /// <summary>
+    ///     Every analyser that answers for at least one extension, in registration order, so a question
+    ///     about the whole set — which names do this build's languages call generated? — is asked of
+    ///     each language once. One that a later registration took every extension from answers for
+    ///     nothing and is left out, and the fallback is not a language.
+    /// </summary>
+    public IEnumerable<ILanguageAnalyzer> Analyzers =>
+        _registrations.Distinct().Where(analyzer =>
+            analyzer.Extensions.Any(extension => ReferenceEquals(_byExtension[extension], analyzer)));
+
+    /// <summary>
     ///     Who answers for this extension — the fallback where no profile covers it, never null. The
     ///     extension is spelled the way <c>files.extension</c> stores it, lowercase and without the
     ///     dot, and a leading dot is tolerated so a caller quoting a file name does not have to strip

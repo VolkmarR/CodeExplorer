@@ -354,6 +354,16 @@ public interface ILanguageAnalyzer
     Answer<bool> IsGenerated(string qualifiedPath);
 
     /// <summary>
+    ///     The qualified paths this language's tools generate, as globs where <c>*</c> crosses <c>/</c>,
+    ///     for the engine to match: the overview's suggested exclusions offer each one. Published as
+    ///     globs for the reason <see cref="DeclarationCandidates" /> publishes a pattern — the engine
+    ///     chooses the files (CODING_STANDARDS), and a caller handing every path to .NET to be asked
+    ///     about would be filtering the candidate set there. Matched without regard to case, as every
+    ///     path filter here is. Empty where the language names no generated file.
+    /// </summary>
+    IReadOnlyList<string> GeneratedPaths { get; }
+
+    /// <summary>
     ///     What every appearance of <paramref name="symbol" /> on this line looks like, in the order
     ///     they occur — the question <c>find_references</c> asks, and the one that cannot be answered
     ///     from <see cref="StateAt" /> alone, because <c>:=</c> is an assignment in X# and a syntax
