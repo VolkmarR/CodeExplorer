@@ -27,8 +27,8 @@ namespace CodeExplorer.Tests;
 ///     <para>
 ///         Beside <see cref="HttpJsonTests" /> and on its fixture, not in place of it: that class pins
 ///         the values the web compares against — each enum's spelling — which a names-only snapshot
-///         cannot see, and this one pins every name, which those tests checked only for the few
-///         answers they read.
+///         cannot see. The property-name lists those tests held for a few answers moved here, where
+///         every answer has one.
 ///     </para>
 /// </summary>
 public sealed class ApiContractTests(HttpJsonFixture fixture) : IClassFixture<HttpJsonFixture>
