@@ -84,6 +84,11 @@ public sealed class WarmUpTests : IDisposable
     private static Dictionary<string, Dictionary<string, string>> Repository(string content, string slug = "one") =>
         new() { [slug] = new Dictionary<string, string> { ["src/A.cs"] = content } };
 
+    /// <param name="engine">The engine the host is pinned to.</param>
+    /// <param name="warmUpOnStart">
+    ///     Switches on the background warm-up, which is off everywhere else so that a restart in a test
+    ///     is a cold wake and nothing restores behind the assertions.
+    /// </param>
     private TestHost Start(SearchEngine engine, bool warmUpOnStart = false) =>
-        _host = new TestHost(engine, warmUpOnStart: warmUpOnStart);
+        _host = new TestHost(engine, ("Refresh:WarmUpOnStart", warmUpOnStart));
 }

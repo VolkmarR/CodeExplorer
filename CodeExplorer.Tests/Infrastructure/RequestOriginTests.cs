@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -53,7 +54,7 @@ public sealed class RequestOriginTests
     public async Task With_no_tenant_a_request_without_a_host_is_refused(string? allowedHosts)
     {
         // The framework's filter serves a missing Host by default, which names no allowed host either.
-        using var host = new TestHost(SearchEngine.Substring, allowedHosts: allowedHosts);
+        using var host = new TestHost(SearchEngine.Substring, (RequestOrigin.AllowedHostsSetting, allowedHosts));
 
         Assert.Equal(HttpStatusCode.BadRequest, await host.GetWithoutHostAsync("/api/projects"));
     }
@@ -61,7 +62,9 @@ public sealed class RequestOriginTests
     [Fact]
     public async Task A_configured_allowed_hosts_replaces_the_loopback_default()
     {
-        using var host = new TestHost(SearchEngine.Substring, allowedHosts: "code.example");
+        // The operator's own AllowedHosts, which replaces the loopback default an unauthenticated server
+        // otherwise answers under (GHSA-qxhv-3r9w-q8h4).
+        using var host = new TestHost(SearchEngine.Substring, (RequestOrigin.AllowedHostsSetting, "code.example"));
 
         Assert.Equal(HttpStatusCode.OK, await GetAsync(host, "/api/projects", "code.example"));
         Assert.Equal(HttpStatusCode.BadRequest, await GetAsync(host, "/api/projects", "localhost"));

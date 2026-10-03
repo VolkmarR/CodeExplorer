@@ -781,6 +781,12 @@ public sealed class HistoryTests : IDisposable
         Assert.Equal(await _host.ScalarsAsync(project, sql), refreshed);
     }
 
+    /// <summary>
+    ///     <c>Index:MaxFileBytes</c> lowered to a kilobyte, so a fixture can cross it without committing
+    ///     the 25 MiB the shipped default would take.
+    /// </summary>
+    private static readonly (string, object?) SmallFileCeiling = ("Index:MaxFileBytes", 1024);
+
     /// <summary>A text file of two hundred lines, well over the 1 KiB ceiling the size tests set.</summary>
     private static readonly string _dump =
         string.Concat(Enumerable.Range(1, 200).Select(i => $"INSERT INTO t VALUES ({i});\n"));
@@ -794,7 +800,7 @@ public sealed class HistoryTests : IDisposable
     [Fact]
     public async Task A_text_file_over_the_size_ceiling_is_recorded_in_history_without_lines()
     {
-        using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
+        using var host = new TestHost(SearchEngine.Substring, SmallFileCeiling);
         string source = host.CreateEmptyGitRepository("one");
         host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["src/Check.cs"] = "first\n" },
             "Add the validator", "Ada", "ada@example.invalid", 0);
@@ -835,7 +841,7 @@ public sealed class HistoryTests : IDisposable
     [Fact]
     public async Task A_moved_file_over_the_size_ceiling_is_recorded_as_a_rename()
     {
-        using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
+        using var host = new TestHost(SearchEngine.Substring, SmallFileCeiling);
         string source = host.CreateEmptyGitRepository("one");
         host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = _dump },
             "Add the dump", "Ada", "ada@example.invalid", 0);
@@ -862,7 +868,7 @@ public sealed class HistoryTests : IDisposable
     [Fact]
     public async Task A_blob_over_the_size_ceiling_is_not_diffed_where_a_file_and_a_directory_swap()
     {
-        using var host = new TestHost(SearchEngine.Substring, maxFileBytes: 1024);
+        using var host = new TestHost(SearchEngine.Substring, SmallFileCeiling);
         string source = host.CreateEmptyGitRepository("one");
         host.CommitToGitRepositoryAs("one", new Dictionary<string, string> { ["data/dump.sql"] = _dump },
             "Add the dump", "Ada", "ada@example.invalid", 0);

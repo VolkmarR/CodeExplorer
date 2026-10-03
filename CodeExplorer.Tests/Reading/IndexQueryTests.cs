@@ -15,7 +15,7 @@ public sealed class IndexQueryTests : IDisposable
 
     public IndexQueryTests() => Directory.CreateDirectory(_root);
 
-    public void Dispose() => TestHost.DeleteTree(_root);
+    public void Dispose() => GitFixtures.DeleteTree(_root);
 
     [Theory]
     [InlineData("plain")]

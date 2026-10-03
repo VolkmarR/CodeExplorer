@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text;
 using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
@@ -29,74 +28,41 @@ namespace CodeExplorer.Tests;
 
 /// <summary>
 ///     One in-process server with its own data directory and a pinned search engine, plus the fixture
-///     steps every index-backed test repeats: a git repository with one commit, a project, its
+///     steps every index-backed test repeats: a git repository with one commit (from
+///     <see cref="GitFixtures" />, whose root the server's directories share), a project, its
 ///     repositories, a build, and an MCP client bound to the project's route.
 /// </summary>
-public sealed class TestHost : IDisposable
+public sealed class TestHost : GitFixtures
 {
-    private readonly string _root =
-        Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
+    /// <param name="engine">Pinned in every test: the two engines build different schemas and rank differently.</param>
+    /// <param name="settings">
+    ///     Configuration the host starts with, keyed as <c>appsettings.json</c> spells it, each value
+    ///     written out invariantly and a null one left unset. Every setting a test passes departs from
+    ///     the shipped default for a reason, and the class that passes it says what that reason is.
+    /// </param>
+    public TestHost(SearchEngine engine, params (string Key, object? Value)[] settings)
+        : this(engine, false, null, settings)
+    {
+    }
 
     /// <param name="engine">Pinned in every test: the two engines build different schemas and rank differently.</param>
-    /// <param name="drainSeconds">
-    ///     How long a swap waits for in-flight queries. Zero proves what happens to a connection the
-    ///     drain gave up on; the default is long enough that a test holding one blocks the swap.
-    /// </param>
-    /// <param name="minimumFreeBytes">Raised past any real disk to prove the free-space refusal.</param>
-    /// <param name="warmUpOnStart">
-    ///     Switches on the background warm-up, which is off everywhere else so that a restart in a test
-    ///     is a cold wake and nothing restores behind the assertions.
-    /// </param>
     /// <param name="authenticated">
     ///     Points the host at <see cref="Tenant" />. Off everywhere else, because an unauthenticated
     ///     server is the shape ADR-0004 requires an empty appsettings to produce and therefore the one
     ///     the rest of the suite should be proving still works.
     /// </param>
-    /// <param name="extensionDirectory">
-    ///     Where DuckDB looks for the fts extension. Absent everywhere else, which leaves DuckDB's own
-    ///     default; the container arrangement (#14) is the one thing that sets it, so the one test that
-    ///     asserts on it is the one that passes it.
-    /// </param>
-    /// <param name="maxCommitPaths">
-    ///     Lowered far below any real ceiling so that a fixture commit of a dozen paths counts as a mass
-    ///     commit. A fixture large enough to cross the shipped default would take longer to build than
-    ///     the rest of the suite takes to run.
-    /// </param>
-    /// <param name="transferStallSeconds">
-    ///     Lowered to seconds so a stalled remote gives up within a test's patience. The limit is
-    ///     libgit2's and process-wide, so only a test that runs alone may set it (see
-    ///     <c>StalledRemoteTests</c>).
-    /// </param>
-    /// <param name="allowLocalRepositories">
-    ///     On everywhere but where the refusal is the subject, because every fixture is a repository on
-    ///     this disk; the shipped default is off (GHSA-5373-pppr-q3q9).
-    /// </param>
-    /// <param name="allowedHosts">
-    ///     The operator's own <c>AllowedHosts</c>, which replaces the loopback default an
-    ///     unauthenticated server otherwise answers under (GHSA-qxhv-3r9w-q8h4).
-    /// </param>
-    /// <param name="maxFileBytes">
-    ///     Lowered to a few kilobytes so a fixture can cross <c>Index:MaxFileBytes</c> without committing
-    ///     the 25 MiB the shipped default would take.
-    /// </param>
-    /// <param name="repackPackThreshold">
-    ///     Lowered to a few packs so a handful of commit-and-refresh cycles cross it, where the shipped
-    ///     fifty would take fifty.
-    /// </param>
-    /// <param name="repackLooseObjectThreshold">
-    ///     The same for loose objects, which the clone of a local fixture starts out as.
-    /// </param>
-    /// <param name="repackEnabled">Off only where the switch is the subject; the shipped default is on.</param>
     /// <param name="webUiPage">
     ///     An <c>index.html</c> for the host to serve as the web UI, from a web root of its own. Absent
     ///     everywhere else: <c>wwwroot</c> is a Vite build that exists on a developer's machine and not
     ///     on CI, so a test that reaches the SPA fallback has to bring the page it falls back to.
     /// </param>
-    public TestHost(SearchEngine engine, int? drainSeconds = null, long? minimumFreeBytes = null,
-        bool warmUpOnStart = false, bool authenticated = false, string? extensionDirectory = null,
-        int? maxCommitPaths = null, int? transferStallSeconds = null, bool allowLocalRepositories = true,
-        string? allowedHosts = null, long? maxFileBytes = null, int? repackPackThreshold = null,
-        int? repackLooseObjectThreshold = null, bool repackEnabled = true, string? webUiPage = null)
+    public TestHost(SearchEngine engine, bool authenticated = false, string? webUiPage = null)
+        : this(engine, authenticated, webUiPage, [])
+    {
+    }
+
+    private TestHost(SearchEngine engine, bool authenticated, string? webUiPage,
+        (string Key, object? Value)[] settings)
     {
         if (webUiPage is not null)
         {
@@ -105,39 +71,22 @@ public sealed class TestHost : IDisposable
             _servesWebUi = true;
         }
 
-
-        _repackEnabled = repackEnabled;
-        _repackPackThreshold = repackPackThreshold;
-        _repackLooseObjectThreshold = repackLooseObjectThreshold;
-        _allowLocalRepositories = allowLocalRepositories;
-        _allowedHosts = allowedHosts;
         _engine = engine;
-        _drainSeconds = drainSeconds;
-        _minimumFreeBytes = minimumFreeBytes;
-        _warmUpOnStart = warmUpOnStart;
         _authenticated = authenticated;
-        _extensionDirectory = extensionDirectory;
-        _maxCommitPaths = maxCommitPaths;
-        _transferStallSeconds = transferStallSeconds;
-        _maxFileBytes = maxFileBytes;
+        // On everywhere but where the refusal is the subject, because every fixture is a repository on
+        // this disk; the shipped default is off (GHSA-5373-pppr-q3q9).
+        _settings[RepositoryUrl.AllowLocalSetting] = "true";
+        foreach ((string key, object? value) in settings)
+            _settings[key] = value is null ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
         Factory = Build();
     }
 
     private readonly SearchEngine _engine;
-    private readonly int? _drainSeconds;
-    private readonly long? _minimumFreeBytes;
-    private readonly bool _warmUpOnStart;
     private readonly bool _authenticated;
-    private readonly string? _extensionDirectory;
-    private readonly int? _maxCommitPaths;
-    private readonly int? _transferStallSeconds;
-    private readonly long? _maxFileBytes;
-    private readonly int? _repackPackThreshold;
-    private readonly int? _repackLooseObjectThreshold;
-    private readonly bool _repackEnabled;
     private readonly bool _servesWebUi;
-    private bool _allowLocalRepositories;
-    private readonly string? _allowedHosts;
+
+    /// <summary>What <see cref="Build" /> configures beyond the directories and the engine, by key.</summary>
+    private readonly Dictionary<string, string?> _settings = [];
 
     /// <summary>
     ///     Private, so a test cannot build a client that bypasses <see cref="CreateClient" /> or reach a
@@ -167,25 +116,9 @@ public sealed class TestHost : IDisposable
             builder.UseSetting("Storage:DataDirectory", DataDirectory);
             builder.UseSetting("Storage:DurableDirectory", DurableDirectory);
             builder.UseSetting("Index:SearchEngine", _engine.ToString());
-            if (_extensionDirectory is { } extensions) builder.UseSetting("Index:ExtensionDirectory", extensions);
-            if (_drainSeconds is { } seconds)
-                builder.UseSetting("Index:DrainSeconds", seconds.ToString(CultureInfo.InvariantCulture));
-            if (_minimumFreeBytes is { } bytes)
-                builder.UseSetting("Refresh:MinimumFreeBytes", bytes.ToString(CultureInfo.InvariantCulture));
-            if (_maxCommitPaths is { } paths)
-                builder.UseSetting("History:MaxCommitPaths", paths.ToString(CultureInfo.InvariantCulture));
-            if (_transferStallSeconds is { } stall)
-                builder.UseSetting("Git:TransferStallSeconds", stall.ToString(CultureInfo.InvariantCulture));
-            if (_maxFileBytes is { } fileBytes)
-                builder.UseSetting("Index:MaxFileBytes", fileBytes.ToString(CultureInfo.InvariantCulture));
-            if (_repackPackThreshold is { } packs)
-                builder.UseSetting("Git:RepackPackThreshold", packs.ToString(CultureInfo.InvariantCulture));
-            if (_repackLooseObjectThreshold is { } loose)
-                builder.UseSetting("Git:RepackLooseObjectThreshold", loose.ToString(CultureInfo.InvariantCulture));
-            if (!_repackEnabled) builder.UseSetting("Git:RepackEnabled", "false");
-            if (_warmUpOnStart) builder.UseSetting("Refresh:WarmUpOnStart", "true");
-            if (_allowLocalRepositories) builder.UseSetting(RepositoryUrl.AllowLocalSetting, "true");
-            if (_allowedHosts is { } hosts) builder.UseSetting(RequestOrigin.AllowedHostsSetting, hosts);
+            foreach ((string key, string? value) in _settings)
+                if (value is not null)
+                    builder.UseSetting(key, value);
             // Through the static-file options and not UseWebRoot, which the minimal host reads before this
             // callback runs and so ignores: the page served was the developer's own wwwroot build.
             if (_servesWebUi)
@@ -276,7 +209,7 @@ public sealed class TestHost : IDisposable
     /// </summary>
     public void RestartWithoutLocalRepositories()
     {
-        _allowLocalRepositories = false;
+        _settings[RepositoryUrl.AllowLocalSetting] = "false";
         Restart();
     }
 
@@ -376,10 +309,10 @@ public sealed class TestHost : IDisposable
     public string DurableControlBackup => Path.Combine(DurableDirectory, "control", "control.duckdb");
 
     /// <summary>The folder standing in for a blob container, which is what an unconfigured app uses.</summary>
-    private string DurableDirectory => Path.Combine(_root, "durable");
+    private string DurableDirectory => Path.Combine(Root, "durable");
 
     /// <summary>The web root of a host given a <c>webUiPage</c>, in place of the project's own <c>wwwroot</c>.</summary>
-    private string WebRoot => Path.Combine(_root, "wwwroot");
+    private string WebRoot => Path.Combine(Root, "wwwroot");
 
     /// <summary>A project's index file, for a test asserting that a deletion took it or a build made it.</summary>
     public string IndexFile(string slug) => Path.Combine(DataDirectory, "indexes", slug + ".duckdb");
@@ -401,159 +334,12 @@ public sealed class TestHost : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    public void Dispose()
+    /// <summary>Stops the server before the root goes, because it holds its databases open under it.</summary>
+    protected override void Dispose(bool disposing)
     {
-        Factory.Dispose();
-        DeleteTree(_root);
+        if (disposing) Factory.Dispose();
+        base.Dispose(disposing);
     }
-
-    /// <summary>
-    ///     Removes a directory git has written into. libgit2 marks pack files read-only and
-    ///     <c>Directory.Delete</c> refuses a read-only file, so the attributes are cleared first rather
-    ///     than left to fail on the first pack.
-    ///     A refused delete is tried again for a moment, because a file DuckDB has just removed can
-    ///     linger: closing a database's last connection deletes its <c>.wal</c>, and while another
-    ///     process — a virus scanner, the search indexer — still has the freshly written file open, it
-    ///     is listed but refuses deletion with "access denied". Measured on this machine it is gone
-    ///     61 ms later, and before this retry it failed whichever test's cleanup met it, so a
-    ///     different test each run. The same file can also vanish between being listed and having
-    ///     its attributes cleared, which needs nothing more than skipping it. It does not defeat a file
-    ///     mapped into this process, which no wait releases: a caller with such a tree passes
-    ///     <paramref name="retry" /> false and catches the failure itself.
-    /// </summary>
-    public static void DeleteTree(string path, bool retry = true)
-    {
-        if (!Directory.Exists(path)) return;
-
-        foreach (var file in new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories))
-        {
-            try
-            {
-                file.Attributes = FileAttributes.Normal;
-            }
-            catch (Exception gone) when (gone is FileNotFoundException or DirectoryNotFoundException)
-            {
-                // Deleted since it was listed: nothing left to clear.
-            }
-        }
-
-        for (int attempt = 1; ; attempt++)
-        {
-            try
-            {
-                Directory.Delete(path, true);
-                return;
-            }
-            catch (Exception refused) when (retry && attempt < DeleteAttempts
-                                             && refused is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(DeleteRetryMilliseconds);
-                // The attempt that threw may have removed everything but the directory's own entry.
-                if (!Directory.Exists(path)) return;
-            }
-        }
-    }
-
-    /// <summary>
-    ///     Half a second in all, several times the 61 ms a lingering WAL was measured to need, and short
-    ///     enough that a file that will never go fails the cleanup promptly instead of stalling it.
-    /// </summary>
-    private const int DeleteAttempts = 10;
-
-    private const int DeleteRetryMilliseconds = 50;
-
-    /// <summary>Builds a non-bare repository with one commit holding the given files and returns its path.</summary>
-    public string CreateGitRepository(string name, Dictionary<string, string> files) =>
-        Commit(CreateEmptyGitRepository(name), files);
-
-    /// <summary>
-    ///     The same with each file's bytes written as given, for a test about how content is decoded:
-    ///     the string overload always writes UTF-8, so it cannot commit a Windows-1252 or UTF-16 file.
-    /// </summary>
-    public string CreateGitRepository(string name, Dictionary<string, byte[]> files) =>
-        Commit(CreateEmptyGitRepository(name), files);
-
-    /// <summary>
-    ///     An initialised repository with no commits: a remote that really is empty, as opposed to a
-    ///     clone whose HEAD lost the branch it named. The two look alike from HEAD's tip and must not
-    ///     be reported alike.
-    /// </summary>
-    public string CreateEmptyGitRepository(string name)
-    {
-        string path = Path.Combine(_root, "fixtures", name);
-        Repository.Init(path);
-        return path;
-    }
-
-    /// <summary>
-    ///     Renames the branch a fixture's HEAD is on, which is what a default branch renamed upstream
-    ///     looks like from here: the old name is gone, so the next fetch prunes it out of the clone
-    ///     that was made while HEAD still named it.
-    /// </summary>
-    public void RenameDefaultBranch(string name, string branch)
-    {
-        using var repo = new Repository(FixturePath(name));
-        repo.Branches.Rename(repo.Head, branch);
-    }
-
-    /// <summary>A second branch on a fixture, at the commit its HEAD is at.</summary>
-    public void CreateBranch(string name, string branch)
-    {
-        using var repo = new Repository(FixturePath(name));
-        repo.CreateBranch(branch);
-    }
-
-    /// <summary>The commit a fixture's HEAD is at, for a test that resets the fixture back to it later.</summary>
-    public string HeadOf(string name)
-    {
-        using var repo = new Repository(FixturePath(name));
-        return repo.Head.Tip.Sha;
-    }
-
-    /// <summary>
-    ///     <c>reset --hard</c> on a fixture, which the next forced fetch mirrors as a force push would.
-    ///     Hard, so a commit made on top afterwards starts from that commit's tree.
-    /// </summary>
-    public void ResetGitRepository(string name, string sha)
-    {
-        using var repo = new Repository(FixturePath(name));
-        repo.Reset(ResetMode.Hard, repo.Lookup<Commit>(sha));
-    }
-
-    /// <summary>
-    ///     Points a repository's HEAD at a branch that does not exist: the state #31 left a clone in,
-    ///     and, on a fixture, a remote whose own default branch cannot be resolved. Written as a file
-    ///     because that is all HEAD is, and because libgit2 refuses such a symbolic reference.
-    /// </summary>
-    public static void BreakHead(string gitDirectory, string branch) =>
-        WriteHead(gitDirectory, $"ref: refs/heads/{branch}");
-
-    /// <summary>
-    ///     Detaches a repository's HEAD at a commit, so a fixture advertises HEAD as a commit id rather
-    ///     than as a symbolic reference naming a branch (#260).
-    /// </summary>
-    public static void DetachHead(string gitDirectory, string sha) => WriteHead(gitDirectory, sha);
-
-    /// <summary>
-    ///     A push to a branch of a fixture whose HEAD is detached, which stays detached at
-    ///     <paramref name="detachedAt" />: the remote's branch moves on and its HEAD does not (#288).
-    /// </summary>
-    public void PushWhileDetached(string name, string branch, string detachedAt, Dictionary<string, string> files)
-    {
-        BreakHead(FixtureGitPath(name), branch);
-        CommitToGitRepository(name, files);
-        DetachHead(FixtureGitPath(name), detachedAt);
-    }
-
-    /// <summary>The branch a fixture's HEAD is on, which is whatever <c>init.defaultBranch</c> made it.</summary>
-    public string BranchOf(string name)
-    {
-        using var repo = new Repository(FixturePath(name));
-        return repo.Head.FriendlyName;
-    }
-
-    private static void WriteHead(string gitDirectory, string content) =>
-        File.WriteAllText(Path.Combine(gitDirectory, "HEAD"), content + "\n");
 
     /// <summary>The bare clone of one repository, for a test that has to look at it or break it.</summary>
     public string ClonePath(string project, string repository) =>
@@ -581,108 +367,11 @@ public sealed class TestHost : IDisposable
         return path;
     }
 
-    /// <summary>The <c>.git</c> directory of a fixture, which is non-bare.</summary>
-    public string FixtureGitPath(string name) => Path.Combine(FixturePath(name), ".git");
-
-    /// <summary>
-    ///     Adds a commit to a fixture already created, which is what a push to the remote looks like
-    ///     from here: the clone made earlier still holds the old tree until something fetches.
-    /// </summary>
-    public string CommitToGitRepository(string name, Dictionary<string, string> files) =>
-        Commit(Path.Combine(_root, "fixtures", name), files);
-
-    /// <summary>
-    ///     A commit with an author and a message of its own, for a history test: the default fixture
-    ///     author and subject are the same on every commit, which is exactly what a test asserting who
-    ///     wrote what cannot use. The date advances with <paramref name="minute" /> so that two commits
-    ///     are orderable, which at the shared epoch they are not.
-    /// </summary>
-    public string CommitToGitRepositoryAs(string name, Dictionary<string, string> files, string subject,
-        string authorName, string authorEmail, int minute) =>
-        Commit(Path.Combine(_root, "fixtures", name), files, subject,
-            new Signature(authorName, authorEmail, DateTimeOffset.UnixEpoch.AddMinutes(minute)));
-
-    /// <summary>
-    ///     A commit that deletes paths rather than writing them, for a history test about a file that
-    ///     the recorded window changed and HEAD no longer holds. The two cases cannot be one call: a
-    ///     deletion is an absent key, and an absent key is indistinguishable from a file the commit
-    ///     simply did not touch.
-    /// </summary>
-    public void RemoveInGitRepositoryAs(string name, IEnumerable<string> paths, string subject, string authorName,
-        string authorEmail, int minute)
-    {
-        using var repo = new Repository(FixturePath(name));
-        foreach (string relative in paths) Commands.Remove(repo, relative);
-        var author = new Signature(authorName, authorEmail, DateTimeOffset.UnixEpoch.AddMinutes(minute));
-        repo.Commit(subject, author, author);
-    }
-
-    /// <summary>
-    ///     A commit that moves paths, content unchanged — one commit holding the removal of each old
-    ///     path and the addition of each new one, which is how git records a move and the only shape
-    ///     libgit2's rename detection reports as <c>renamed</c>. A remove commit followed by an add
-    ///     commit is two unrelated changes, and a test built that way proves nothing about renames
-    ///     (#131).
-    /// </summary>
-    /// <param name="name">The fixture repository.</param>
-    /// <param name="moves">Old repository-relative path to new, all in one commit.</param>
-    /// <param name="subject">The commit's subject.</param>
-    /// <param name="authorName">Who to record as the author.</param>
-    /// <param name="authorEmail">Their address.</param>
-    /// <param name="minute">Minutes past the epoch, which is how these fixtures order their history.</param>
-    public void MoveInGitRepositoryAs(string name, Dictionary<string, string> moves, string subject,
-        string authorName, string authorEmail, int minute)
-    {
-        string root = FixturePath(name);
-        using var repo = new Repository(root);
-        foreach ((string from, string to) in moves)
-        {
-            string source = Path.Combine(root, from);
-            string target = Path.Combine(root, to);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Move(source, target);
-            Commands.Remove(repo, from);
-            Commands.Stage(repo, to);
-        }
-
-        var author = new Signature(authorName, authorEmail, DateTimeOffset.UnixEpoch.AddMinutes(minute));
-        repo.Commit(subject, author, author);
-    }
-
-    // Encoding.UTF8.GetBytes writes no byte order mark, as File.WriteAllText did before the bytes overload.
-    private static string Commit(string path, Dictionary<string, string> files, string subject = "fixture",
-        Signature? author = null) =>
-        Commit(path, files.ToDictionary(file => file.Key, file => Encoding.UTF8.GetBytes(file.Value)), subject,
-            author);
-
-    private static string Commit(string path, Dictionary<string, byte[]> files, string subject = "fixture",
-        Signature? author = null)
-    {
-        using var repo = new Repository(path);
-        foreach ((string relative, byte[] content) in files)
-        {
-            string full = Path.Combine(path, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-            File.WriteAllBytes(full, content);
-            Commands.Stage(repo, relative);
-        }
-
-        author ??= new Signature("Test", "test@example.invalid", DateTimeOffset.UnixEpoch);
-        repo.Commit(subject, author, author);
-        return path;
-    }
-
-    /// <summary>Where <see cref="CreateGitRepository(string, Dictionary{string, string})" /> put the fixture with this name.</summary>
-    public string FixturePath(string name) => Path.Combine(_root, "fixtures", name);
-
-    /// <summary>Deletes a fixture, which is what a remote that was removed or renamed looks like from here.</summary>
-    public void RemoveGitRepository(string name) => DeleteTree(FixturePath(name));
-
     /// <summary>
     ///     What the host was pointed at. The layout under it is named by the members above; it is public
     ///     for a test asserting that a message a caller reads does not disclose it.
     /// </summary>
-    public string DataDirectory => Path.Combine(_root, "data");
+    public string DataDirectory => Path.Combine(Root, "data");
 
     /// <param name="slug">The project's slug, which is also its display name unless <paramref name="name" /> says otherwise.</param>
     /// <param name="singleRepository">Declares the project single-repository (ADR-0006).</param>

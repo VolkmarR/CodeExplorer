@@ -14,6 +14,13 @@ public sealed class CoChangedTests(CoChangedFixture fixture) : IClassFixture<CoC
     private readonly TestHost _host = fixture.Host;
 
     /// <summary>
+    ///     Lowered far below any real ceiling so that a fixture commit of a dozen paths counts as a mass
+    ///     commit. A fixture large enough to cross the shipped default would take longer to build than
+    ///     the rest of the suite takes to run.
+    /// </summary>
+    private static readonly (string, object?) TightCeiling = ("History:MaxCommitPaths", 5);
+
+    /// <summary>
     ///     The coupling itself: the files a window's commits kept changing alongside one file, most
     ///     shared commits first. The fixture couples Api.cs to Store.cs more often than to Dto.cs and
     ///     never to Lonely.cs, so a ranking that counted the window's commits rather than the shared
@@ -70,7 +77,7 @@ public sealed class CoChangedTests(CoChangedFixture fixture) : IClassFixture<CoC
         Assert.Contains("vendor/Bulk01.cs", included, StringComparison.Ordinal);
         Assert.DoesNotContain("left out of the pairing", included, StringComparison.Ordinal);
 
-        using var tight = new TestHost(SearchEngine.Substring, maxCommitPaths: 5);
+        using var tight = new TestHost(SearchEngine.Substring, TightCeiling);
         await HistoryFixtures.BuildCoupledProjectAsync(tight, HistoryFixtures.Coupled);
         await using var client = await tight.ConnectAsync(HistoryFixtures.Coupled);
         string reply = await TestHost.CallAsync(client, "co_changed",
@@ -114,7 +121,7 @@ public sealed class CoChangedTests(CoChangedFixture fixture) : IClassFixture<CoC
     [Fact]
     public async Task Co_changed_says_a_files_only_commits_were_mass_changes_rather_than_that_it_moves_alone()
     {
-        using var tight = new TestHost(SearchEngine.Substring, maxCommitPaths: 5);
+        using var tight = new TestHost(SearchEngine.Substring, TightCeiling);
         await HistoryFixtures.BuildCoupledProjectAsync(tight, "swept");
         await using var client = await tight.ConnectAsync("swept");
 

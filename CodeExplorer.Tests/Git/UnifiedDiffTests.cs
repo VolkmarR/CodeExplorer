@@ -8,15 +8,15 @@ namespace CodeExplorer.Tests;
 ///     What <see cref="RenderedPatch" /> reads out of the text libgit2 renders, and the one property the
 ///     history walk's speed now rests on: that the edits do not depend on how much unchanged text was
 ///     rendered around them.
-///     The fixture is built with LibGit2Sharp directly rather than through <c>TestHost</c>. Nothing
+///     The fixture is built in a <see cref="GitFixtures" /> rather than through <c>TestHost</c>. Nothing
 ///     here needs a server, an index or a project — it is a question about a diff — and a repository in
 ///     a temporary directory is the whole world it needs.
 /// </summary>
 public sealed class UnifiedDiffTests : IDisposable
 {
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "ce-diff-" + Guid.NewGuid().ToString("N")[..8]);
+    private readonly GitFixtures _fixtures = new();
 
-    public void Dispose() => TestHost.DeleteTree(_root);
+    public void Dispose() => _fixtures.Dispose();
 
     /// <summary>
     ///     <see cref="NativeDiff" /> asks libgit2 for no context lines, which is worth several times
@@ -142,8 +142,8 @@ public sealed class UnifiedDiffTests : IDisposable
     /// </summary>
     private string Build()
     {
-        Repository.Init(_root);
-        using var repository = new Repository(_root);
+        string root = _fixtures.CreateEmptyGitRepository("diff");
+        using var repository = new Repository(root);
 
         string[] twenty = [.. Enumerable.Range(1, 20).Select(n => $"line {n}")];
 
@@ -189,12 +189,12 @@ public sealed class UnifiedDiffTests : IDisposable
 
         // A rename with edits in the same commit, which is what the replay carries attribution across
         // and what rename detection has to keep finding.
-        File.Delete(Path.Combine(_root, "other.txt"));
+        File.Delete(Path.Combine(root, "other.txt"));
         Commit(repository, "rename with edits",
             new Dictionary<string, string> { ["moved.txt"] = Join(["alpha", "beta changed", "gamma", "delta"]) });
 
         Commit(repository, "drop a file", new Dictionary<string, string>(), ["lines.txt"]);
-        return _root;
+        return root;
     }
 
     private static string Join(IEnumerable<string> lines) => string.Join('\n', lines) + "\n";
