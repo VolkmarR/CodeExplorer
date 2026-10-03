@@ -112,7 +112,10 @@ reported as a right one. A doubtful form is left out.
   is what `ModuleBoundaryTests` now asserts.
 - **`IsGenerated` and `ImportOn` have no caller yet.** They are questions the seam has to answer for
   the import-edge and file-filter tickets to be callers of it rather than authors of a second copy;
-  they are tested directly until then.
+  they are tested directly until then. `ImportsOn` has had its caller since the import build;
+  `StateAt` joins the list instead (#333). Nothing in production asks the lexical state at one
+  index — the scan's other answers carry it — but it is the second question this seam names, so it
+  stays on the interface and is tested directly.
 - **A modifier list says what introduces a name, and a second, narrower one says what opens a
   scope.** One list could not answer both (#83). It was read twice — by the analyser to find
   declarations, and transitively by `DeclarationScope` to decide which declaration a reference sits
