@@ -229,29 +229,17 @@ public sealed class ProjectOverview(
     ///     for too.
     /// </summary>
     public async Task<RefreshRefusal?> DeleteAsync(Project project, CancellationToken cancellationToken) =>
-        await refreshes.RemoveUnlessRefreshingAsync(project.Slug, "the project", async () =>
-        {
-            ExceptionDispatchInfo? unbackedUp = null;
-            try
+        await refreshes.RemoveUnlessRefreshingAsync(project.Slug, "the project", () => RemoveThenCleanUpAsync(
+            () => control.DeleteProjectAsync(project.Slug, cancellationToken),
+            // Whether or not a row went: a project already gone from the control database still has
+            // its index and copies removed. Left behind, a project created later under the slug would
+            // open them (GHSA-253f-grfp-cqq7). The discard may wait for a restore holding the writer
+            // gate and for the drain of in-flight queries.
+            async (_, uncancellable) =>
             {
-                await control.DeleteProjectAsync(project.Slug, cancellationToken);
-            }
-            catch (BackupFailedException ex)
-            {
-                // The row is gone and only its backup failed, so the rest of the delete still runs:
-                // stopping here left the index and copies for a project created later under the slug.
-                // Thrown once they are gone, so the operator still learns the store did not take the change.
-                unbackedUp = ExceptionDispatchInfo.Capture(ex);
-            }
-
-            // Not the caller's token from here on: the project is already gone from the control database,
-            // so a delete abandoned now would leave its index and durable copy behind for a project
-            // created later under the slug to open (GHSA-253f-grfp-cqq7). The discard may wait for a
-            // restore holding the writer gate and for the drain of in-flight queries.
-            await readers.DiscardAsync(project.Slug, CancellationToken.None);
-            await clones.RemoveAsync(project.Slug, null, CancellationToken.None);
-            unbackedUp?.Throw();
-        });
+                await readers.DiscardAsync(project.Slug, uncancellable);
+                await clones.RemoveAsync(project.Slug, null, uncancellable);
+            }));
 
     /// <summary>
     ///     Removes one repository and its local copy. Its files stay searchable until the next build,
@@ -265,27 +253,50 @@ public sealed class ProjectOverview(
     {
         var found = false;
         var refused = await refreshes.RemoveUnlessRefreshingAsync(project.Slug, "the repository", async () =>
-        {
-            ExceptionDispatchInfo? unbackedUp = null;
-            try
-            {
-                found = await control.DeleteRepositoryAsync(project.Slug, slug, cancellationToken);
-            }
-            catch (BackupFailedException ex)
-            {
-                // The row is gone and only its backup failed, as in DeleteAsync: stopping here left the
-                // full clone on disk with no row that would ever lead to it again. Thrown once it is gone.
-                found = true;
-                unbackedUp = ExceptionDispatchInfo.Capture(ex);
-            }
-
-            // Not the caller's token once the row is gone, for the reason DeleteAsync gives: nothing
-            // would ever remove a copy left behind by an abandoned request, and it would hold disk and
-            // count against the free-space gate of every later refresh.
-            if (found) await clones.RemoveAsync(project.Slug, slug, CancellationToken.None);
-            unbackedUp?.Throw();
-        });
+            found = await RemoveThenCleanUpAsync(
+                () => control.DeleteRepositoryAsync(project.Slug, slug, cancellationToken),
+                // Only once the row is gone: a left-behind clone is one no row would ever lead to again,
+                // holding disk and counting against the free-space gate of every later refresh.
+                async (removed, uncancellable) =>
+                {
+                    if (removed) await clones.RemoveAsync(project.Slug, slug, uncancellable);
+                }));
         return new RepositoryRemoval(found, refused);
+    }
+
+    /// <summary>
+    ///     Runs a control-database removal and then the cleanup of what it leaves on disk, and answers
+    ///     whether the removal found its row. A <see cref="BackupFailedException" /> says the row is gone
+    ///     and only its backup failed, so the cleanup runs anyway, told the row went: stopping there left
+    ///     the index and copies of a deleted project for one created later under the slug to open
+    ///     (GHSA-253f-grfp-cqq7). The failure is thrown once the cleanup is done, so the operator still
+    ///     learns the store did not take the change.
+    /// </summary>
+    /// <param name="remove">The control-database write; answers whether its row was there.</param>
+    /// <param name="cleanUp">
+    ///     Given whether the row went, and <see cref="CancellationToken.None" /> rather than the caller's
+    ///     token: the row is already gone, so a request abandoned now would leave behind what nothing
+    ///     would ever remove again.
+    /// </param>
+    private static async Task<bool> RemoveThenCleanUpAsync(Func<Task<bool>> remove,
+        Func<bool, CancellationToken, Task> cleanUp)
+    {
+        bool removed;
+        ExceptionDispatchInfo? unbackedUp = null;
+        try
+        {
+            removed = await remove();
+        }
+        catch (BackupFailedException ex)
+        {
+            // A backup runs only after a write that removed a row.
+            removed = true;
+            unbackedUp = ExceptionDispatchInfo.Capture(ex);
+        }
+
+        await cleanUp(removed, CancellationToken.None);
+        unbackedUp?.Throw();
+        return removed;
     }
 
     /// <param name="slug">The project to read.</param>
