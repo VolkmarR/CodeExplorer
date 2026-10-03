@@ -237,8 +237,9 @@ public sealed class GitClones(
             ? Path.Combine(_cloneRoot, projectSlug)
             : Path.Combine(_cloneRoot, projectSlug, repositorySlug + ".git");
         var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        try
+        // A held scope here, where RefreshAndOpenAsync cannot have one: its gate is released by the
+        // transfer's own continuation, on another task, after the call that took it has returned.
+        using (await gate.HoldAsync(cancellationToken))
         {
             // The gate is keyed by clone path, so removing a project does not exclude a fetch or a repack
             // of one of its repositories running under a different key. That exclusion is the caller's:
@@ -247,10 +248,6 @@ public sealed class GitClones(
             // thing that transfers. A transfer a cancelled refresh abandoned at shutdown can still be
             // in flight; it loses the race and leaves a folder.
             await Task.Run(() => LocalCopyFiles.DeleteDirectory(path), cancellationToken);
-        }
-        finally
-        {
-            gate.Release();
         }
 
         // Dropped after the gate is released, so the dictionary does not grow by one entry for every
