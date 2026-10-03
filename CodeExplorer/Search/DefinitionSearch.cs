@@ -99,26 +99,16 @@ public sealed class DefinitionSearch(IndexReaders readers)
             (DefinitionResult result) => new Telemetry.Measured(
                 result.Sites.Select(site => site.QualifiedPath).Distinct().Count(), result.TotalSites));
 
-    private async Task<Outcome> RunAsync(string slug, DefinitionRequest request,
-        CancellationToken cancellationToken)
-    {
-        string symbol = request.Symbol.Trim();
-        if (request.Filter.Refusal is { } refused) return new Problem(refused);
-        if (SearchQuery.Unusable(symbol, "find_definition") is { } unusable) return new Problem(unusable);
+    private Task<Outcome> RunAsync(string slug, DefinitionRequest request, CancellationToken cancellationToken) =>
+        SymbolMatch.RunAsync(readers, slug, request.Symbol, request.Filter, "find_definition",
+            (index, symbol, filter, token) => QueryAsync(index, symbol, filter, token), cancellationToken);
 
-        return await readers.OverIndexAsync(slug, request.Filter.Repository,
-            (index, token) => QueryAsync(index, request, symbol, token), cancellationToken);
-    }
-
-    private static async Task<Outcome> QueryAsync(IndexReader index, DefinitionRequest request, string symbol,
+    private static async Task<Outcome> QueryAsync(IndexReader index, string symbol, FileFilter filter,
         CancellationToken cancellationToken)
     {
         var connection = index.Connection;
-        // The slug the index holds, not the one the caller typed: the filter's subquery matches it exactly.
-        var filter = request.Filter with { Repository = index.Repository?.Slug };
-        var symbolPattern = new DuckDBParameter("q", SymbolText.WholeWordPattern(symbol));
-        var parameters = new List<DuckDBParameter> { symbolPattern };
-        string literally = SearchQuery.Literally(symbol, parameters);
+        var parameters = new List<DuckDBParameter>();
+        var match = SymbolMatch.For(symbol, parameters);
         // Read once and handed to both the shapes and the coverage note, which ask about the same list.
         var extensions = await ScopeCoverage.ExtensionsAsync(connection, cancellationToken);
         var shapes = Shapes(extensions, symbol, parameters);
@@ -130,8 +120,8 @@ public sealed class DefinitionSearch(IndexReaders readers)
                                                      SELECT f.file_id, f.qualified_path, f.extension,
                                                             l.line_number, l.content
                                                      FROM lines l JOIN files f USING (file_id)
-                                                     WHERE {literally}
-                                                       AND regexp_matches(l.content, $q, ''){fileFilter}
+                                                     WHERE {match.Literally}
+                                                       AND {match.Pattern}{fileFilter}
                                                        AND ({declarationShapes})
                                                      ORDER BY f.qualified_path, l.line_number
                                                      LIMIT $limit
@@ -195,7 +185,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
                         count(DISTINCT l.file_id) AS every_file
                  FROM lines l LEFT JOIN (SELECT f.file_id FROM files f WHERE true{fileFilter}) f
                    USING (file_id)
-                 WHERE {literally} AND regexp_matches(l.content, $q, '')
+                 WHERE {match.Sql}
                  """, parameters);
             await using var reader = await command.ReaderAsync(cancellationToken);
             if (await reader.ReadAsync(cancellationToken))
@@ -210,7 +200,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
         // one written in a language no profile covers, and the reply says so either way (#126) — or
         // in one this asked the engine for no lines of at all (#129).
         var uncovered = await ScopeCoverage.OfMatchesAsync(connection, extensions,
-            $"{literally} AND regexp_matches(l.content, $q, '')", fileFilter, parameters, shapes.Unreadable,
+            match.Sql, fileFilter, parameters, shapes.Unreadable,
             cancellationToken);
 
         return new DefinitionResult([.. ranked.Take(MaxSites)], ranked.Count, separated, naming,

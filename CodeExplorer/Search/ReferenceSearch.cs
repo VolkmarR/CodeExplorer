@@ -133,37 +133,24 @@ public sealed class ReferenceSearch(IndexReaders readers)
         Telemetry.Search(slug, Engine, () => RunAsync(slug, request, cancellationToken),
             (ReferenceResult result) => new Telemetry.Measured(result.TotalFiles, result.TotalLines));
 
-    private async Task<Outcome> RunAsync(string slug, ReferenceRequest request,
-        CancellationToken cancellationToken)
-    {
-        string symbol = request.Symbol.Trim();
-        if (request.Filter.Refusal is { } refused) return new Problem(refused);
-        if (SearchQuery.Unusable(symbol, "find_references") is { } unusable) return new Problem(unusable);
-
-        return await readers.OverIndexAsync(slug, request.Filter.Repository,
-            (index, token) => QueryAsync(index, request, symbol, token), cancellationToken);
-    }
+    private Task<Outcome> RunAsync(string slug, ReferenceRequest request, CancellationToken cancellationToken) =>
+        SymbolMatch.RunAsync(readers, slug, request.Symbol, request.Filter, "find_references",
+            (index, symbol, filter, token) => QueryAsync(index, request, symbol, filter, token), cancellationToken);
 
     private static async Task<Outcome> QueryAsync(IndexReader index, ReferenceRequest request, string symbol,
-        CancellationToken cancellationToken)
+        FileFilter filter, CancellationToken cancellationToken)
     {
         var connection = index.Connection;
-        // The slug the index holds, not the one the caller typed: the filter's subquery matches it exactly.
-        var filter = request.Filter with { Repository = index.Repository?.Slug };
         int maxFiles = Math.Clamp(request.MaxFiles, 1, MaxFiles);
-        string pattern = SymbolText.WholeWordPattern(symbol);
 
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
 
-        var matchParameters = new List<DuckDBParameter>
-        {
-            new("q", pattern), new("occurrence", SymbolText.OccurrencePattern(symbol)),
-            new("sentinel", SymbolText.OccurrenceSentinel(symbol))
-        };
-        string literally = SearchQuery.Literally(symbol, matchParameters);
+        var matchParameters = new List<DuckDBParameter>();
         // What a match is, spelled once for the scan and for the coverage count, so the two cannot drift.
-        string matches = $"{literally} AND regexp_matches(l.content, $q, '')";
+        string matches = SymbolMatch.For(symbol, matchParameters).Sql;
+        matchParameters.Add(new DuckDBParameter("occurrence", SymbolText.OccurrencePattern(symbol)));
+        matchParameters.Add(new DuckDBParameter("sentinel", SymbolText.OccurrenceSentinel(symbol)));
 
         // Unlike grep this counts the unfiltered files whenever filters were given rather than only on
         // an empty answer: the footgun here is a result that looks complete because the file declaring

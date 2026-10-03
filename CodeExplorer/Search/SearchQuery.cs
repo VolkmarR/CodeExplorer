@@ -38,29 +38,6 @@ internal static class SearchQuery
     }
 
     /// <summary>
-    ///     The exact-substring test that goes in front of a symbol's whole-word pattern. A line the
-    ///     pattern matches contains the symbol literally — that is all the pattern is, between word
-    ///     boundaries — so this excludes nothing and DuckDB pushes it into the scan of <c>lines</c>,
-    ///     where the regular expression cannot go. On Radix it halves both symbol searches:
-    ///     <c>find_definition Init</c> 120 ms to 52 ms, <c>find_references SqlSelectBase</c> 110 ms to
-    ///     42 ms, same rows.
-    ///     Grep has done this since it stopped reading the BM25 index; the two symbol searches asked
-    ///     the engine for a bare pattern until the plans were read (#94), which is the sort of thing
-    ///     only measuring the query finds.
-    /// </summary>
-    /// <param name="symbol">The identifier being looked for, exactly as it is matched: case and all.</param>
-    /// <param name="parameters">The command's parameters, appended to.</param>
-    public static string Literally(string symbol, List<DuckDBParameter> parameters)
-    {
-        ArgumentNullException.ThrowIfNull(parameters);
-        // The parameter name and the column are fixed rather than passed: both callers spell a line's
-        // text `l.content` and neither has a second literal to bind, so a knob for either would be a
-        // choice nothing makes. A third caller that needs one adds it then.
-        parameters.Add(new DuckDBParameter("lit", symbol));
-        return "contains(l.content, $lit)";
-    }
-
-    /// <summary>
     ///     The <c>AND</c> that narrows a language's files to the lines it could declare something on:
     ///     empty for an analyser that reads every line — a parser-backed one narrows nothing — and
     ///     null for one that reads none, which is not the same as an empty narrowing and must not
