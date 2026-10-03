@@ -150,6 +150,14 @@ internal static class IndexQuery
     }
 
     /// <summary>
+    ///     A WHERE clause from conditions ANDed, or nothing where there are none. The overview, the churn
+    ///     counts and the commit listings each built it themselves, and the scopes they narrow by are
+    ///     optional, so the empty case is the one a copy gets wrong.
+    /// </summary>
+    public static string Where(IReadOnlyCollection<string> conditions) =>
+        conditions.Count == 0 ? "" : $"WHERE {string.Join(" AND ", conditions)}";
+
+    /// <summary>
     ///     Text as a SQL string literal, quotes included, where nothing can be bound: <c>ATTACH</c>,
     ///     <c>COPY</c> and <c>SET</c> take no parameters.
     ///     A slug is validated on the way into the control database and is still escaped rather than trusted.
