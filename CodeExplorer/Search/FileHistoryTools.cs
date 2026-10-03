@@ -130,7 +130,7 @@ internal sealed partial class HistoryTools
                  - The message body is here and nowhere else: git_log lists subjects alone, so whatever a subject like "BugFix 558185 - Fehlermeldung" does not say is read here.
                  - It says how many files the commit touched and how many lines it added and removed. commit_files names the paths.
                  - It cannot show the diff. No hunks, no before-and-after, no changed line: the index records which paths a commit touched and how many lines, never the change itself. Read the file at HEAD instead.
-                 - It cannot find a commit for you. Nothing searches commit messages — not this tool and not git_log — so a ticket number is found by paging git_log or by grepping the code, and only then asked about here.
+                 - It cannot find a commit for you. To find one by a ticket or PR number, call git_log(message="…"), which matches text in commit subjects, then ask about the SHA it prints here. A number that appears only in a body is not matched there.
                  - Only the default branch is recorded. A commit on a branch that was never merged is not here.
                  """)]
     public async Task<string> Commit(
@@ -175,7 +175,7 @@ internal sealed partial class HistoryTools
                  - Each path carries git's own word for what happened to it — added, modified, deleted, renamed.
                  - A path HEAD still holds is named the way grep and read_file name it, so it can be opened directly. A path this commit deleted, or a later one renamed away, is named too and marked `(no longer at HEAD)`; there is nothing at it to read now.
                  - It cannot show the diff: which paths, and how many lines, is all the index holds of a change. Read the file at HEAD to see what it says today.
-                 - It cannot find the commit for you. Nothing here searches commit messages — not this tool and not git_log — so a ticket or PR number in a subject is found by paging git_log, never by grepping the code, and only then asked about here.
+                 - It cannot find the commit for you. A ticket or PR number lives in a commit subject and almost never in the code, so find it with git_log(message="…") rather than grep, and then ask here about the SHA it prints.
                  - Call commit for the message, the author and the totals.
                  - Only the default branch is recorded. A commit on a branch that was never merged is not here.
                  """)]
