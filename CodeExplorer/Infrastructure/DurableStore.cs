@@ -55,7 +55,7 @@ public sealed class DurableStore
         // the wipe are different things, and a folder standing in for a blob account should read that
         // way even when both happen to sit on one developer disk.
         _directory = configuration["Storage:DurableDirectory"]
-                     ?? Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "durable");
+                     ?? Path.Combine(Setting.DataDirectory(configuration), "durable");
     }
 
     /// <summary>

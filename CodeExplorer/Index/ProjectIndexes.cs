@@ -104,7 +104,7 @@ public sealed partial class ProjectIndexes : IDisposable
     {
         _durable = durable;
         _logger = logger;
-        _directory = Path.Combine(configuration["Storage:DataDirectory"] ?? "data", "indexes");
+        _directory = Path.Combine(Setting.DataDirectory(configuration), "indexes");
         Directory.CreateDirectory(_directory);
         _drainTimeout = TimeSpan.FromSeconds(configuration.GetValue("Index:DrainSeconds", _defaultDrainSeconds));
         // The instance needs a default catalog; this file holds nothing and exists only so that every
