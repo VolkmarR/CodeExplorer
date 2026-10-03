@@ -1,4 +1,3 @@
-import { useMemo } from 'react'
 import { barY, defineChart, ruleY } from '@tanstack/charts'
 import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
@@ -17,56 +16,54 @@ const LABEL_EVERY = 15
  * bar reads as its total and its failures at once.
  */
 export function MinuteChart({ minutes }: { minutes: MinuteCalls[] }) {
-  const definition = useMemo(() => {
-    const top = Math.max(1, ...minutes.map((m) => m.calls))
-    return defineChart({
-      marks: [
-        barY(minutes, {
+  const top = Math.max(1, ...minutes.map((m) => m.calls))
+  const definition = defineChart({
+    marks: [
+      barY(minutes, {
+        x: 'minute',
+        y: 'calls',
+        key: 'minute',
+        fill: 'var(--primary)',
+        inset: 0.5,
+        radius: 1,
+      }),
+      barY(
+        minutes.filter((m) => m.failed > 0),
+        {
           x: 'minute',
-          y: 'calls',
-          key: 'minute',
-          fill: 'var(--primary)',
+          y: 'failed',
+          key: (m) => `${m.minute}!`,
+          fill: 'var(--destructive)',
           inset: 0.5,
           radius: 1,
-        }),
-        barY(
-          minutes.filter((m) => m.failed > 0),
-          {
-            x: 'minute',
-            y: 'failed',
-            key: (m) => `${m.minute}!`,
-            fill: 'var(--destructive)',
-            inset: 0.5,
-            radius: 1,
-          },
-        ),
-        ruleY([0], { stroke: 'var(--border)' }),
-      ],
-      scales: {
-        x: {
-          scale: scaleBand()
-            .domain(minutes.map((m) => m.minute))
-            .padding(0.1),
-          axis: {
-            line: false,
-            ticks: {
-              size: 0,
-              values: minutes.flatMap((m, i) => (i % LABEL_EVERY === 0 ? [m.minute] : [])),
-              format: (minute: string) => clock.format(new Date(minute)),
-            },
+        },
+      ),
+      ruleY([0], { stroke: 'var(--border)' }),
+    ],
+    scales: {
+      x: {
+        scale: scaleBand()
+          .domain(minutes.map((m) => m.minute))
+          .padding(0.1),
+        axis: {
+          line: false,
+          ticks: {
+            size: 0,
+            values: minutes.flatMap((m, i) => (i % LABEL_EVERY === 0 ? [m.minute] : [])),
+            format: (minute: string) => clock.format(new Date(minute)),
           },
         },
-        // No value axis: the card's header names the busiest minute, and the tooltip every other one.
-        y: { scale: scaleLinear().domain([0, top]), axis: false },
       },
-      focus: 'group-x',
-      keyboard: false,
-      tooltip: {
-        use: tooltip,
-        formatGroup: (points) => (points[0] ? describe(points[0].datum) : ''),
-      },
-    })
-  }, [minutes])
+      // No value axis: the card's header names the busiest minute, and the tooltip every other one.
+      y: { scale: scaleLinear().domain([0, top]), axis: false },
+    },
+    focus: 'group-x',
+    keyboard: false,
+    tooltip: {
+      use: tooltip,
+      formatGroup: (points) => (points[0] ? describe(points[0].datum) : ''),
+    },
+  })
 
   return (
     <Chart

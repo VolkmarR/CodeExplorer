@@ -4,7 +4,6 @@ import type {
   RepositoryCoupling,
 } from '@/features/projects/api'
 import { featuredRepository, pairShare, sharedCommits } from '@/features/projects/folderCoupling'
-import { useMemo } from 'react'
 import { cell, defineChart } from '@tanstack/charts'
 import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
@@ -146,60 +145,57 @@ function shortName(folder: string) {
 
 /** The upper triangle of shared commits, one row and column per folder, busiest first. */
 function Heatmap({ repository }: { repository: RepositoryCoupling }) {
-  const heatmap = useMemo(() => {
-    const folders = repository.folders.map((f) => f.folder)
-    const rows = folders.slice(0, -1)
-    const columns = folders.slice(1)
-    const strongest = Math.max(...repository.pairs.map((p) => p.commits))
-    const cells = rows.flatMap((row, i) =>
-      columns.slice(i).map((column) => {
-        const shared = sharedCommits(repository, row, column)
-        return {
-          column,
-          row,
-          shared,
-          shade: String(shared > 0 ? Math.ceil(((SHADES.length - 1) * shared) / strongest) : 0),
-        }
+  const folders = repository.folders.map((f) => f.folder)
+  const rows = folders.slice(0, -1)
+  const columns = folders.slice(1)
+  const strongest = Math.max(...repository.pairs.map((p) => p.commits))
+  const cells = rows.flatMap((row, i) =>
+    columns.slice(i).map((column) => {
+      const shared = sharedCommits(repository, row, column)
+      return {
+        column,
+        row,
+        shared,
+        shade: String(shared > 0 ? Math.ceil(((SHADES.length - 1) * shared) / strongest) : 0),
+      }
+    }),
+  )
+  const definition = defineChart({
+    marks: [
+      cell(cells, {
+        x: 'column',
+        y: 'row',
+        color: 'shade',
+        key: (c) => `${c.row}\u0000${c.column}`,
+        inset: 1,
+        radius: 2,
       }),
-    )
-    const definition = defineChart({
-      marks: [
-        cell(cells, {
-          x: 'column',
-          y: 'row',
-          color: 'shade',
-          key: (c) => `${c.row}\u0000${c.column}`,
-          inset: 1,
-          radius: 2,
-        }),
-      ],
-      scales: {
-        x: {
-          scale: scaleBand().domain(columns),
-          axis: {
-            line: false,
-            ticks: { size: 0, format: shortName },
-            tickLabels: { rotate: -45, anchor: 'end' },
-          },
-        },
-        y: {
-          scale: scaleBand().domain(rows),
-          axis: { line: false, ticks: { size: 0, format: shortName } },
+    ],
+    scales: {
+      x: {
+        scale: scaleBand().domain(columns),
+        axis: {
+          line: false,
+          ticks: { size: 0, format: shortName },
+          tickLabels: { rotate: -45, anchor: 'end' },
         },
       },
-      color: { domain: SHADES.map((_, i) => String(i)), range: SHADES },
-      margin: MARGIN,
-      tooltip,
-    })
-    return { definition, rows, columns }
-  }, [repository])
+      y: {
+        scale: scaleBand().domain(rows),
+        axis: { line: false, ticks: { size: 0, format: shortName } },
+      },
+    },
+    color: { domain: SHADES.map((_, i) => String(i)), range: SHADES },
+    margin: MARGIN,
+    tooltip,
+  })
 
   return (
     <div className="overflow-x-auto">
       <Chart
-        definition={heatmap.definition}
-        width={MARGIN.left + CELL * heatmap.columns.length}
-        height={MARGIN.bottom + CELL * heatmap.rows.length}
+        definition={definition}
+        width={MARGIN.left + CELL * columns.length}
+        height={MARGIN.bottom + CELL * rows.length}
         className="font-mono text-xs text-muted-foreground"
         ariaLabel={`Shared commits between the folders of ${repository.repositorySlug}`}
       />

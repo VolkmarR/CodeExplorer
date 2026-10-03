@@ -1,4 +1,3 @@
-import { useMemo } from 'react'
 import { barY, defineChart, ruleY, text } from '@tanstack/charts'
 import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
@@ -101,71 +100,69 @@ interface Half {
  * drawn at full length with its real count at the tip, the usual mark for a broken axis.
  */
 function PeriodChart({ changes }: { changes: OverviewFileChanges }) {
-  const definition = useMemo(() => {
-    const { period, periods } = changes
-    const scale = barScale(periods)
-    const halves: Half[] = periods.flatMap((p) =>
-      [true, false].map((added) => {
-        const count = added ? p.added : p.deleted
-        return {
-          added,
-          count,
-          key: `${p.start}${added ? '+' : '-'}`,
-          length: (added ? 1 : -1) * Math.min(count, scale),
-          period: p,
-        }
-      }),
-    )
-    const broken = halves.filter((half) => half.count > scale)
-    const ticks = axisTicks(periods, period)
+  const { period, periods } = changes
+  const scale = barScale(periods)
+  const halves: Half[] = periods.flatMap((p) =>
+    [true, false].map((added) => {
+      const count = added ? p.added : p.deleted
+      return {
+        added,
+        count,
+        key: `${p.start}${added ? '+' : '-'}`,
+        length: (added ? 1 : -1) * Math.min(count, scale),
+        period: p,
+      }
+    }),
+  )
+  const broken = halves.filter((half) => half.count > scale)
+  const ticks = axisTicks(periods, period)
 
-    return defineChart({
-      marks: [
-        barY(halves, {
-          x: (half) => half.period.start,
-          y: 'length',
-          key: 'key',
-          fill: (half) => (half.added ? 'var(--primary)' : 'var(--destructive)'),
-          inset: 0.5,
-          radius: 1,
-        }),
-        ruleY([0], { stroke: 'var(--border)' }),
-        text(broken, {
-          x: (half) => half.period.start,
-          y: 'length',
-          key: 'key',
-          text: (half) => formatCount(half.count),
-          // Upright, running away from the line: neighbouring outliers are one bar apart, and
-          // their counts side by side would read as one number.
-          rotate: -90,
-          anchor: (half) => (half.added ? 'start' : 'end'),
-          dy: (half) => (half.added ? -4 : 4),
-          fill: 'var(--foreground)',
-          fontSize: 11,
-        }),
-      ],
-      scales: {
-        x: {
-          scale: scaleBand()
-            .domain(periods.map((p) => p.start))
-            .padding(0.1),
-          axis: { line: false, ticks: { size: 0, ...ticks } },
-        },
-        y: {
-          scale: scaleLinear().domain([-scale, scale]),
-          axis: false,
-        },
+  const definition = defineChart({
+    marks: [
+      barY(halves, {
+        x: (half) => half.period.start,
+        y: 'length',
+        key: 'key',
+        fill: (half) => (half.added ? 'var(--primary)' : 'var(--destructive)'),
+        inset: 0.5,
+        radius: 1,
+      }),
+      ruleY([0], { stroke: 'var(--border)' }),
+      text(broken, {
+        x: (half) => half.period.start,
+        y: 'length',
+        key: 'key',
+        text: (half) => formatCount(half.count),
+        // Upright, running away from the line: neighbouring outliers are one bar apart, and
+        // their counts side by side would read as one number.
+        rotate: -90,
+        anchor: (half) => (half.added ? 'start' : 'end'),
+        dy: (half) => (half.added ? -4 : 4),
+        fill: 'var(--foreground)',
+        fontSize: 11,
+      }),
+    ],
+    scales: {
+      x: {
+        scale: scaleBand()
+          .domain(periods.map((p) => p.start))
+          .padding(0.1),
+        axis: { line: false, ticks: { size: 0, ...ticks } },
       },
-      // Room above the line for the upright counts of the periods drawn broken.
-      margin: { top: broken.some((half) => half.added) ? 36 : 8 },
-      focus: 'group-x',
-      keyboard: false,
-      tooltip: {
-        use: tooltip,
-        formatGroup: (points) => (points[0] ? describePeriod(points[0].datum.period, period) : ''),
+      y: {
+        scale: scaleLinear().domain([-scale, scale]),
+        axis: false,
       },
-    })
-  }, [changes])
+    },
+    // Room above the line for the upright counts of the periods drawn broken.
+    margin: { top: broken.some((half) => half.added) ? 36 : 8 },
+    focus: 'group-x',
+    keyboard: false,
+    tooltip: {
+      use: tooltip,
+      formatGroup: (points) => (points[0] ? describePeriod(points[0].datum.period, period) : ''),
+    },
+  })
 
   return (
     <Chart
