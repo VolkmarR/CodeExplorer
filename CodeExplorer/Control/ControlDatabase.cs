@@ -304,18 +304,15 @@ public sealed partial class ControlDatabase : IDisposable
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         // ON CONFLICT DO NOTHING keeps the existence check and the insert one statement, so two
         // concurrent creates cannot both succeed.
-        await using (var command = connection.Query("""
-                                                    INSERT INTO projects (slug, name, single_repository)
-                                                    VALUES ($slug, $name, $single) ON CONFLICT DO NOTHING
-                                                    """,
-                         [new DuckDBParameter("slug", slug), new("name", name), new("single", singleRepository)]))
+        if (await InTransactionAsync(connection, transaction, """
+                                                              INSERT INTO projects (slug, name, single_repository)
+                                                              VALUES ($slug, $name, $single) ON CONFLICT DO NOTHING
+                                                              """,
+                [new DuckDBParameter("slug", slug), new("name", name), new("single", singleRepository)],
+                cancellationToken) != 1)
         {
-            command.Transaction = (DuckDBTransaction)transaction;
-            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                return false;
-            }
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
         }
 
         int orphans = await DeleteRowsOfAsync(connection, transaction, slug, cancellationToken);
@@ -392,11 +389,13 @@ public sealed partial class ControlDatabase : IDisposable
     public async Task<IReadOnlyDictionary<string, int>> CountRepositoriesAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        var counts = await connection.UnexplainedListAsync(
-            "SELECT project_slug, count(*) AS repositories FROM repositories GROUP BY project_slug", [],
-            reader => (Project: reader.Text("project_slug"), Repositories: (int)reader.Int64("repositories")),
-            cancellationToken);
-        return counts.ToDictionary(count => count.Project, count => count.Repositories, StringComparer.Ordinal);
+        await using var command = connection.Query(
+            "SELECT project_slug, count(*) AS repositories FROM repositories GROUP BY project_slug", []);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(cancellationToken))
+            counts[reader.Text("project_slug")] = (int)reader.Int64("repositories");
+        return counts;
     }
 
     /// <summary>
@@ -504,10 +503,8 @@ public sealed partial class ControlDatabase : IDisposable
             {
                 await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
                 await DeleteRowsOfAsync(connection, transaction, slug, cancellationToken);
-                await using var command = connection.Query("DELETE FROM projects WHERE slug = $slug",
-                    [new DuckDBParameter("slug", slug)]);
-                command.Transaction = (DuckDBTransaction)transaction;
-                deleted = await command.ExecuteNonQueryAsync(cancellationToken);
+                deleted = await InTransactionAsync(connection, transaction, "DELETE FROM projects WHERE slug = $slug",
+                    [new DuckDBParameter("slug", slug)], cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
             }
 
@@ -542,11 +539,8 @@ public sealed partial class ControlDatabase : IDisposable
                      "DELETE FROM repositories WHERE project_slug = $slug",
                      "DELETE FROM excluded_paths WHERE project_slug = $slug"
                  ])
-        {
-            await using var command = connection.Query(sql, [new DuckDBParameter("slug", slug)]);
-            command.Transaction = (DuckDBTransaction)transaction;
-            deleted += await command.ExecuteNonQueryAsync(cancellationToken);
-        }
+            deleted += await InTransactionAsync(connection, transaction, sql, [new DuckDBParameter("slug", slug)],
+                cancellationToken);
 
         return deleted;
     }
@@ -614,21 +608,30 @@ public sealed partial class ControlDatabase : IDisposable
         IReadOnlyList<string> patterns, CancellationToken cancellationToken)
     {
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using var command = connection.Query("DELETE FROM excluded_paths WHERE project_slug = $project",
-            [new DuckDBParameter("project", projectSlug)]);
-        command.Transaction = (DuckDBTransaction)transaction;
-        await command.ExecuteNonQueryAsync(cancellationToken);
-        command.CommandText = "INSERT INTO excluded_paths VALUES ($project, $position, $pattern)";
+        await InTransactionAsync(connection, transaction, "DELETE FROM excluded_paths WHERE project_slug = $project",
+            [new DuckDBParameter("project", projectSlug)], cancellationToken);
         for (int position = 0; position < patterns.Count; position++)
-        {
-            command.Parameters.Clear();
-            command.Parameters.Add(new DuckDBParameter("project", projectSlug));
-            command.Parameters.Add(new DuckDBParameter("position", position));
-            command.Parameters.Add(new DuckDBParameter("pattern", patterns[position]));
-            await command.ExecuteNonQueryAsync(cancellationToken);
-        }
+            await InTransactionAsync(connection, transaction,
+                "INSERT INTO excluded_paths VALUES ($project, $position, $pattern)",
+                [
+                    new DuckDBParameter("project", projectSlug), new("position", position),
+                    new("pattern", patterns[position])
+                ],
+                cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    ///     One statement with its parameters bound, run inside the caller's transaction, answering the
+    ///     rows it touched. The writes that must commit together all go through here.
+    /// </summary>
+    private static async Task<int> InTransactionAsync(DuckDBConnection connection, DbTransaction transaction,
+        string sql, IEnumerable<DuckDBParameter> parameters, CancellationToken cancellationToken)
+    {
+        await using var command = connection.Query(sql, parameters);
+        command.Transaction = (DuckDBTransaction)transaction;
+        return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     /// <summary>Forgets one repository of a project. False when the project or the repository is unknown.</summary>
