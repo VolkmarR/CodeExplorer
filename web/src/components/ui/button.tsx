@@ -39,6 +39,11 @@ const buttonVariants = cva(
   },
 )
 
+/**
+ * A Button rendered as a router link (`render={<Link … />}`) also takes `nativeButton={false}`:
+ * Base UI assumes the rendered element is a native `<button>` unless told otherwise, and warns in a
+ * dev build when it is an anchor instead.
+ */
 function Button({
   className,
   variant = 'default',
