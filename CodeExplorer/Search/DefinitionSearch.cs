@@ -115,7 +115,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
         string declarationShapes = shapes.Sql;
         string fileFilter = filter.Sql(parameters);
 
-        List<Candidate> candidates;
+        List<AnalyzedLine> candidates;
         await using (var command = connection.Query($"""
                                                      SELECT f.file_id, f.qualified_path, f.extension,
                                                             l.line_number, l.content
@@ -126,16 +126,13 @@ public sealed class DefinitionSearch(IndexReaders readers)
                                                      ORDER BY f.qualified_path, l.line_number
                                                      LIMIT $limit
                                                      """, [.. parameters, new("limit", RowCap.Limit(MaxCandidates))]))
-            candidates = await command.ListAsync(reader => new Candidate(reader.Int64("file_id"),
-                reader.Text("qualified_path"), Languages.Default.For(reader.Text("extension")),
-                reader.Int32("line_number"), reader.Text("content")), cancellationToken);
+            candidates = await command.ListAsync(AnalyzedLine.From, cancellationToken);
 
         bool capped = RowCap.Trim(candidates, MaxCandidates);
 
         // The lines above each candidate, so that a `procedure Foo;` inside a commented-out block is
         // not a declaration and one below a Delphi `implementation` is known to be the body.
-        var positions = await FilePositions.ReadAsync(connection,
-            candidates.Select(line => (line.FileId, line.Analyzer, line.LineNumber)), cancellationToken);
+        var positions = await FilePositions.ReadAsync(connection, candidates, cancellationToken);
 
         var sites = new List<DefinitionSite>();
         // Whether the languages these sites were read from draw the split at all, which is what says
@@ -206,10 +203,6 @@ public sealed class DefinitionSearch(IndexReaders readers)
         return new DefinitionResult([.. ranked.Take(MaxSites)], ranked.Count, separated, naming,
             namingWithoutFilters, uncovered, capped);
     }
-
-    /// <summary>One line the engine offered, before the file's language says what it declares.</summary>
-    private readonly record struct Candidate(
-        long FileId, string Path, ILanguageAnalyzer Analyzer, int LineNumber, string Content);
 
     /// <summary>Whether what the line declares is the symbol asked about, as a type or as a member.</summary>
     private static bool Names(Declared declared, string symbol) =>

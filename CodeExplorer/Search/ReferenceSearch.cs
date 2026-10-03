@@ -214,7 +214,7 @@ public sealed class ReferenceSearch(IndexReaders readers)
                       ORDER BY k.qualified_path, k.line_number
                       """;
 
-        var matched = new List<MatchedLine>();
+        var matched = new List<AnalyzedLine>();
         int totalFiles = 0;
         long totalLines = 0;
         long totalOccurrences = 0;
@@ -233,17 +233,14 @@ public sealed class ReferenceSearch(IndexReaders readers)
                 totalOccurrences = reader.Int64("total_occurrences");
                 if (filter.Any) withoutFilters = (int)reader.Int64("every_file");
                 if (reader.IsNull("qualified_path")) continue;
-                matched.Add(new MatchedLine(reader.Int64("file_id"), reader.Text("qualified_path"),
-                    Languages.Default.For(reader.Text("extension")), reader.Int32("line_number"),
-                    reader.Text("content")));
+                matched.Add(AnalyzedLine.From(reader));
             }
         }
 
         var scopes = await ScopesAsync(connection, matched, cancellationToken);
         // Where each matched line's file stands at the start of it, which is what keeps a line inside
         // a block comment opened forty lines up from reading as a call (#53).
-        var positions = await FilePositions.ReadAsync(connection,
-            matched.Select(line => (line.FileId, line.Analyzer, line.LineNumber)), cancellationToken);
+        var positions = await FilePositions.ReadAsync(connection, matched, cancellationToken);
         // Every appearance on the line, not only the first: a line naming the identifier twice is two
         // references, and they are often of different kinds. What each one looks like is the file's
         // language's question (ADR-0008), so `:=` is a write in an X# file and not in a C# one, and a
@@ -275,14 +272,6 @@ public sealed class ReferenceSearch(IndexReaders readers)
     }
 
     /// <summary>
-    ///     One line the engine matched, before it is taken apart into the references on it. It carries
-    ///     the analyser its file resolved to, so the lookup happens once per line rather than once for
-    ///     the grouping and again for the classification.
-    /// </summary>
-    private readonly record struct MatchedLine(
-        long FileId, string Path, ILanguageAnalyzer Analyzer, int LineNumber, string Content);
-
-    /// <summary>
     ///     The declaration lines of every file a reference was read from, which is what an enclosing
     ///     scope is worked out from. DuckDB narrows each file to the few lines that could be a
     ///     declaration, so the whole file never leaves the index for the sake of a label on one line.
@@ -292,7 +281,7 @@ public sealed class ReferenceSearch(IndexReaders readers)
     ///     are still read in a single pass.
     /// </summary>
     private static async Task<Dictionary<long, List<DeclarationLine>>> ScopesAsync(
-        DuckDBConnection connection, List<MatchedLine> matched, CancellationToken cancellationToken)
+        DuckDBConnection connection, List<AnalyzedLine> matched, CancellationToken cancellationToken)
     {
         var scopes = new Dictionary<long, List<DeclarationLine>>();
 

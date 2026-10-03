@@ -1,9 +1,27 @@
+using System.Data.Common;
 using System.Globalization;
 using CodeExplorer.Language;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer.Search;
+
+/// <summary>
+///     One line a symbol search matched, before its file's language says what is on it. It carries the
+///     analyser its file resolved to, so the lookup happens once per line rather than once for each
+///     question asked about it, and it is what <see cref="FilePositions.ReadAsync" /> places.
+/// </summary>
+internal readonly record struct AnalyzedLine(
+    long FileId, string Path, ILanguageAnalyzer Analyzer, int LineNumber, string Content)
+{
+    /// <summary>
+    ///     The line from a row selecting <c>file_id</c>, <c>qualified_path</c>, <c>extension</c>,
+    ///     <c>line_number</c> and <c>content</c>.
+    /// </summary>
+    public static AnalyzedLine From(DbDataReader row) =>
+        new(row.Int64("file_id"), row.Text("qualified_path"), Languages.Default.For(row.Text("extension")),
+            row.Int32("line_number"), row.Text("content"));
+}
 
 /// <summary>
 ///     Where each line a search cares about stands in its own file: inside a block comment or a
@@ -97,14 +115,12 @@ internal static class FilePositions
     /// </summary>
     /// <param name="connection">Already bound to the project being searched.</param>
     /// <param name="wanted">
-    ///     The lines to answer for, each with the analyser its file resolved to. File ids must come
-    ///     from a query and never from a request: they are inlined into the SQL below.
+    ///     The lines to answer for. File ids must come from a query and never from a request: they are
+    ///     inlined into the SQL below.
     /// </param>
     /// <param name="cancellationToken">Threaded to the command, as every async path here is.</param>
     public static async Task<Dictionary<(long File, int Line), FilePosition>> ReadAsync(
-        DuckDBConnection connection,
-        IEnumerable<(long FileId, ILanguageAnalyzer Analyzer, int LineNumber)> wanted,
-        CancellationToken cancellationToken)
+        DuckDBConnection connection, IEnumerable<AnalyzedLine> wanted, CancellationToken cancellationToken)
     {
         var positions = new Dictionary<(long, int), FilePosition>();
         var files = wanted.GroupBy(line => line.FileId)
