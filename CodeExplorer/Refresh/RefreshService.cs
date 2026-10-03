@@ -66,7 +66,7 @@ public sealed record RefreshStatus(
 public sealed record RefreshRefusal(string Message, int StatusCode)
 {
     /// <summary>The refusal as the endpoint's answer, under its own status code.</summary>
-    public IResult Result() => ApiError.Result(Message, StatusCode);
+    public IResult Result() => ApiError.Result(StatusCode, Message);
 }
 
 /// <summary>Where a refresh request got to. <paramref name="Refused" /> null means it was taken on.</summary>

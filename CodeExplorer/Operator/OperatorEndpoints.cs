@@ -49,8 +49,7 @@ internal static class OperatorEndpoints
                     // The refusal carries its own status code, as a refused refresh does.
                     { Refused: { } refused } => refused.Result(),
                     { Found: true } => Results.NoContent(),
-                    _ => Results.NotFound(new
-                        { error = $"Project '{project.Slug}' has no repository with slug '{repository}'." })
+                    _ => ApiError.NotFound($"Project '{project.Slug}' has no repository with slug '{repository}'.")
                 });
     }
 }
