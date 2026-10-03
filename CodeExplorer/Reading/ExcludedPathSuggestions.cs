@@ -1,11 +1,9 @@
 using System.Globalization;
-using System.Text.Json.Serialization;
 using DuckDB.NET.Data;
 
 namespace CodeExplorer.Reading;
 
 /// <summary>Which of the rules in <see cref="ExcludedPathSuggestions" /> proposed a pattern.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter<SuggestionRule>))]
 public enum SuggestionRule
 {
     GitAttributes,
