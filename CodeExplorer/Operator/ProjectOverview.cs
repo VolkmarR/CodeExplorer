@@ -28,6 +28,9 @@ public sealed record ProjectSummary(
 ///     One repository as the project page shows it: what the operator configured, plus where the last
 ///     build found it. The git fields are null for a repository added since the last build, which is
 ///     how the page shows that a rebuild is owed. The credential appears only as set or not set.
+///     <paramref name="NewestCommit" /> is the read's own <see cref="AttributedBy" />, and null where no
+///     history was imported — which the page says in those words, because an operator seeing nothing
+///     would otherwise read it as a repository nobody has touched.
 /// </summary>
 public sealed record RepositoryDetail(
     string Slug,
@@ -37,14 +40,7 @@ public sealed record RepositoryDetail(
     int? FileCount,
     long? LineCount,
     long Commits = 0,
-    RepositoryCommit? NewestCommit = null);
-
-/// <summary>
-///     The newest commit imported for a repository, as the project page names it. Null where no history
-///     was imported — which the page says in those words, because an operator seeing nothing would
-///     otherwise read it as a repository nobody has touched.
-/// </summary>
-public sealed record RepositoryCommit(string Sha, string AuthorName, DateTimeOffset AuthoredAt, string Subject);
+    AttributedBy? NewestCommit = null);
 
 /// <summary>
 ///     What the overview page draws: the index's overview computed live over the page's filters and
@@ -164,10 +160,7 @@ public sealed class ProjectOverview(
         var repositories = configured
             .Select(r => indexed.GetValueOrDefault(r.Slug) is { } built
                 ? new RepositoryDetail(r.Slug, r.Url, r.HasCredential, built.HeadCommit, built.FileCount,
-                    built.LineCount, built.Commits,
-                    built.NewestCommit is { } newest
-                        ? new RepositoryCommit(newest.Sha, newest.AuthorName, newest.AuthoredAt, newest.Subject)
-                        : null)
+                    built.LineCount, built.Commits, built.NewestCommit)
                 : new RepositoryDetail(r.Slug, r.Url, r.HasCredential, null, null, null))
             .ToList();
         return new ProjectDetail(project.Slug, project.Name, project.SingleRepository, status, repositories);
