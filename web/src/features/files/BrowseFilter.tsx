@@ -17,8 +17,9 @@ export function BrowseFilter({ project, search }: { project: string; search: Bro
   const { data: detail } = useSuspenseQuery(projectQuery(project))
   const [draft, setDraft] = useDraft(search)
 
-  // One repository has nothing to choose between; the tree's root already is it (ADR-0006).
-  const multiRepository = !detail.singleRepository && detail.repositories.length > 1
+  // One repository has nothing to choose between; the tree's root already is it (ADR-0006). A
+  // single-repository project has one at most, so the count is the whole test.
+  const multiRepository = detail.repositories.length > 1
 
   return (
     <form

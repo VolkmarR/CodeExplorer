@@ -1,12 +1,7 @@
-import {
-  CHURN_WINDOWS,
-  DEFAULT_CHURN_DEPTH,
-  describeWindow,
-  windowsWith,
-  type ChurnParameters,
-} from '@/lib/urls/churnParams'
+import { CHURN_WINDOWS, DEFAULT_CHURN_DEPTH, type ChurnParameters } from '@/lib/urls/churnParams'
 import type { RepositoryDetail } from '@/features/projects/api'
-import { RepositorySelect } from '@/features/projects/RepositorySelect'
+import { RepositoryFilter } from '@/features/projects/RepositoryFilter'
+import { WindowSelect } from '@/components/WindowSelect'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -34,33 +29,14 @@ export function ChurnControls({
   repositories: RepositoryDetail[]
   onChange: (change: Partial<ChurnParameters>) => void
 }) {
-  // One repository needs no filter; the choice is offered only where there is one to make. Nor is it
-  // offered once a directory is chosen, which carries its own repository — the trail moves the
-  // reader then, and two controls on one scope could disagree.
-  const filterable = repositories.length > 1 && search.directory === undefined
-
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div className="flex items-center gap-2">
-        <Label htmlFor="churn-window" className="text-xs text-muted-foreground">
-          Window
-        </Label>
-        <Select
-          value={String(search.days)}
-          onValueChange={(next) => onChange({ days: Number(next) })}
-        >
-          <SelectTrigger id="churn-window" className="w-36">
-            <SelectValue>{describeWindow(search.days)}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {windowsWith(CHURN_WINDOWS, search.days).map((days) => (
-              <SelectItem key={days} value={String(days)}>
-                {describeWindow(days)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      <WindowSelect
+        id="churn-window"
+        offered={CHURN_WINDOWS}
+        days={search.days}
+        onChange={(days) => onChange({ days })}
+      />
 
       {/* Before the repository, because it changes what every row below means where the repository
           only changes which of them there are. */}
@@ -88,20 +64,15 @@ export function ChurnControls({
         </Select>
       </div>
 
-      {filterable ? (
-        <div className="flex items-center gap-2">
-          <Label htmlFor="churn-repository" className="text-xs text-muted-foreground">
-            Repository
-          </Label>
-          <div className="w-48">
-            <RepositorySelect
-              id="churn-repository"
-              repositories={repositories}
-              value={search.repository ?? ''}
-              onChange={(repository) => onChange({ repository })}
-            />
-          </div>
-        </div>
+      {/* Not offered once a directory is chosen, which carries its own repository: the trail moves
+          the reader then, and two controls on one scope could disagree. */}
+      {search.directory === undefined ? (
+        <RepositoryFilter
+          id="churn-repository"
+          repositories={repositories}
+          value={search.repository ?? ''}
+          onChange={(repository) => onChange({ repository })}
+        />
       ) : null}
     </div>
   )
