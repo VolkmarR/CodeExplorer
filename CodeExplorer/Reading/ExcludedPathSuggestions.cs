@@ -45,9 +45,9 @@ internal static class ExcludedPathSuggestions
     ///     Names generated, locked or kept by a tool, which no one reads in a dashboard, grouped by the
     ///     ecosystem that writes them. Each is offered only where the index holds a file matching it.
     ///     A language's generated code is not here: its profile names it
-    ///     (<see cref="CodeExplorer.Language.ILanguageAnalyzer.GeneratedPaths" />), and a second copy
-    ///     here had already drifted from it — <c>*.g.cs</c> and <c>*_vo.prg</c> were never offered.
-    ///     What is left belongs to no language: lock files, bundles, snapshots, IDE state.
+    ///     (<see cref="CodeExplorer.Language.ILanguageAnalyzer.GeneratedPathPatterns" />), and one list
+    ///     is what keeps the two from drifting apart. What is left belongs to no language: lock files,
+    ///     bundles, snapshots, IDE state.
     /// </summary>
     private static readonly string[] _wellKnown =
     [
@@ -80,8 +80,9 @@ internal static class ExcludedPathSuggestions
         var accepted = new List<ExcludedPathSuggestion>();
         var candidates = new List<(string Pattern, SuggestionRule Rule, string Reason)>();
         candidates.AddRange(await GitAttributesAsync(connection, cancellationToken));
-        candidates.AddRange(Languages.Default.Analyzers.SelectMany(analyzer => analyzer.GeneratedPaths.Select(glob =>
-            (AtAnyDepth(glob), SuggestionRule.WellKnownName, $"A name generated {analyzer.Language} code is given"))));
+        candidates.AddRange(Languages.Default.Analyzers.SelectMany(analyzer =>
+            analyzer.GeneratedPathPatterns.Select(glob => (AtAnyDepth(glob), SuggestionRule.WellKnownName,
+                $"A name the {analyzer.Language} profile calls generated"))));
         candidates.AddRange(_wellKnown.Select(p => (p, SuggestionRule.WellKnownName, "A well-known generated name")));
         foreach (var candidate in candidates)
             await OfferAsync(connection, existing, accepted, candidate, logger, cancellationToken);

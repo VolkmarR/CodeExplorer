@@ -355,12 +355,11 @@ public interface ILanguageAnalyzer
     ///     for the engine to match: the overview's suggested exclusions offer each one. Published as
     ///     globs for the reason <see cref="DeclarationCandidates" /> publishes a pattern — the engine
     ///     chooses the files (CODING_STANDARDS), and a caller handing every path to .NET to be asked
-    ///     about would be filtering the candidate set there. That is also why there is no per-path
-    ///     "is this generated?" here any more (#341): the one caller needed the globs. Matched without
-    ///     regard to case, as every path filter here is. Empty where the language names no generated
-    ///     file.
+    ///     about would be filtering the candidate set there. Like that pattern, it is published for the
+    ///     engine rather than answered, so it carries no <see cref="Evidence" />. Matched without regard
+    ///     to case, as every path filter here is. Empty where the language names no generated file.
     /// </summary>
-    IReadOnlyList<string> GeneratedPaths { get; }
+    IReadOnlyList<string> GeneratedPathPatterns { get; }
 
     /// <summary>
     ///     What every appearance of <paramref name="symbol" /> on this line looks like, in the order

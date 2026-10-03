@@ -124,9 +124,9 @@ public sealed class ExcludedPathSuggestionsTests : IDisposable
         // file carries it: nothing here is *.generated.cs or *.designer.prg.
         Assert.Equal(
             [
-                ("**/*_vo.prg", 1, "A name generated X# code is given"),
-                ("**/*.g.cs", 1, "A name generated C# code is given"),
-                ("**/*.designer.cs", 1, "A name generated C# code is given")
+                ("**/*_vo.prg", 1, "A name the X# profile calls generated"),
+                ("**/*.g.cs", 1, "A name the C# profile calls generated"),
+                ("**/*.designer.cs", 1, "A name the C# profile calls generated")
             ],
             suggestions.Where(s => s.Rule == SuggestionRule.WellKnownName).Select(s => (s.Pattern, s.Files, s.Reason)));
     }

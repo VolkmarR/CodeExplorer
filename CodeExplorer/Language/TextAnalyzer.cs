@@ -13,9 +13,10 @@ namespace CodeExplorer.Language;
 ///     profile is the only thing that will ever read it.
 ///     .NET <see cref="Regex" /> appears here and only here, and only over a line DuckDB already
 ///     picked out, which is the division CODING_STANDARDS draws: the candidate set is chosen by the
-///     engine, and this says what each candidate is. The declaration and assignment patterns are built per profile rather than declared with <c>[GeneratedRegex]</c>, because their
-///     alternations come from the profile's own keyword lists; one analyser is built per language at
-///     startup and the cost is paid once. The shapes no profile changes are source-generated below.
+///     engine, and this says what each candidate is. The declaration and assignment patterns are
+///     built per profile rather than declared with <c>[GeneratedRegex]</c>, because their alternations
+///     come from the profile's own keyword lists; one analyser is built per language at startup and
+///     the cost is paid once. The shapes no profile changes are source-generated below.
 /// </summary>
 public sealed partial class TextAnalyzer : ILanguageAnalyzer
 {
@@ -255,7 +256,7 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
 
     public FilePosition Start => _start;
 
-    public IReadOnlyList<string> GeneratedPaths => _profile.GeneratedPathPatterns;
+    public IReadOnlyList<string> GeneratedPathPatterns => _profile.GeneratedPathPatterns;
 
     /// <summary>
     ///     The alternation of these words for a regex, or null when there are none to match. Longest
