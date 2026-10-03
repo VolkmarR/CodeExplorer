@@ -1,5 +1,4 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { RouteError } from '@/components/RouteError'
 import { ProjectPage } from '@/features/projects/ProjectPage'
 import { projectOverviewQuery, projectQuery } from '@/features/projects/queries'
 import { refreshStatusQuery } from '@/features/refresh/queries'
@@ -7,7 +6,6 @@ import { validateOverviewSearch } from '@/lib/urls/overviewParams'
 
 export const Route = createFileRoute('/projects/$project/')({
   component: ProjectPage,
-  errorComponent: RouteError,
   loaderDeps: ({ search }) => search,
   // The project and the refresh status because the card around the page shows both, and a page
   // opened while a refresh is running has to say so straight away rather than after the first poll
