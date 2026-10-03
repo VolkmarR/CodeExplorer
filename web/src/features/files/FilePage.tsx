@@ -6,7 +6,7 @@ import { CodeView } from '@/features/files/CodeView'
 import { FileRail } from '@/features/files/FileRail'
 import { PathTrail } from '@/components/PathTrail'
 import { treeSearch } from '@/lib/urls/browseParams'
-import { blameQuery, fileQuery } from '@/features/files/queries'
+import { blameQuery, canBlame, fileQuery } from '@/features/files/queries'
 import { CommitLine } from '@/components/CommitLine'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { PageCard } from '@/components/PageCard'
@@ -43,11 +43,7 @@ export function FilePage() {
   // the code, and most readers of a file are reading the code. The runs are the same cache entry
   // the rail's recent commits read, so turning the gutter on costs nothing once the rail has them.
   const [blaming, setBlaming] = useState(false)
-  const hasHistory = file.lastCommit !== null
-  const blame = useQuery({
-    ...blameQuery(project, path),
-    enabled: blaming && hasHistory && file.skipReason === null,
-  })
+  const blame = useQuery(blameQuery(project, file, blaming))
 
   return (
     <PageCard
@@ -113,7 +109,7 @@ export function FilePage() {
           </Toggle>
           {/* Offered only where it can answer: a file whose repository has no history in the index
               would show an empty gutter, and a button that does nothing is worse than none. */}
-          {hasHistory && file.skipReason === null ? (
+          {canBlame(file) ? (
             <Toggle size="sm" pressed={blaming} onPressedChange={setBlaming}>
               <History />
               Blame
