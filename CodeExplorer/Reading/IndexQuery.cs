@@ -72,6 +72,24 @@ internal static class IndexQuery
         [CallerMemberName] string member = "")
     {
         await using var reader = await command.ReaderAsync(cancellationToken, file, member);
+        return await RowsAsync(reader, row, cancellationToken);
+    }
+
+    /// <summary>
+    ///     The same list read for the control database and a build, which <see cref="ReaderAsync" />
+    ///     leaves out on purpose: it executes the statement without writing a plan.
+    /// </summary>
+    public static async Task<List<T>> UnexplainedListAsync<T>(this DuckDBConnection connection, string sql,
+        IEnumerable<DuckDBParameter> parameters, Func<DbDataReader, T> row, CancellationToken cancellationToken)
+    {
+        await using var command = connection.Query(sql, parameters);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await RowsAsync(reader, row, cancellationToken);
+    }
+
+    private static async Task<List<T>> RowsAsync<T>(DbDataReader reader, Func<DbDataReader, T> row,
+        CancellationToken cancellationToken)
+    {
         var rows = new List<T>();
         while (await reader.ReadAsync(cancellationToken)) rows.Add(row(reader));
         return rows;

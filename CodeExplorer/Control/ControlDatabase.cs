@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using CodeExplorer.Infrastructure;
@@ -298,29 +299,23 @@ public sealed partial class ControlDatabase : IDisposable
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.Transaction = (DuckDBTransaction)transaction;
         // ON CONFLICT DO NOTHING keeps the existence check and the insert one statement, so two
         // concurrent creates cannot both succeed.
-        command.CommandText = """
-                              INSERT INTO projects (slug, name, single_repository)
-                              VALUES ($slug, $name, $single) ON CONFLICT DO NOTHING
-                              """;
-        command.Parameters.Add(new DuckDBParameter("slug", slug));
-        command.Parameters.Add(new DuckDBParameter("name", name));
-        command.Parameters.Add(new DuckDBParameter("single", singleRepository));
-        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        await using (var command = connection.Query("""
+                                                    INSERT INTO projects (slug, name, single_repository)
+                                                    VALUES ($slug, $name, $single) ON CONFLICT DO NOTHING
+                                                    """,
+                         [new DuckDBParameter("slug", slug), new("name", name), new("single", singleRepository)]))
         {
-            await transaction.RollbackAsync(cancellationToken);
-            return false;
+            command.Transaction = (DuckDBTransaction)transaction;
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
         }
 
-        command.Parameters.Clear();
-        command.Parameters.Add(new DuckDBParameter("slug", slug));
-        command.CommandText = "DELETE FROM repositories WHERE project_slug = $slug";
-        int orphans = await command.ExecuteNonQueryAsync(cancellationToken);
-        command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $slug";
-        orphans += await command.ExecuteNonQueryAsync(cancellationToken);
+        int orphans = await DeleteRowsOfAsync(connection, transaction, slug, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         if (orphans > 0 && _logger.IsEnabled(LogLevel.Warning))
@@ -336,13 +331,9 @@ public sealed partial class ControlDatabase : IDisposable
     public async Task<IReadOnlyList<Project>> ListAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT slug, name, single_repository FROM projects ORDER BY slug";
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var projects = new List<Project>();
-        while (await reader.ReadAsync(cancellationToken))
-            projects.Add(new Project(reader.Text("slug"), reader.Text("name"), reader.Flag("single_repository")));
-        return projects;
+        return await connection.UnexplainedListAsync("SELECT slug, name, single_repository FROM projects ORDER BY slug",
+            [], reader => new Project(reader.Text("slug"), reader.Text("name"), reader.Flag("single_repository")),
+            cancellationToken);
     }
 
     /// <summary>
@@ -365,9 +356,8 @@ public sealed partial class ControlDatabase : IDisposable
         // committed after the snapshot too, and one that bumped before it had committed before it.
         long generation = Volatile.Read(ref _cacheGeneration);
         await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT name, single_repository FROM projects WHERE slug = $slug";
-        command.Parameters.Add(new DuckDBParameter("slug", slug));
+        await using var command = connection.Query("SELECT name, single_repository FROM projects WHERE slug = $slug",
+            [new DuckDBParameter("slug", slug)]);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return null;
 
@@ -399,13 +389,11 @@ public sealed partial class ControlDatabase : IDisposable
     public async Task<IReadOnlyDictionary<string, int>> CountRepositoriesAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT project_slug, count(*) AS repositories FROM repositories GROUP BY project_slug";
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        while (await reader.ReadAsync(cancellationToken))
-            counts[reader.Text("project_slug")] = (int)reader.Int64("repositories");
-        return counts;
+        var counts = await connection.UnexplainedListAsync(
+            "SELECT project_slug, count(*) AS repositories FROM repositories GROUP BY project_slug", [],
+            reader => (Project: reader.Text("project_slug"), Repositories: (int)reader.Int64("repositories")),
+            cancellationToken);
+        return counts.ToDictionary(count => count.Project, count => count.Repositories, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -475,16 +463,14 @@ public sealed partial class ControlDatabase : IDisposable
             string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));
 
         await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-                              INSERT INTO repositories (project_slug, slug, url, credential)
-                              VALUES ($project, $slug, $url, $credential) ON CONFLICT DO NOTHING
-                              """;
-        command.Parameters.Add(new DuckDBParameter("project", repository.ProjectSlug));
-        command.Parameters.Add(new DuckDBParameter("slug", repository.Slug));
-        command.Parameters.Add(new DuckDBParameter("url", repository.Url));
-        command.Parameters.Add(new DuckDBParameter("credential",
-            (object?)repository.ProtectedCredential ?? DBNull.Value));
+        await using var command = connection.Query("""
+                                                   INSERT INTO repositories (project_slug, slug, url, credential)
+                                                   VALUES ($project, $slug, $url, $credential) ON CONFLICT DO NOTHING
+                                                   """,
+        [
+            new DuckDBParameter("project", repository.ProjectSlug), new("slug", repository.Slug),
+            new("url", repository.Url), new("credential", (object?)repository.ProtectedCredential ?? DBNull.Value)
+        ]);
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1
             ? (AddRepositoryOutcome.Created, repository)
             : (AddRepositoryOutcome.SlugTaken, null);
@@ -494,16 +480,10 @@ public sealed partial class ControlDatabase : IDisposable
         string projectSlug, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT slug, url, credential FROM repositories WHERE project_slug = $project ORDER BY slug";
-        command.Parameters.Add(new DuckDBParameter("project", projectSlug));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var repositories = new List<ProjectRepository>();
-        while (await reader.ReadAsync(cancellationToken))
-            repositories.Add(new ProjectRepository(projectSlug, reader.Text("slug"), reader.Text("url"),
-                reader.TextOrNull("credential")));
-        return repositories;
+        return await connection.UnexplainedListAsync(
+            "SELECT slug, url, credential FROM repositories WHERE project_slug = $project ORDER BY slug",
+            [new DuckDBParameter("project", projectSlug)], reader => new ProjectRepository(projectSlug,
+                reader.Text("slug"), reader.Text("url"), reader.TextOrNull("credential")), cancellationToken);
     }
 
     /// <summary>
@@ -520,15 +500,10 @@ public sealed partial class ControlDatabase : IDisposable
             await using (var connection = await OpenAsync(cancellationToken))
             {
                 await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-                await using var command = connection.CreateCommand();
+                await DeleteRowsOfAsync(connection, transaction, slug, cancellationToken);
+                await using var command = connection.Query("DELETE FROM projects WHERE slug = $slug",
+                    [new DuckDBParameter("slug", slug)]);
                 command.Transaction = (DuckDBTransaction)transaction;
-                command.CommandText = "DELETE FROM repositories WHERE project_slug = $slug";
-                command.Parameters.Add(new DuckDBParameter("slug", slug));
-                await command.ExecuteNonQueryAsync(cancellationToken);
-                // Or a project created later under the same slug would open with this one's exclusions.
-                command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $slug";
-                await command.ExecuteNonQueryAsync(cancellationToken);
-                command.CommandText = "DELETE FROM projects WHERE slug = $slug";
                 deleted = await command.ExecuteNonQueryAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
             }
@@ -550,6 +525,30 @@ public sealed partial class ControlDatabase : IDisposable
     }
 
     /// <summary>
+    ///     Deletes every row hung off a project's slug, inside the caller's transaction, and answers how
+    ///     many went. A delete runs it before the project row, and a create after inserting one, to
+    ///     clear what an earlier project under the slug left behind; either way, a project created later
+    ///     under the slug must not open with another one's repositories or exclusions.
+    /// </summary>
+    private static async Task<int> DeleteRowsOfAsync(DuckDBConnection connection, DbTransaction transaction,
+        string slug, CancellationToken cancellationToken)
+    {
+        int deleted = 0;
+        foreach (string sql in (string[])
+                 [
+                     "DELETE FROM repositories WHERE project_slug = $slug",
+                     "DELETE FROM excluded_paths WHERE project_slug = $slug"
+                 ])
+        {
+            await using var command = connection.Query(sql, [new DuckDBParameter("slug", slug)]);
+            command.Transaction = (DuckDBTransaction)transaction;
+            deleted += await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        return deleted;
+    }
+
+    /// <summary>
     ///     The globs the project's overview page leaves out (#216), in the order they were written;
     ///     empty for a project nobody configured. Read per page load rather than cached, so a save
     ///     applies on the next one — it is one indexed read beside an overview that costs hundreds of
@@ -559,14 +558,9 @@ public sealed partial class ControlDatabase : IDisposable
         CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT pattern FROM excluded_paths WHERE project_slug = $project ORDER BY position";
-        command.Parameters.Add(new DuckDBParameter("project", projectSlug));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var patterns = new List<string>();
-        while (await reader.ReadAsync(cancellationToken)) patterns.Add(reader.Text("pattern"));
-        return patterns;
+        return await connection.UnexplainedListAsync(
+            "SELECT pattern FROM excluded_paths WHERE project_slug = $project ORDER BY position",
+            [new DuckDBParameter("project", projectSlug)], reader => reader.Text("pattern"), cancellationToken);
     }
 
     /// <summary>
@@ -617,10 +611,9 @@ public sealed partial class ControlDatabase : IDisposable
         IReadOnlyList<string> patterns, CancellationToken cancellationToken)
     {
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
+        await using var command = connection.Query("DELETE FROM excluded_paths WHERE project_slug = $project",
+            [new DuckDBParameter("project", projectSlug)]);
         command.Transaction = (DuckDBTransaction)transaction;
-        command.CommandText = "DELETE FROM excluded_paths WHERE project_slug = $project";
-        command.Parameters.Add(new DuckDBParameter("project", projectSlug));
         await command.ExecuteNonQueryAsync(cancellationToken);
         command.CommandText = "INSERT INTO excluded_paths VALUES ($project, $position, $pattern)";
         for (int position = 0; position < patterns.Count; position++)
@@ -640,10 +633,9 @@ public sealed partial class ControlDatabase : IDisposable
         CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM repositories WHERE project_slug = $project AND slug = $slug";
-        command.Parameters.Add(new DuckDBParameter("project", projectSlug));
-        command.Parameters.Add(new DuckDBParameter("slug", slug));
+        await using var command = connection.Query(
+            "DELETE FROM repositories WHERE project_slug = $project AND slug = $slug",
+            [new DuckDBParameter("project", projectSlug), new("slug", slug)]);
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1) return false;
 
         await BackupAsync();
