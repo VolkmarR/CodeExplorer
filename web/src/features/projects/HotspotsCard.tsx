@@ -4,7 +4,7 @@ import { HotspotScatter } from '@/features/projects/HotspotScatter'
 import { FilePathLink } from '@/components/FilePathLink'
 import { ShareBar } from '@/components/ShareBar'
 import { formatCount } from '@/lib/format'
-import { NO_HISTORY } from '@/features/projects/noHistory'
+import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
@@ -31,7 +31,7 @@ export function HotspotsCard({
         <CardTitle>Hotspots</CardTitle>
       </CardHeader>
       <CardContent>
-        {!churn.since ? (
+        {!historyWindow(churn) ? (
           <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
         ) : (
           <>

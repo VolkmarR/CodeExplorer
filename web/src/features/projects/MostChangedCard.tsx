@@ -4,7 +4,7 @@ import type { IndexOverview } from '@/features/projects/api'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { formatDate } from '@/lib/format'
 import { CHURN_DEFAULTS, churnSearch } from '@/lib/urls/churnParams'
-import { NO_HISTORY } from '@/features/projects/noHistory'
+import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
@@ -26,9 +26,7 @@ export function MostChangedCard({
   excluded: number | undefined
 }) {
   const { churn } = overview
-  // Both or neither, which is what the pair means: null together is "no history was imported", and
-  // reading one of them alone would let an empty ranking pass for a quiet quarter.
-  const window = churn.since && churn.until ? { since: churn.since, until: churn.until } : null
+  const window = historyWindow(churn)
   return (
     <Card>
       <CardHeader>
@@ -53,8 +51,12 @@ export function MostChangedCard({
                 See the whole ranking
               </Link>
             </p>
-            {/* The churn page's own list, so the same ranking reads the same in both places. */}
-            <ChurnList project={project} files={churn.files} />
+            {churn.files.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No file changed in this window.</p>
+            ) : (
+              // The churn page's own list, so the same ranking reads the same in both places.
+              <ChurnList project={project} files={churn.files} />
+            )}
             <ExcludedNote project={project} files={excluded} what="this window" />
           </>
         )}

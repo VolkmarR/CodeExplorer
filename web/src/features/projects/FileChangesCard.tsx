@@ -4,9 +4,14 @@ import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
 import { scaleLinear } from '@tanstack/charts/scales/linear'
 import { tooltip } from '@tanstack/charts/tooltip'
-import type { ChangePeriod, OverviewFileChanges, PeriodChanges } from '@/features/projects/api'
+import type {
+  ChangePeriod,
+  OverviewChurn,
+  OverviewFileChanges,
+  PeriodChanges,
+} from '@/features/projects/api'
 import { barScale, fileChangeTotals } from '@/features/projects/fileChanges'
-import { NO_HISTORY } from '@/features/projects/noHistory'
+import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import {
   formatCount,
   formatUtcDate,
@@ -27,9 +32,19 @@ const PER: Record<ChangePeriod, string> = { Day: 'per day', Month: 'per month', 
  * and the files deleted below it, over the filter bar's window, a bar per day, week or month by its
  * length. The scale is capped (`barScale`), so an outlier draws broken with its real count beside it.
  * Renames are not drawn: a move neither grows nor shrinks the code, so they appear only in the totals.
+ * Whether there is history at all is read off Most changed's section, as the other history cards read it.
  */
-export function FileChangesCard({ changes }: { changes: OverviewFileChanges }) {
-  if (changes.periods.length === 0) {
+export function FileChangesCard({
+  churn,
+  changes,
+}: {
+  /** Most changed's section, for whether there was history at all. */
+  churn: OverviewChurn
+  changes: OverviewFileChanges
+}) {
+  // The server sends no periods exactly where there is no window, so the second test never decides
+  // alone; it is kept so the chart is never drawn over nothing.
+  if (!historyWindow(churn) || changes.periods.length === 0) {
     return (
       <Card>
         <CardHeader>{title}</CardHeader>

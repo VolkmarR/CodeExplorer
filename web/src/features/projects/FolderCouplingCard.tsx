@@ -10,7 +10,7 @@ import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
 import { tooltip } from '@tanstack/charts/tooltip'
 import { formatCount, formatPercent } from '@/lib/format'
-import { NO_HISTORY } from '@/features/projects/noHistory'
+import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /** Pairs listed per repository: the strongest under the heatmap, and for each repository it does not draw. */
@@ -38,7 +38,7 @@ export function FolderCouplingCard({
 }) {
   const featured = featuredRepository(coupling, repository)
   const others = coupling.repositories.filter((r) => r !== featured)
-  if (!churn.since) {
+  if (!historyWindow(churn)) {
     return (
       <Card>
         <CardHeader>{title}</CardHeader>

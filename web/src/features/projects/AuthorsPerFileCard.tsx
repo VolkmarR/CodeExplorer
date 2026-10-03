@@ -4,7 +4,7 @@ import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { FilePathLink } from '@/components/FilePathLink'
 import { formatCount, formatPercent } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { NO_HISTORY } from '@/features/projects/noHistory'
+import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
@@ -30,7 +30,7 @@ export function AuthorsPerFileCard({
         <span className="text-xs text-muted-foreground">whole imported history</span>
       </CardHeader>
       <CardContent>
-        {!churn.since ? (
+        {!historyWindow(churn) ? (
           <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
         ) : (
           <>

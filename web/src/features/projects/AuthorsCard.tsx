@@ -1,7 +1,7 @@
 import type { IndexOverview } from '@/features/projects/api'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { formatCount, formatDate } from '@/lib/format'
-import { NO_HISTORY } from '@/features/projects/noHistory'
+import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
@@ -24,8 +24,12 @@ export function AuthorsCard({
         <CardTitle>Most commits</CardTitle>
       </CardHeader>
       <CardContent className="space-y-1 text-sm">
-        {overview.authors.length === 0 ? (
+        {!historyWindow(overview.churn) ? (
           <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
+        ) : overview.authors.length === 0 ? (
+          // History, and none of it left in this window: the filters took it, which the note below
+          // says, and a project with no history reads differently (CODING_STANDARDS, Errors).
+          <p className="text-sm text-muted-foreground">No commits in this window.</p>
         ) : (
           <>
             {/* Said once, at the top, rather than per row: it is a caveat about the whole list, and
@@ -48,15 +52,16 @@ export function AuthorsCard({
                 </span>
               </div>
             ))}
-            {/* A commit is dropped only where every file it touched was excluded, so the count is
-                of files and the rows above are what is left of each author. */}
-            <ExcludedNote
-              project={project}
-              files={excluded}
-              what="the window's commits (a commit still counts while it touched one file shown)"
-            />
           </>
         )}
+        {/* Outside the branches, so an empty list says why it is empty. A commit is dropped only
+            where every file it touched was excluded, so the count is of files and the rows above are
+            what is left of each author. */}
+        <ExcludedNote
+          project={project}
+          files={excluded}
+          what="the window's commits (a commit still counts while it touched one file shown)"
+        />
       </CardContent>
     </Card>
   )
