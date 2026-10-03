@@ -570,21 +570,25 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
     [Fact]
     public async Task Repo_info_writes_its_counts_the_way_project_overview_does()
     {
-        // Its own server: it needs a file past a thousand lines, which the shared fixtures do not have.
+        // Its own server: it needs a repository past a thousand lines, which the shared fixtures do not
+        // have. Two files, so the assertions say nothing about a singular the header does not decide.
         using var host = new TestHost(SearchEngine.Substring);
         await host.IndexedProjectAsync("big", new Dictionary<string, Dictionary<string, string>>
         {
-            ["main"] = new() { ["long.txt"] = string.Concat(Enumerable.Repeat("x\n", 1200)) }
+            ["main"] = new()
+            {
+                ["long.txt"] = string.Concat(Enumerable.Repeat("x\n", 1199)), ["short.txt"] = "y\n"
+            }
         }, true);
         await using var client = await host.ConnectAsync("big");
 
         string info = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
         string overview = await CallAsync(client, "project_overview", new Dictionary<string, object?>());
 
-        Assert.Contains("1 repository indexed, 1 files, 1,200 lines.", info);
-        Assert.Contains("1 repository, 1 files, 1,200 lines.", overview);
-        Assert.Contains("1 file, 1,200 lines, commit ", info);
-        Assert.Contains("1 file, 1,200 lines\n", overview);
+        Assert.Contains("1 repository indexed, 2 files, 1,200 lines.", info);
+        Assert.Contains("1 repository, 2 files, 1,200 lines.", overview);
+        Assert.Contains("2 files, 1,200 lines, commit ", info);
+        Assert.Contains("2 files, 1,200 lines\n", overview);
     }
 
     /// <summary>
