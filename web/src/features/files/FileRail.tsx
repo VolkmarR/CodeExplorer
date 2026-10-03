@@ -4,7 +4,6 @@ import { DeclarationPanel } from '@/features/files/DeclarationPanel'
 import { ImportPanel } from '@/features/files/ImportPanel'
 import { blameQuery } from '@/features/files/queries'
 import { RailPanel } from '@/features/files/RailPanel'
-import { RailPending } from '@/features/files/RailPending'
 import { CommitLine } from '@/components/CommitLine'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { CommitRef } from '@/features/history/api'
@@ -111,25 +110,21 @@ function RecentCommits({
   }
 
   return (
-    <RailPanel title="Recent commits">
-      {blame.isPending ? (
-        <RailPending />
-      ) : (
-        <ul className="space-y-2.5">
-          {distinctCommits(blame.data?.runs ?? []).map((commit) => (
-            <li key={commit.sha} className="min-w-0 text-xs">
-              <p className="truncate">{commit.subject}</p>
-              <CommitLine
-                commit={commit}
-                project={project}
-                from={origin?.view ?? 'files'}
-                subject={false}
-                className="text-muted-foreground"
-              />
-            </li>
-          ))}
-        </ul>
-      )}
+    <RailPanel title="Recent commits" pending={blame.isPending}>
+      <ul className="space-y-2.5">
+        {distinctCommits(blame.data?.runs ?? []).map((commit) => (
+          <li key={commit.sha} className="min-w-0 text-xs">
+            <p className="truncate">{commit.subject}</p>
+            <CommitLine
+              commit={commit}
+              project={project}
+              from={origin?.view ?? 'files'}
+              subject={false}
+              className="text-muted-foreground"
+            />
+          </li>
+        ))}
+      </ul>
     </RailPanel>
   )
 }
