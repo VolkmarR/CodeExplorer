@@ -230,10 +230,9 @@ public static class Authentication
 
         if (project is null)
         {
-            http.Response.StatusCode = StatusCodes.Status404NotFound;
-            await http.Response.WriteAsJsonAsync(
-                new { error = $"No protected resource at '{http.Request.Path}'. A project's is at "
-                              + $"{_metadataPrefix}/projects/{{slug}}/mcp." },
+            await ApiError.WriteAsync(http.Response, StatusCodes.Status404NotFound,
+                $"No protected resource at '{http.Request.Path}'. A project's is at "
+                + $"{_metadataPrefix}/projects/{{slug}}/mcp.",
                 http.RequestAborted);
             context.HandleResponse();
             return;
@@ -300,8 +299,7 @@ public static class Authentication
                 return;
             }
 
-            context.Response.StatusCode = status;
-            await context.Response.WriteAsJsonAsync(new { error }, context.HttpContext.RequestAborted);
+            await ApiError.WriteAsync(context.Response, status, error, context.HttpContext.RequestAborted);
         };
 
     /// <summary>

@@ -63,7 +63,11 @@ public sealed record RefreshStatus(
 /// </summary>
 /// <param name="Message">Operator-facing prose, returned as the API's <c>{ error }</c>.</param>
 /// <param name="StatusCode">409 when the caller should simply try later, 507 when the disk is the problem.</param>
-public sealed record RefreshRefusal(string Message, int StatusCode);
+public sealed record RefreshRefusal(string Message, int StatusCode)
+{
+    /// <summary>The refusal as the endpoint's answer, under its own status code.</summary>
+    public IResult Result() => ApiError.Result(Message, StatusCode);
+}
 
 /// <summary>Where a refresh request got to. <paramref name="Refused" /> null means it was taken on.</summary>
 public sealed record RefreshRequest(RefreshStatus Status, RefreshRefusal? Refused = null);
@@ -141,9 +145,9 @@ public sealed class RefreshService(
         lock (_sync)
         {
             var current = Status(project.Slug);
-            if (current.State is RefreshState.Queued or RefreshState.Running)
+            if (Busy(current) is { } busy)
                 return new RefreshRequest(current, new RefreshRefusal(
-                    $"A refresh of project '{project.Slug}' is already {(current.State == RefreshState.Queued ? "queued" : "running")}. "
+                    $"A refresh of project '{project.Slug}' is already {busy}. "
                     + $"Poll GET /api/projects/{project.Slug}/refresh for its progress instead of starting a second one.",
                     StatusCodes.Status409Conflict));
 
@@ -196,10 +200,9 @@ public sealed class RefreshService(
     {
         lock (_sync)
         {
-            var current = Status(slug);
-            if (current.State is RefreshState.Queued or RefreshState.Running)
+            if (Busy(Status(slug)) is { } busy)
                 return new RefreshRefusal(
-                    $"A refresh of project '{slug}' is {(current.State == RefreshState.Queued ? "queued" : "running")}, and it reads the project's repositories and their local copies. "
+                    $"A refresh of project '{slug}' is {busy}, and it reads the project's repositories and their local copies. "
                     + $"Remove {removing} after it has finished; poll GET /api/projects/{slug}/refresh for its progress.",
                     StatusCodes.Status409Conflict);
             _removals[slug] = _removals.GetValueOrDefault(slug) + 1;
@@ -326,6 +329,18 @@ public sealed class RefreshService(
     /// </summary>
     private static string Unexplained(string slug, string phase) =>
         $"The refresh of project '{slug}' failed in the phase \"{phase}\". The operator log has the details.";
+
+    /// <summary>
+    ///     What a refresh of the project is doing, as the two refusals it causes say it — "queued" or
+    ///     "running" — or null when none holds the project. One test and one spelling for both, so a
+    ///     refresh request and a removal cannot disagree about whether a refresh is in the way.
+    /// </summary>
+    private static string? Busy(RefreshStatus status) => status.State switch
+    {
+        RefreshState.Queued => "queued",
+        RefreshState.Running => "running",
+        _ => null
+    };
 
     /// <summary>
     ///     The refusal for a refresh that would not fit, or null when it fits. One method, because the

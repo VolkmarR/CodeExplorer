@@ -79,9 +79,8 @@ public static class RequestOrigin
                 return;
             }
 
-            context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await context.Response.WriteAsJsonAsync(
-                new { error = $"Refused a request from origin '{origin}': this server answers its own origin only." },
+            await ApiError.WriteAsync(context.Response, StatusCodes.Status403Forbidden,
+                $"Refused a request from origin '{origin}': this server answers its own origin only.",
                 context.RequestAborted);
         });
 

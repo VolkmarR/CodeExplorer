@@ -23,8 +23,7 @@ internal static class RefreshEndpoints
                 // is where the caller watches it.
                 { Refused: null, Status: var status } => Results.Accepted(
                     $"/api/projects/{project.Slug}/refresh", status),
-                { Refused: var refused } => Results.Json(new { error = refused.Message },
-                    statusCode: refused.StatusCode)
+                { Refused: var refused } => refused.Result()
             });
 
         // A status exists only for a project that existed when it was asked for, so the common case —

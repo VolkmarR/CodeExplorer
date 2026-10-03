@@ -39,7 +39,7 @@ internal static class OperatorEndpoints
         project.MapDelete("", async (Project project, ProjectOverview overview, CancellationToken ct) =>
             await overview.DeleteAsync(project, ct) is { } refused
                 // The refusal carries its own status code, as a refused refresh does.
-                ? Results.Json(new { error = refused.Message }, statusCode: refused.StatusCode)
+                ? refused.Result()
                 : Results.NoContent());
 
         project.MapDelete("/repositories/{repository}",
@@ -47,8 +47,7 @@ internal static class OperatorEndpoints
                 await overview.DeleteRepositoryAsync(project, repository, ct) switch
                 {
                     // The refusal carries its own status code, as a refused refresh does.
-                    { Refused: { } refused } => Results.Json(new { error = refused.Message },
-                        statusCode: refused.StatusCode),
+                    { Refused: { } refused } => refused.Result(),
                     { Found: true } => Results.NoContent(),
                     _ => Results.NotFound(new
                         { error = $"Project '{project.Slug}' has no repository with slug '{repository}'." })
