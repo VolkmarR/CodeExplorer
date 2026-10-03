@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace CodeExplorer.Language;
@@ -14,8 +13,7 @@ namespace CodeExplorer.Language;
 ///     profile is the only thing that will ever read it.
 ///     .NET <see cref="Regex" /> appears here and only here, and only over a line DuckDB already
 ///     picked out, which is the division CODING_STANDARDS draws: the candidate set is chosen by the
-///     engine, and this says what each candidate is. The declaration, assignment and generated-path
-///     patterns are built per profile rather than declared with <c>[GeneratedRegex]</c>, because their
+///     engine, and this says what each candidate is. The declaration and assignment patterns are built per profile rather than declared with <c>[GeneratedRegex]</c>, because their
 ///     alternations come from the profile's own keyword lists; one analyser is built per language at
 ///     startup and the cost is paid once. The shapes no profile changes are source-generated below.
 /// </summary>
@@ -61,7 +59,6 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
     // that matches nothing and is still run on every candidate line.
     private readonly Regex? _assignment;
     private readonly Func<string, CandidateLines> _declarationCandidatesFor;
-    private readonly Regex? _generated;
     private readonly StringComparison _keywordComparison;
     private readonly Regex? _keywordDeclaration;
     private readonly Regex? _memberDeclaration;
@@ -220,19 +217,10 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         _declarationCandidatesFor = shapes.CandidatesFor;
 
         _assignment = PatternOrNull("", AssignmentPattern(profile.AssignmentOperators));
-        // Not compiled: nothing in production asks it, and a test asking a handful of paths does not
-        // earn the cost of emitting one.
-        _generated = profile.GeneratedPathPatterns.Count == 0
-            ? null
-            : new Regex(
-                "^(?:" + string.Join("|", profile.GeneratedPathPatterns.Select(GlobToPattern)) + ")$",
-                // A path is compared without regard to case, the way a file system does.
-                RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     }
 
     /// <summary>
-    ///     How every per-profile pattern here but the generated-path one is built.
-    ///     <see cref="RegexOptions.Compiled" /> because
+    ///     How every per-profile pattern here is built. <see cref="RegexOptions.Compiled" /> because
     ///     these run against every line of every file a build ingests and every candidate line a
     ///     reference or definition search reads, which is the one place in this system where a regex is
     ///     hot. Measured on this machine, over the ten analysers (#149): building all of them went from
@@ -269,12 +257,6 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
 
     public IReadOnlyList<string> GeneratedPaths => _profile.GeneratedPathPatterns;
 
-    public Answer<bool> IsGenerated(string qualifiedPath)
-    {
-        ArgumentNullException.ThrowIfNull(qualifiedPath);
-        return new Answer<bool>(_generated?.IsMatch(qualifiedPath) ?? false, Evidence.Text);
-    }
-
     /// <summary>
     ///     The alternation of these words for a regex, or null when there are none to match. Longest
     ///     first, so a multi-word form such as SQL's <c>or replace</c> is not cut short by a shorter
@@ -297,23 +279,6 @@ public sealed partial class TextAnalyzer : ILanguageAnalyzer
         var operators = _compoundOperators.Select(op => op + "=").Concat(assignments)
             .OrderByDescending(op => op.Length).Select(SymbolText.Re2Literal);
         return $@"^\s*(?:{string.Join("|", operators)})(?!=|>)";
-    }
-
-    /// <summary>
-    ///     A path glob as a regex. <c>*</c> crosses <c>/</c>, the same way the search filters' globs
-    ///     do, so an operator who has learned one syntax has learned both.
-    /// </summary>
-    private static string GlobToPattern(string glob)
-    {
-        var pattern = new StringBuilder();
-        foreach (char c in glob)
-            pattern.Append(c switch
-            {
-                '*' => ".*",
-                '?' => ".",
-                _ => SymbolText.Re2Literal(c.ToString())
-            });
-        return pattern.ToString();
     }
 
     /// <summary>One character against another, under the profile's own case rule.</summary>

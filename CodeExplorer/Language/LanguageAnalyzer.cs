@@ -350,16 +350,15 @@ public interface ILanguageAnalyzer
     /// </summary>
     Answer<ImportsOnLine> ImportsOn(FilePosition position, string line);
 
-    /// <summary>Whether a file at this qualified path is generated rather than hand-written.</summary>
-    Answer<bool> IsGenerated(string qualifiedPath);
-
     /// <summary>
     ///     The qualified paths this language's tools generate, as globs where <c>*</c> crosses <c>/</c>,
     ///     for the engine to match: the overview's suggested exclusions offer each one. Published as
     ///     globs for the reason <see cref="DeclarationCandidates" /> publishes a pattern — the engine
     ///     chooses the files (CODING_STANDARDS), and a caller handing every path to .NET to be asked
-    ///     about would be filtering the candidate set there. Matched without regard to case, as every
-    ///     path filter here is. Empty where the language names no generated file.
+    ///     about would be filtering the candidate set there. That is also why there is no per-path
+    ///     "is this generated?" here any more (#341): the one caller needed the globs. Matched without
+    ///     regard to case, as every path filter here is. Empty where the language names no generated
+    ///     file.
     /// </summary>
     IReadOnlyList<string> GeneratedPaths { get; }
 
