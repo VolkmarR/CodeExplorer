@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { Origin } from '@/lib/urls/views'
 import { DeclarationPanel } from '@/features/files/DeclarationPanel'
 import { ImportPanel } from '@/features/files/ImportPanel'
-import { blameQuery } from '@/features/files/queries'
+import { blameQuery, canBlame } from '@/features/files/queries'
 import { RailPanel } from '@/features/files/RailPanel'
 import { CommitLine } from '@/components/CommitLine'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -101,6 +101,18 @@ function RecentCommits({
         <p className="text-sm text-muted-foreground">
           No history is imported for this repository, so nothing can be said about what changed this
           file.
+        </p>
+      </RailPanel>
+    )
+  }
+
+  // A file the build skipped has history and no lines, so `canBlame` holds the request back. Said
+  // in words, because a disabled query stays pending and the panel would wait for ever.
+  if (!canBlame(file)) {
+    return (
+      <RailPanel title="Recent commits">
+        <p className="text-sm text-muted-foreground">
+          This file is not indexed, so it has no lines to name the commits of.
         </p>
       </RailPanel>
     )
