@@ -61,7 +61,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
                  - IMPORTANT: an answer where every name is a framework or a package is NOT evidence that the file has no project-local dependencies. Where a language or dialect expresses those by global visibility, inheritance, reflection, dynamic construction or a project-level reference, there is no import line to find, and this tool is the wrong question. The one that works is list_declarations on the file, then find_references on a name it declares.
                  """)]
     public async Task<string> Imports(
-        [Description("Qualified path of the file, e.g. \"main/src/Api/Orders.cs\".")]
+        [Description(ParameterText.TheFile)]
         string path,
         CancellationToken cancellationToken = default)
     {

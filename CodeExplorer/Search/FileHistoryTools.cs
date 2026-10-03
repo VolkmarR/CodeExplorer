@@ -27,7 +27,7 @@ internal sealed partial class HistoryTools
                  - It says who changed the file and when, never what they changed: the diffs are not indexed. commit_files takes a SHA listed here and names every other path that commit touched.
                  """)]
     public async Task<string> FileHistory(
-        [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
+        [Description(ParameterText.OneFile)]
         string path,
         [Description("Commits to return, 1-200. Default 30.")]
         int limit = _defaultCommits,
@@ -76,7 +76,7 @@ internal sealed partial class HistoryTools
                  - A path HEAD no longer holds is refused: attribution is the lines of the file as of the newest recorded commit, and a deleted or renamed-away path has none. git_log and file_history still list its commits.
                  """)]
     public async Task<string> Blame(
-        [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
+        [Description(ParameterText.OneFile)]
         string path,
         [Description("1-based first line. Default 1.")]
         int startLine = 1,
@@ -290,7 +290,7 @@ internal sealed partial class HistoryTools
                  - IMPORTANT: a machine-authored commit counts exactly like a hand-written one. Regenerated output, a mechanical version bump across unrelated modules and a bulk rename all rank like real work, and a directory of generated files can outrank the code that generates it. `exclude` is the answer, in grep's syntax: `exclude="*.g.ts,*.generated.*,/migrations/,package-lock.json"`. Nothing is excluded by default and no naming convention is assumed — look at the top of an unfiltered ranking first, then exclude what the project turns out to regenerate. The reply says how many paths the filter hid.
                  """)]
     public async Task<string> HotFiles(
-        [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
+        [Description(ParameterText.Days)]
         int days = HistoryWindow.DefaultDays,
         [Description(
             "Qualified path of a directory to rank within, e.g. \"main/src/Api\", or a repository slug alone for one repository. Matched by the path each commit recorded, so it begins where a directory was last renamed or moved. Default: the whole project.")]

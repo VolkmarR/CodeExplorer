@@ -28,9 +28,9 @@ internal sealed partial class HistoryTools
                  - A path HEAD no longer holds is refused. The coupling of a file that is gone is a question about a path rather than about a file you can open; git_log and file_history still list its commits.
                  """)]
     public async Task<string> CoChanged(
-        [Description("Qualified path of one file, e.g. \"main/src/Api/Foo.cs\".")]
+        [Description(ParameterText.OneFile)]
         string path,
-        [Description("Days back from the newest recorded commit, 1-3650. Default 90.")]
+        [Description(ParameterText.Days)]
         int days = HistoryWindow.DefaultDays,
         [Description("Files to return, 1-100. Default 20.")]
         int limit = _defaultRankedFiles,
