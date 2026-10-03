@@ -5,7 +5,7 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     What <see cref="UnifiedDiff" /> reads out of the text libgit2 renders, and the one property the
+///     What <see cref="RenderedPatch" /> reads out of the text libgit2 renders, and the one property the
 ///     history walk's speed now rests on: that the edits do not depend on how much unchanged text was
 ///     rendered around them.
 ///     The fixture is built with LibGit2Sharp directly rather than through <c>TestHost</c>. Nothing
@@ -106,7 +106,7 @@ public sealed class UnifiedDiffTests : IDisposable
             var rendered = repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null,
                     new CompareOptions { ContextLines = 3 })
                 .Select(change => new ChangedPath(change.Path, change.OldPath, LocalCopy.KindName(change.Status),
-                    change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison, UnifiedDiff.Edits(change.Patch)))
+                    change.LinesAdded, change.LinesDeleted, change.IsBinaryComparison, RenderedPatch.Edits(change.Patch)))
                 .OrderBy(change => change.Path, StringComparer.Ordinal).ToList();
             var read = diff.Diff(parent?.Tree.Id, commit.Tree.Id, long.MaxValue)
                 .OrderBy(change => change.Path, StringComparer.Ordinal).ToList();
@@ -130,7 +130,7 @@ public sealed class UnifiedDiffTests : IDisposable
         var read = new Dictionary<string, FileEdits>(StringComparer.Ordinal);
         foreach (var change in repository.Diff.Compare<Patch>(parent?.Tree, commit.Tree, null, null, options))
             read[change.Path] = new FileEdits(change.Status.ToString(), change.OldPath,
-                change.IsBinaryComparison ? [] : UnifiedDiff.Edits(change.Patch));
+                change.IsBinaryComparison ? [] : RenderedPatch.Edits(change.Patch));
         return read;
     }
 
