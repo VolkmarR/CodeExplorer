@@ -37,9 +37,7 @@ export function PageCard({
   return (
     <Card className={cn('gap-0', className)}>
       <CardHeader>
-        <PageHeader title={title} hint={hint} actions={actions}>
-          {badges}
-        </PageHeader>
+        <PageHeader title={title} hint={hint} badges={badges} actions={actions} />
       </CardHeader>
       {tabs ? <div className="mt-4 px-(--card-spacing)">{tabs}</div> : null}
       <Separator className="mt-4" />
