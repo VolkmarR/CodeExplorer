@@ -1105,7 +1105,7 @@ public sealed class LanguageAnalyzerTests
         public Answer<ImportsOnLine> ImportsOn(FilePosition position, string line) =>
             new(ImportsOnLine.Nothing, Evidence.Parsed);
 
-        public IReadOnlyList<string> GeneratedPaths => [];
+        public IReadOnlyList<string> GeneratedPathPatterns => [];
 
         public IReadOnlyList<Answer<ReferenceKind>> Occurrences(FilePosition position, string line, string symbol) =>
             [new Answer<ReferenceKind>(ReferenceKind.Definition, Evidence.Parsed)];

@@ -10,7 +10,6 @@ The questions are:
 - What is the lexical state at this position — code, comment, string, or not established?
 - What, if anything, does this line declare, and is it a declaration or an implementation?
 - What does this file import?
-- Which paths are generated?
 - What does every appearance of an identifier on this line look like — a write, a call, a read, a
   type use?
 
@@ -18,6 +17,11 @@ Every answer is an `Answer<T>`, which carries the value and the `Evidence` it wa
 `Text` for one read from the source, `Parsed` for one a real parser produced. It is on the answer
 and not on the analyser, because an analyser that parses what it can and falls back on the rest
 tells the truth only per answer.
+
+Beside the questions, an analyser publishes what the engine matches with on its behalf: which lines
+could declare something (`DeclarationCandidates`) and which paths its language's tools generate
+(`GeneratedPathPatterns`). These are patterns handed to DuckDB, not answers about a file, so they
+carry no `Evidence`.
 
 The first is a question about the file and the rest about one line of it, which is the division the
 scan is built on (#53). An analyser hands out an opaque `FilePosition` and takes one back, so a
@@ -118,7 +122,7 @@ reported as a right one. A doubtful form is left out.
   second copy of the names and drifted from the profiles. Its one caller turned out to need the
   globs and not the answer: the suggestions count matching files in DuckDB, and handing every path
   to a .NET matcher would filter the candidate set outside the engine, which CODING_STANDARDS
-  forbids. So the analyser publishes `GeneratedPaths` the way it publishes `DeclarationCandidates`,
+  forbids. So the analyser publishes `GeneratedPathPatterns` the way it publishes `DeclarationCandidates`,
   `IsGenerated` is gone, and the suggestions read every registered language's globs through
   `LanguageRegistry.Analyzers`. The globs match without regard to case, like every path filter here,
   so `*.designer.cs` names the `Form1.Designer.cs` the designer writes.
