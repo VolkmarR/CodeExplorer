@@ -469,14 +469,9 @@ public sealed partial class ProjectIndexes : IDisposable
     private static async Task CopyWithFullTextAsync(DuckDBConnection connection, string slug,
         CancellationToken cancellationToken)
     {
-        var tables = new List<string>();
-        await using (var command = connection.CreateCommand())
-        {
-            command.CommandText = "SELECT table_name FROM duckdb_tables() "
-                                  + "WHERE database_name = current_database() AND schema_name = 'main'";
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken)) tables.Add(reader.GetString(0));
-        }
+        var tables = await connection.UnexplainedListAsync("SELECT table_name FROM duckdb_tables() "
+                                                           + "WHERE database_name = current_database() AND schema_name = 'main'",
+            [], reader => reader.GetString(0), cancellationToken);
 
         foreach (string table in tables)
             // index_info is the one row that changes: the copy is what gains the BM25 index.

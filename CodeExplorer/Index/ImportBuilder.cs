@@ -175,19 +175,14 @@ public sealed class ImportBuilder
         // The edges first, so that a project with none — one written entirely in C#, X# or Delphi,
         // where every name is a module — never builds the map below. On a large project that map is
         // a lowercased copy of every path in it.
-        var edges = new List<(long Id, string Name, int Repo, string Directory, string Extension)>();
-        await using (var command = connection.Query(
-                         $"""
-                          SELECT i.import_id, i.name, f.repo_id, f.directory, f.extension
-                          FROM imports i JOIN files f USING (file_id)
-                          WHERE i.shape = '{ImportColumns.PathShape}'
-                          """, []))
-        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken))
-                edges.Add((reader.Int64("import_id"), reader.Text("name"), reader.Int32("repo_id"),
-                    reader.Text("directory"), reader.Text("extension")));
-        }
+        var edges = await connection.UnexplainedListAsync(
+            $"""
+             SELECT i.import_id, i.name, f.repo_id, f.directory, f.extension
+             FROM imports i JOIN files f USING (file_id)
+             WHERE i.shape = '{ImportColumns.PathShape}'
+             """, [], reader => (Id: reader.Int64("import_id"), Name: reader.Text("name"),
+                Repo: reader.Int32("repo_id"), Directory: reader.Text("directory"),
+                Extension: reader.Text("extension")), cancellationToken);
 
         if (edges.Count == 0) return;
 

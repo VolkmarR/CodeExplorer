@@ -50,12 +50,7 @@ public sealed class OverviewBuilder
     ///     <see cref="ProjectPaths.For(bool,IEnumerable{string},string)" /> takes the anchor from.
     /// </summary>
     private static async Task<List<string>> SlugsAsync(DuckDBConnection connection,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.Query("SELECT slug FROM repositories ORDER BY repo_id", []);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var slugs = new List<string>();
-        while (await reader.ReadAsync(cancellationToken)) slugs.Add(reader.Text("slug"));
-        return slugs;
-    }
+        CancellationToken cancellationToken) =>
+        await connection.UnexplainedListAsync("SELECT slug FROM repositories ORDER BY repo_id", [],
+            reader => reader.Text("slug"), cancellationToken);
 }
