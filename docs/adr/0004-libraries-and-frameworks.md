@@ -18,7 +18,9 @@ freely within the same major and records anything larger here.
 - **DuckDB.NET.Data.Full 1.5.5** and **LibGit2Sharp 0.32.0**, as ADR-0003 verified. LibGit2Sharp
   does not expose libgit2's server timeouts, so `Git/TransferStallLimit.cs` calls the bundled native
   library by its hashed name (`git2-5853918`) with libgit2 1.9's option numbers (#231): a LibGit2Sharp
-  bump changes that name and must re-check those numbers.
+  bump changes that name and must re-check those numbers. Every direct libgit2 call, that one
+  included, is declared in `Git/LibGit2.cs` with the name, the numbers and the struct layouts it
+  rests on, so the re-check is of that one file.
 - **Matching runs inside DuckDB**: `regexp_matches` / `regexp_extract_all` (RE2 syntax) for grep,
   `list_matches` and `find_references` candidates, and the SQL `GLOB` operator on the path column.
   Filtering happens before rows leave the engine. Agents therefore get RE2 — no lookbehind, no
