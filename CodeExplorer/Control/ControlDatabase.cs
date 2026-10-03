@@ -257,19 +257,22 @@ public sealed partial class ControlDatabase : IDisposable
     ///     <paramref name="singleRepository" /> is written once, here. There is deliberately no update
     ///     path for it (ADR-0006): it decides how every file in the project is named, and a name that
     ///     can change is one agents cannot hold.
+    ///     Answers the project as stored, the way <see cref="AddRepositoryAsync" /> answers the repository,
+    ///     so the endpoint does not rebuild it from the request and trim the name a second time.
     /// </summary>
-    public async Task<CreateProjectOutcome> CreateAsync(string? slug, string? name, bool singleRepository,
+    public async Task<(CreateProjectOutcome Outcome, Project? Project)> CreateAsync(string? slug, string? name,
+        bool singleRepository,
         CancellationToken cancellationToken)
     {
-        if (!IsValidSlug(slug)) return CreateProjectOutcome.InvalidSlug;
+        if (!IsValidSlug(slug)) return (CreateProjectOutcome.InvalidSlug, null);
 
-        if (string.IsNullOrWhiteSpace(name)) return CreateProjectOutcome.MissingName;
+        if (string.IsNullOrWhiteSpace(name)) return (CreateProjectOutcome.MissingName, null);
 
         await EnterProjectGateAsync(cancellationToken);
         try
         {
             if (!await InsertProjectAsync(slug, name.Trim(), singleRepository, cancellationToken))
-                return CreateProjectOutcome.SlugTaken;
+                return (CreateProjectOutcome.SlugTaken, null);
 
             // Nothing positive can be cached for a slug that was free a statement ago, so this is the
             // belt to the delete below: the rule is that every writer forgets, not that the one that
@@ -282,7 +285,7 @@ public sealed partial class ControlDatabase : IDisposable
         }
 
         await BackupAsync();
-        return CreateProjectOutcome.Created;
+        return (CreateProjectOutcome.Created, new Project(slug, name.Trim(), singleRepository));
     }
 
     /// <summary>
