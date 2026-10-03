@@ -10,7 +10,7 @@ The questions are:
 - What is the lexical state at this position — code, comment, string, or not established?
 - What, if anything, does this line declare, and is it a declaration or an implementation?
 - What does this file import?
-- Is this file generated?
+- Which paths are generated?
 - What does every appearance of an identifier on this line look like — a write, a call, a read, a
   type use?
 
@@ -44,7 +44,7 @@ question has to stay.
 So `find_references` does not learn that X# sends with `:`. It asks what the appearance of an
 identifier looks like, and an X# file answers `MemberAccess` where a C# file would answer something
 else. A tree-sitter or Roslyn analyser answers the same questions from a syntax tree, and the
-callers — reference classification, `find_definition`, the import extractor, the file filter — see
+callers — reference classification, `find_definition`, the import extractor, the suggested exclusions — see
 no difference.
 
 The last question is the one #57 did not name. The ticket lists four and expects reference
@@ -110,12 +110,18 @@ reported as a right one. A doubtful form is left out.
   `Infrastructure/Languages.cs` used to hold, because the language a file is written in and the way
   it opens a comment are one fact and were two copies of one. It references no other module, which
   is what `ModuleBoundaryTests` now asserts.
-- **`IsGenerated` and `ImportOn` have no caller yet.** They are questions the seam has to answer for
-  the import-edge and file-filter tickets to be callers of it rather than authors of a second copy;
-  they are tested directly until then. `ImportsOn` has had its caller since the import build;
-  `StateAt` joins the list instead (#333). Nothing in production asks the lexical state at one
-  index — the scan's other answers carry it — but it is the second question this seam names, so it
-  stays on the interface and is tested directly.
+- **`StateAt` has no caller yet.** `ImportsOn` has had its caller since the import build. Nothing in
+  production asks the lexical state at one index — the scan's other answers carry it — but it is the
+  second question this seam names, so it stays on the interface and is tested directly (#333).
+- **Which files are generated is published as globs, not asked per path (#341).** `IsGenerated`
+  waited for a file-filter ticket that never came, while the overview's suggested exclusions kept a
+  second copy of the names and drifted from the profiles. Its one caller turned out to need the
+  globs and not the answer: the suggestions count matching files in DuckDB, and handing every path
+  to a .NET matcher would filter the candidate set outside the engine, which CODING_STANDARDS
+  forbids. So the analyser publishes `GeneratedPaths` the way it publishes `DeclarationCandidates`,
+  `IsGenerated` is gone, and the suggestions read every registered language's globs through
+  `LanguageRegistry.Analyzers`. The globs match without regard to case, like every path filter here,
+  so `*.designer.cs` names the `Form1.Designer.cs` the designer writes.
 - **A modifier list says what introduces a name, and a second, narrower one says what opens a
   scope.** One list could not answer both (#83). It was read twice — by the analyser to find
   declarations, and transitively by `DeclarationScope` to decide which declaration a reference sits

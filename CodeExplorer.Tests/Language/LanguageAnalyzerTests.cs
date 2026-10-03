@@ -651,7 +651,6 @@ public sealed class LanguageAnalyzerTests
         Assert.Equal(Evidence.Text, analyzer.StateAt(analyzer.Start, "// x", 3).Evidence);
         Assert.Equal(Evidence.Text, analyzer.Declares(analyzer.Start, "public class Order").Evidence);
         Assert.Equal(Evidence.Text, analyzer.ImportsOn(analyzer.Start, "using System;").Evidence);
-        Assert.Equal(Evidence.Text, analyzer.IsGenerated("src/Order.g.cs").Evidence);
         Assert.Equal(Evidence.Text, analyzer.Occurrences(analyzer.Start, "Order x;", "Order")[0].Evidence);
     }
 
@@ -860,16 +859,6 @@ public sealed class LanguageAnalyzerTests
         }
 
         return (names, declared);
-    }
-
-    [Fact]
-    public void A_generated_file_is_named_as_one()
-    {
-        Assert.True(Languages.Default.For("cs").IsGenerated("main/src/Order.g.cs").Value);
-        Assert.True(Languages.Default.For("prg").IsGenerated("main/src/Order_vo.prg").Value);
-        Assert.False(Languages.Default.For("cs").IsGenerated("main/src/Order.cs").Value);
-        // Nothing is claimed for a language with no pattern for it, which is weaker than a guess.
-        Assert.False(Languages.Default.For("sql").IsGenerated("main/src/Order.sql").Value);
     }
 
     [Fact]
@@ -1115,8 +1104,6 @@ public sealed class LanguageAnalyzerTests
 
         public Answer<ImportsOnLine> ImportsOn(FilePosition position, string line) =>
             new(ImportsOnLine.Nothing, Evidence.Parsed);
-
-        public Answer<bool> IsGenerated(string qualifiedPath) => new(false, Evidence.Parsed);
 
         public IReadOnlyList<string> GeneratedPaths => [];
 

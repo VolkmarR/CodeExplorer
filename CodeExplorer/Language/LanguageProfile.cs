@@ -326,7 +326,10 @@ public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensi
 
     /// <summary>
     ///     Qualified paths that mean a generated file, as globs where <c>*</c> crosses <c>/</c> — the
-    ///     same shape the search filters take, so an operator reading both sees one syntax.
+    ///     same shape the search filters take, so an operator reading both sees one syntax. Matched
+    ///     without regard to case, so <c>*.designer.cs</c> names the <c>Form1.Designer.cs</c> the
+    ///     Windows Forms designer writes. This is the only list of a language's generated names: the
+    ///     overview's suggested exclusions offer each one (#341) and keep no copy of their own.
     /// </summary>
     public IReadOnlyList<string> GeneratedPathPatterns { get; init; } = [];
 }
