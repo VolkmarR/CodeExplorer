@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
@@ -72,7 +71,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     // a mix of both generations — a set every check a fetch makes would pass. Per project and kept for
     // the life of the process, like the writer gates in ProjectIndexes and for the same reasons. In
     // process only: across two replicas the #187 ordering in StoreAsync is still the only guard.
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
+    private readonly KeyedGate _gates = new();
 
     /// <summary>
     ///     Writes a project's durable copy: every table to a local Parquet file, then each file to the
@@ -100,7 +99,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
                     + "(FORMAT parquet, COMPRESSION zstd)",
                     cancellationToken);
 
-            using (await HoldAsync(slug, cancellationToken))
+            using (await _gates.HoldAsync(slug, cancellationToken))
             {
                 await store.RemoveOneAsync(Name(slug, _indexInfo), cancellationToken);
                 foreach (string table in _tables)
@@ -128,7 +127,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     {
         // Held until every table is in the scratch folder and no longer: the load reads only those
         // local files, so from here on a store can replace the originals without mixing them in.
-        using var held = await HoldAsync(slug, cancellationToken);
+        using var held = await _gates.HoldAsync(slug, cancellationToken);
         // Started here and not in LoadAsync, so the measurement covers the transfer — which on a cold
         // wake is most of what a restore costs — and not only the insert that follows it.
         var copy = new DurableCopy(Scratch(slug), Telemetry.DurableCopy(slug, Telemetry.FetchOperation));
@@ -198,7 +197,7 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     {
         // Gated too: a store still uploading when the project is deleted would otherwise put back the
         // tables it had not reached yet, a durable copy of a project that no longer exists.
-        using var held = await HoldAsync(slug, cancellationToken);
+        using var held = await _gates.HoldAsync(slug, cancellationToken);
         await store.RemoveAsync($"indexes/{slug}/", cancellationToken);
     }
 
@@ -254,23 +253,6 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
         string directory = Path.Combine(_scratch, $"{slug}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         return directory;
-    }
-
-    /// <summary>
-    ///     Waits for the project's durable copy to itself and holds it until disposed. The gate is
-    ///     created on first use; a semaphore that loses the <c>GetOrAdd</c> race was never waited on,
-    ///     so dropping it undisposed holds nothing.
-    /// </summary>
-    private async Task<Held> HoldAsync(string slug, CancellationToken cancellationToken)
-    {
-        var gate = _gates.GetOrAdd(slug, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        return new Held(gate);
-    }
-
-    private readonly struct Held(SemaphoreSlim gate) : IDisposable
-    {
-        public void Dispose() => gate.Release();
     }
 
     /// <summary>Every project under its own prefix, which is what makes one project's copy removable on its own.</summary>
