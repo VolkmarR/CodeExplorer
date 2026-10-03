@@ -10,7 +10,7 @@ import { projectKey } from '@/lib/queryKeys'
  */
 export function commitsQuery(project: string, parameters: HistoryParameters) {
   return queryOptions({
-    queryFn: () => fetchCommits(project, parameters.page, parameters.repository),
+    queryFn: () => fetchCommits(project, parameters),
     queryKey: [...projectKey(project), 'commits', parameters],
     staleTime: Infinity,
   })

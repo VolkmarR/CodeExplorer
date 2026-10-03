@@ -14,10 +14,11 @@ import { recordRequest } from '@/lib/recordRequest'
  * the tree's `path`: the glob answers for the whole project.
  */
 test('a listing sends its glob and page always and its repository only when set', async () => {
-  expect(await recordRequest(() => fetchBrowse('demo', '', 1))).toBe(
+  expect(await recordRequest(() => fetchBrowse('demo', { glob: '', page: 1, path: '' }))).toBe(
     '/api/projects/demo/files?glob=&page=1',
   )
-  expect(await recordRequest(() => fetchBrowse('demo', '*.cs', 2, 'main'))).toBe(
+  const narrowed = { glob: '*.cs', page: 2, path: 'main/src', repository: 'main' }
+  expect(await recordRequest(() => fetchBrowse('demo', narrowed))).toBe(
     '/api/projects/demo/files?glob=*.cs&page=2&repository=main',
   )
 })

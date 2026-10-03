@@ -80,7 +80,7 @@ export function treeQuery(project: string, path: string) {
  */
 export function browseQuery(project: string, parameters: BrowseParameters) {
   return queryOptions({
-    queryFn: () => fetchBrowse(project, parameters.glob, parameters.page, parameters.repository),
+    queryFn: () => fetchBrowse(project, parameters),
     queryKey: [...projectKey(project), 'browse', parameters],
     staleTime: Infinity,
   })

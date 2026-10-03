@@ -1,6 +1,6 @@
 import type { ChurnFile } from '@/features/churn/api'
 import type { CommitRef } from '@/features/history/api'
-import { http, scoped } from '@/lib/http'
+import { http } from '@/lib/http'
 import type { OverviewParameters } from '@/lib/urls/overviewParams'
 
 /**
@@ -300,12 +300,13 @@ export function fetchProject(slug: string) {
 }
 
 /** Every field of the page's URL is a query parameter of the read, so a view is one request. */
-export function fetchProjectOverview(slug: string, parameters: OverviewParameters) {
-  const search: Record<string, string> = {}
-  if (parameters.days !== undefined) search.days = String(parameters.days)
-  if (parameters.showExcluded) search.showExcluded = 'true'
+export function fetchProjectOverview(
+  slug: string,
+  { days, showExcluded, repository }: OverviewParameters,
+) {
+  // `showExcluded` is true or absent, never false: `overviewSearch` puts every view in that form.
   return http
-    .get(`projects/${slug}/overview`, { searchParams: scoped(search, parameters.repository) })
+    .get(`projects/${slug}/overview`, { searchParams: { days, showExcluded, repository } })
     .json<ProjectOverviewDetail>()
 }
 

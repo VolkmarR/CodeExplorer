@@ -1,5 +1,6 @@
 import type { CommitRef } from '@/features/history/api'
-import { http, scoped } from '@/lib/http'
+import { http } from '@/lib/http'
+import type { BrowseParameters } from '@/lib/urls/browseParams'
 
 /** What the browse, tree and file views read. Each shape mirrors a record in the C# host. */
 
@@ -146,11 +147,10 @@ export interface FileDeclarations {
   declarations: Declaration[]
 }
 
-export function fetchBrowse(project: string, glob: string, page: number, repository?: string) {
+/** The tree's `path` stays out: a glob answers for the whole project, wherever the tree was. */
+export function fetchBrowse(project: string, { glob, page, repository }: BrowseParameters) {
   return http
-    .get(`projects/${project}/files`, {
-      searchParams: scoped({ glob, page: String(page) }, repository),
-    })
+    .get(`projects/${project}/files`, { searchParams: { glob, page, repository } })
     .json<FileList>()
 }
 

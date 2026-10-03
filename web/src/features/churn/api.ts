@@ -1,5 +1,5 @@
 import type { ChurnParameters } from '@/lib/urls/churnParams'
-import { http, scoped } from '@/lib/http'
+import { http } from '@/lib/http'
 
 /** The churn ranking's shapes and call. Each shape mirrors a record in the C# host. */
 
@@ -62,14 +62,15 @@ export interface ChurnedExtension {
  * Takes the whole parameter set rather than an argument each: every field of it is a search param,
  * and a call listing five of six is how one gets dropped without the types noticing.
  */
-export function fetchChurn(project: string, parameters: ChurnParameters) {
-  const search: Record<string, string> = { days: String(parameters.days) }
-  if (parameters.directory) search.directory = parameters.directory
-  if (parameters.depth !== undefined) search.depth = String(parameters.depth)
-  if (parameters.extensions) search.extensions = parameters.extensions
+export function fetchChurn(
+  project: string,
+  { days, directory, depth, extensions, repository }: ChurnParameters,
+) {
+  // Listed rather than spread so the query string keeps the order it has always been sent in,
+  // whatever order the URL's parameters arrived in.
   return http
     .get(`projects/${project}/churn`, {
-      searchParams: scoped(search, parameters.repository),
+      searchParams: { days, directory, depth, extensions, repository },
     })
     .json<Churn>()
 }
