@@ -10,7 +10,7 @@ import type {
   PeriodChanges,
 } from '@/features/projects/api'
 import { barScale, fileChangeTotals } from '@/features/projects/fileChanges'
-import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
+import { OverviewCard } from '@/features/projects/OverviewCard'
 import {
   formatCount,
   formatUtcDate,
@@ -19,9 +19,6 @@ import {
   formatUtcMonthName,
   utcDayParts,
 } from '@/lib/format'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-const title = <CardTitle>Files added and deleted</CardTitle>
 
 /** What the header calls one bar. */
 const PER: Record<ChangePeriod, string> = { Day: 'per day', Month: 'per month', Week: 'per week' }
@@ -41,47 +38,30 @@ export function FileChangesCard({
   churn: OverviewChurn
   changes: OverviewFileChanges
 }) {
-  if (!historyWindow(churn)) {
-    return (
-      <Card>
-        <CardHeader>{title}</CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
-        </CardContent>
-      </Card>
-    )
-  }
-
   const totals = fileChangeTotals(changes.periods)
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-baseline justify-between">
-        {title}
-        <span className="text-xs text-muted-foreground">{PER[changes.period]}</span>
-      </CardHeader>
-      <CardContent>
-        <PeriodChart changes={changes} />
-        {/* The exact counts for a reader who cannot see the bars; the tooltip has them for one who can. */}
-        <ol className="sr-only" aria-label={`Files added and deleted ${PER[changes.period]}`}>
-          {changes.periods.map((p) => (
-            <li key={p.start}>{describePeriod(p, changes.period)}</li>
-          ))}
-        </ol>
-        {/* The bars' colours and not DiffStat's: these totals are the legend for the bars above,
-            and they count files, where DiffStat's added and removed pair counts lines. */}
-        <p className="pt-3 text-xs tabular-nums">
-          <span className="text-primary">+{formatCount(totals.added)} added</span>
-          {' · '}
-          <span className="text-destructive">−{formatCount(totals.deleted)} deleted</span>
-          {' · '}
-          <span className="text-muted-foreground">{formatCount(totals.renamed)} renamed</span>
-        </p>
-        <p className="pt-2 text-xs text-muted-foreground">
-          Renames are the moves git detected. A move that also changed more than half of a file
-          falls outside rename detection and counts as a delete plus an add.
-        </p>
-      </CardContent>
-    </Card>
+    <OverviewCard title="Files added and deleted" aside={PER[changes.period]} history={churn}>
+      <PeriodChart changes={changes} />
+      {/* The exact counts for a reader who cannot see the bars; the tooltip has them for one who can. */}
+      <ol className="sr-only" aria-label={`Files added and deleted ${PER[changes.period]}`}>
+        {changes.periods.map((p) => (
+          <li key={p.start}>{describePeriod(p, changes.period)}</li>
+        ))}
+      </ol>
+      {/* The bars' colours and not DiffStat's: these totals are the legend for the bars above,
+          and they count files, where DiffStat's added and removed pair counts lines. */}
+      <p className="pt-3 text-xs tabular-nums">
+        <span className="text-primary">+{formatCount(totals.added)} added</span>
+        {' · '}
+        <span className="text-destructive">−{formatCount(totals.deleted)} deleted</span>
+        {' · '}
+        <span className="text-muted-foreground">{formatCount(totals.renamed)} renamed</span>
+      </p>
+      <p className="pt-2 text-xs text-muted-foreground">
+        Renames are the moves git detected. A move that also changed more than half of a file falls
+        outside rename detection and counts as a delete plus an add.
+      </p>
+    </OverviewCard>
   )
 }
 

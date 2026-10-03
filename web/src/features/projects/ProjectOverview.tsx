@@ -95,12 +95,13 @@ export function ProjectOverview({
             <MostChangedCard
               project={project}
               repository={search.repository}
-              overview={overview}
+              churn={overview.churn}
               excluded={excluded?.changedFiles}
             />
             <AuthorsCard
               project={project}
-              overview={overview}
+              churn={overview.churn}
+              authors={overview.authors}
               excluded={excluded?.committedFiles}
             />
           </>
