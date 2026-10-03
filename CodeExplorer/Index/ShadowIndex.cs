@@ -41,8 +41,7 @@ public sealed class ShadowIndex(DuckDBConnection connection, string catalog, str
     {
         if (fullTextLoaded)
         {
-            report(new RefreshProgress(RefreshProgress.FullTextStep, RefreshProgress.TotalStepCount,
-                RefreshProgress.FullTextPhase));
+            report(new RefreshProgress(RefreshProgress.FullTextStep, RefreshProgress.FullTextPhase));
             await FtsExtension.CreateIndexAsync(Connection, cancellationToken);
         }
 

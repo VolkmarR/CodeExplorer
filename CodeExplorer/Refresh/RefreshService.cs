@@ -260,7 +260,7 @@ public sealed class RefreshService(
         {
             // Reported before the restore rather than after the check, so a restore that takes minutes
             // shows as a refresh running and not as one still waiting for the slot.
-            Report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount, RefreshProgress.StartPhase));
+            Report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.StartPhase));
 
             // Before the check below, which sizes the shadow from the live file: on a wiped disk there is
             // none until the durable copy is restored, and the check would size the shadow of a large

@@ -121,8 +121,7 @@ public sealed partial class ProjectIndexes
             await CheckpointAsync(shadow.Connection, slug, catalog, refusal, cancellationToken);
             shadow.Dispose();
 
-            report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.TotalStepCount,
-                RefreshProgress.SwapPhase));
+            report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.SwapPhase));
             await ReplaceFileAsync(slug, "the new index was swapped in anyway",
                 MoveIntoPlace(slug, catalog, ShadowPath(slug), refusal, cancellationToken), cancellationToken);
             // The shadow built its own full-text index, so a restore it replaced has nothing to settle.

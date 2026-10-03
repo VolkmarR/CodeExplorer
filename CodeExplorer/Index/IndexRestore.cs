@@ -154,8 +154,7 @@ public sealed partial class ProjectIndexes
 
             // Before the fetch and not once a copy is found: the transfer is most of what a restore
             // costs, and an unreachable store fails in it.
-            report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.TotalStepCount,
-                RefreshProgress.RestorePhase));
+            report(new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.RestorePhase));
 
             // Null is a project that has never been indexed, or a copy an older schema wrote. Both
             // mean "rebuild from git", and both have recorded themselves on the way out.

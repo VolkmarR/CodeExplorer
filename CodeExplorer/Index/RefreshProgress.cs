@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CodeExplorer.Index;
 
 /// <summary>
@@ -18,8 +20,20 @@ namespace CodeExplorer.Index;
 ///     import dwarfing everything else, so one figure weighted as though they were equal would race to
 ///     most of the way and then sit still — the progress bar people have learned not to believe.
 /// </summary>
-public sealed record RefreshProgress(int Step, int TotalSteps, string Phase, long? Done = null, long? Total = null)
+public sealed record RefreshProgress(
+    [property: JsonPropertyOrder(-1)] int Step,
+    string Phase,
+    long? Done = null,
+    long? Total = null)
 {
+    /// <summary>
+    ///     <see cref="TotalStepCount" />, on every report: it never varies, so no reporter passes it,
+    ///     and the status the web UI polls still carries it beside the step. Ordered with
+    ///     <see cref="Step" /> so the JSON keeps the shape it had while this was a parameter.
+    /// </summary>
+    [JsonPropertyOrder(-1)]
+    public int TotalSteps => TotalStepCount;
+
     /// <summary>
     ///     How many steps a refresh has: fetching, reading, history, the overview, the full-text index,
     ///     storing, swapping. Fixed and known before it starts, which is what makes "step 3 of 7" a fact
