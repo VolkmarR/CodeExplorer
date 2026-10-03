@@ -61,9 +61,8 @@ internal static class Program
 
         using (server)
         {
-            var endpoint = StdioProxy.Endpoint(server?.BaseAddress ?? DevelopmentServer, project);
             using var proxy = new StdioProxy(Console.OpenStandardInput(), Console.OpenStandardOutput(), http,
-                endpoint, server, Console.Error);
+                server?.BaseAddress ?? DevelopmentServer, project, server, Console.Error);
             await proxy.RunAsync(CancellationToken.None);
         }
 
