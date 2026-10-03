@@ -83,7 +83,7 @@ public sealed class StdioProxyTests : IDisposable
             if (id == 3) overtaken.SetResult();
             return id is null ? ScriptedServer.Accepted() : ScriptedServer.Events(Result(id.Value, "{}"));
         });
-        await using var proxy = new ProxyRun(new HttpClient(server), Loopback);
+        await using var proxy = new ProxyRun(new HttpClient(server), Loopback, "p");
 
         await proxy.SendAsync(Request(2, "tools/call", """{"name":"grep","arguments":{}}"""));
         await proxy.SendAsync(Request(3, "tools/list"));
@@ -108,7 +108,7 @@ public sealed class StdioProxyTests : IDisposable
     public async Task A_server_that_is_not_running_is_answered_with_an_error_and_the_proxy_keeps_running()
     {
         using var http = new HttpClient();
-        await using var proxy = new ProxyRun(http, StdioProxy.Endpoint(new Uri($"http://127.0.0.1:{ClosedPort()}/"), "p"));
+        await using var proxy = new ProxyRun(http, new Uri($"http://127.0.0.1:{ClosedPort()}/"), "p");
 
         await proxy.SendAsync(Initialize(1));
         var first = await proxy.ReadAsync();
@@ -134,15 +134,15 @@ public sealed class StdioProxyTests : IDisposable
     }
 
     [Theory]
-    [InlineData("http://example.com/projects/p/mcp")]
-    [InlineData("http://0.0.0.0:5000/projects/p/mcp")]
-    [InlineData("http://192.168.1.10:5000/projects/p/mcp")]
-    [InlineData("http://127.0.0.1.example.com/projects/p/mcp")]
-    public void An_endpoint_off_this_machine_is_refused(string endpoint)
+    [InlineData("http://example.com/")]
+    [InlineData("http://0.0.0.0:5000/")]
+    [InlineData("http://192.168.1.10:5000/")]
+    [InlineData("http://127.0.0.1.example.com/")]
+    public void An_endpoint_off_this_machine_is_refused(string address)
     {
         using var http = new HttpClient();
         var refusal = Assert.Throws<ArgumentException>(() =>
-            new StdioProxy(Stream.Null, Stream.Null, http, new Uri(endpoint), null, TextWriter.Null));
+            new StdioProxy(Stream.Null, Stream.Null, http, new Uri(address), "p", null, TextWriter.Null));
         Assert.Contains("not a loopback address", refusal.Message);
     }
 
@@ -194,7 +194,7 @@ public sealed class StdioProxyTests : IDisposable
                 null when request.Method == HttpMethod.Delete => new HttpResponseMessage(HttpStatusCode.OK),
                 _ => ScriptedServer.Accepted(),
             }));
-        await using var proxy = new ProxyRun(new HttpClient(server), Loopback);
+        await using var proxy = new ProxyRun(new HttpClient(server), Loopback, "p");
 
         await proxy.SendAsync(Initialize(1, "2025-06-18"));
         _ = await proxy.ReadAsync();
@@ -217,7 +217,7 @@ public sealed class StdioProxyTests : IDisposable
     {
         using var server = new ScriptedServer((_, _) => Task.FromResult(ScriptedServer.Events(
             "{\"jsonrpc\":\"2.0\",\n\"id\":1,\n\"result\":{\"protocolVersion\":\"2025-11-25\"}}")));
-        await using var proxy = new ProxyRun(new HttpClient(server), Loopback);
+        await using var proxy = new ProxyRun(new HttpClient(server), Loopback, "p");
 
         await proxy.SendAsync(Initialize(1));
         var answer = await proxy.ReadAsync();
@@ -254,7 +254,7 @@ public sealed class StdioProxyTests : IDisposable
                 _ => ScriptedServer.Accepted(),
             });
         });
-        await using var proxy = new ProxyRun(new HttpClient(server), Loopback);
+        await using var proxy = new ProxyRun(new HttpClient(server), Loopback, "p");
 
         await proxy.SendAsync(Initialize(1));
         _ = await proxy.ReadAsync();
@@ -333,10 +333,10 @@ public sealed class StdioProxyTests : IDisposable
     private ProxyRun Proxy(string project)
     {
         var http = _host.CreateClient();
-        return new ProxyRun(http, StdioProxy.Endpoint(http.BaseAddress!, project));
+        return new ProxyRun(http, http.BaseAddress!, project);
     }
 
-    private static readonly Uri Loopback = new("http://127.0.0.1:5000/projects/p/mcp");
+    private static readonly Uri Loopback = new("http://127.0.0.1:5000/");
 
     private static string Initialize(int id, string version = "2025-11-25") =>
         Request(id, "initialize",
@@ -376,11 +376,11 @@ public sealed class StdioProxyTests : IDisposable
         private readonly StreamReader _reader;
         private bool _closed;
 
-        public ProxyRun(HttpClient http, Uri endpoint)
+        public ProxyRun(HttpClient http, Uri address, string project)
         {
             _http = http;
-            _proxy = new StdioProxy(_toProxy.Reader.AsStream(), _fromProxy.Writer.AsStream(), http, endpoint, null,
-                Diagnostics);
+            _proxy = new StdioProxy(_toProxy.Reader.AsStream(), _fromProxy.Writer.AsStream(), http, address, project,
+                null, Diagnostics);
             ClientInput = _toProxy.Writer.AsStream();
             ClientOutput = _fromProxy.Reader.AsStream();
             _writer = new StreamWriter(ClientInput, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };

@@ -83,26 +83,28 @@ public sealed class StdioProxy : IDisposable
     /// <param name="input">What the client writes: one JSON-RPC message per line, UTF-8.</param>
     /// <param name="output">What the client reads, which carries protocol messages and nothing else.</param>
     /// <param name="http">The client the endpoint is reached through. Its timeout bounds a whole tool call.</param>
-    /// <param name="endpoint">The project's MCP endpoint, which must be on a loopback address.</param>
+    /// <param name="address">The server's base address, which must be a loopback address.</param>
+    /// <param name="project">The slug of the project whose MCP endpoint the client is connected to.</param>
     /// <param name="server">
     ///     The evaluation package's server, started when nothing answers. Null where the proxy runs
     ///     beside a server it does not manage, such as a developer's <c>dotnet run</c>: a server it did
     ///     not start, it does not start either.
     /// </param>
     /// <param name="diagnostics">Standard error, where a client logs what a server process says about itself.</param>
-    public StdioProxy(Stream input, Stream output, HttpClient http, Uri endpoint, LocalServer? server,
-        TextWriter diagnostics)
+    public StdioProxy(Stream input, Stream output, HttpClient http, Uri address, string project,
+        LocalServer? server, TextWriter diagnostics)
     {
+        var endpoint = Endpoint(address, project);
         if (!IsLoopback(endpoint))
             throw new ArgumentException(
                 $"The proxy connects only to a server on this machine, and {endpoint} is not a loopback address. "
-                + "CodeExplorer without authentication must not be reached over a network.", nameof(endpoint));
+                + "CodeExplorer without authentication must not be reached over a network.", nameof(address));
 
         _input = input;
         _output = output;
         _http = http;
         _endpoint = endpoint;
-        _project = ProjectOf(endpoint);
+        _project = project;
         _server = server;
         _diagnostics = TextWriter.Synchronized(diagnostics);
     }
@@ -324,8 +326,7 @@ public sealed class StdioProxy : IDisposable
             return;
         }
 
-        if (negotiates && message["result"]?["protocolVersion"] is JsonValue version
-                       && version.TryGetValue(out string? negotiated))
+        if (negotiates && TextOf(message["result"]?["protocolVersion"]) is { } negotiated)
             _protocolVersion = negotiated;
 
         await WriteAsync(message, cancellationToken);
@@ -410,7 +411,7 @@ public sealed class StdioProxy : IDisposable
             return null;
         }
 
-        string? said = answer?["error"] is JsonValue text && text.TryGetValue(out string? words) ? words : null;
+        string? said = TextOf(answer?["error"]);
         if (response.StatusCode == HttpStatusCode.NotFound && said is not null)
             return $"CodeExplorer has no project with the slug '{_project}'. Create the project in the CodeExplorer "
                    + $"web UI at {new Uri(_endpoint, "/")}, or correct the slug given to CodeExplorer.McpProxy in the "
@@ -485,13 +486,13 @@ public sealed class StdioProxy : IDisposable
 
     private static bool IsRequest(JsonObject message) => message.ContainsKey("method") && message.ContainsKey("id");
 
-    private static string? MethodOf(JsonObject message) =>
-        message["method"] is JsonValue value && value.TryGetValue(out string? method) ? method : null;
+    private static string? MethodOf(JsonObject message) => TextOf(message["method"]);
 
-    private static string? MetaVersionOf(JsonObject message) =>
-        message["params"]?["_meta"]?[ProtocolVersionMeta] is JsonValue value && value.TryGetValue(out string? version)
-            ? version
-            : null;
+    private static string? MetaVersionOf(JsonObject message) => TextOf(message["params"]?["_meta"]?[ProtocolVersionMeta]);
+
+    /// <summary>A JSON string's text, or null for anything else, a missing member included.</summary>
+    private static string? TextOf(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
 
     /// <summary>The parameter the SDK routes these methods by, which 2026-07-28 repeats in <c>Mcp-Name</c>.</summary>
     private static string? RoutingNameOf(JsonObject message, string? method)
@@ -502,10 +503,7 @@ public sealed class StdioProxy : IDisposable
             "resources/read" => "uri",
             _ => null,
         };
-        return parameter is not null && message["params"]?[parameter] is JsonValue value
-                                     && value.TryGetValue(out string? name)
-            ? name
-            : null;
+        return parameter is null ? null : TextOf(message["params"]?[parameter]);
     }
 
     /// <summary>
@@ -533,10 +531,4 @@ public sealed class StdioProxy : IDisposable
         _sessionLock.Dispose();
     }
 
-    /// <summary>The slug in <c>/projects/{slug}/mcp</c>, for the one sentence that has to name it.</summary>
-    private static string ProjectOf(Uri endpoint)
-    {
-        string[] segments = endpoint.AbsolutePath.Trim('/').Split('/');
-        return segments is [.., "projects", var slug, "mcp"] ? Uri.UnescapeDataString(slug) : endpoint.AbsolutePath;
-    }
 }
