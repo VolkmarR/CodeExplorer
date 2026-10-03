@@ -1,6 +1,6 @@
 import { expect, test } from 'vite-plus/test'
 import { fetchSearch } from '@/features/search/api'
-import { recordRequest } from '@/lib/recordRequest'
+import { recordRequest } from '@/testing/recordRequest'
 
 /**
  * The request a search makes, pinned byte for byte: the booleans travel as words even when false,

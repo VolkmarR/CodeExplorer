@@ -7,7 +7,7 @@ import {
   fetchImports,
   fetchTree,
 } from '@/features/files/api'
-import { recordRequest } from '@/lib/recordRequest'
+import { recordRequest } from '@/testing/recordRequest'
 
 /**
  * The requests the browse and file views make, pinned byte for byte. A browse listing never sends

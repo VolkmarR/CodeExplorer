@@ -1,6 +1,6 @@
 import { expect, test } from 'vite-plus/test'
 import { fetchCommit, fetchCommitFiles, fetchCommits } from '@/features/history/api'
-import { recordRequest } from '@/lib/recordRequest'
+import { recordRequest } from '@/testing/recordRequest'
 
 /** The change log's requests, pinned byte for byte. */
 test('a page of the log sends its page always and its repository only when set', async () => {
