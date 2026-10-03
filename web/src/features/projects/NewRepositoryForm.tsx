@@ -30,10 +30,8 @@ export function NewRepositoryForm({
   const add = useMutation({
     mutationFn: () =>
       addRepository(project, slug.trim(), url.trim(), credential === '' ? null : credential),
+    // No reset of the fields: `onAdded` closes the form, and the table it sits in unmounts it.
     onSuccess: async (created) => {
-      setSlug('')
-      setUrl('')
-      setCredential('')
       await invalidateProject(queryClient, project)
       toast.add({
         description: 'Refresh to clone and index it.',

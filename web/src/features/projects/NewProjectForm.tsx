@@ -20,10 +20,8 @@ export function NewProjectForm({ onCancel, onCreated }: NewProjectFormProps) {
 
   const create = useMutation({
     mutationFn: () => createProject(slug.trim(), name.trim(), single),
+    // No reset of the fields: `onCreated` leaves the page, which unmounts the form.
     onSuccess: async () => {
-      setSlug('')
-      setName('')
-      setSingle(false)
       await queryClient.invalidateQueries(projectsQuery())
       onCreated()
     },
@@ -71,7 +69,7 @@ export function NewProjectForm({ onCancel, onCreated }: NewProjectFormProps) {
           {/* The one decision on this form that cannot be revisited, so it says so where it is made
               rather than in a confirmation afterwards. */}
           <div className="rounded-lg border border-dashed p-3">
-            <Label className="flex items-start gap-3 font-normal">
+            <Label className="items-start gap-3 font-normal">
               <input
                 type="checkbox"
                 checked={single}

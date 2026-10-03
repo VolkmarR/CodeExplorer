@@ -56,23 +56,15 @@ export function ProjectList() {
                         click away in the sidebar once you are inside it. Nothing to show there
                         before the first build, so an unbuilt project leads to its settings — where
                         the repositories and the build button are — instead. */}
-                    {project.index.builtAt ? (
-                      <Link
-                        to="/projects/$project"
-                        params={{ project: project.slug }}
-                        className={CARD_LINK}
-                      >
-                        {project.name}
-                      </Link>
-                    ) : (
-                      <Link
-                        to="/projects/$project/settings"
-                        params={{ project: project.slug }}
-                        className={CARD_LINK}
-                      >
-                        {project.name}
-                      </Link>
-                    )}
+                    <Link
+                      to={
+                        project.index.builtAt ? '/projects/$project' : '/projects/$project/settings'
+                      }
+                      params={{ project: project.slug }}
+                      className={CARD_LINK}
+                    >
+                      {project.name}
+                    </Link>
                     <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">
                       {project.slug}
                     </span>
