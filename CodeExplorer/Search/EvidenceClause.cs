@@ -25,8 +25,13 @@ internal static class EvidenceClause
     {
         bool read = false, byParser = false;
         foreach (var answer in evidence)
+        {
             if (answer == Evidence.Parsed) byParser = true;
             else read = true;
-        return !byParser ? textual : read ? mixed : parsed;
+            // Nothing later can change a mixed answer, and a reference search can hold thousands.
+            if (read && byParser) return mixed;
+        }
+
+        return byParser ? parsed : textual;
     }
 }

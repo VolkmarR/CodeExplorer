@@ -145,7 +145,9 @@ internal sealed partial class SearchTools
         }
 
         // Read off the sites' own evidence (EvidenceClause) rather than written as a fact, which it was
-        // until a parser-backed analyser would have made it false.
+        // until a parser-backed analyser would have made it false. The sites listed and not every site
+        // counted: the footer qualifies the lines the reply shows, and a site past the cap is not one
+        // of them.
         text.Append('\n').Append(EvidenceClause.Of(result.Sites.Select(site => site.Evidence),
             "Declaration forms are read from line shape, not from a compiler, so an unrelated symbol of the same name is included and a form this does not know is missing. Strong evidence, not proof.",
             "Declarations are parsed by a real parser for each language here, but matched by name, so an unrelated symbol of the same name is included.",
