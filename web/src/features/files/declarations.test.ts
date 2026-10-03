@@ -16,7 +16,6 @@ const declared = (fields: Partial<FileDeclarations>): FileDeclarations => ({
   coverage: 'Read',
   declarations: [],
   languageName: 'C#',
-  offset: 0,
   qualifiedPath: 'one/src/Orders.cs',
   ...fields,
 })

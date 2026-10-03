@@ -5,7 +5,6 @@ import {
   DECLARATION_EVIDENCE,
   declarationLabel,
   declarationsNote,
-  ROLE_LABEL,
 } from '@/features/files/declarations'
 import { fileSearch } from '@/lib/urls/fileParams'
 import { declarationsQuery } from '@/features/files/queries'
@@ -69,7 +68,7 @@ export function DeclarationPanel({
                 line {declaration.lineNumber}
                 {/* Only where the language draws the split. Where it does not, saying nothing is the
                     answer rather than picking one of the two labels (CONTEXT.md, Declaration). */}
-                {declaration.role === null ? null : ` · ${ROLE_LABEL[declaration.role]}`}
+                {declaration.role === null ? null : ` · ${declaration.role.toLowerCase()}`}
               </p>
             </li>
           )
