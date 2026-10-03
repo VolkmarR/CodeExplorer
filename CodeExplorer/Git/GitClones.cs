@@ -237,7 +237,7 @@ public sealed class GitClones(
             ? Path.Combine(_cloneRoot, projectSlug)
             : Path.Combine(_cloneRoot, projectSlug, repositorySlug + ".git");
         var gate = _cloneGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
-        // A held scope here, where RefreshAndOpenAsync cannot have one: its gate is released by the
+        // A held scope here, where RefreshAndOpenAsync takes none: its gate is released by the
         // transfer's own continuation, on another task, after the call that took it has returned.
         using (await gate.HoldAsync(cancellationToken))
         {
