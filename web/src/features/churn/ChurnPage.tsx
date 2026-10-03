@@ -3,12 +3,12 @@ import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { ChurnControls } from '@/features/churn/ChurnControls'
 import { ChurnList } from '@/features/churn/ChurnList'
 import { ChurnNotes } from '@/features/churn/ChurnNotes'
-import { ChurnScopeTrail } from '@/features/churn/ChurnScopeTrail'
 import { ExtensionFilter } from '@/features/churn/ExtensionFilter'
 import { churnSearch, type ChurnParameters } from '@/lib/urls/churnParams'
 import { churnQuery } from '@/features/churn/queries'
 import { projectQuery } from '@/features/projects/queries'
 import { PageCard } from '@/components/PageCard'
+import { PathTrail } from '@/components/PathTrail'
 import { WindowNote } from '@/components/WindowNote'
 import { formatCountOf, formatDate } from '@/lib/format'
 
@@ -62,8 +62,27 @@ export function ChurnPage() {
       >
         <div className="space-y-4">
           {/* Where the reader is, above everything that changes what is in it: drilling in is one
-              click and this is the only way back out that keeps the window and the filter. */}
-          <ChurnScopeTrail project={project} search={search} />
+              click and this is the only way back out that keeps the window and the filter (#161).
+              Nothing until a directory is chosen: at the root the trail would be one link to the
+              page already open. */}
+          {search.directory === undefined ? null : (
+            <PathTrail
+              project={project}
+              path={search.directory}
+              label="Ranking scope"
+              linkTo={(directory) => ({
+                params: { project },
+                // The whole project clears the repository with the directory: a directory carries
+                // one, and clearing half the scope would leave the reader in a repository they
+                // never chose.
+                search: churnSearch(
+                  search,
+                  directory === '' ? { directory, repository: '' } : { directory },
+                ),
+                to: '/projects/$project/churn',
+              })}
+            />
+          )}
 
           {/* The filter, above the ranking it narrows, drawn from what this window holds. */}
           <ExtensionFilter
