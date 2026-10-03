@@ -94,18 +94,12 @@ internal sealed class LocalCopyRepack
     // visible to libgit2, so removing it before the .pack never leaves an index naming a missing file.
     private static readonly string[] _companions = [".idx", ".pack", ".rev", ".bitmap", ".mtimes", ".promisor"];
 
-    private readonly bool _enabled;
-    private readonly int _packThreshold;
-    private readonly int _looseObjectThreshold;
-    private readonly long _minimumFreeBytes;
+    private readonly RepackSettings _settings;
     private readonly ILogger _logger;
 
     public LocalCopyRepack(RepackSettings settings, ILogger logger)
     {
-        _enabled = settings.Enabled;
-        _packThreshold = settings.PackThreshold;
-        _looseObjectThreshold = settings.LooseObjectThreshold;
-        _minimumFreeBytes = settings.MinimumFreeBytes;
+        _settings = settings;
         _logger = logger;
     }
 
@@ -161,11 +155,11 @@ internal sealed class LocalCopyRepack
             // and the copy may not cross a threshold again for months.
             LocalCopyFiles.DeleteDirectory(staging);
             DeleteLeftovers(path, objects);
-            if (!_enabled) return;
+            if (!_settings.Enabled) return;
 
             int packs = PackCount(objects);
             int loose = LooseObjectCount(objects);
-            if (packs <= _packThreshold && loose <= _looseObjectThreshold) return;
+            if (packs <= _settings.PackThreshold && loose <= _settings.LooseObjectThreshold) return;
             if (cancellationToken.IsCancellationRequested) return;
 
             var plan = Plan(objects, loose);
@@ -181,14 +175,14 @@ internal sealed class LocalCopyRepack
                           + LooseDirectories(objects).Sum(Size);
             long free = FreeSpace.Available(path);
             // Subtracted rather than added, so a margin configured as large as a long cannot overflow.
-            if (free - folded < _minimumFreeBytes)
+            if (free - folded < _settings.MinimumFreeBytes)
             {
                 if (_logger.IsEnabled(LogLevel.Warning))
                     _logger.LogWarning("The local copy of repository {Repository} of project {Project} at {Path} "
                                        + "holds {Packs} packs and {Loose} loose objects but was not repacked: "
                                        + "that needs up to {Needed} bytes free beside the {Minimum} kept free for "
                                        + "refreshes, and {Free} are", repository.Slug, repository.ProjectSlug, path,
-                        packs, loose, folded, _minimumFreeBytes, free);
+                        packs, loose, folded, _settings.MinimumFreeBytes, free);
                 return;
             }
 
@@ -221,9 +215,8 @@ internal sealed class LocalCopyRepack
     /// </summary>
     private (List<string> Folded, int Kept) Plan(string objects, int loose)
     {
-        string packDirectory = Path.Combine(objects, "pack");
-        var packs = Directory.EnumerateFiles(packDirectory, "*.pack")
-            .Where(pack => !File.Exists(Path.ChangeExtension(pack, ".keep")))
+        string packDirectory = PackDirectory(objects);
+        var packs = UnkeptPacks(packDirectory)
             .Select(pack => Path.ChangeExtension(pack, null))
             .Select(pack => (Path: pack, Objects: File.Exists(pack + ".idx") ? IndexCount(pack + ".idx") : 0L))
             .OrderByDescending(pack => pack.Objects)
@@ -239,7 +232,7 @@ internal sealed class LocalCopyRepack
         }
 
         // The kept packs and the new one must come in at or under the threshold.
-        if (kept + 1 > _packThreshold) kept = 0;
+        if (kept + 1 > _settings.PackThreshold) kept = 0;
         return (packs.Skip(kept).Select(pack => pack.Path).ToList(), kept);
     }
 
@@ -247,7 +240,7 @@ internal sealed class LocalCopyRepack
         (List<string> Folded, int Kept) plan, int loose)
     {
         var watch = Stopwatch.StartNew();
-        string packDirectory = Path.Combine(objects, "pack");
+        string packDirectory = PackDirectory(objects);
         // Taken before anything is written: every object in the folded packs listed here is in the pack
         // about to be written, which is what makes them safe to delete once it is in place.
         string[] old = Directory.GetFiles(packDirectory);
@@ -557,7 +550,7 @@ internal sealed class LocalCopyRepack
             {
                 LocalCopyFiles.DeleteDirectory(directory);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (LocalCopyFiles.IsDiskFailure(ex))
             {
                 // Safe to swallow: answered as a failure, and every object in it is in the new pack.
                 failures.Add(ex);
@@ -575,7 +568,7 @@ internal sealed class LocalCopyRepack
             LocalCopyFiles.DeleteFile(file);
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (LocalCopyFiles.IsDiskFailure(ex))
         {
             // Safe to swallow: answered as a failure, and the file's objects are in the new pack.
             failures.Add(ex);
@@ -599,7 +592,7 @@ internal sealed class LocalCopyRepack
         string record = Path.Combine(path, LeftoversFileName);
         if (!File.Exists(record)) return;
 
-        string packDirectory = Path.Combine(objects, "pack");
+        string packDirectory = PackDirectory(objects);
         var pending = new List<string>();
         foreach (string line in File.ReadAllLines(record))
         {
@@ -614,7 +607,7 @@ internal sealed class LocalCopyRepack
             {
                 LocalCopyFiles.DeleteFile(Path.Combine(packDirectory, file));
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (LocalCopyFiles.IsDiskFailure(ex))
             {
                 // Safe to swallow: still listed, so the next fetch tries again, and its objects are in
                 // the pack that superseded it.
@@ -647,13 +640,23 @@ internal sealed class LocalCopyRepack
     private static bool IsBareName(string name) =>
         name.Length > 0 && name != "." && name != ".." && name.IndexOfAny(['/', '\\', ':']) < 0;
 
+    /// <summary>Where a local copy keeps its packs, under its objects folder.</summary>
+    private static string PackDirectory(string objects) => Path.Combine(objects, "pack");
+
+    /// <summary>
+    ///     The packs a repack may count and fold: every one but a pack marked <c>.keep</c>, which git
+    ///     leaves alone and so does this.
+    /// </summary>
+    private static IEnumerable<string> UnkeptPacks(string packDirectory) =>
+        Directory.EnumerateFiles(packDirectory, "*.pack")
+            .Where(pack => !File.Exists(Path.ChangeExtension(pack, ".keep")));
+
     /// <summary>More packs than configured, not counting one marked <c>.keep</c>, which a repack leaves.</summary>
     private static int PackCount(string objects)
     {
-        string packDirectory = Path.Combine(objects, "pack");
+        string packDirectory = PackDirectory(objects);
         return Directory.Exists(packDirectory)
-            ? Directory.EnumerateFiles(packDirectory, "*.pack")
-                .Count(pack => !File.Exists(Path.ChangeExtension(pack, ".keep")))
+            ? UnkeptPacks(packDirectory).Count()
             : 0;
     }
 
@@ -680,7 +683,7 @@ internal sealed class LocalCopyRepack
         {
             LocalCopyFiles.DeleteDirectory(directory);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (LocalCopyFiles.IsDiskFailure(ex))
         {
             // Safe to swallow: the folder is outside objects, so libgit2 never reads it, and the next
             // fetch tries again before it counts anything.
