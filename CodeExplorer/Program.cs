@@ -86,9 +86,10 @@ builder.Services.AddHttpContextAccessor();
 // rule and the change period already went out, so the web's unions for them stay as they were.
 // Property names keep the web defaults' camelCase. HTTP only: the MCP SDK serialises with options of
 // its own and every tool answers prose, and the stored overview row has its own (IndexOverview), so
-// neither moves with this.
+// neither moves with this. No integers either way: a value that is no member, such as a cast, would
+// otherwise go out as a bare number every web comparison falls through, and fails here instead.
 builder.Services.ConfigureHttpJsonOptions(options =>
-    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(allowIntegerValues: false)));
 builder.Services.AddMcpServer().WithHttpTransport()
     // Each filter is registered once for every tool, present and future.
     .WithRequestFilters(filters => filters

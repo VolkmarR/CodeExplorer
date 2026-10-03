@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeExplorer.Control;
 using CodeExplorer.Git;
@@ -579,6 +580,10 @@ public sealed class TestHost : GitFixtures
     public Task<ProjectOverviewDetail> OverviewDetailAsync(string project, string query = "") =>
         GetJsonAsync<ProjectOverviewDetail>($"/api/projects/{project}/overview{query}");
 
+    /// <summary>The options the server writes its HTTP answers with, registered in <c>Program.cs</c>.</summary>
+    public JsonSerializerOptions HttpJsonOptions =>
+        Services.GetRequiredService<IOptions<JsonOptions>>().Value.SerializerOptions;
+
     /// <summary>
     ///     A GET whose answer is JSON, read as <typeparamref name="T" /> and asserted present, through the
     ///     client the fixture steps use. A non-success status throws, so a test that reads an answer
@@ -589,8 +594,7 @@ public sealed class TestHost : GitFixtures
     public async Task<T> GetJsonAsync<T>(string path)
     {
         using var http = Fixture();
-        var options = Services.GetRequiredService<IOptions<JsonOptions>>().Value.SerializerOptions;
-        var value = await http.GetFromJsonAsync<T>(path, options, Ct);
+        var value = await http.GetFromJsonAsync<T>(path, HttpJsonOptions, Ct);
         Assert.NotNull(value);
         return value;
     }
