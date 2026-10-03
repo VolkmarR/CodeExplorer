@@ -41,10 +41,10 @@ public static class Telemetry
     public const string OutcomeTag = "codeexplorer.outcome";
     public const string FilesTag = "codeexplorer.files";
     public const string LinesTag = "codeexplorer.lines";
-    public const string CommitsTag = "codeexplorer.commits";
+    private const string _commitsTag = "codeexplorer.commits";
 
     /// <summary>Which way the durable copy moved: <see cref="StoreOperation" /> or <see cref="FetchOperation" />.</summary>
-    public const string DurableTag = "codeexplorer.index.durable.operation";
+    private const string _durableTag = "codeexplorer.index.durable.operation";
 
     public const string ToolDuration = "codeexplorer.tool.duration";
     public const string LeaseDuration = "codeexplorer.index.lease.duration";
@@ -54,10 +54,10 @@ public static class Telemetry
     public const string IndexDuration = "codeexplorer.index.build.duration";
     public const string IndexFiles = "codeexplorer.index.files";
     public const string IndexLines = "codeexplorer.index.lines";
-    public const string HistoryDuration = "codeexplorer.index.history.duration";
-    public const string HistoryCommits = "codeexplorer.index.history.commits";
-    public const string HistoryFiles = "codeexplorer.index.history.files";
-    public const string DurableDuration = "codeexplorer.index.durable.duration";
+    private const string _historyDuration = "codeexplorer.index.history.duration";
+    private const string _historyCommits = "codeexplorer.index.history.commits";
+    private const string _historyFiles = "codeexplorer.index.history.files";
+    private const string _durableDuration = "codeexplorer.index.durable.duration";
 
     /// <summary>How many attaches had to take the instance-wide gate. See <see cref="AttachGated" />.</summary>
     public const string AttachGate = "codeexplorer.index.attach.gated";
@@ -89,9 +89,9 @@ public static class Telemetry
     ///     history have different costs and different causes, and a build that got slow says nothing
     ///     about which of the two did. A first history walk is minutes where the file walk is seconds.
     /// </summary>
-    public const string HistorySpan = "codeexplorer.index.history";
+    private const string _historySpan = "codeexplorer.index.history";
 
-    public const string DurableSpan = "codeexplorer.index.durable";
+    private const string _durableSpan = "codeexplorer.index.durable";
 
     /// <summary>A search that reached an engine and got an answer, empty or not.</summary>
     public const string MatchedOutcome = "matched";
@@ -110,21 +110,21 @@ public static class Telemetry
     /// </summary>
     public const string AnsweredOutcome = "answered";
 
-    /// <summary>A lease that was granted. <see cref="AbsentOutcome" /> is a project with no index to lease.</summary>
+    /// <summary>A lease that was granted. <see cref="_absentOutcome" /> is a project with no index to lease.</summary>
     public const string OpenedOutcome = "opened";
 
     /// <summary>An index build that finished. A build has no second answer: it either completed or threw.</summary>
     public const string BuiltOutcome = "built";
 
     /// <summary>The durable copy moved: written to the store, or read back out of it.</summary>
-    public const string MovedOutcome = "moved";
+    private const string _movedOutcome = "moved";
 
     /// <summary>
     ///     The store held no durable copy of this project, or held one an older build wrote. Neither is
     ///     a failure — both mean the index is rebuilt from git — and neither is a move, so a dashboard
     ///     that divides restores by wakes needs them apart.
     /// </summary>
-    public const string AbsentOutcome = "absent";
+    private const string _absentOutcome = "absent";
 
     /// <summary>Writing the durable copy of a project index to the store.</summary>
     public const string StoreOperation = "store";
@@ -168,20 +168,20 @@ public static class Telemetry
         _meter.CreateHistogram<long>(IndexLines, "{line}", "Lines read into an index by one build.");
 
     private static readonly Histogram<double> _historySeconds =
-        _meter.CreateHistogram<double>(HistoryDuration, "s", "How long a history pass of a build took.");
+        _meter.CreateHistogram<double>(_historyDuration, "s", "How long a history pass of a build took.");
 
     private static readonly Histogram<long> _historyCommitCount =
-        _meter.CreateHistogram<long>(HistoryCommits, "{commit}", "Commits appended by one history pass.");
+        _meter.CreateHistogram<long>(_historyCommits, "{commit}", "Commits appended by one history pass.");
 
     private static readonly Histogram<long> _historyFileCount =
-        _meter.CreateHistogram<long>(HistoryFiles, "{file}", "Files blamed by one history pass.");
+        _meter.CreateHistogram<long>(_historyFiles, "{file}", "Files blamed by one history pass.");
 
     private static readonly Counter<long> _attachGateEntries =
         _meter.CreateCounter<long>(AttachGate, "{attach}",
             "Attaches that had to take the instance-wide ATTACH gate.");
 
     private static readonly Histogram<double> _durableSeconds =
-        _meter.CreateHistogram<double>(DurableDuration, "s",
+        _meter.CreateHistogram<double>(_durableDuration, "s",
             "How long a project's durable copy took to store or to fetch.");
 
     /// <summary>
@@ -432,7 +432,7 @@ public static class Telemetry
         public void Opened() => _outcome = OpenedOutcome;
 
         /// <summary>There was no index to lease, which is an answer for the caller to phrase.</summary>
-        public void Absent() => _outcome = AbsentOutcome;
+        public void Absent() => _outcome = _absentOutcome;
     }
 
     /// <summary>
@@ -508,7 +508,7 @@ public static class Telemetry
         private readonly Operation _operation;
         private string _outcome = FailedOutcome;
 
-        internal HistoryBuildRecording(string slug) => _operation = new Operation(HistorySpan, slug);
+        internal HistoryBuildRecording(string slug) => _operation = new Operation(_historySpan, slug);
 
         public void Dispose() => _operation.Complete(_historySeconds, _outcome);
 
@@ -517,7 +517,7 @@ public static class Telemetry
             _outcome = BuiltOutcome;
             _historyCommitCount.Record(commits, _operation.Tags);
             _historyFileCount.Record(files, _operation.Tags);
-            _operation.Tag(CommitsTag, commits);
+            _operation.Tag(_commitsTag, commits);
             _operation.Tag(FilesTag, files);
         }
     }
@@ -538,16 +538,16 @@ public static class Telemetry
         internal DurableCopyRecording(string slug, string operation)
         {
             _which = operation;
-            _operation = new Operation(DurableSpan, slug);
-            _operation.Tag(DurableTag, operation);
+            _operation = new Operation(_durableSpan, slug);
+            _operation.Tag(_durableTag, operation);
         }
 
-        public void Dispose() => _operation.Complete(_durableSeconds, _outcome, DurableTag, _which);
+        public void Dispose() => _operation.Complete(_durableSeconds, _outcome, _durableTag, _which);
 
         /// <summary>The copy was written, or read back and loaded.</summary>
-        public void Moved() => _outcome = MovedOutcome;
+        public void Moved() => _outcome = _movedOutcome;
 
         /// <summary>There was nothing to read back, or what there was an older schema wrote.</summary>
-        public void Absent() => _outcome = AbsentOutcome;
+        public void Absent() => _outcome = _absentOutcome;
     }
 }
