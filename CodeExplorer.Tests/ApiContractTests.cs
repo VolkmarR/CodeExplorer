@@ -1,5 +1,7 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeExplorer.Index;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -31,7 +33,8 @@ namespace CodeExplorer.Tests;
 ///         every answer has one.
 ///     </para>
 /// </summary>
-public sealed class ApiContractTests(HttpJsonFixture fixture) : IClassFixture<HttpJsonFixture>
+[Collection(HttpJsonFixture.Collection)]
+public sealed class ApiContractTests(HttpJsonFixture fixture)
 {
     /// <summary>The switch that rewrites the snapshot. An environment variable, so no code changes to set it.</summary>
     public const string UpdateSwitch = "CODEEXPLORER_UPDATE_API_CONTRACT";
@@ -43,7 +46,8 @@ public sealed class ApiContractTests(HttpJsonFixture fixture) : IClassFixture<Ht
     /// <summary>
     ///     The request each route is read through, by its route pattern as the endpoint table spells it.
     ///     Each one is chosen so that the answer is not empty: an empty array or a null object has no
-    ///     property paths below it, and a shape nobody sees cannot be compared. <c>{sha}</c> is the
+    ///     property paths below it, and a shape nobody sees cannot be compared; what no request here
+    ///     reaches is on <see cref="Unreached" />. <c>{sha}</c> is the
     ///     newest commit of the fixture's project, which only the change log can say.
     /// </summary>
     private static readonly Dictionary<string, string> Requests = new(StringComparer.Ordinal)
@@ -78,6 +82,20 @@ public sealed class ApiContractTests(HttpJsonFixture fixture) : IClassFixture<Ht
     /// </summary>
     private static readonly Dictionary<string, string> Excluded = new(StringComparer.Ordinal);
 
+    /// <summary>
+    ///     Objects the answers above hold null, filled in from a sample serialized through the server's
+    ///     own HTTP options, at the path the route would send them: the names are the record's, only the
+    ///     values are made up. A running refresh's progress is the one today. The fixture's project is
+    ///     idle by the time any test reads it, and catching a refresh mid-flight would need a test hook
+    ///     (CODING_STANDARDS, Testing). Prefer a request that reaches a shape to a sample of it: a sample
+    ///     is only as current as the record it names.
+    /// </summary>
+    private static readonly (string Route, string Path, object Sample)[] Unreached =
+    [
+        ("/api/projects/{project}/refresh", "progress",
+            new RefreshProgress(RefreshProgress.FetchStep, RefreshProgress.StartPhase, 1, 2))
+    ];
+
     private static string Project(string rest) => $"/api/projects/{HttpJsonFixture.Built}{rest}";
 
     [Fact]
@@ -92,7 +110,15 @@ public sealed class ApiContractTests(HttpJsonFixture fixture) : IClassFixture<Ht
         string sha = await NewestCommitAsync();
         var actual = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         foreach ((string route, string request) in Requests)
-            actual[route] = PropertyPaths(await ReadAsync(route, request.Replace("{sha}", sha)));
+            AddPropertyPaths(actual[route] = new SortedSet<string>(StringComparer.Ordinal),
+                await _host.GetJsonNodeAsync(request.Replace("{sha}", sha)));
+        foreach ((string route, string at, object sample) in Unreached)
+        {
+            Assert.True(actual[route].Contains(at),
+                $"{route} answers no {at}, so the sample for it in {nameof(Unreached)} has nowhere to go.");
+            AddPropertyPaths(actual[route], JsonSerializer.SerializeToNode(sample, sample.GetType(),
+                _host.HttpJsonOptions), at);
+        }
 
         string path = Path.Combine(SourceTree.Tests(), SnapshotFile);
         if (Environment.GetEnvironmentVariable(UpdateSwitch) == "1")
@@ -127,25 +153,16 @@ public sealed class ApiContractTests(HttpJsonFixture fixture) : IClassFixture<Ht
         return (string)log["commits"]![0]!["sha"]!;
     }
 
-    private async Task<JsonNode?> ReadAsync(string route, string request)
-    {
-        using var http = _host.CreateClient();
-        using var response = await http.GetAsync(request, TestContext.Current.CancellationToken);
-        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.True(response.IsSuccessStatusCode,
-            $"GET {request} (route {route}) answered {(int)response.StatusCode}: {body}");
-        return JsonNode.Parse(body);
-    }
-
     /// <summary>
-    ///     Every property path in <paramref name="answer" />: names joined by dots, an array written as
-    ///     <c>[]</c> after its name, and the paths of all its elements merged under it.
+    ///     Adds every property path in <paramref name="answer" /> to <paramref name="paths" />, under
+    ///     <paramref name="root" />: names joined by dots, an array written as <c>[]</c> after its name,
+    ///     and the paths of all its elements merged under it. Every object key counts as a name, so a
+    ///     route answering a dictionary would write its data keys here; none does, and one that starts
+    ///     to belongs on <see cref="Excluded" /> or gets its keys folded first.
     /// </summary>
-    private static SortedSet<string> PropertyPaths(JsonNode? answer)
+    private static void AddPropertyPaths(SortedSet<string> paths, JsonNode? answer, string root = "")
     {
-        var paths = new SortedSet<string>(StringComparer.Ordinal);
-        Visit(answer, "");
-        return paths;
+        Visit(answer, root);
 
         void Visit(JsonNode? value, string path)
         {

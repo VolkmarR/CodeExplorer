@@ -17,7 +17,8 @@ namespace CodeExplorer.Tests;
 ///     At the root of the tests and not in a module's folder, because what it pins is the one
 ///     serializer setting in <c>Program.cs</c> that every module's endpoints answer through.
 /// </summary>
-public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJsonFixture>
+[Collection(HttpJsonFixture.Collection)]
+public sealed class HttpJsonTests(HttpJsonFixture fixture)
 {
     private readonly TestHost _host = fixture.Host;
 
@@ -122,11 +123,14 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
 /// <summary>
 ///     One built project holding a file for every enum the web compares against, and one project never
 ///     refreshed, whose status is the idle one. Built once, because every test here only reads. Shared
-///     with <see cref="ApiContractTests" />, which needs a built project with history, imports and
-///     declarations too, and would otherwise build the same one again.
+///     through a collection with <see cref="ApiContractTests" />, which needs a built project with
+///     history, imports and declarations too: a class fixture would be built again for each class.
 /// </summary>
 public sealed class HttpJsonFixture : IAsyncLifetime
 {
+    /// <summary>The collection both classes join to get the one instance.</summary>
+    public const string Collection = "HTTP JSON";
+
     public const string Built = "built";
 
     public const string Unbuilt = "unbuilt";
@@ -186,3 +190,7 @@ public sealed class HttpJsonFixture : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 }
+
+/// <summary>Declares the collection that shares one <see cref="HttpJsonFixture" /> between its classes.</summary>
+[CollectionDefinition(HttpJsonFixture.Collection)]
+public sealed class SharedHttpJsonFixture : ICollectionFixture<HttpJsonFixture>;
