@@ -41,15 +41,6 @@ export const DECLARATION_EVIDENCE =
   'not find rather than one that is not there. Strong evidence, not proof.'
 
 /**
- * The side of a declaration/implementation split as the list prints it. The server sends the
- * enum's member name, which is a value to compare against and not the word a reader is shown.
- */
-export const ROLE_LABEL: Record<NonNullable<Declaration['role']>, string> = {
-  Declaration: 'declaration',
-  Implementation: 'implementation',
-}
-
-/**
  * What to call a declaration in the list. The member where there is one, because that is the name a
  * reader is looking for, and the type it belongs to in front of it where the line names both —
  * Delphi's `procedure TCustomer.Save;` says which type the routine is on, and dropping it would list

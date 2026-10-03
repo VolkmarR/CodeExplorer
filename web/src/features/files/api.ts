@@ -83,15 +83,13 @@ export interface Blame {
  * One name a file imports. `targetPath` and `unresolved` are exclusive: the first is a qualified
  * path the file view opens, the second the server's prose saying why there is none. The `name` is
  * there either way — an edge shown only when it resolves would read as a dependency the file does
- * not have. `shape` is whether the name was a module or a path, and `evidence` how it was read.
+ * not have.
  */
 export interface ImportEdge {
   name: string
-  shape: 'Module' | 'Path'
   lineNumber: number
   targetPath: string | null
   unresolved: string | null
-  evidence: 'Text' | 'Parsed'
 }
 
 /**
@@ -140,16 +138,12 @@ export interface Declaration {
  */
 export type DeclarationCoverage = 'Unprofiled' | 'Unreadable' | 'Read'
 
-/**
- * What a file declares. `capped` says the list is short of what the file declares, and `offset` how
- * many declarations were skipped to reach this page.
- */
+/** What a file declares. `capped` says the list is short of what the file declares. */
 export interface FileDeclarations {
   qualifiedPath: string
   languageName: string
   coverage: DeclarationCoverage
   capped: boolean
-  offset: number
   declarations: Declaration[]
 }
 
