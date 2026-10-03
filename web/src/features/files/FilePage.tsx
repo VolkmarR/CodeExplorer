@@ -15,7 +15,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { toast } from '@/components/ui/toast'
 import { languageFor } from '@/highlight/highlighter'
-import { fileName, formatBytes, formatCount } from '@/lib/format'
+import { fileName, formatBytes, formatCountOf } from '@/lib/format'
 
 /**
  * One file of the index, by qualified path. The path and the line both come from the URL, so a link
@@ -56,7 +56,7 @@ export function FilePage() {
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">{languageFor(file.qualifiedPath)}</Badge>
           <span className="text-xs text-muted-foreground tabular-nums">
-            {formatCount(file.lineCount)} lines · {formatBytes(file.sizeBytes)}
+            {formatCountOf(file.lineCount, 'line')} · {formatBytes(file.sizeBytes)}
           </span>
           {/* The last commit is the one a reader asks about — "who touched this?" — so it carries
               the subject. Nothing is shown for a file without history rather than "never changed",

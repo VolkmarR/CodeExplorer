@@ -9,6 +9,7 @@ import {
 } from '@/features/projects/queries'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { useDraft } from '@/hooks/useDraft'
+import { formatCountOf } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -39,7 +40,7 @@ export function ExcludedPathsForm({ project }: { project: string }) {
         title:
           saved.patterns.length === 0
             ? 'Nothing is excluded now'
-            : `Excluding ${saved.patterns.length} ${saved.patterns.length === 1 ? 'pattern' : 'patterns'}`,
+            : `Excluding ${formatCountOf(saved.patterns.length, 'pattern')}`,
         type: 'success',
       })
     },
@@ -160,8 +161,7 @@ function SuggestionList({
             <div className="min-w-0 flex-1">
               <code className="text-sm break-all">{s.pattern}</code>
               <p className="text-xs text-muted-foreground">
-                {RULE_LABELS[s.rule]} · {s.reason} · {s.files} {s.files === 1 ? 'file' : 'files'} at
-                HEAD
+                {RULE_LABELS[s.rule]} · {s.reason} · {formatCountOf(s.files, 'file')} at HEAD
               </p>
             </div>
             <div className="flex gap-1">

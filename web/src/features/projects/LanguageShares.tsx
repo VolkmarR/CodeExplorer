@@ -6,7 +6,7 @@ import { scaleLinear } from '@tanstack/charts/scales/linear'
 import { tooltip } from '@tanstack/charts/tooltip'
 import type { IndexOverview } from '@/features/projects/api'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
-import { formatCount } from '@/lib/format'
+import { formatCountOf, formatPercent } from '@/lib/format'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /** The languages drawn by name; every one after them is folded into "Other". */
@@ -82,7 +82,7 @@ export function LanguageShares({
       tooltip: {
         use: tooltip,
         format: (point) =>
-          `${point.datum.name}: ${formatCount(point.datum.files)} files, ${formatCount(point.datum.lines)} lines`,
+          `${point.datum.name}: ${formatCountOf(point.datum.files, 'file')}, ${formatCountOf(point.datum.lines, 'line')}`,
       },
     })
     return { segments, total, definition }
@@ -111,7 +111,7 @@ export function LanguageShares({
                     className="size-2.5 rounded-xs bg-(--swatch)"
                     style={{ '--swatch': segment.colour } as React.CSSProperties}
                   />
-                  {segment.name} {Math.round((100 * segment.lines) / bar.total)} %
+                  {segment.name} {formatPercent(segment.lines / bar.total)}
                 </li>
               ))}
             </ul>

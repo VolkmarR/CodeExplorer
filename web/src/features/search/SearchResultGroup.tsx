@@ -5,7 +5,7 @@ import { MatchedLine } from '@/features/search/MatchedLine'
 import { matchRanges } from '@/features/search/matchRanges'
 import { languageFor } from '@/highlight/highlighter'
 import type { GrepFile } from '@/features/search/api'
-import { directoryOf, fileName, formatCount } from '@/lib/format'
+import { directoryOf, fileName, formatCountOf } from '@/lib/format'
 
 /** One shared empty array for context lines, so a row without marks does not get a new prop each render. */
 const NO_MATCHES: never[] = []
@@ -45,7 +45,7 @@ export function SearchResultGroup({
           {fileName(file.qualifiedPath)}
         </Link>
         <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-          {formatCount(file.matchCount)} {file.matchCount === 1 ? 'match' : 'matches'}
+          {formatCountOf(file.matchCount, 'match', 'matches')}
           {file.matchesShown < file.matchCount ? `, showing ${file.matchesShown}` : ''}
         </span>
       </div>

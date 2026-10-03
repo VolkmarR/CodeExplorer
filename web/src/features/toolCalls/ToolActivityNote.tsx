@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { toolActivityQuery } from '@/features/toolCalls/queries'
-import { formatCount, formatTime } from '@/lib/format'
+import { formatCountOf, formatTime } from '@/lib/format'
 
 /**
  * One line on a project's card in the list: whether agents have been using it. Not a suspense query,
@@ -14,8 +14,7 @@ export function ToolActivityNote({ project }: { project: string }) {
 
   return (
     <span className="text-xs text-muted-foreground tabular-nums">
-      {formatCount(activity.callsLastHour)}{' '}
-      {activity.callsLastHour === 1 ? 'tool call' : 'tool calls'} in the last hour · last{' '}
+      {formatCountOf(activity.callsLastHour, 'tool call')} in the last hour · last{' '}
       {formatTime(activity.lastCall)}
     </span>
   )

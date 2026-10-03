@@ -5,7 +5,7 @@ import type { CommitEntry, CommitList as CommitPage } from '@/features/history/a
 import { DiffStat } from '@/components/DiffStat'
 import { Pager } from '@/components/Pager'
 import { Badge } from '@/components/ui/badge'
-import { formatCount, formatDate, shortSha } from '@/lib/format'
+import { formatCountOf, formatDate, shortSha } from '@/lib/format'
 
 /**
  * A page of commits, each a row that opens the commit's own page. The row used to expand in place
@@ -104,7 +104,7 @@ function CommitRow({
             <span title={commit.authorEmail}>{commit.authorName}</span>
             <span className="tabular-nums">
               <DiffStat added={commit.added} deleted={commit.deleted} /> in{' '}
-              {formatCount(commit.filesChanged)} {commit.filesChanged === 1 ? 'file' : 'files'}
+              {formatCountOf(commit.filesChanged, 'file')}
             </span>
           </span>
         </span>

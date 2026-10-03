@@ -9,7 +9,7 @@ import { RepositorySelect } from '@/features/projects/RepositorySelect'
 import { PageCard } from '@/components/PageCard'
 import { WindowNote } from '@/components/WindowNote'
 import { Label } from '@/components/ui/label'
-import { formatCount, formatDate } from '@/lib/format'
+import { formatCountOf, formatDate } from '@/lib/format'
 
 /**
  * A project's change log: the commits of every repository's default branch, newest first, a page at
@@ -52,7 +52,7 @@ export function HistoryPage() {
         hint={
           log.total === 0
             ? 'no history is recorded yet'
-            : `${formatCount(log.total)} ${log.total === 1 ? 'commit' : 'commits'} on the default branch, newest first`
+            : `${formatCountOf(log.total, 'commit')} on the default branch, newest first`
         }
         actions={
           filterable ? (

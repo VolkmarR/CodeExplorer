@@ -1,5 +1,5 @@
 import type { Churn } from '@/features/churn/api'
-import { formatCount } from '@/lib/format'
+import { formatCountOf } from '@/lib/format'
 
 /**
  * What the ranking above does not cover. Both notes are about the same mistake — reading a partial
@@ -18,7 +18,7 @@ export function ChurnNotes({ ranking }: { ranking: Churn }) {
     <>
       {hidden > 0 ? (
         <p className="text-xs text-muted-foreground">
-          {formatCount(hidden)} other {hidden === 1 ? 'path' : 'paths'} changed in this window and{' '}
+          {formatCountOf(hidden, 'other path')} changed in this window and{' '}
           {hidden === 1 ? 'is' : 'are'} filtered out of this ranking.
         </p>
       ) : null}

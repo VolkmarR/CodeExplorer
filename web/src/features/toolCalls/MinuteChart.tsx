@@ -5,7 +5,7 @@ import { scaleBand } from '@tanstack/charts/scales/band'
 import { scaleLinear } from '@tanstack/charts/scales/linear'
 import { tooltip } from '@tanstack/charts/tooltip'
 import type { MinuteCalls } from '@/features/toolCalls/api'
-import { formatCount } from '@/lib/format'
+import { formatCount, formatCountOf } from '@/lib/format'
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 
@@ -80,5 +80,5 @@ export function MinuteChart({ minutes }: { minutes: MinuteCalls[] }) {
 
 function describe(m: MinuteCalls) {
   const failed = m.failed > 0 ? `, ${formatCount(m.failed)} failed` : ''
-  return `${clock.format(new Date(m.minute))}: ${formatCount(m.calls)} calls${failed}`
+  return `${clock.format(new Date(m.minute))}: ${formatCountOf(m.calls, 'call')}${failed}`
 }

@@ -9,7 +9,7 @@ import { PageCard } from '@/components/PageCard'
 import { Pager } from '@/components/Pager'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { formatCount, formatDate, shortSha } from '@/lib/format'
+import { formatCount, formatCountOf, formatDate, shortSha } from '@/lib/format'
 
 /**
  * One commit, by SHA. It exists because a commit was the one thing the UI named everywhere and could
@@ -44,7 +44,7 @@ export function CommitPage() {
           </span>
           <span className="text-xs tabular-nums">
             <DiffStat added={commit.added} deleted={commit.deleted} /> in{' '}
-            {formatCount(commit.filesChanged)} {commit.filesChanged === 1 ? 'file' : 'files'}
+            {formatCountOf(commit.filesChanged, 'file')}
           </span>
         </div>
       }

@@ -4,7 +4,7 @@ import { fileSearch } from '@/lib/urls/fileParams'
 import type { BrowseParameters } from '@/lib/urls/browseParams'
 import { browseQuery } from '@/features/files/queries'
 import { Pager } from '@/components/Pager'
-import { formatBytes, formatCount } from '@/lib/format'
+import { formatBytes, formatCount, formatCountOf } from '@/lib/format'
 import {
   Table,
   TableBody,
@@ -29,7 +29,7 @@ export function FileList({ project, search }: { project: string; search: BrowseP
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        {formatCount(listing.total)} {listing.total === 1 ? 'file' : 'files'}
+        {formatCountOf(listing.total, 'file')}
         {/* Which rows these are, not how many: a page in the middle of a wide match is otherwise
             indistinguishable from the whole of a narrow one. */}
         {lastPage > 1

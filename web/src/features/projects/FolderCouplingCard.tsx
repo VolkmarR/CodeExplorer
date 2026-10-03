@@ -9,7 +9,7 @@ import { cell, defineChart } from '@tanstack/charts'
 import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
 import { tooltip } from '@tanstack/charts/tooltip'
-import { formatCount, formatPercent } from '@/lib/format'
+import { formatCount, formatCountOf, formatPercent } from '@/lib/format'
 import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -80,7 +80,7 @@ export function FolderCouplingCard({
                     {pair.first} + {pair.second}
                   </span>
                   <span className="tabular-nums text-muted-foreground">
-                    {formatCount(pair.commits)} commits
+                    {formatCountOf(pair.commits, 'commit')}
                   </span>
                   <span
                     className="w-10 text-right tabular-nums"
@@ -112,7 +112,7 @@ export function FolderCouplingCard({
           </div>
         )}
         <p className="pt-3 text-xs text-muted-foreground">
-          Commits touching more than {formatCount(coupling.maxCommitPaths)} paths are left out
+          Commits touching more than {formatCountOf(coupling.maxCommitPaths, 'path')} are left out
           (History:MaxCommitPaths): {formatCount(coupling.ceilingExcluded)} in this window.
         </p>
       </CardContent>

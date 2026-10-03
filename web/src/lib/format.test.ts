@@ -4,7 +4,9 @@ import {
   fileName,
   formatBytes,
   formatCount,
+  formatCountOf,
   formatSeconds,
+  nounFor,
   shortSha,
   splitFileName,
   utcDayParts,
@@ -81,6 +83,18 @@ test('a size crosses its unit at the binary boundary and not before', () => {
   expect(formatBytes(1024)).toBe('1.0 KiB')
   expect(formatBytes(1024 * 1024 - 1)).toBe('1024.0 KiB')
   expect(formatBytes(1024 * 1024)).toBe('1.0 MiB')
+})
+
+test('a counted noun is singular for one and plural for every other count, zero included', () => {
+  expect(formatCountOf(1, 'file')).toBe('1 file')
+  expect(formatCountOf(0, 'file')).toBe('0 files')
+  expect(formatCountOf(2, 'match', 'matches')).toBe('2 matches')
+  expect(formatCountOf(1, 'repository', 'repositories')).toBe('1 repository')
+  // The number is grouped like any other count.
+  expect(formatCountOf(12_345, 'line').replaceAll(/[\s.,]/g, '')).toBe('12345lines')
+  // The noun alone follows the same rule, for a number styled apart from it.
+  expect(nounFor(1, 'match', 'matches')).toBe('match')
+  expect(nounFor(3, 'file')).toBe('files')
 })
 
 test('a count is grouped, so six figures read as six figures', () => {
