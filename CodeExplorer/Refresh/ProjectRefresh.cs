@@ -20,8 +20,6 @@ public sealed class ProjectRefresh(
     ProjectIndexes indexes,
     ILogger<ProjectRefresh> logger)
 {
-    private const int _totalSteps = RefreshProgress.TotalStepCount;
-
     /// <param name="project">The project to refresh, as the control database holds it.</param>
     /// <param name="report">
     ///     Called with the phase reached, for the status a web UI and an external cron poll. Synchronous,
@@ -72,7 +70,7 @@ public sealed class ProjectRefresh(
             IndexSummary summary;
             try
             {
-                report(new RefreshProgress(RefreshProgress.IngestStep, _totalSteps, RefreshProgress.IngestPhase));
+                report(new RefreshProgress(RefreshProgress.IngestStep, RefreshProgress.IngestPhase));
                 bool published;
                 using (var shadow = await indexes.CreateShadowAsync(project.Slug, cancellationToken))
                 {
@@ -80,7 +78,7 @@ public sealed class ProjectRefresh(
                         report, cancellationToken);
                     // Reported before the publish waits on the writer gate, so a wait behind a restore of
                     // the same project is billed to the store it is holding up.
-                    report(new RefreshProgress(RefreshProgress.StoreStep, _totalSteps, RefreshProgress.StorePhase));
+                    report(new RefreshProgress(RefreshProgress.StoreStep, RefreshProgress.StorePhase));
                     // No phase names the flush to disk: it is the CHECKPOINT the publish runs on the
                     // shadow after storing it and before the swap (#242). It lands after StoreStep is
                     // reported, outside the step-3 window #91 is about, so its half-second is billed to
@@ -159,7 +157,7 @@ public sealed class ProjectRefresh(
         {
             // Reported before the fetch, and counted as done after: an operator watching wants to know
             // which repository is being transferred now, not which one finished last.
-            report(new RefreshProgress(RefreshProgress.FetchStep, _totalSteps, $"Fetching '{repository.Slug}'", fetched++,
+            report(new RefreshProgress(RefreshProgress.FetchStep, $"Fetching '{repository.Slug}'", fetched++,
                 repositories.Count));
             try
             {

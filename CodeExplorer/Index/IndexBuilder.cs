@@ -77,8 +77,7 @@ public sealed class IndexBuilder(
         // Named while it runs, for the reason the overview below is (#91): it is the one pass of the
         // build that reported nothing, so its cost was read back under the label of whichever
         // repository the walk reported last.
-        report(new RefreshProgress(RefreshProgress.IngestStep, RefreshProgress.TotalStepCount,
-            RefreshProgress.ResolveImportsPhase));
+        report(new RefreshProgress(RefreshProgress.IngestStep, RefreshProgress.ResolveImportsPhase));
         await imports.ResolveAsync(shadow, cancellationToken);
         // After the files, because attribution is joined onto them and a file row is what says which
         // blobs are at HEAD; before CompleteAsync, because the index_info row means the build finished
@@ -90,8 +89,7 @@ public sealed class IndexBuilder(
         // Reported rather than left under the attribution's label (#91), and a step of its own rather
         // than a second phase of the history's: what a refresh spent its wall clock on can only be read
         // back if whatever spent it was named while it ran, and the counter is read the same way.
-        report(new RefreshProgress(RefreshProgress.OverviewStep, RefreshProgress.TotalStepCount,
-            RefreshProgress.OverviewPhase));
+        report(new RefreshProgress(RefreshProgress.OverviewStep, RefreshProgress.OverviewPhase));
         await overview.FillAsync(shadow, singleRepository, cancellationToken);
         await shadow.CompleteAsync(singleRepository, report, cancellationToken);
 
@@ -134,7 +132,7 @@ public sealed class IndexBuilder(
                 // Every 200 files rather than every file: the status is polled, not streamed, so a
                 // finer grain would only cost dictionary writes nobody reads.
                 if (fileCount % RefreshProgress.ReportEvery == 0)
-                    report(new RefreshProgress(RefreshProgress.IngestStep, RefreshProgress.TotalStepCount,
+                    report(new RefreshProgress(RefreshProgress.IngestStep,
                         $"Reading '{repository.Slug}' into the shadow index", fileCount, entries.Count));
                 fileId++;
                 fileCount++;

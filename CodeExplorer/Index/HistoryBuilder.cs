@@ -80,8 +80,7 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             attributed += Replay(connection, catalog, repository.Slug, fresh, report, cancellationToken);
         }
 
-        report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
-            RefreshProgress.AttributionPhase));
+        report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.AttributionPhase));
         Materialise(connection, cancellationToken);
         // After Materialise and not before it: both read the completed commit_files, and this one is
         // what the scoped history reads replace seventeen scans of that table with (#148).
@@ -147,8 +146,8 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             // The walk is where a first import spends its minutes, and how long it is cannot be known
             // before it ends, so the count runs without a total rather than against an invented one.
             if (fresh.Count % RefreshProgress.ReportEvery == 0)
-                report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
-                    $"Reading the history of '{slug}'", fresh.Count));
+                report(new RefreshProgress(RefreshProgress.HistoryStep, $"Reading the history of '{slug}'",
+                    fresh.Count));
             fresh.Add(commit);
         }
 
@@ -250,8 +249,8 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (done++ % RefreshProgress.ReportEvery == 0)
-                    report(new RefreshProgress(RefreshProgress.HistoryStep, RefreshProgress.TotalStepCount,
-                        $"Attributing the lines of '{slug}'", done, fresh.Count));
+                    report(new RefreshProgress(RefreshProgress.HistoryStep, $"Attributing the lines of '{slug}'",
+                        done, fresh.Count));
                 foreach (var change in commit.Files) Apply(state, change, id);
             }
 
