@@ -4,7 +4,8 @@ import { Copy, History, WrapText } from 'lucide-react'
 import { useState } from 'react'
 import { CodeView } from '@/features/files/CodeView'
 import { FileRail } from '@/features/files/FileRail'
-import { PathBreadcrumb } from '@/features/files/PathBreadcrumb'
+import { PathTrail } from '@/components/PathTrail'
+import { treeSearch } from '@/lib/urls/browseParams'
 import { blameQuery, fileQuery } from '@/features/files/queries'
 import { CommitLine } from '@/components/CommitLine'
 import { ErrorPanel } from '@/components/ErrorPanel'
@@ -51,7 +52,19 @@ export function FilePage() {
   return (
     <PageCard
       title={fileName(file.qualifiedPath)}
-      hint={<PathBreadcrumb project={project} path={file.qualifiedPath} />}
+      // The same trail as the tree's, so walking down into a file and back up reads as one path.
+      hint={
+        <PathTrail
+          project={project}
+          path={file.qualifiedPath}
+          label="Breadcrumb"
+          linkTo={(to) => ({
+            params: { project },
+            search: treeSearch(to),
+            to: '/projects/$project/files',
+          })}
+        />
+      }
       badges={
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">{languageFor(file.qualifiedPath)}</Badge>

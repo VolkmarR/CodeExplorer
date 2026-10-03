@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { FileText, Folder, GitBranch } from 'lucide-react'
 import { treeSearch } from '@/lib/urls/browseParams'
 import { fileSearch } from '@/lib/urls/fileParams'
-import { PathBreadcrumb } from '@/features/files/PathBreadcrumb'
+import { PathTrail } from '@/components/PathTrail'
 import { treeQuery } from '@/features/files/queries'
 import { formatBytes, formatCount } from '@/lib/format'
 import {
@@ -25,7 +25,16 @@ export function FileTree({ project, path }: { project: string; path: string }) {
 
   return (
     <div className="space-y-3">
-      <PathBreadcrumb project={project} path={level.path} />
+      <PathTrail
+        project={project}
+        path={level.path}
+        label="Breadcrumb"
+        linkTo={(to) => ({
+          params: { project },
+          search: treeSearch(to),
+          to: '/projects/$project/files',
+        })}
+      />
 
       {level.entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">
