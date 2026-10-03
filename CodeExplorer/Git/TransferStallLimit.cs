@@ -27,8 +27,10 @@ internal static class TransferStallLimit
 
     // The native library LibGit2Sharp ships and has already loaded; the name carries the libgit2 commit
     // it was built from, so it changes with the LibGit2Sharp package. A mismatch throws
-    // DllNotFoundException the first time GitClones is built, which every refresh test does. BlobReader
-    // binds to the same library, so this is the one place the name is kept.
+    // DllNotFoundException the first time GitClones is built, which every refresh test does. This file,
+    // BlobReader, NativeDiff and NativeRepository all bind to the library through this constant, so an
+    // update of the package changes the name here and nowhere else. It sits here because this was the
+    // first of the four; it is no more this class's than theirs.
     internal const string Library = "git2-5853918";
 
     // git_libgit2_opt_t in libgit2 1.7 and later, which the bundled 1.9 is.

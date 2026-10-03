@@ -64,8 +64,9 @@ internal static class PathLineageBuilder
         }
         finally
         {
-            // In a finally for the reason the attribution scratch is: a cancelled or failed build must
-            // not leave these on a connection the pool hands out again.
+            // Dropped as soon as the chains are written, as the attribution scratch is, rather than held
+            // until the build ends; the shadow's connection is never pooled, so this is about memory
+            // and not about a later borrower.
             foreach (string scratch in new[]
                          { "lineage_prefixes", "lineage_hops", "lineage_chain", "lineage_member_commit" })
                 connection.Execute($"DROP TABLE IF EXISTS {scratch}", CancellationToken.None);

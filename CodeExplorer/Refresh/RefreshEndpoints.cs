@@ -5,8 +5,9 @@ namespace CodeExplorer.Refresh;
 /// <summary>
 ///     The two endpoints a refresh is driven by, and the warm-up beside them (ADR-0005). The first two
 ///     are separate because the work outlives the request — a Container Apps Job on a cron fires the
-///     one and never looks again, while the web UI polls the other (ADR-0004). Authentication is off
-///     until the ticket that adds it, so nothing here checks a caller yet.
+///     one and never looks again, while the web UI polls the other (ADR-0004). None of them checks a
+///     caller itself: where a tenant is configured, the fallback policy covers them as it covers every
+///     other endpoint (<c>Authentication</c>), and where none is, the server is open by design.
 /// </summary>
 internal static class RefreshEndpoints
 {

@@ -1,8 +1,9 @@
 namespace CodeExplorer.Infrastructure;
 
 /// <summary>
-///     A project (CONTEXT.md): the stable slug agents address it by, and a display name that can
-///     change freely.
+///     A project (CONTEXT.md): the stable slug agents address it by, and its display name. Nothing
+///     about it changes after creation, the name included, which is what lets the control database
+///     cache a found project for as long as it exists (<c>ControlDatabase.FindAsync</c>).
 ///     It sits in <c>Infrastructure/</c> rather than in <c>Control/</c> even though the control
 ///     database is what stores it, because it is the one thing every module is handed —
 ///     <c>BoundProject</c> resolves it from the route, a handler declares it as a parameter and every
@@ -11,7 +12,7 @@ namespace CodeExplorer.Infrastructure;
 ///     and no behaviour beyond reading itself off the request.
 /// </summary>
 /// <param name="Slug">The stable name agents address the project by; it never changes.</param>
-/// <param name="Name">The display name, which can change freely.</param>
+/// <param name="Name">The display name, written once at creation and never updated.</param>
 /// <param name="SingleRepository">
 ///     Declared at creation and read-only afterwards (ADR-0006): the project holds one repository and
 ///     names its files without a repository slug. Changing it either way would rename every file

@@ -4,10 +4,11 @@ import { RailPanel } from '@/features/files/RailPanel'
  * A panel that answers from the index: the heading and its count, whatever the answer has to explain
  * about itself, the list, and the caveat on how the answer was reached.
  *
- * All three such panels — what a file declares, what it imports, what imports it — are this shape and
- * differ only in their rows, so it is written once. Each was hand-written before, and the cost was
- * four literal class strings per copy: a spacing or type-scale fix landed on one panel and left the
- * others a few pixels off, which is the drift `RailPanel` itself exists to prevent.
+ * Both such panels — what a file declares and what it imports — are this shape and differ only in
+ * their rows, so it is written once. (A third, what imports it, was removed in #160.) Each was
+ * hand-written before, and the cost was four literal class strings per copy: a spacing or type-scale
+ * fix landed on one panel and left the others a few pixels off, which is the drift `RailPanel` itself
+ * exists to prevent.
  */
 export function RailPanelAnswer({
   title,
