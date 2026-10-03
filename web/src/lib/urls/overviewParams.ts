@@ -1,4 +1,5 @@
-import { DEFAULT_CHURN_DAYS, text } from '@/lib/urls/churnParams'
+import { DEFAULT_CHURN_DAYS } from '@/lib/urls/churnParams'
+import { flag, positiveInteger, text } from '@/lib/urls/coerce'
 
 /**
  * What the overview page needs from the URL: the window its most-changed ranking is counted over,
@@ -33,13 +34,12 @@ export const DEFAULT_OVERVIEW_DAYS = DEFAULT_CHURN_DAYS
  * cache entry.
  */
 export function validateOverviewSearch(search: Record<string, unknown>): OverviewParameters {
-  const days = Number(search.days)
   return overviewSearch({
     // Any positive number, as the churn page takes: the server clamps it, and 45 days is a question.
-    days: Number.isInteger(days) && days > 0 ? days : undefined,
+    days: positiveInteger(search.days),
     repository: text(search.repository),
     // True or absent, never false: a link that says `showExcluded=false` asks for the default.
-    showExcluded: search.showExcluded === true || search.showExcluded === 'true',
+    showExcluded: flag(search.showExcluded),
   })
 }
 

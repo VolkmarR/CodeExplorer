@@ -1,3 +1,5 @@
+import { flag, positiveInteger, text, textOrEmpty } from '@/lib/urls/coerce'
+
 /**
  * Everything a search is made of lives in the URL, so a result list can be pasted to a colleague and
  * opens as the same search (ADR-0004). It is defined here rather than in the route file so that the
@@ -17,17 +19,13 @@ export interface SearchParameters {
  * truncated URL should still open a page, and an empty query is the resting state of this one.
  */
 export function validateSearch(search: Record<string, unknown>): SearchParameters {
-  const page = Number(search.page)
   return {
-    caseSensitive: search.caseSensitive === true || search.caseSensitive === 'true',
-    extension:
-      typeof search.extension === 'string' && search.extension !== ''
-        ? search.extension
-        : undefined,
-    page: Number.isInteger(page) && page > 0 ? page : 1,
-    path: typeof search.path === 'string' && search.path !== '' ? search.path : undefined,
-    q: typeof search.q === 'string' ? search.q : '',
-    regex: search.regex === true || search.regex === 'true',
+    caseSensitive: flag(search.caseSensitive),
+    extension: text(search.extension),
+    page: positiveInteger(search.page) ?? 1,
+    path: text(search.path),
+    q: textOrEmpty(search.q),
+    regex: flag(search.regex),
   }
 }
 
