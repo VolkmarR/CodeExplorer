@@ -21,38 +21,13 @@ public sealed class TelemetryTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    /// <summary>Three files holding "Widget" on three lines, in two repositories.</summary>
-    private static async Task<TestHost> ProjectAsync(SearchEngine engine, string slug)
-    {
-        var host = new TestHost(engine);
-        try
-        {
-            await host.IndexedProjectAsync(slug, new Dictionary<string, Dictionary<string, string>>
-            {
-                ["one"] = new()
-                {
-                    ["src/Widget.cs"] = "class Widget\n{\n    int Size;\n}\n",
-                    ["docs/Widget.md"] = "widget notes\n"
-                },
-                ["two"] = new() { ["src/Widget.cs"] = "class Widget { }\n" }
-            });
-            return host;
-        }
-        catch
-        {
-            // The host owns a data directory and an open DuckDB instance; a failure here would leak both.
-            host.Dispose();
-            throw;
-        }
-    }
-
     [Theory]
     [InlineData(SearchEngine.Substring, Search.GrepSearch.SubstringEngine, "tele-search-substring")]
     [InlineData(SearchEngine.Fts, Search.GrepSearch.TokenEngine, "tele-search-fts")]
     public async Task A_search_records_its_duration_engine_and_result_counts(
         SearchEngine engine, string reported, string slug)
     {
-        using var host = await ProjectAsync(engine, slug);
+        using var host = await WidgetProject.HostAsync(engine, slug);
         using var probe = new TelemetryProbe(slug);
 
         var result = await host.GetJsonAsync<GrepResult>($"/api/projects/{slug}/search?q=Widget");
@@ -76,7 +51,7 @@ public sealed class TelemetryTests
     public async Task A_second_search_entry_point_reports_the_same_attributes()
     {
         const string slug = "tele-tool";
-        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, slug);
 
         using var probe = new TelemetryProbe(slug);
         await using (var client = await host.ConnectAsync(slug))
@@ -103,7 +78,7 @@ public sealed class TelemetryTests
     public async Task A_tool_call_records_its_whole_duration_with_the_query_span_inside_it()
     {
         const string slug = "tele-call";
-        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, slug);
 
         using var probe = new TelemetryProbe(slug);
         await using (var client = await host.ConnectAsync(slug))
@@ -137,7 +112,7 @@ public sealed class TelemetryTests
     public async Task Leasing_an_index_is_timed_wherever_it_is_asked_for()
     {
         const string slug = "tele-lease";
-        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, slug);
 
         using var probe = new TelemetryProbe(slug);
         await host.GetJsonAsync<GrepResult>($"/api/projects/{slug}/search?q=Widget");
@@ -160,7 +135,7 @@ public sealed class TelemetryTests
     public async Task A_call_the_argument_filter_answers_is_still_timed()
     {
         const string slug = "tele-unbound";
-        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, slug);
 
         using var probe = new TelemetryProbe(slug);
         await using (var client = await host.ConnectAsync(slug))
@@ -187,7 +162,7 @@ public sealed class TelemetryTests
     public async Task The_heuristic_searches_record_under_their_own_engine_names(
         string tool, string argument, string value, string engine, string slug)
     {
-        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, slug);
 
         using var probe = new TelemetryProbe(slug);
         await using (var client = await host.ConnectAsync(slug))
@@ -245,7 +220,7 @@ public sealed class TelemetryTests
     public async Task A_search_that_answers_with_a_problem_is_recorded_as_one()
     {
         const string slug = "tele-problem";
-        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, slug);
         using var probe = new TelemetryProbe(slug);
 
         using var http = host.CreateClient();
@@ -265,7 +240,7 @@ public sealed class TelemetryTests
     public async Task A_search_that_throws_is_recorded_as_a_failure()
     {
         const string slug = "tele-failed";
-        using var host = await ProjectAsync(SearchEngine.Substring, slug);
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, slug);
         using var probe = new TelemetryProbe(slug);
 
         // An agent that abandons a slow search is the real case; an already-cancelled token is the
@@ -285,7 +260,7 @@ public sealed class TelemetryTests
     [Fact]
     public async Task A_search_of_a_project_with_no_index_still_carries_its_slug()
     {
-        using var host = await ProjectAsync(SearchEngine.Substring, "tele-known");
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, "tele-known");
         // Created and never refreshed: a slug that is no project at all is a 404 from the route
         // (BoundProject) and never reaches a search, so it is not what this is about.
         await host.CreateProjectAsync("tele-ghost");
@@ -379,7 +354,7 @@ public sealed class TelemetryTests
         // The default TestHost sets no endpoint, so this is the offline default path, asserted rather
         // than assumed: a broken registration would otherwise fail every test at once and read as a
         // search defect.
-        using var host = await ProjectAsync(SearchEngine.Substring, "tele-offline");
+        using var host = await WidgetProject.HostAsync(SearchEngine.Substring, "tele-offline");
         Assert.Equal(3, (await host.GetJsonAsync<GrepResult>("/api/projects/tele-offline/search?q=Widget")).TotalFiles);
     }
 
