@@ -27,12 +27,6 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
         "and a name is resolved only where it names exactly one file in this project. Strong evidence, not proof.";
 
     /// <summary>
-    ///     What a reply with no edges of its own claims: a file that wrote no import line has no
-    ///     evidence of its own to report, and the caveat still has to say how it was read.
-    /// </summary>
-    private static readonly Evidence[] _textual = [Evidence.Text];
-
-    /// <summary>
     ///     The pivot this tool makes when the import graph has nothing to say. An empty answer here is
     ///     about import lines and never about dependency, so it must not be left as the last word: a
     ///     project-local dependency expressed by global visibility, inheritance, reflection, dynamic
@@ -102,7 +96,10 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
 
         if (result.Imports.Count == 0)
             return Finish(text.Append(
-                "\nNo import line was read in it. In a language that has them, that means the file imports nothing — not that nothing was looked for.\n"), _textual);
+                "\nNo import line was read in it. In a language that has them, that means the file imports nothing — not that nothing was looked for.\n"),
+                // No edges, so no evidence of their own: EvidenceClause reads that as textual, which is
+                // how the file was scanned, and the caveat still says so.
+                []);
 
         if (result.Capped)
             text.Append(CultureInfo.InvariantCulture,
