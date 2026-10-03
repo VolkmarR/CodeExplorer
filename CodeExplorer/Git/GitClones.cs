@@ -103,7 +103,7 @@ public sealed class GitClones(
         {
             return await RefreshAndOpenAsync(repository, path, cancellationToken);
         }
-        catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (LocalCopyFiles.IsGitOrDiskFailure(ex))
         {
             // What the transfer itself raised is already an McpException; this is the rest, the local
             // copy failing on the server's own disk while it is cleared, opened or read. The message
@@ -213,7 +213,7 @@ public sealed class GitClones(
         {
             return directory.EnumerateFiles("*", SearchOption.AllDirectories).Sum(file => file.Length);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (LocalCopyFiles.IsDiskFailure(ex))
         {
             // Safe to swallow: a clone being written or removed while this walks is the normal case,
             // and the gate only needs a figure to reason with. Zero reads as "nothing to reserve for",
@@ -315,7 +315,7 @@ public sealed class GitClones(
         {
             Repository.Clone(repository.Url, path, options);
         }
-        catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (LocalCopyFiles.IsGitOrDiskFailure(ex))
         {
             // Judged before the delete, whose time would otherwise count as the remote's silence.
             var failure = TransferFailed("Cloning", repository, path, ex, watch);
@@ -449,7 +449,7 @@ public sealed class GitClones(
         {
             Commands.Fetch(clone, "origin", [_mirrorRefSpec], options, null);
         }
-        catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (LocalCopyFiles.IsGitOrDiskFailure(ex))
         {
             cancellationToken.ThrowIfCancellationRequested();
             // The clone is left in place: it still holds the commits of the last successful fetch, so
@@ -589,7 +589,7 @@ public sealed class GitClones(
                 ? Repository.ListRemoteReferences(repository.Url)
                 : Repository.ListRemoteReferences(repository.Url, credentials)).ToList();
         }
-        catch (Exception ex) when (ex is LibGit2SharpException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (LocalCopyFiles.IsGitOrDiskFailure(ex))
         {
             cancellationToken.ThrowIfCancellationRequested();
             // Safe to swallow: the fetch above already succeeded, so the commits are here and a clone
