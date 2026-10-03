@@ -12,7 +12,7 @@ namespace CodeExplorer.Tests;
 /// </summary>
 public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassFixture<SearchEndpointFixture>
 {
-    private readonly TestHost _host = fixture.Host(SearchEngine.Substring);
+    private readonly TestHost _host = fixture.Substring;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -21,7 +21,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     [InlineData(SearchEngine.Fts)]
     public async Task Search_answers_with_qualified_paths_the_file_endpoint_accepts(SearchEngine engine)
     {
-        var host = fixture.Host(engine);
+        var host = await fixture.HostAsync(engine);
 
         var result = await host.GetJsonAsync<GrepResult>("/api/projects/alpha/search?q=Widget");
 
@@ -44,7 +44,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     [InlineData(SearchEngine.Fts)]
     public async Task Search_filters_by_extension_and_pages(SearchEngine engine)
     {
-        var host = fixture.Host(engine);
+        var host = await fixture.HostAsync(engine);
 
         var scoped = await host.GetJsonAsync<GrepResult>("/api/projects/alpha/search?q=Widget&extension=cs");
         Assert.Equal(2, scoped.TotalFiles);
@@ -60,7 +60,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     [InlineData(SearchEngine.Fts)]
     public async Task Browsing_lists_files_by_glob_and_by_repository(SearchEngine engine)
     {
-        var host = fixture.Host(engine);
+        var host = await fixture.HostAsync(engine);
 
         var all = await host.GetJsonAsync<FileListResponse>("/api/projects/alpha/files");
         Assert.Equal(3, all.Total);
@@ -108,7 +108,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     [InlineData(SearchEngine.Fts, 0)]
     public async Task The_engine_the_result_names_is_the_one_that_answered(SearchEngine engine, int expected)
     {
-        var result = await fixture.Host(engine)
+        var result = await (await fixture.HostAsync(engine))
             .GetJsonAsync<GrepResult>($"/api/projects/{SearchEndpointFixture.Factory}/search?q=Widget");
 
         // The one place the two engines legitimately disagree, and why the result carries the engine:
@@ -659,7 +659,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
 ///     server and build a project on it, and <see cref="HistoryFixture" /> records what that costs: a
 ///     project on an already-booted host takes 430ms against 1150ms on a cold one.
 ///     Only <see cref="Alpha" /> and <see cref="Factory" /> are read under both engines, so the full-text
-///     server builds those two and the substring server builds them all.
+///     server builds those two, on first use, and the substring server builds them all.
 ///     The tests that delete a project's commits, and the one about a project with no index, still
 ///     start a server of their own and say so where they do. A project's fixture repositories are named
 ///     after it, because a fixture directory belongs to the host and most of these call theirs
@@ -701,19 +701,34 @@ public sealed class SearchEndpointFixture : IAsyncLifetime
     /// <summary>One file declaring exactly as many names as the ceiling holds, and one declaring one more.</summary>
     public const string DeclarationCeiling = "declaration-ceiling";
 
-    private readonly TestHost _substring = new(SearchEngine.Substring);
     private readonly TestHost _fts = new(SearchEngine.Fts);
 
-    /// <summary>The server pinned to <paramref name="engine" />.</summary>
-    public TestHost Host(SearchEngine engine) => engine == SearchEngine.Fts ? _fts : _substring;
+    /// <summary>
+    ///     The full-text server's projects, built when a full-text case first asks for them rather than
+    ///     before the class runs. <c>INSTALL fts</c> fails offline, and a build that failed in
+    ///     <see cref="InitializeAsync" /> would fail every test here, the substring ones with it, where it
+    ///     should fail only the cases that need the extension.
+    /// </summary>
+    private readonly Lazy<Task> _ftsBuilt;
 
-    public async ValueTask InitializeAsync() =>
-        // Two servers that share nothing, so they boot and build side by side.
-        await Task.WhenAll(BuildAsync(_fts, false), BuildAsync(_substring, true));
+    public SearchEndpointFixture() => _ftsBuilt = new Lazy<Task>(() => BuildAsync(_fts, false));
+
+    /// <summary>The substring server, which holds every project here.</summary>
+    public TestHost Substring { get; } = new(SearchEngine.Substring);
+
+    /// <summary>The server pinned to <paramref name="engine" />, its projects built.</summary>
+    public async Task<TestHost> HostAsync(SearchEngine engine)
+    {
+        if (engine != SearchEngine.Fts) return Substring;
+        await _ftsBuilt.Value;
+        return _fts;
+    }
+
+    public async ValueTask InitializeAsync() => await BuildAsync(Substring, true);
 
     private static async Task BuildAsync(TestHost host, bool everything)
     {
-        await host.IndexedProjectAsync(Alpha, WidgetProject.Repositories());
+        await IndexAsync(host, Alpha, WidgetProject.Repositories());
         await IndexAsync(host, Factory, new() { ["one"] = new() { ["src/A.cs"] = "class WidgetFactory { }\n" } });
         if (!everything) return;
 
@@ -808,47 +823,8 @@ public sealed class SearchEndpointFixture : IAsyncLifetime
 
     public ValueTask DisposeAsync()
     {
-        _substring.Dispose();
+        Substring.Dispose();
         _fts.Dispose();
         return ValueTask.CompletedTask;
-    }
-}
-
-/// <summary>
-///     Two repositories that each hold a <c>src/Widget.cs</c>, plus a doc file: three files holding
-///     "Widget" on three lines. The project the endpoint tests browse and search, and the one the
-///     telemetry tests search to have something to record.
-/// </summary>
-internal static class WidgetProject
-{
-    /// <summary>A new copy each time, so no test can change what the next one is built from.</summary>
-    public static Dictionary<string, Dictionary<string, string>> Repositories() => new()
-    {
-        ["one"] = new()
-        {
-            ["docs/Widget.md"] = "widget notes\n",
-            ["src/Widget.cs"] = "class Widget\n{\n    int Size;\n}\n"
-        },
-        ["two"] = new() { ["src/Widget.cs"] = "class Widget { }\n" }
-    };
-
-    /// <summary>
-    ///     A server of its own holding the project as <paramref name="slug" />, for a test that changes
-    ///     the project or must be the only one on its server.
-    /// </summary>
-    public static async Task<TestHost> HostAsync(SearchEngine engine, string slug)
-    {
-        var host = new TestHost(engine);
-        try
-        {
-            await host.IndexedProjectAsync(slug, Repositories());
-            return host;
-        }
-        catch
-        {
-            // The host owns a data directory and an open DuckDB instance; a failure here would leak both.
-            host.Dispose();
-            throw;
-        }
     }
 }

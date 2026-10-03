@@ -13,8 +13,6 @@ namespace CodeExplorer.Tests;
 /// </summary>
 public sealed class ToolStatisticsTests
 {
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
     private static readonly DateTimeOffset Noon = new(2026, 10, 2, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
@@ -141,7 +139,7 @@ public sealed class ToolStatisticsTests
             Assert.Single(probe.For(Telemetry.ToolDuration)).Tags[Telemetry.OutcomeTag]);
 
         var statistics = await host.GetJsonAsync<ToolCallStatistics>($"/api/projects/{slug}/tool-calls");
-        Assert.Equal(1,statistics.FailedLastHour);
+        Assert.Equal(1, statistics.FailedLastHour);
         Assert.True(Assert.Single(statistics.Recent).Failed);
     }
 

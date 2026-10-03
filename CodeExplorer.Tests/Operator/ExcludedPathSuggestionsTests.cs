@@ -15,8 +15,6 @@ public sealed class ExcludedPathSuggestionsTests : IDisposable
 {
     private readonly TestHost _host = new(SearchEngine.Substring);
 
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
     public void Dispose() => _host.Dispose();
 
     [Fact]

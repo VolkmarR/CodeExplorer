@@ -85,8 +85,12 @@ public sealed class TestHost : GitFixtures
     private readonly bool _authenticated;
     private readonly bool _servesWebUi;
 
-    /// <summary>What <see cref="Build" /> configures beyond the directories and the engine, by key.</summary>
-    private readonly Dictionary<string, string?> _settings = [];
+    /// <summary>
+    ///     What <see cref="Build" /> configures beyond the directories and the engine, by key. Compared
+    ///     ignoring case as configuration compares them, so a key spelled differently replaces the
+    ///     default rather than being applied beside it.
+    /// </summary>
+    private readonly Dictionary<string, string?> _settings = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     ///     Private, so a test cannot build a client that bypasses <see cref="CreateClient" /> or reach a
