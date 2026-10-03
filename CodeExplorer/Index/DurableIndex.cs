@@ -44,26 +44,17 @@ public sealed class DurableIndex(IConfiguration configuration, DurableStore stor
     private const string _indexInfo = "index_info";
 
     /// <summary>
-    ///     The tables of a project index besides <see cref="_indexInfo" />, in the order a restore may
-    ///     insert them. There is no foreign key between them, so the order is for readability rather
-    ///     than for the engine.
+    ///     The tables of a project index besides <see cref="_indexInfo" />, in the order the schema
+    ///     creates them, which is the order a restore inserts them. There is no foreign key between them,
+    ///     so the order is for readability rather than for the engine.
+    ///     Every table travels, the derived ones too. A restore does not re-walk or rebuild, and an index
+    ///     restored without one reads as an empty answer rather than a missing one: without the rename
+    ///     chains (<c>path_lineage</c>, #148) a scope stops saying what it was called before, without the
+    ///     import edges (#55) <c>imports</c> says a file imports nothing, and without the overview (#51)
+    ///     <c>project_overview</c> has nothing to answer from until the next build.
     /// </summary>
     private static readonly string[] _contentTables =
-    [
-        "repositories", "files", "lines", "commits", "commit_files", "attribution",
-        // The rename chains the build derived (#148). Derived and still carried: a restore does not
-        // re-walk, so an index that lost this would stop telling a caller what a scope was called
-        // before — silently, because a missing chain is indistinguishable from a path nobody renamed.
-        "path_lineage",
-        // The import edges the build read and resolved (#55). They travel with the tables, like the
-        // overview and for the same reason: a restored index that had lost them would answer
-        // `imports` with nothing, which reads as "this file imports nothing".
-        "imports",
-        // The overview the build computed (#51). It travels with the tables it was derived from, so a
-        // restored index answers project_overview without a rebuild — which is the whole point of
-        // computing it at build time rather than per call.
-        "project_overview"
-    ];
+        [.. ProjectIndexes.Tables.Where(table => table != _indexInfo)];
 
     /// <summary>Every table a store writes, in order: <see cref="_indexInfo" /> last, for the reason <see cref="StoreAsync" /> gives.</summary>
     private static readonly string[] _tables = [.._contentTables, _indexInfo];

@@ -24,14 +24,6 @@ namespace CodeExplorer.Tests;
 /// </summary>
 public sealed class DurabilityTests : IDisposable
 {
-    /// <summary>The Parquet set a completed store leaves, in name order.</summary>
-    private static readonly string[] StoredFiles =
-    [
-        "attribution.parquet", "commit_files.parquet", "commits.parquet", "files.parquet",
-        "imports.parquet", "index_info.parquet", "lines.parquet", "path_lineage.parquet",
-        "project_overview.parquet", "repositories.parquet"
-    ];
-
     private TestHost? _host;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -44,11 +36,11 @@ public sealed class DurabilityTests : IDisposable
         var host = Start(SearchEngine.Substring);
         await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
 
-        // Spelled out rather than derived from the table list, so adding a table to the index without
-        // adding it to the durable copy fails here instead of on the next scale to zero. The history
-        // tables are as much of the index as the code ones are (ADR-0007), and that includes the
-        // rename chains the build derives from them (#148): a restore does not re-walk.
-        Assert.Equal(StoredFiles, StoredFileNames(host, "alpha"));
+        // Read off the index the build just created rather than off the table list the store walks, so
+        // a table added to the DDL and not to that list fails here instead of on the next scale to zero.
+        // The history tables are as much of the index as the code ones are (ADR-0007), and that
+        // includes the rename chains the build derives from them (#148): a restore does not re-walk.
+        Assert.Equal(await IndexTableFilesAsync(host, "alpha"), StoredFileNames(host, "alpha"));
     }
 
     [Fact]
@@ -502,19 +494,17 @@ public sealed class DurabilityTests : IDisposable
     }
 
     /// <summary>
+    ///     Every table but <c>index_info</c>, whose absence is the subject of the tests above. Taken from
+    ///     the schema's own list, so a table added to it is interrupted here too without a second edit.
+    /// </summary>
+    public static TheoryData<string> ContentTables => [.. ProjectIndexes.Tables.Where(table => table != "index_info")];
+
+    /// <summary>
     ///     A re-store that stopped part-way (#187), at each table in turn and the history ones included.
     ///     The interruption is that table's durable file held open exclusively, so its write fails.
     /// </summary>
     [Theory]
-    [InlineData("repositories")]
-    [InlineData("files")]
-    [InlineData("lines")]
-    [InlineData("commits")]
-    [InlineData("commit_files")]
-    [InlineData("attribution")]
-    [InlineData("path_lineage")]
-    [InlineData("imports")]
-    [InlineData("project_overview")]
+    [MemberData(nameof(ContentTables))]
     public async Task A_re_store_interrupted_at_any_table_reads_as_no_copy_and_one_refresh_repairs_it(string table)
     {
         var host = Start(SearchEngine.Substring);
@@ -538,7 +528,7 @@ public sealed class DurabilityTests : IDisposable
         // with writes the whole set again.
         await host.RefreshAsync("alpha");
         Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
-        Assert.Equal(StoredFiles, StoredFileNames(host, "alpha"));
+        Assert.Equal(await IndexTableFilesAsync(host, "alpha"), StoredFileNames(host, "alpha"));
         host.DeleteIndexFile("alpha");
         Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
         // The history the mixed copy would have left stale, restored whole with the rest.
@@ -680,6 +670,17 @@ public sealed class DurabilityTests : IDisposable
 
     private static IEnumerable<string?> StoredFileNames(TestHost host, string slug) =>
         Directory.EnumerateFiles(host.DurableIndexDirectory(slug)).Select(Path.GetFileName).Order();
+
+    /// <summary>
+    ///     The Parquet file each table of the project's live index should be stored as, in the order
+    ///     <see cref="StoredFileNames" /> lists them. The main schema only: the BM25 index lives in
+    ///     <c>fts</c>'s own schema and is rebuilt on a restore, never stored.
+    /// </summary>
+    private static async Task<IEnumerable<string?>> IndexTableFilesAsync(TestHost host, string slug) =>
+        (await host.ScalarsAsync(slug,
+            "SELECT table_name FROM duckdb_tables() "
+            + "WHERE database_name = current_database() AND schema_name = 'main'"))
+        .Select(string? (table) => table + ".parquet").Order();
 
     /// <summary>One repository of one file. The slug names the fixture on disk too, so two projects need two.</summary>
     private static Dictionary<string, Dictionary<string, string>> Repository(string content, string slug = "one") =>
