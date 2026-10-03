@@ -86,26 +86,36 @@ public sealed class MatchList(IndexReaders readers)
     private async Task<Outcome> RunAsync(string slug, MatchListRequest request,
         CancellationToken cancellationToken)
     {
-        string query = request.Query.Trim();
-        if (query.Length == 0)
-            return new Problem(
+        if (PatternQuery.Refusal(request.Query, request.Filter, true,
                 "The pattern is empty. Pass an RE2 pattern with parentheses around the part you want, "
-                + "such as \"PackageReference Include=\\\"([^\\\"]+)\\\"\" with group=1.");
-        if (request.Filter.Refusal is { } refused) return new Problem(refused);
-        if (Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
-        query = Re2.WithQuoteClosed(query);
+                + "such as \"PackageReference Include=\\\"([^\\\"]+)\\\"\" with group=1.", out string query)
+            is { } refused)
+            return refused;
 
         if (request.Group is < 0 or > MaxGroup)
             return new Problem(
                 $"group={request.Group} is out of range; it must be 0 for the whole match or 1-{MaxGroup} for a capture group.");
 
+        // Checked before the engine sees the group rather than left to it: DuckDB reports a missing group
+        // as an invalid argument, which reads as a broken pattern and sends the caller off fixing a
+        // parenthesis that was never wrong. A pattern that does not compile has no groups to count, so
+        // it is compiled alone before the count refuses, and before a whole-word wrapping balances it.
+        int groups = Re2.CaptureGroups(query);
         return await readers.OverIndexAsync(slug, request.Filter.Repository,
-            (index, token) => QueryAsync(index, request, query, token), cancellationToken);
+            (index, token) => PatternQuery.GuardedAsync(index.Connection, query,
+                request.WholeWord || request.Group > groups,
+                () => QueryAsync(index, request, query, groups, token), token),
+            cancellationToken);
     }
 
     private static async Task<Outcome> QueryAsync(IndexReader index, MatchListRequest request, string query,
-        CancellationToken cancellationToken)
+        int groups, CancellationToken cancellationToken)
     {
+        if (request.Group > groups)
+            return new Problem(
+                $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
+                + "Put parentheses around the part that varies, or use group=0 for the whole match.");
+
         var connection = index.Connection;
         // The slug the index holds, not the one the caller typed: the filter's subquery matches it exactly.
         var filter = request.Filter with { Repository = index.Repository?.Slug };
@@ -115,92 +125,67 @@ public sealed class MatchList(IndexReaders readers)
         // whose group 2 is the caller's whole match and so whose group n + 2 is the caller's group n. The
         // rest of a line after its last whole word comes back as an empty value, so empty values are
         // dropped before unnest rather than after, where each would have been a row.
-        var matchParameters = new List<DuckDBParameter>
-        {
-            new("q", request.WholeWord ? SymbolText.WholeWord(query) : query),
-            new("extract", request.WholeWord ? SymbolText.WholeWordMatches(query) : query),
-            new("flags", request.CaseSensitive ? "" : "i")
-        };
+        List<DuckDBParameter> matchParameters =
+        [
+            .. PatternQuery.LineParameters(query, request.WholeWord, request.CaseSensitive),
+            new("extract", request.WholeWord ? SymbolText.WholeWordMatches(query) : query)
+        ];
         int group = request.WholeWord ? request.Group + 2 : request.Group;
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
 
-        try
+        var matches = new List<DistinctMatch>();
+        int totalDistinct = 0;
+        long totalMatches = 0;
+        int totalFiles = 0;
+
+        // regexp_matches narrows to the lines that match before regexp_extract_all runs over them,
+        // which is the difference between extracting from a project and extracting from its hits.
+        // unnest flattens the per-line array, so a line matching three times contributes three
+        // rows, the way `grep -o` emits one line per match. The group index is inlined because
+        // regexp_extract_all takes it as a literal; it is bounded above, so it is a small integer,
+        // and it is spelled in the invariant culture because a literal is SQL text, not display text.
+        string groupLiteral = group.ToString(CultureInfo.InvariantCulture);
+        await using (var command = connection.Query($"""
+                                                     WITH extracted AS (
+                                                         SELECT l.file_id,
+                                                                unnest(list_filter(regexp_extract_all(l.content, $extract, {groupLiteral}, $flags), v -> v <> '')) AS value
+                                                         FROM lines l JOIN files f USING (file_id)
+                                                         WHERE {PatternQuery.LineMatch}{fileFilter}),
+                                                     grouped AS (
+                                                         SELECT value, count(*) AS n, count(DISTINCT file_id) AS files
+                                                         FROM extracted WHERE value <> '' GROUP BY value),
+                                                     totals AS (
+                                                         SELECT count(*) AS total_distinct, coalesce(sum(n), 0) AS total_matches,
+                                                                -- The same WHERE the grouping uses: a file whose capture
+                                                                -- group came back empty every time contributed no value
+                                                                -- and must not be counted as a file one came from.
+                                                                (SELECT count(DISTINCT file_id) FROM extracted WHERE value <> '') AS total_files
+                                                         FROM grouped)
+                                                     SELECT g.value, g.n, g.files, t.total_distinct, t.total_matches, t.total_files
+                                                     FROM grouped g CROSS JOIN totals t
+                                                     ORDER BY g.n DESC, g.value
+                                                     LIMIT $limit
+                                                     """, [.. matchParameters, .. fileParameters, new("limit", limit)]))
+        await using (var reader = await command.ReaderAsync(cancellationToken))
         {
-            // Checked here rather than left to the engine: DuckDB reports a missing group as an invalid
-            // argument, which reads as a broken pattern and sends the caller off fixing a parenthesis
-            // that was never wrong. A pattern that does not compile has no groups to count, so it is
-            // compiled alone before the count refuses, and before a whole-word wrapping balances it.
-            int groups = Re2.CaptureGroups(query);
-            if ((request.WholeWord || request.Group > groups)
-                && await Re2.RejectionAsync(connection, query, "", cancellationToken) is { } rejection)
-                return new Problem(Re2.Rejected(rejection));
-            if (request.Group > groups)
-                return new Problem(
-                    $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
-                    + "Put parentheses around the part that varies, or use group=0 for the whole match.");
-
-            var matches = new List<DistinctMatch>();
-            int totalDistinct = 0;
-            long totalMatches = 0;
-            int totalFiles = 0;
-
-            // regexp_matches narrows to the lines that match before regexp_extract_all runs over them,
-            // which is the difference between extracting from a project and extracting from its hits.
-            // unnest flattens the per-line array, so a line matching three times contributes three
-            // rows, the way `grep -o` emits one line per match. The group index is inlined because
-            // regexp_extract_all takes it as a literal; it is bounded above, so it is a small integer,
-            // and it is spelled in the invariant culture because a literal is SQL text, not display text.
-            string groupLiteral = group.ToString(CultureInfo.InvariantCulture);
-            await using (var command = connection.Query($"""
-                                                         WITH extracted AS (
-                                                             SELECT l.file_id,
-                                                                    unnest(list_filter(regexp_extract_all(l.content, $extract, {groupLiteral}, $flags), v -> v <> '')) AS value
-                                                             FROM lines l JOIN files f USING (file_id)
-                                                             WHERE regexp_matches(l.content, $q, $flags){fileFilter}),
-                                                         grouped AS (
-                                                             SELECT value, count(*) AS n, count(DISTINCT file_id) AS files
-                                                             FROM extracted WHERE value <> '' GROUP BY value),
-                                                         totals AS (
-                                                             SELECT count(*) AS total_distinct, coalesce(sum(n), 0) AS total_matches,
-                                                                    -- The same WHERE the grouping uses: a file whose capture
-                                                                    -- group came back empty every time contributed no value
-                                                                    -- and must not be counted as a file one came from.
-                                                                    (SELECT count(DISTINCT file_id) FROM extracted WHERE value <> '') AS total_files
-                                                             FROM grouped)
-                                                         SELECT g.value, g.n, g.files, t.total_distinct, t.total_matches, t.total_files
-                                                         FROM grouped g CROSS JOIN totals t
-                                                         ORDER BY g.n DESC, g.value
-                                                         LIMIT $limit
-                                                         """, [.. matchParameters, .. fileParameters, new("limit", limit)]))
-            await using (var reader = await command.ReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
             {
-                while (await reader.ReadAsync(cancellationToken))
-                {
-                    matches.Add(new DistinctMatch(reader.Text("value"), reader.Int64("n"),
-                        (int)reader.Int64("files")));
-                    totalDistinct = (int)reader.Int64("total_distinct");
-                    totalMatches = reader.Int64("total_matches");
-                    totalFiles = (int)reader.Int64("total_files");
-                }
+                matches.Add(new DistinctMatch(reader.Text("value"), reader.Int64("n"),
+                    (int)reader.Int64("files")));
+                totalDistinct = (int)reader.Int64("total_distinct");
+                totalMatches = reader.Int64("total_matches");
+                totalFiles = (int)reader.Int64("total_files");
             }
-
-            int? withoutFilters = null;
-            if (totalDistinct == 0 && filter.Any)
-                // Same pattern, no file filters: a second pass only on the empty answer, so the common
-                // case pays nothing.
-                withoutFilters = (int)await connection.CountAsync(
-                    "SELECT count(DISTINCT l.file_id) FROM lines l WHERE regexp_matches(l.content, $q, $flags)",
-                    matchParameters, cancellationToken);
-
-            return new MatchListResult(totalDistinct, totalMatches, totalFiles, matches, withoutFilters);
         }
-        catch (DuckDBException ex) when (Re2.IsPatternRejection(ex))
-        {
-            // The pattern is the only caller text a parser sees here; anything else DuckDB raises is
-            // infrastructure and propagates.
-            return new Problem(Re2.Rejected(ex));
-        }
+
+        int? withoutFilters = null;
+        if (totalDistinct == 0 && filter.Any)
+            // Same pattern, no file filters: a second pass only on the empty answer, so the common
+            // case pays nothing.
+            withoutFilters = await PatternQuery.FilesMatchingAsync(connection, PatternQuery.LineMatch,
+                matchParameters, cancellationToken);
+
+        return new MatchListResult(totalDistinct, totalMatches, totalFiles, matches, withoutFilters);
     }
-
 }

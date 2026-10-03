@@ -171,40 +171,26 @@ public sealed partial class GrepSearch(IndexReaders readers)
 
     private async Task<Outcome> RunAsync(string slug, GrepRequest request, CancellationToken cancellationToken)
     {
-        string query = request.Query.Trim();
-        if (query.Length == 0)
-            return new Problem("The query is empty. Pass the text or RE2 pattern to search for.");
-
-        if (request.Filter.Refusal is { } refused) return new Problem(refused);
         bool regex = request.Regex || request.Multiline;
-        if (regex && Re2.Unsupported(query) is { } unsupported) return new Problem(unsupported);
-        if (regex) query = Re2.WithQuoteClosed(query);
+        if (PatternQuery.Refusal(request.Query, request.Filter, regex,
+                "The query is empty. Pass the text or RE2 pattern to search for.", out string query) is { } refused)
+            return refused;
 
         return await readers.OverIndexAsync(slug, null,
             (index, token) => QueryAsync(index, request, query, regex, token), cancellationToken);
     }
 
-    private static async Task<Outcome> QueryAsync(IndexReader index, GrepRequest request, string query, bool regex,
+    private static Task<Outcome> QueryAsync(IndexReader index, GrepRequest request, string query, bool regex,
         CancellationToken cancellationToken)
     {
-        var connection = index.Connection;
         var bounds = Bounds.From(request);
-        try
-        {
-            // Only a wrapped pattern needs compiling alone first; a bare one is compiled by the search.
-            if (regex && (request.WholeWord || request.Multiline)
-                && await Re2.RejectionAsync(connection, query, "", cancellationToken) is { } rejection)
-                return new Problem(Re2.Rejected(rejection));
-            return request.Multiline
-                ? await SearchMultilineAsync(connection, request, query, bounds, cancellationToken)
-                : await SearchLinesAsync(index, request, query, regex, bounds, cancellationToken);
-        }
-        catch (DuckDBException ex) when (regex && Re2.IsPatternRejection(ex))
-        {
-            // Only regex mode hands user text to a parser; anything else DuckDB raises here is
-            // infrastructure and propagates.
-            return new Problem(Re2.Rejected(ex));
-        }
+        // Only a wrapped pattern needs compiling alone first: whole words and multiline wrap it.
+        return PatternQuery.GuardedAsync(index.Connection, regex ? query : null,
+            request.WholeWord || request.Multiline,
+            () => request.Multiline
+                ? SearchMultilineAsync(index.Connection, request, query, bounds, cancellationToken)
+                : SearchLinesAsync(index, request, query, regex, bounds, cancellationToken),
+            cancellationToken);
     }
 
     private static async Task<Outcome> SearchLinesAsync(
@@ -223,9 +209,8 @@ public sealed partial class GrepSearch(IndexReaders readers)
         if (regex)
         {
             engine = RegexEngine;
-            match = "regexp_matches(l.content, $q, $flags)";
-            matchParameters.Add(new DuckDBParameter("q", request.WholeWord ? SymbolText.WholeWord(query) : query));
-            matchParameters.Add(new DuckDBParameter("flags", request.CaseSensitive ? "" : "i"));
+            match = PatternQuery.LineMatch;
+            matchParameters.AddRange(PatternQuery.LineParameters(query, request.WholeWord, request.CaseSensitive));
         }
         else
         {
@@ -364,8 +349,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         int? withoutFilters = null;
         if (totalFiles == 0 && request.HasFileFilters)
             // Same match, no file filters: a second pass only on the empty answer, so the common case pays nothing.
-            withoutFilters = (int)await connection.CountAsync(
-                $"SELECT count(DISTINCT l.file_id) FROM lines l WHERE {match}", matchParameters, cancellationToken);
+            withoutFilters = await PatternQuery.FilesMatchingAsync(connection, match, matchParameters, cancellationToken);
 
         return new GrepResult(engine, totalFiles, totalLines, bounds.Page, bounds.PageSize, files, withoutFilters);
 
