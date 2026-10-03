@@ -90,7 +90,7 @@ public sealed class ProjectDeleteRaceTests : IDisposable
             await command.ExecuteNonQueryAsync(Ct);
         }
 
-        Assert.Equal(CreateProjectOutcome.Created, await control.CreateAsync("alpha", "Alpha", false, Ct));
+        Assert.Equal(CreateProjectOutcome.Created, (await control.CreateAsync("alpha", "Alpha", false, Ct)).Outcome);
 
         // Inherited, the repository would be cloned with the deleted project's credential.
         Assert.Empty(await control.ListRepositoriesAsync("alpha", Ct));
@@ -105,7 +105,7 @@ public sealed class ProjectDeleteRaceTests : IDisposable
         Assert.Equal(AddRepositoryOutcome.Created, (await Control.AddRepositoryAsync("alpha", "one", Remote, "token", Ct)).Outcome);
         Assert.Equal(ExcludedPathsOutcome.Saved, (await Control.SetExcludedPathsAsync("alpha", ["**/*.rc"], Ct)).Outcome);
 
-        Assert.Equal(CreateProjectOutcome.SlugTaken, await Control.CreateAsync("alpha", "Alpha again", false, Ct));
+        Assert.Equal(CreateProjectOutcome.SlugTaken, (await Control.CreateAsync("alpha", "Alpha again", false, Ct)).Outcome);
 
         Assert.Equal(["one"], (await Control.ListRepositoriesAsync("alpha", Ct)).Select(r => r.Slug));
         Assert.Equal(["**/*.rc"], await Control.ExcludedPathsAsync("alpha", Ct));

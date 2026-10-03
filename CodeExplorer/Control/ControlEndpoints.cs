@@ -34,10 +34,9 @@ internal static class ControlEndpoints
         api.MapPost("/projects", async (CreateProjectRequest request, ControlDatabase control, CancellationToken ct) =>
             await control.CreateAsync(request.Slug, request.Name, request.SingleRepository, ct) switch
             {
-                CreateProjectOutcome.Created => Results.Created($"/projects/{request.Slug}/mcp",
-                    new Project(request.Slug!, request.Name!.Trim(), request.SingleRepository)),
-                CreateProjectOutcome.InvalidSlug => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
-                CreateProjectOutcome.MissingName => Results.BadRequest(new { error = "Name is required." }),
+                (CreateProjectOutcome.Created, { } created) => Results.Created($"/projects/{created.Slug}/mcp", created),
+                (CreateProjectOutcome.InvalidSlug, _) => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
+                (CreateProjectOutcome.MissingName, _) => Results.BadRequest(new { error = "Name is required." }),
                 _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." })
             });
 
