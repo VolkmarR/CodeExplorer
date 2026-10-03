@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json.Nodes;
 using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
@@ -585,6 +586,19 @@ public sealed class TestHost : GitFixtures
     {
         using var http = Fixture();
         var value = await http.GetFromJsonAsync<T>(path, Ct);
+        Assert.NotNull(value);
+        return value;
+    }
+
+    /// <summary>
+    ///     A GET whose answer is JSON, read as the bytes spell it rather than as a record. A typed read
+    ///     turns either spelling of an enum value back into the same member, so a test about what the
+    ///     browser compares against has to read the text.
+    /// </summary>
+    public async Task<JsonNode> GetJsonNodeAsync(string path)
+    {
+        using var http = Fixture();
+        var value = JsonNode.Parse(await http.GetStringAsync(path, Ct));
         Assert.NotNull(value);
         return value;
     }
