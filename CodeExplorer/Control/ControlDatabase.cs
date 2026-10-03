@@ -84,6 +84,8 @@ public sealed partial class ControlDatabase : IDisposable
     // In-process is complete here rather than replica-limited: DuckDB lets one process open a file for
     // writing, so every writer of control.duckdb is in this one. Taken before _backupGate and
     // _cacheGate and released before a backup starts, so an operator write never waits on an upload.
+    // Every hold is therefore a using block that closes before BackupAsync, never a using declaration,
+    // which would last to the end of the method and so across the backup.
     private readonly SemaphoreSlim _projectGate = new(1, 1);
 
     // DuckDB.NET has no connection pool. What it has is one native instance per file, reference
@@ -243,10 +245,6 @@ public sealed partial class ControlDatabase : IDisposable
         _projectGate.Dispose();
     }
 
-    /// <summary>Takes <see cref="_projectGate" />; the caller releases it in a <c>finally</c>.</summary>
-    private Task EnterProjectGateAsync(CancellationToken cancellationToken) =>
-        _projectGate.WaitAsync(cancellationToken);
-
     /// <summary>
     ///     Null is a slug the body left out: System.Text.Json binds an absent property as null whatever
     ///     the record declares, and it is refused by the same rule as a malformed one (#237).
@@ -268,8 +266,7 @@ public sealed partial class ControlDatabase : IDisposable
 
         if (string.IsNullOrWhiteSpace(name)) return (CreateProjectOutcome.MissingName, null);
 
-        await EnterProjectGateAsync(cancellationToken);
-        try
+        using (await _projectGate.HoldAsync(cancellationToken))
         {
             if (!await InsertProjectAsync(slug, name.Trim(), singleRepository, cancellationToken))
                 return (CreateProjectOutcome.SlugTaken, null);
@@ -278,10 +275,6 @@ public sealed partial class ControlDatabase : IDisposable
             // belt to the delete below: the rule is that every writer forgets, not that the one that
             // matters does.
             Forget(slug);
-        }
-        finally
-        {
-            _projectGate.Release();
         }
 
         await BackupAsync();
@@ -413,69 +406,54 @@ public sealed partial class ControlDatabase : IDisposable
     public async Task<(AddRepositoryOutcome Outcome, ProjectRepository? Repository)> AddRepositoryAsync(
         string projectSlug, string? slug, string url, string? credential, CancellationToken cancellationToken)
     {
-        (AddRepositoryOutcome Outcome, ProjectRepository? Repository) added;
-        await EnterProjectGateAsync(cancellationToken);
-        try
+        ProjectRepository repository;
+        // From the existence check to the insert, so a project delete lands wholly before it or wholly after.
+        using (await _projectGate.HoldAsync(cancellationToken))
         {
-            added = await AddRepositoryGatedAsync(projectSlug, slug, url, credential, cancellationToken);
+            // Safe to answer from the cache here: a delete forgets the slug before it releases the gate.
+            if (await FindAsync(projectSlug, cancellationToken) is not { } project)
+                return (AddRepositoryOutcome.NoProject, null);
+
+            if (project.SingleRepository)
+            {
+                // The one repository is what the whole project is named after, so a second one would
+                // have nothing to be called and nowhere to be named (ADR-0006).
+                if ((await ListRepositoriesAsync(projectSlug, cancellationToken)).Count > 0)
+                    return (AddRepositoryOutcome.ProjectIsFull, null);
+                slug = projectSlug;
+            }
+
+            if (!IsValidSlug(slug)) return (AddRepositoryOutcome.InvalidSlug, null);
+
+            switch (RepositoryUrl.Classify(url))
+            {
+                case RepositoryUrlKind.Invalid:
+                    return (AddRepositoryOutcome.InvalidUrl, null);
+                case RepositoryUrlKind.Local when !_localAllowed:
+                    return (AddRepositoryOutcome.LocalNotAllowed, null);
+            }
+
+            if (RepositoryUrl.SendsCredentialInClear(url, !string.IsNullOrEmpty(credential)))
+                return (AddRepositoryOutcome.ClearTextCredential, null);
+
+            repository = new ProjectRepository(projectSlug, slug, url.Trim(),
+                string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));
+
+            await using var connection = await OpenAsync(cancellationToken);
+            await using var command = connection.Query("""
+                                                       INSERT INTO repositories (project_slug, slug, url, credential)
+                                                       VALUES ($project, $slug, $url, $credential) ON CONFLICT DO NOTHING
+                                                       """,
+            [
+                new DuckDBParameter("project", repository.ProjectSlug), new("slug", repository.Slug),
+                new("url", repository.Url), new("credential", (object?)repository.ProtectedCredential ?? DBNull.Value)
+            ]);
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+                return (AddRepositoryOutcome.SlugTaken, null);
         }
-        finally
-        {
-            _projectGate.Release();
-        }
 
-        if (added.Outcome == AddRepositoryOutcome.Created) await BackupAsync();
-        return added;
-    }
-
-    /// <summary>
-    ///     <see cref="AddRepositoryAsync" /> under the project gate, from the existence check to the
-    ///     insert, so a project delete lands wholly before it or wholly after.
-    /// </summary>
-    private async Task<(AddRepositoryOutcome Outcome, ProjectRepository? Repository)> AddRepositoryGatedAsync(
-        string projectSlug, string? slug, string url, string? credential, CancellationToken cancellationToken)
-    {
-        // Safe to answer from the cache here: a delete forgets the slug before it releases the gate.
-        if (await FindAsync(projectSlug, cancellationToken) is not { } project)
-            return (AddRepositoryOutcome.NoProject, null);
-
-        if (project.SingleRepository)
-        {
-            // The one repository is what the whole project is named after, so a second one would have
-            // nothing to be called and nowhere to be named (ADR-0006).
-            if ((await ListRepositoriesAsync(projectSlug, cancellationToken)).Count > 0)
-                return (AddRepositoryOutcome.ProjectIsFull, null);
-            slug = projectSlug;
-        }
-
-        if (!IsValidSlug(slug)) return (AddRepositoryOutcome.InvalidSlug, null);
-
-        switch (RepositoryUrl.Classify(url))
-        {
-            case RepositoryUrlKind.Invalid:
-                return (AddRepositoryOutcome.InvalidUrl, null);
-            case RepositoryUrlKind.Local when !_localAllowed:
-                return (AddRepositoryOutcome.LocalNotAllowed, null);
-        }
-
-        if (RepositoryUrl.SendsCredentialInClear(url, !string.IsNullOrEmpty(credential)))
-            return (AddRepositoryOutcome.ClearTextCredential, null);
-
-        var repository = new ProjectRepository(projectSlug, slug, url.Trim(),
-            string.IsNullOrEmpty(credential) ? null : _protector.Protect(credential));
-
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.Query("""
-                                                   INSERT INTO repositories (project_slug, slug, url, credential)
-                                                   VALUES ($project, $slug, $url, $credential) ON CONFLICT DO NOTHING
-                                                   """,
-        [
-            new DuckDBParameter("project", repository.ProjectSlug), new("slug", repository.Slug),
-            new("url", repository.Url), new("credential", (object?)repository.ProtectedCredential ?? DBNull.Value)
-        ]);
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-            ? (AddRepositoryOutcome.Created, repository)
-            : (AddRepositoryOutcome.SlugTaken, null);
+        await BackupAsync();
+        return (AddRepositoryOutcome.Created, repository);
     }
 
     public async Task<IReadOnlyList<ProjectRepository>> ListRepositoriesAsync(
@@ -496,8 +474,7 @@ public sealed partial class ControlDatabase : IDisposable
     public async Task<bool> DeleteProjectAsync(string slug, CancellationToken cancellationToken)
     {
         int deleted;
-        await EnterProjectGateAsync(cancellationToken);
-        try
+        using (await _projectGate.HoldAsync(cancellationToken))
         {
             await using (var connection = await OpenAsync(cancellationToken))
             {
@@ -512,10 +489,6 @@ public sealed partial class ControlDatabase : IDisposable
             // only thing that knows. Inside the gate, so a gated write that asks next cannot be answered
             // from the cache with the project just deleted.
             Forget(slug);
-        }
-        finally
-        {
-            _projectGate.Release();
         }
 
         if (deleted != 1) return false;
@@ -583,8 +556,7 @@ public sealed partial class ControlDatabase : IDisposable
                     return (ExcludedPathsOutcome.Refused, null,
                         $"'{pattern}' is not a pattern that can be matched: {refused}");
 
-            await EnterProjectGateAsync(cancellationToken);
-            try
+            using (await _projectGate.HoldAsync(cancellationToken))
             {
                 // Asked again although the route bound the project, because a delete may have committed
                 // since, and rows written for it now would open a project later created under the slug.
@@ -592,10 +564,6 @@ public sealed partial class ControlDatabase : IDisposable
                     return (ExcludedPathsOutcome.NoProject, null, null);
 
                 await ReplaceExcludedPathsAsync(connection, projectSlug, patterns, cancellationToken);
-            }
-            finally
-            {
-                _projectGate.Release();
             }
         }
 
@@ -662,7 +630,7 @@ public sealed partial class ControlDatabase : IDisposable
     /// </summary>
     private async Task BackupAsync()
     {
-        await _backupGate.WaitAsync(CancellationToken.None);
+        using var held = await _backupGate.HoldAsync(CancellationToken.None);
         try
         {
             await using (var connection = await OpenAsync(CancellationToken.None))
@@ -677,10 +645,6 @@ public sealed partial class ControlDatabase : IDisposable
         catch (Exception ex)
         {
             throw new BackupFailedException(ex);
-        }
-        finally
-        {
-            _backupGate.Release();
         }
     }
 
