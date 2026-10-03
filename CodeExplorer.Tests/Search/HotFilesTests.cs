@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using CodeExplorer.Search;
 using ModelContextProtocol.Client;
 using Xunit;
@@ -259,10 +258,7 @@ public sealed class HotFilesTests(HotFilesFixture fixture) : IClassFixture<HotFi
     {
         await using var client = await _host.ConnectAsync(HistoryFixtures.Mixed);
 
-        using var http = _host.CreateClient();
-        var page = await http.GetFromJsonAsync<ChangeLogAnswer>(
-            $"/api/projects/{HistoryFixtures.Mixed}/commits?repository=one", TestContext.Current.CancellationToken);
-        Assert.NotNull(page);
+        var page = await _host.GetJsonAsync<ChangeLogAnswer>($"/api/projects/{HistoryFixtures.Mixed}/commits?repository=one");
 
         string reply = await TestHost.CallAsync(client, "git_log",
             new Dictionary<string, object?> { ["repo"] = "one" });

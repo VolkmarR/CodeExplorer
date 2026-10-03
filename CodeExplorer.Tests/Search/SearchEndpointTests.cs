@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Search;
 using Xunit;
@@ -47,7 +46,7 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(engine);
 
-        var result = await GetAsync<GrepResult>(host, "/api/projects/alpha/search?q=Widget");
+        var result = await host.GetJsonAsync<GrepResult>("/api/projects/alpha/search?q=Widget");
 
         Assert.Equal(3, result.TotalFiles);
         // Two repositories each hold src/Widget.cs; only the qualified path tells them apart, which is
@@ -55,7 +54,7 @@ public sealed class SearchEndpointTests
         Assert.Contains(result.Files, f => f.QualifiedPath == "one/src/Widget.cs");
         Assert.Contains(result.Files, f => f.QualifiedPath == "two/src/Widget.cs");
 
-        var file = await GetAsync<FileContentResponse>(host,
+        var file = await host.GetJsonAsync<FileContentResponse>(
             "/api/projects/alpha/file?path=" + Uri.EscapeDataString("one/src/Widget.cs"));
         Assert.Equal("one", file.RepositorySlug);
         Assert.Equal(4, file.LineCount);
@@ -70,11 +69,11 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(engine);
 
-        var scoped = await GetAsync<GrepResult>(host, "/api/projects/alpha/search?q=Widget&extension=cs");
+        var scoped = await host.GetJsonAsync<GrepResult>("/api/projects/alpha/search?q=Widget&extension=cs");
         Assert.Equal(2, scoped.TotalFiles);
         Assert.DoesNotContain(scoped.Files, f => f.QualifiedPath.EndsWith(".md", StringComparison.Ordinal));
 
-        var page = await GetAsync<GrepResult>(host, "/api/projects/alpha/search?q=Widget&pageSize=1&page=2");
+        var page = await host.GetJsonAsync<GrepResult>("/api/projects/alpha/search?q=Widget&pageSize=1&page=2");
         Assert.Equal(3, page.TotalFiles);
         Assert.Single(page.Files);
     }
@@ -86,15 +85,15 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(engine);
 
-        var all = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files");
+        var all = await host.GetJsonAsync<FileListResponse>("/api/projects/alpha/files");
         Assert.Equal(3, all.Total);
 
-        var sources = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?glob=*.cs");
+        var sources = await host.GetJsonAsync<FileListResponse>("/api/projects/alpha/files?glob=*.cs");
         Assert.Equal(2, sources.Total);
         Assert.All(sources.Files, f => Assert.EndsWith(".cs", f.QualifiedPath, StringComparison.Ordinal));
 
         // Both repositories hold src/Widget.cs, so scoping is the only thing that separates them.
-        var scoped = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?repository=two");
+        var scoped = await host.GetJsonAsync<FileListResponse>("/api/projects/alpha/files?repository=two");
         Assert.Equal("two/src/Widget.cs", Assert.Single(scoped.Files).QualifiedPath);
     }
 
@@ -110,20 +109,20 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        var first = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?glob=*&page=1&pageSize=2");
+        var first = await host.GetJsonAsync<FileListResponse>("/api/projects/alpha/files?glob=*&page=1&pageSize=2");
         Assert.Equal(3, first.Total);
         Assert.Equal(1, first.Page);
         Assert.Equal(2, first.PageSize);
         Assert.Equal(2, first.Files.Count);
 
-        var second = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?glob=*&page=2&pageSize=2");
+        var second = await host.GetJsonAsync<FileListResponse>("/api/projects/alpha/files?glob=*&page=2&pageSize=2");
         Assert.Equal(3, second.Total);
         Assert.Equal(2, second.Page);
         // Ordered by qualified path, so the pages partition the match rather than overlapping.
         Assert.Empty(second.Files.Select(f => f.QualifiedPath).Intersect(first.Files.Select(f => f.QualifiedPath),
             StringComparer.Ordinal));
 
-        var pastTheEnd = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?glob=*&page=9&pageSize=2");
+        var pastTheEnd = await host.GetJsonAsync<FileListResponse>("/api/projects/alpha/files?glob=*&page=9&pageSize=2");
         Assert.Equal(3, pastTheEnd.Total);
         Assert.Empty(pastTheEnd.Files);
     }
@@ -137,7 +136,7 @@ public sealed class SearchEndpointTests
         await host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
             { ["one"] = new() { ["src/A.cs"] = "class WidgetFactory { }\n" } });
 
-        var result = await GetAsync<GrepResult>(host, "/api/projects/alpha/search?q=Widget");
+        var result = await host.GetJsonAsync<GrepResult>("/api/projects/alpha/search?q=Widget");
 
         // The one place the two engines legitimately disagree, and why the result carries the engine:
         // full-text matches whole identifier tokens, so `WidgetFactory` is not a hit for `Widget`,
@@ -209,7 +208,7 @@ public sealed class SearchEndpointTests
         Assert.Contains("No repository 'three'", await tree.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
 
         // Case is forgiven the way it is for a path, and the answer is spelled the way the index holds it.
-        var scoped = await GetAsync<FileListResponse>(host, "/api/projects/alpha/files?repository=TWO");
+        var scoped = await host.GetJsonAsync<FileListResponse>("/api/projects/alpha/files?repository=TWO");
         Assert.Equal("two", Assert.Single(scoped.Files).RepositorySlug);
     }
 
@@ -231,7 +230,7 @@ public sealed class SearchEndpointTests
 
         // The root of a project is its repositories: a qualified path begins with one, so there is no
         // level above them to list.
-        var root = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree");
+        var root = await host.GetJsonAsync<TreeResponse>("/api/projects/alpha/tree");
         Assert.Equal("", root.Path);
         Assert.Equal(["one", "two"], root.Entries.Select(e => e.Name));
         Assert.Equal(2, root.Entries[0].Files);
@@ -239,13 +238,13 @@ public sealed class SearchEndpointTests
 
         // Inside a repository: directories only here, and each counts what lies beneath it rather than
         // its immediate children.
-        var repository = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree?path=one");
+        var repository = await host.GetJsonAsync<TreeResponse>("/api/projects/alpha/tree?path=one");
         Assert.Equal("one", repository.Path);
         Assert.Equal(["docs", "src"], repository.Entries.Select(e => e.Name));
         Assert.All(repository.Entries, e => Assert.NotNull(e.Files));
         Assert.Equal("one/docs", repository.Entries[0].QualifiedPath);
 
-        var source = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree?path=one/src");
+        var source = await host.GetJsonAsync<TreeResponse>("/api/projects/alpha/tree?path=one/src");
         var file = Assert.Single(source.Entries);
         Assert.Equal("Widget.cs", file.Name);
         // Null `Files` is what tells a file from a directory, and the qualified path is what the file
@@ -264,7 +263,7 @@ public sealed class SearchEndpointTests
             ["one"] = new() { ["README.md"] = "read me\n", ["src/A.cs"] = "class A { }\n" }
         });
 
-        var level = await GetAsync<TreeResponse>(host, "/api/projects/alpha/tree?path=one");
+        var level = await host.GetJsonAsync<TreeResponse>("/api/projects/alpha/tree?path=one");
 
         // A file at the repository root has an empty `directory`, which is also the prefix this level
         // matches on. The listing must show it as a file and must not turn it into a directory.
@@ -298,14 +297,14 @@ public sealed class SearchEndpointTests
 
         // The stored qualified path is the short one, so a listing, a search and a file read all agree
         // without anyone rewriting anything (ADR-0006).
-        var files = await GetAsync<FileListResponse>(host, "/api/projects/solo/files?glob=*");
+        var files = await host.GetJsonAsync<FileListResponse>("/api/projects/solo/files?glob=*");
         Assert.Equal(["README.md", "src/Widget.cs"], files.Files.Select(f => f.QualifiedPath).Order());
 
-        var file = await GetAsync<FileContentResponse>(host,
+        var file = await host.GetJsonAsync<FileContentResponse>(
             "/api/projects/solo/file?path=" + Uri.EscapeDataString("src/Widget.cs"));
         Assert.Equal("src/Widget.cs", file.QualifiedPath);
 
-        var search = await GetAsync<GrepResult>(host, "/api/projects/solo/search?q=Widget");
+        var search = await host.GetJsonAsync<GrepResult>("/api/projects/solo/search?q=Widget");
         Assert.Equal("src/Widget.cs", Assert.Single(search.Files).QualifiedPath);
     }
 
@@ -319,12 +318,12 @@ public sealed class SearchEndpointTests
 
         // There is no repository level to walk through: the root is the repository's own top level, and
         // the entries under it are named without a slug.
-        var root = await GetAsync<TreeResponse>(host, "/api/projects/solo/tree");
+        var root = await host.GetJsonAsync<TreeResponse>("/api/projects/solo/tree");
         Assert.Equal(["src", "README.md"], root.Entries.Select(e => e.Name));
         Assert.Equal("src", root.Entries[0].QualifiedPath);
         Assert.Equal("README.md", root.Entries[1].QualifiedPath);
 
-        var source = await GetAsync<TreeResponse>(host, "/api/projects/solo/tree?path=src");
+        var source = await host.GetJsonAsync<TreeResponse>("/api/projects/solo/tree?path=src");
         Assert.Equal("src/Widget.cs", Assert.Single(source.Entries).QualifiedPath);
     }
 
@@ -339,11 +338,11 @@ public sealed class SearchEndpointTests
         using var host = await ProjectAsync(SearchEngine.Substring);
 
         // One commit per fixture repository. A page of one still says there are two.
-        var page = await GetAsync<ChangeLogAnswer>(host, "/api/projects/alpha/commits?pageSize=1");
+        var page = await host.GetJsonAsync<ChangeLogAnswer>("/api/projects/alpha/commits?pageSize=1");
         Assert.Equal(2, page.Total);
         Assert.Single(page.Commits);
 
-        var scoped = await GetAsync<ChangeLogAnswer>(host, "/api/projects/alpha/commits?repository=one");
+        var scoped = await host.GetJsonAsync<ChangeLogAnswer>("/api/projects/alpha/commits?repository=one");
         Assert.Equal(1, scoped.Total);
         var commit = Assert.Single(scoped.Commits);
         Assert.Equal("one", commit.RepositorySlug);
@@ -352,7 +351,7 @@ public sealed class SearchEndpointTests
         Assert.Equal(5, commit.Added);
         Assert.Equal(0, commit.Deleted);
 
-        var files = await GetAsync<CommitFilesResponse>(host, $"/api/projects/alpha/commits/{commit.Sha}/files");
+        var files = await host.GetJsonAsync<CommitFilesResponse>($"/api/projects/alpha/commits/{commit.Sha}/files");
         Assert.Equal(["one/docs/Widget.md", "one/src/Widget.cs"], files.Files.Select(f => f.QualifiedPath));
         Assert.All(files.Files, f => Assert.Equal("added", f.ChangeKind));
 
@@ -370,7 +369,7 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        var page = await GetAsync<ChangeLogAnswer>(host, $"/api/projects/alpha/commits?page={int.MaxValue}&pageSize=50");
+        var page = await host.GetJsonAsync<ChangeLogAnswer>($"/api/projects/alpha/commits?page={int.MaxValue}&pageSize=50");
 
         Assert.Equal(2, page.Total);
         Assert.Equal(int.MaxValue, page.Page);
@@ -388,10 +387,10 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        var scoped = await GetAsync<ChangeLogAnswer>(host, "/api/projects/alpha/commits?repository=one");
+        var scoped = await host.GetJsonAsync<ChangeLogAnswer>("/api/projects/alpha/commits?repository=one");
         var listed = Assert.Single(scoped.Commits);
 
-        var one = await GetAsync<LoggedCommit>(host, $"/api/projects/alpha/commits/{listed.Sha}");
+        var one = await host.GetJsonAsync<LoggedCommit>($"/api/projects/alpha/commits/{listed.Sha}");
         Assert.Equal(listed, one);
 
         using var http = host.CreateClient();
@@ -410,7 +409,7 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        var all = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn");
+        var all = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn");
         Assert.NotNull(all.Since);
         // The fixture's commits are at the Unix epoch, decades before today: a window measured from
         // the clock would rank nothing at all, and this is the assertion that says which it is.
@@ -422,11 +421,11 @@ public sealed class SearchEndpointTests
         Assert.All(all.Files, f => Assert.True(f.AtHead));
 
         // Scoped to one repository, the ranking covers only that repository.
-        var scoped = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?repository=two");
+        var scoped = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn?repository=two");
         Assert.Equal("two/src/Widget.cs", Assert.Single(scoped.Files).QualifiedPath);
 
         // A one-day window still reaches the newest commit, because it ends there rather than today.
-        var narrow = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?days=1");
+        var narrow = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn?days=1");
         Assert.NotEmpty(narrow.Files);
         Assert.Equal(all.Until, narrow.Until);
 
@@ -434,7 +433,7 @@ public sealed class SearchEndpointTests
         // found nothing in has to be named, or half a project's churn reads as all of it.
         Assert.Empty(all.WithoutHistory);
         await host.ExecuteAsync("alpha", "DELETE FROM commits WHERE repo_slug = 'two'");
-        var partial = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn");
+        var partial = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn");
         Assert.Equal("two", Assert.Single(partial.WithoutHistory));
         Assert.DoesNotContain(partial.Files, f => f.RepositorySlug == "two");
     }
@@ -452,12 +451,12 @@ public sealed class SearchEndpointTests
 
         // The menu the page draws its filter from: what this window is written in, ranked like the
         // files are, and carried before anything is filtered so a first visit can offer the choice.
-        var all = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn");
+        var all = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn");
         Assert.Null(all.Depth);
         Assert.Equal(0, all.Hidden);
         Assert.Equal([".cs", ".md"], all.Extensions.Select(e => e.Extension).Order());
 
-        var sharp = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?extensions=.cs");
+        var sharp = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn?extensions=.cs");
         Assert.Equal(["one/src/Widget.cs", "two/src/Widget.cs"],
             sharp.Files.Select(f => f.QualifiedPath).Order());
         // The Markdown file is off screen and the answer says so, rather than letting two rows read
@@ -467,17 +466,17 @@ public sealed class SearchEndpointTests
         Assert.Equal([".cs", ".md"], sharp.Extensions.Select(e => e.Extension).Order());
 
         // Written without the dot, the way a person types it.
-        var bare = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?extensions=cs");
+        var bare = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn?extensions=cs");
         Assert.Equal(sharp.Files.Count, bare.Files.Count);
 
         // A directory scope is a qualified path and carries its own repository, which is why the page
         // sends one parameter and not two.
-        var scoped = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?directory=one/src");
+        var scoped = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn?directory=one/src");
         Assert.Equal("one/src/Widget.cs", Assert.Single(scoped.Files).QualifiedPath);
 
         // Rolled up, the rows are directories and the answer says at what depth — the page draws a
         // directory row and a file row differently and cannot tell them apart from the path.
-        var rolled = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn?depth=2");
+        var rolled = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn?depth=2");
         Assert.Equal(2, rolled.Depth);
         Assert.Equal(["one/docs", "one/src", "two/src"],
             rolled.Files.Select(f => f.QualifiedPath).Order());
@@ -493,7 +492,7 @@ public sealed class SearchEndpointTests
         using var host = await ProjectAsync(SearchEngine.Substring);
         await host.ExecuteAsync("alpha", "DELETE FROM commits");
 
-        var churn = await GetAsync<ChurnResponse>(host, "/api/projects/alpha/churn");
+        var churn = await host.GetJsonAsync<ChurnResponse>("/api/projects/alpha/churn");
 
         Assert.Null(churn.Since);
         Assert.Null(churn.Until);
@@ -546,10 +545,10 @@ public sealed class SearchEndpointTests
     {
         using var host = await ProjectAsync(SearchEngine.Substring);
 
-        var log = await GetAsync<ChangeLogAnswer>(host, "/api/projects/alpha/commits?repository=one");
+        var log = await host.GetJsonAsync<ChangeLogAnswer>("/api/projects/alpha/commits?repository=one");
         var commit = Assert.Single(log.Commits);
 
-        var blame = await GetAsync<BlameResponse>(host,
+        var blame = await host.GetJsonAsync<BlameResponse>(
             "/api/projects/alpha/file/blame?path=" + Uri.EscapeDataString("one/src/Widget.cs"));
 
         Assert.Equal("one/src/Widget.cs", blame.QualifiedPath);
@@ -572,7 +571,7 @@ public sealed class SearchEndpointTests
             ["one"] = new() { ["assets/logo.bin"] = "\0\0binary", ["src/A.cs"] = "class A { }\n" }
         });
 
-        var blame = await GetAsync<BlameResponse>(host,
+        var blame = await host.GetJsonAsync<BlameResponse>(
             "/api/projects/alpha/file/blame?path=" + Uri.EscapeDataString("one/assets/logo.bin"));
 
         // The file is in the index and its page renders; only the gutter has nothing to fill.
@@ -597,7 +596,7 @@ public sealed class SearchEndpointTests
     {
         using var host = await ImportingProjectAsync();
 
-        var imports = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/Orders.cs"));
+        var imports = await host.GetJsonAsync<FileImportsResponse>(Route("imports", "one/src/Orders.cs"));
 
         Assert.True(imports.Profiled);
         Assert.True(imports.HasImports);
@@ -610,7 +609,7 @@ public sealed class SearchEndpointTests
         Assert.All(imports.Imports, i => Assert.Null(i.TargetPath));
         Assert.All(imports.Imports, i => Assert.NotNull(i.Unresolved));
 
-        var resolved = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/Report.cs"));
+        var resolved = await host.GetJsonAsync<FileImportsResponse>(Route("imports", "one/src/Report.cs"));
         var edge = Assert.Single(resolved.Imports);
         // The link the panel draws: a qualified path the file route accepts, not the name as written.
         Assert.Equal("one/src/Orders.cs", edge.TargetPath);
@@ -630,19 +629,19 @@ public sealed class SearchEndpointTests
         using var host = await ImportingProjectAsync();
 
         // A language with imports, and a file that writes none.
-        var none = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/Storage.cs"));
+        var none = await host.GetJsonAsync<FileImportsResponse>(Route("imports", "one/src/Storage.cs"));
         Assert.True(none.Profiled);
         Assert.True(none.HasImports);
         Assert.Empty(none.Imports);
 
         // A language with no import concept at all.
-        var sql = await GetAsync<FileImportsResponse>(host, Route("imports", "one/db/install.sql"));
+        var sql = await host.GetJsonAsync<FileImportsResponse>(Route("imports", "one/db/install.sql"));
         Assert.True(sql.Profiled);
         Assert.False(sql.HasImports);
         Assert.Equal("SQL", sql.LanguageName);
 
         // An extension no profile covers: its import lines were never read.
-        var uncovered = await GetAsync<FileImportsResponse>(host, Route("imports", "one/build/notes.rst"));
+        var uncovered = await host.GetJsonAsync<FileImportsResponse>(Route("imports", "one/build/notes.rst"));
         Assert.False(uncovered.Profiled);
         Assert.Empty(uncovered.Imports);
     }
@@ -665,11 +664,11 @@ public sealed class SearchEndpointTests
             }
         });
 
-        var exactly = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/Exactly.cs"));
+        var exactly = await host.GetJsonAsync<FileImportsResponse>(Route("imports", "one/src/Exactly.cs"));
         Assert.Equal(ImportGraph.MaxEdges, exactly.Imports.Count);
         Assert.False(exactly.Capped);
 
-        var more = await GetAsync<FileImportsResponse>(host, Route("imports", "one/src/OneMore.cs"));
+        var more = await host.GetJsonAsync<FileImportsResponse>(Route("imports", "one/src/OneMore.cs"));
         // Still only the ceiling is reported, and now the reply says the list is short of the answer.
         Assert.Equal(ImportGraph.MaxEdges, more.Imports.Count);
         Assert.True(more.Capped);
@@ -749,7 +748,7 @@ public sealed class SearchEndpointTests
     {
         using var host = await DeclaringProjectAsync();
 
-        var declared = await GetAsync<FileDeclarationsResponse>(host,
+        var declared = await host.GetJsonAsync<FileDeclarationsResponse>(
             Route("declarations", "one/src/Orders.cs"));
 
         Assert.Equal("one/src/Orders.cs", declared.QualifiedPath);
@@ -782,20 +781,20 @@ public sealed class SearchEndpointTests
         using var host = await DeclaringProjectAsync();
 
         // A language whose declarations are read, and a file that writes none.
-        var none = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/src/Empty.cs"));
+        var none = await host.GetJsonAsync<FileDeclarationsResponse>(Route("declarations", "one/src/Empty.cs"));
         Assert.Equal("read", none.Coverage);
         Assert.Empty(none.Declarations);
 
         // A language a profile covers and whose declarations this cannot read: it was never scanned,
         // which is not the same as having been scanned and found to declare nothing.
-        var css = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/web/site.css"));
+        var css = await host.GetJsonAsync<FileDeclarationsResponse>(Route("declarations", "one/web/site.css"));
         Assert.Equal("CSS", css.LanguageName);
         Assert.Equal("unreadable", css.Coverage);
         Assert.Empty(css.Declarations);
 
         // An extension no profile covers: it was read with the conservative default shapes, so the
         // list is thin for a reason the panel has to be able to name.
-        var uncovered = await GetAsync<FileDeclarationsResponse>(host,
+        var uncovered = await host.GetJsonAsync<FileDeclarationsResponse>(
             Route("declarations", "one/build/notes.rst"));
         Assert.Equal("unprofiled", uncovered.Coverage);
         Assert.Equal(".rst", uncovered.LanguageName);
@@ -822,11 +821,11 @@ public sealed class SearchEndpointTests
             }
         });
 
-        var exactly = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/src/Exactly.cs"));
+        var exactly = await host.GetJsonAsync<FileDeclarationsResponse>(Route("declarations", "one/src/Exactly.cs"));
         Assert.Equal(FileDeclarations.MaxDeclarations, exactly.Declarations.Count);
         Assert.False(exactly.Capped);
 
-        var more = await GetAsync<FileDeclarationsResponse>(host, Route("declarations", "one/src/OneMore.cs"));
+        var more = await host.GetJsonAsync<FileDeclarationsResponse>(Route("declarations", "one/src/OneMore.cs"));
         // Still only the ceiling is reported, and now the reply says the list is short of the answer.
         Assert.Equal(FileDeclarations.MaxDeclarations, more.Declarations.Count);
         Assert.True(more.Capped);
@@ -849,13 +848,5 @@ public sealed class SearchEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Contains("No indexed file 'one/src/Nowhere.cs'", await response.Content.ReadAsStringAsync(Ct),
             StringComparison.Ordinal);
-    }
-
-    private static async Task<T> GetAsync<T>(TestHost host, string url)
-    {
-        using var http = host.CreateClient();
-        var value = await http.GetFromJsonAsync<T>(url, Ct);
-        Assert.NotNull(value);
-        return value;
     }
 }

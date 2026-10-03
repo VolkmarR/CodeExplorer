@@ -52,7 +52,7 @@ public sealed class LocalRepositoryTests : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains(Setting, await response.Content.ReadAsStringAsync(Ct));
-        Assert.Empty(await http.GetFromJsonAsync<object[]>("/api/projects/alpha/repositories", Ct) ?? []);
+        Assert.Empty(await _host.GetJsonAsync<object[]>("/api/projects/alpha/repositories"));
     }
 
     [Theory]

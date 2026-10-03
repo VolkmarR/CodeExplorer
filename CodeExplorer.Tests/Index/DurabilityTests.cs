@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using CodeExplorer.Control;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
@@ -145,10 +144,10 @@ public sealed class DurabilityTests : IDisposable
         // Single-repository, because single_repository is the one column a read path cannot recover
         // from anywhere else: a qualified path cannot be parsed without it (ADR-0006).
         await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"), true);
-        var before = await DetailAsync(host, "alpha");
+        var before = await host.GetJsonAsync<ProjectDetail>("/api/projects/alpha");
         host.DeleteIndexFile("alpha");
 
-        var after = await DetailAsync(host, "alpha");
+        var after = await host.GetJsonAsync<ProjectDetail>("/api/projects/alpha");
 
         Assert.Equal(before.Index.BuiltAt, after.Index.BuiltAt);
         Assert.Equal(["src/A.cs"], await host.ScalarsAsync("alpha", "SELECT qualified_path FROM files"));
@@ -332,12 +331,11 @@ public sealed class DurabilityTests : IDisposable
         host.DeleteIndexFile("alpha");
         host.Restart();
 
-        using var http = host.CreateClient();
-        var projects = await http.GetFromJsonAsync<List<ProjectSummary>>("/api/projects", Ct);
+        var projects = await host.GetJsonAsync<List<ProjectSummary>>("/api/projects");
 
         // The page shows the project and reports it as not built, which is what the disk says. Drawing
         // one list must not wake every durable copy, so this is the read that deliberately does not.
-        Assert.Null(Assert.Single(projects!).Index.BuiltAt);
+        Assert.Null(Assert.Single(projects).Index.BuiltAt);
         Assert.False(host.Indexes.HasIndex("alpha"));
     }
 
@@ -351,9 +349,7 @@ public sealed class DurabilityTests : IDisposable
 
         host.RestartWithoutControlDatabase();
 
-        using var http = host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectDetail>("/api/projects/alpha", Ct);
-        Assert.NotNull(detail);
+        var detail = await host.GetJsonAsync<ProjectDetail>("/api/projects/alpha");
         Assert.Equal("one", Assert.Single(detail.Repositories).Slug);
         // The credential column is restored with it; what the page may say about it is still only
         // whether it is set, which is what the backup being a file rather than a report protects.
@@ -373,9 +369,7 @@ public sealed class DurabilityTests : IDisposable
 
         // Restored, migrated, and stored again. Without the last step the store would still hold the
         // older shape, and every wake until someone happened to create a project would migrate afresh.
-        using var http = host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectDetail>("/api/projects/legacy", Ct);
-        Assert.NotNull(detail);
+        var detail = await host.GetJsonAsync<ProjectDetail>("/api/projects/legacy");
         Assert.False(detail.SingleRepository);
         Assert.True(await StoredControlIsMigratedAsync(host));
     }
@@ -658,14 +652,6 @@ public sealed class DurabilityTests : IDisposable
             $"COPY (SELECT 1 AS schema_version, now() AS built_at, false AS fts_indexed, false AS single_repository) "
             + $"TO '{path.Replace("'", "''")}' (FORMAT parquet)";
         await command.ExecuteNonQueryAsync(Ct);
-    }
-
-    private static async Task<ProjectDetail> DetailAsync(TestHost host, string slug)
-    {
-        using var http = host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectDetail>($"/api/projects/{slug}", Ct);
-        Assert.NotNull(detail);
-        return detail;
     }
 
     private static IEnumerable<string?> StoredFileNames(TestHost host, string slug) =>
