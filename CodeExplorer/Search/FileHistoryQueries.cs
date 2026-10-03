@@ -385,10 +385,7 @@ public sealed partial class HistoryQueries
                                                          ORDER BY sha
                                                          LIMIT $limit
                                                          """, [new DuckDBParameter("p", prefix), new("limit", ceiling)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var shas = new List<string>();
-        while (await reader.ReadAsync(cancellationToken)) shas.Add(reader.Text("sha"));
-        return shas;
+        return await command.ListAsync(reader => reader.Text("sha"), cancellationToken);
     }
 
     /// <summary>
@@ -419,12 +416,8 @@ public sealed partial class HistoryQueries
                                                          ORDER BY start_line
                                                          """,
             [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var runs = new List<AttributedLines>();
-        while (await reader.ReadAsync(cancellationToken))
-            runs.Add(new AttributedLines(reader.Int32("start_line"), reader.Int32("end_line"),
-                reader.Attribution()));
-        return runs;
+        return await command.ListAsync(reader => new AttributedLines(reader.Int32("start_line"),
+            reader.Int32("end_line"), reader.Attribution()), cancellationToken);
     }
 
     /// <summary>
@@ -452,13 +445,9 @@ public sealed partial class HistoryQueries
                                                                               WHERE sha = $sha)
                                                          ORDER BY cf.path
                                                          """, [new DuckDBParameter("sha", sha)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var files = new List<CommitFile>();
-        while (await reader.ReadAsync(cancellationToken))
-            files.Add(new CommitFile(reader.Text("path"), reader.Text("change_kind"), reader.Int32("added"),
-                reader.Int32("deleted"), paths.Format(reader.Text("repo_slug"), reader.Text("path")),
-                !reader.IsNull("qualified_path")));
-        return files;
+        return await command.ListAsync(reader => new CommitFile(reader.Text("path"), reader.Text("change_kind"),
+            reader.Int32("added"), reader.Int32("deleted"), paths.Format(reader.Text("repo_slug"), reader.Text("path")),
+            !reader.IsNull("qualified_path")), cancellationToken);
     }
 
 }

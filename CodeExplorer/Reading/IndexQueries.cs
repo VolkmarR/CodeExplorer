@@ -56,12 +56,8 @@ internal static class IndexQueries
                                                     FROM files f{scope}
                                                     GROUP BY f.extension
                                                     """, parameters);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var counts = new List<ExtensionCount>();
-        while (await reader.ReadAsync(cancellationToken))
-            counts.Add(new ExtensionCount(reader.Text("extension"), reader.Int32("files"), reader.Int64("lines"),
-                reader.Int32("skipped")));
-        return counts;
+        return await command.ListAsync(reader => new ExtensionCount(reader.Text("extension"),
+            reader.Int32("files"), reader.Int64("lines"), reader.Int32("skipped")), cancellationToken);
     }
 
     /// <summary>
@@ -136,8 +132,7 @@ internal static class IndexQueries
                                                     FROM ranked
                                                     ORDER BY commits DESC, added + deleted DESC, path
                                                     """, [.. parameters, new("limit", limit)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        return await ReadChurnedAsync(reader, paths, cancellationToken);
+        return await command.ListAsync(reader => Churned(reader, paths), cancellationToken);
     }
 
     /// <summary>
@@ -226,29 +221,20 @@ internal static class IndexQueries
                                                     FROM ranked
                                                     ORDER BY commits DESC, added + deleted DESC, path
                                                     """, parameters);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        return await ReadChurnedAsync(reader, paths, cancellationToken);
+        return await command.ListAsync(reader => Churned(reader, paths), cancellationToken);
     }
 
     /// <summary>
-    ///     The rows both rankings answer with, a file's and a directory's alike. The reader is opened
-    ///     by the caller, so the query plan is labelled with the ranking that ran and not with this.
+    ///     The row both rankings answer with, a file's and a directory's alike.
     /// </summary>
-    private static async Task<IReadOnlyList<ChurnedFile>> ReadChurnedAsync(DbDataReader reader, ProjectPaths paths,
-        CancellationToken cancellationToken)
+    private static ChurnedFile Churned(DbDataReader reader, ProjectPaths paths)
     {
-        var churned = new List<ChurnedFile>();
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            // Spelled from the repository and the path rather than read off a files row, because the
-            // paths that have none are exactly the ones no longer at HEAD — and those are ranked and
-            // must still be named.
-            string slug = reader.Text("repo_slug");
-            churned.Add(new ChurnedFile(paths.Format(slug, reader.Text("path")), slug, reader.Flag("at_head"),
-                reader.Int32("commits"), reader.Int64("added"), reader.Int64("deleted")));
-        }
-
-        return churned;
+        // Spelled from the repository and the path rather than read off a files row, because the
+        // paths that have none are exactly the ones no longer at HEAD — and those are ranked and
+        // must still be named.
+        string slug = reader.Text("repo_slug");
+        return new ChurnedFile(paths.Format(slug, reader.Text("path")), slug, reader.Flag("at_head"),
+            reader.Int32("commits"), reader.Int64("added"), reader.Int64("deleted"));
     }
 
     /// <summary>
@@ -328,13 +314,8 @@ internal static class IndexQueries
                                                     ORDER BY commits DESC, files DESC, extension
                                                     LIMIT $xl
                                                     """, parameters);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var extensions = new List<ChurnedExtension>();
-        while (await reader.ReadAsync(cancellationToken))
-            extensions.Add(new ChurnedExtension(reader.Text("extension"), reader.Int32("commits"),
-                reader.Int32("files")));
-
-        return extensions;
+        return await command.ListAsync(reader => new ChurnedExtension(reader.Text("extension"),
+            reader.Int32("commits"), reader.Int32("files")), cancellationToken);
     }
 
     /// <summary>

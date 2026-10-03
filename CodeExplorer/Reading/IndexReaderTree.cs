@@ -74,19 +74,14 @@ public sealed partial class IndexReader
     ///     first.
     /// </summary>
     public async Task<IReadOnlyList<string>> LinesAsync(long fileId, int first, int last,
-        CancellationToken cancellationToken)
-    {
-        await using var command = Connection.Query("""
-                                                   SELECT content FROM lines
-                                                   WHERE file_id = $f AND line_number BETWEEN $a AND $b
-                                                   ORDER BY line_number
-                                                   """,
-            [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)]);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var result = new List<string>();
-        while (await reader.ReadAsync(cancellationToken)) result.Add(reader.Text("content"));
-        return result;
-    }
+        CancellationToken cancellationToken) =>
+        await Connection.ListAsync("""
+                                   SELECT content FROM lines
+                                   WHERE file_id = $f AND line_number BETWEEN $a AND $b
+                                   ORDER BY line_number
+                                   """,
+            [new DuckDBParameter("f", fileId), new DuckDBParameter("a", first), new DuckDBParameter("b", last)],
+            reader => reader.Text("content"), cancellationToken);
 
     /// <summary>
     ///     A case-insensitive glob over the qualified path, run as the RE2 expression that means what
@@ -328,25 +323,18 @@ public sealed partial class IndexReader
     ///     — the call an agent opens a project with — the one read that scanned <c>files</c> whole for
     ///     a number the build already had (#149). It is a column now, so this reads one small table.
     /// </summary>
-    private async Task<IReadOnlyList<TreeItem>> RepositoryLevelAsync(CancellationToken cancellationToken)
-    {
-        await using var command = Connection.Query("""
-                                                   SELECT r.slug,
-                                                          CAST(r.file_count AS BIGINT) AS files,
-                                                          CAST(r.line_count AS BIGINT) AS lines,
-                                                          CAST(r.byte_count AS BIGINT) AS bytes
-                                                   FROM repositories r
-                                                   ORDER BY r.slug
-                                                   """, []);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var entries = new List<TreeItem>();
-        while (await reader.ReadAsync(cancellationToken))
+    private async Task<IReadOnlyList<TreeItem>> RepositoryLevelAsync(CancellationToken cancellationToken) =>
+        await Connection.ListAsync("""
+                                   SELECT r.slug,
+                                          CAST(r.file_count AS BIGINT) AS files,
+                                          CAST(r.line_count AS BIGINT) AS lines,
+                                          CAST(r.byte_count AS BIGINT) AS bytes
+                                   FROM repositories r
+                                   ORDER BY r.slug
+                                   """, [], reader =>
         {
             string slug = reader.Text("slug");
-            entries.Add(new TreeItem(slug, slug, (int)reader.Int64("files"), reader.Int64("lines"),
-                reader.Int64("bytes"), null));
-        }
-
-        return entries;
-    }
+            return new TreeItem(slug, slug, (int)reader.Int64("files"), reader.Int64("lines"),
+                reader.Int64("bytes"), null);
+        }, cancellationToken);
 }

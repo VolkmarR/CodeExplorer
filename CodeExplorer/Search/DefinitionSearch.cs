@@ -125,7 +125,7 @@ public sealed class DefinitionSearch(IndexReaders readers)
         string declarationShapes = shapes.Sql;
         string fileFilter = filter.Sql(parameters);
 
-        var candidates = new List<Candidate>();
+        List<Candidate> candidates;
         await using (var command = connection.Query($"""
                                                      SELECT f.file_id, f.qualified_path, f.extension,
                                                             l.line_number, l.content
@@ -136,13 +136,9 @@ public sealed class DefinitionSearch(IndexReaders readers)
                                                      ORDER BY f.qualified_path, l.line_number
                                                      LIMIT $limit
                                                      """, [.. parameters, new("limit", RowCap.Limit(MaxCandidates))]))
-        await using (var reader = await command.ReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken))
-                candidates.Add(new Candidate(reader.Int64("file_id"), reader.Text("qualified_path"),
-                    Languages.Default.For(reader.Text("extension")), reader.Int32("line_number"),
-                    reader.Text("content")));
-        }
+            candidates = await command.ListAsync(reader => new Candidate(reader.Int64("file_id"),
+                reader.Text("qualified_path"), Languages.Default.For(reader.Text("extension")),
+                reader.Int32("line_number"), reader.Text("content")), cancellationToken);
 
         bool capped = RowCap.Trim(candidates, MaxCandidates);
 

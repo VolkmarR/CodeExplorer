@@ -203,30 +203,27 @@ internal static class ExcludedPathSuggestions
         parameters.Add(new DuckDBParameter("most", MaxLinesPerCommit));
         var conditions = new List<string> { "f.skip_reason IS NULL" };
         if (covered.Matching("f.qualified_path", "c", parameters) is { } matching) conditions.Add($"NOT {matching}");
-        await using var command = connection.Query($"""
-                                                    WITH bumped AS (
-                                                        SELECT c.repo_slug, cf.path, count(*)::INTEGER AS commits,
-                                                               max(cf.added + cf.deleted)::INTEGER AS most
-                                                        FROM commit_files cf
-                                                        JOIN commits c USING (commit_id)
-                                                        WHERE {string.Join(" AND ", inWindow)}
-                                                        GROUP BY c.repo_slug, cf.path
-                                                        HAVING count(*) >= $min AND max(cf.added + cf.deleted) <= $most),
-                                                    candidates AS (
-                                                        SELECT f.qualified_path, f.name, b.commits, b.most
-                                                        FROM bumped b
-                                                        JOIN repositories r ON r.slug = b.repo_slug
-                                                        JOIN files f ON f.repo_id = r.repo_id AND f.path = b.path
-                                                        {OverviewQueries.Where(conditions)})
-                                                    SELECT c.*, (SELECT count(*) FROM files n WHERE lower(n.name) = lower(c.name))::INTEGER AS named
-                                                    FROM candidates c
-                                                    ORDER BY c.commits DESC, c.qualified_path
-                                                    """, parameters);
-        await using var reader = await command.ReaderAsync(cancellationToken);
-        var rows = new List<(string Path, string Name, int Commits, int Most, int Named)>();
-        while (await reader.ReadAsync(cancellationToken))
-            rows.Add((reader.Text("qualified_path"), reader.Text("name"), reader.Int32("commits"),
-                reader.Int32("most"), reader.Int32("named")));
+        var rows = await connection.ListAsync($"""
+                                               WITH bumped AS (
+                                                   SELECT c.repo_slug, cf.path, count(*)::INTEGER AS commits,
+                                                          max(cf.added + cf.deleted)::INTEGER AS most
+                                                   FROM commit_files cf
+                                                   JOIN commits c USING (commit_id)
+                                                   WHERE {string.Join(" AND ", inWindow)}
+                                                   GROUP BY c.repo_slug, cf.path
+                                                   HAVING count(*) >= $min AND max(cf.added + cf.deleted) <= $most),
+                                               candidates AS (
+                                                   SELECT f.qualified_path, f.name, b.commits, b.most
+                                                   FROM bumped b
+                                                   JOIN repositories r ON r.slug = b.repo_slug
+                                                   JOIN files f ON f.repo_id = r.repo_id AND f.path = b.path
+                                                   {OverviewQueries.Where(conditions)})
+                                               SELECT c.*, (SELECT count(*) FROM files n WHERE lower(n.name) = lower(c.name))::INTEGER AS named
+                                               FROM candidates c
+                                               ORDER BY c.commits DESC, c.qualified_path
+                                               """, parameters, reader => (Path: reader.Text("qualified_path"),
+            Name: reader.Text("name"), Commits: reader.Int32("commits"), Most: reader.Int32("most"),
+            Named: reader.Int32("named")), cancellationToken);
 
         var patterns = new List<(string, SuggestionRule, string)>();
         // A name holding a glob character would mean something else as a pattern; there is no escape.

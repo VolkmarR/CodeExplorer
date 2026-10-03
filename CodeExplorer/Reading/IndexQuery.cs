@@ -53,6 +53,31 @@ internal static class IndexQuery
     }
 
     /// <summary>
+    ///     Every row a statement answers with, each turned into a <typeparamref name="T" /> by
+    ///     <paramref name="row" />, in the order the statement returns them. The caller's file and member
+    ///     are passed on to <see cref="ReaderAsync" />, so the plan is labelled with the method that wrote
+    ///     the statement and not with this one.
+    /// </summary>
+    public static async Task<List<T>> ListAsync<T>(this DuckDBConnection connection, string sql,
+        IEnumerable<DuckDBParameter> parameters, Func<DbDataReader, T> row, CancellationToken cancellationToken,
+        [CallerFilePath] string file = "", [CallerMemberName] string member = "")
+    {
+        await using var command = connection.Query(sql, parameters);
+        return await command.ListAsync(row, cancellationToken, file, member);
+    }
+
+    /// <summary>The same for a command its caller built, which stays the caller's to dispose.</summary>
+    public static async Task<List<T>> ListAsync<T>(this DuckDBCommand command, Func<DbDataReader, T> row,
+        CancellationToken cancellationToken, [CallerFilePath] string file = "",
+        [CallerMemberName] string member = "")
+    {
+        await using var reader = await command.ReaderAsync(cancellationToken, file, member);
+        var rows = new List<T>();
+        while (await reader.ReadAsync(cancellationToken)) rows.Add(row(reader));
+        return rows;
+    }
+
+    /// <summary>
     ///     The one value a statement answers with, explained like any other read. Every <c>count(*)</c>
     ///     and every <c>EXISTS</c> on the query path goes through here for the reason the counts do:
     ///     a total is one number at the call site and a scan of a whole table underneath, which is the
