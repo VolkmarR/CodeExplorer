@@ -29,8 +29,7 @@ public sealed class InsecureRedirectTests : IDisposable
     /// <summary>One for the class: generating an RSA key is the slowest thing either test does.</summary>
     private static readonly X509Certificate2 _certificate = SelfSigned();
 
-    private readonly string _root =
-        Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
+    private readonly GitFixtures _fixtures = new();
 
     private readonly TcpListener _https = new(IPAddress.Loopback, 0);
     private readonly TcpListener _http = new(IPAddress.Loopback, 0);
@@ -55,7 +54,7 @@ public sealed class InsecureRedirectTests : IDisposable
     {
         _https.Dispose();
         _http.Dispose();
-        TestHost.DeleteTree(_root);
+        _fixtures.Dispose();
     }
 
     [Fact]
@@ -65,7 +64,7 @@ public sealed class InsecureRedirectTests : IDisposable
         options.FetchOptions.CertificateCheck = AcceptTestCertificate;
 
         var refused = Assert.ThrowsAny<LibGit2SharpException>(() =>
-            Repository.Clone(RemoteUrl, Path.Combine(_root, "clone"), options));
+            Repository.Clone(RemoteUrl, _fixtures.FixturePath("clone"), options));
 
         Assert.Contains(Refusal, refused.Message, StringComparison.Ordinal);
         Assert.Equal(0, Volatile.Read(ref _httpConnections));
@@ -74,7 +73,7 @@ public sealed class InsecureRedirectTests : IDisposable
     [Fact]
     public void A_fetch_does_not_follow_an_https_remote_to_http()
     {
-        string path = Repository.Init(Path.Combine(_root, "copy"), isBare: true);
+        string path = Repository.Init(_fixtures.FixturePath("copy"), isBare: true);
         using var copy = new Repository(path);
         copy.Network.Remotes.Add("origin", RemoteUrl);
 

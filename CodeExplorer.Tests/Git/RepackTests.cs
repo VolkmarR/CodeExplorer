@@ -1,3 +1,4 @@
+using CodeExplorer.Git;
 using CodeExplorer.Index;
 using LibGit2Sharp;
 using Xunit;
@@ -14,11 +15,17 @@ namespace CodeExplorer.Tests;
 /// </summary>
 public sealed class RepackTests : IDisposable
 {
+    /// <summary>
+    ///     Lowered to a few packs so a handful of commit-and-refresh cycles cross it, where the shipped
+    ///     fifty would take fifty. The loose-object threshold is lowered the same way where a test is
+    ///     about loose objects, which the clone of a local fixture starts out as.
+    /// </summary>
     private const int PackThreshold = 3;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private readonly TestHost _host = new(SearchEngine.Substring, repackPackThreshold: PackThreshold);
+    private readonly TestHost _host =
+        new(SearchEngine.Substring, (LocalCopyRepack.PackThresholdSetting, PackThreshold));
 
     public void Dispose() => _host.Dispose();
 
@@ -67,7 +74,7 @@ public sealed class RepackTests : IDisposable
         using (var clone = new Repository(copy))
             clone.ObjectDatabase.Pack(new PackBuilderOptions(packDirectory));
         foreach (string loose in Directory.EnumerateDirectories(Path.Combine(copy, "objects"), "??"))
-            TestHost.DeleteTree(loose);
+            GitFixtures.DeleteTree(loose);
         string large = Path.ChangeExtension(Directory.GetFiles(packDirectory, "*.pack").Single(), null);
         var packs = new List<int>();
         for (int cycle = 1; cycle <= PackThreshold; cycle++)
@@ -106,8 +113,9 @@ public sealed class RepackTests : IDisposable
     [Fact]
     public async Task A_repack_switched_off_leaves_a_copy_past_both_thresholds_alone()
     {
-        using var host = new TestHost(SearchEngine.Substring, repackPackThreshold: PackThreshold,
-            repackLooseObjectThreshold: 1, repackEnabled: false);
+        // Off only here, where the switch is the subject; the shipped default is on.
+        using var host = new TestHost(SearchEngine.Substring, (LocalCopyRepack.PackThresholdSetting, PackThreshold),
+            (LocalCopyRepack.LooseObjectThresholdSetting, 1), (LocalCopyRepack.EnabledSetting, false));
 
         var packs = await CyclesAsync(host, PackThreshold + 1);
 
@@ -123,7 +131,7 @@ public sealed class RepackTests : IDisposable
     [Fact]
     public async Task A_first_clone_is_not_repacked_and_the_fetch_after_it_is()
     {
-        using var host = new TestHost(SearchEngine.Substring, repackLooseObjectThreshold: 1);
+        using var host = new TestHost(SearchEngine.Substring, (LocalCopyRepack.LooseObjectThresholdSetting, 1));
         string source = host.CreateGitRepository("main", Files(0));
         host.CommitToGitRepository("main", Files(1));
         await host.CreateProjectAsync("alpha");
@@ -278,9 +286,7 @@ public sealed class RepackTests : IDisposable
     [InlineData("Git:RepackLooseObjectThreshold")]
     public void A_threshold_of_zero_stops_the_server_from_starting_with_the_setting_named(string setting)
     {
-        using var host = setting == "Git:RepackPackThreshold"
-            ? new TestHost(SearchEngine.Substring, repackPackThreshold: 0)
-            : new TestHost(SearchEngine.Substring, repackLooseObjectThreshold: 0);
+        using var host = new TestHost(SearchEngine.Substring, (setting, 0));
 
         var refused = Assert.Throws<InvalidOperationException>(() => host.Services);
         Assert.Contains(setting, refused.Message, StringComparison.Ordinal);

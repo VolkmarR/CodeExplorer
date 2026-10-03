@@ -23,7 +23,7 @@ public sealed class LocalRepositoryTests : IDisposable
     private const string LoopbackSsh = "ssh://git@[::1]/repo.git";
     private const string LoopbackScp = "git@127.0.0.1:org/repo.git";
 
-    private readonly TestHost _host = new(SearchEngine.Substring, allowLocalRepositories: false);
+    private readonly TestHost _host = new(SearchEngine.Substring, (Setting, false));
 
     public void Dispose() => _host.Dispose();
 

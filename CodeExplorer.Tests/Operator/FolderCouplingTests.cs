@@ -48,8 +48,9 @@ public sealed class FolderCouplingTests : IDisposable
     public async Task A_commit_over_the_ceiling_is_left_out_and_counted()
     {
         _host.Dispose();
-        _host = new TestHost(SearchEngine.Substring, maxCommitPaths: 3);
-        // Four paths in the fixture's commit, over a ceiling of three.
+        // Four paths in the fixture's commit, over a ceiling of three: far below any real one, because a
+        // fixture large enough to cross the shipped default would take longer to build than the suite.
+        _host = new TestHost(SearchEngine.Substring, ("History:MaxCommitPaths", 3));
         await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
         {
             ["one"] = new() { ["src/A.cs"] = "a\n", ["lib/C.cs"] = "c\n", ["docs/D.md"] = "d\n", ["x/E.cs"] = "e\n" }

@@ -282,7 +282,7 @@ public sealed class DurabilityTests : IDisposable
         host.DeleteIndexFile("alpha");
         host.Restart();
         host.RenameDefaultBranch("one", "trunk");
-        TestHost.BreakHead(host.FixtureGitPath("one"), "main");
+        GitFixtures.BreakHead(host.FixtureGitPath("one"), "main");
 
         using (var response = await host.RequestRefreshAsync("alpha"))
             Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);

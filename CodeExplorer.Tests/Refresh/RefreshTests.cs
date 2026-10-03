@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using CodeExplorer.Operator;
 using CodeExplorer.Reading;
 using CodeExplorer.Refresh;
@@ -22,6 +23,12 @@ public sealed class RefreshTests : IDisposable
 {
     private const string OldFile = "src/A.cs";
     private const string NewFile = "src/B.cs";
+
+    /// <summary>
+    ///     How long a swap waits for in-flight queries. Zero proves what happens to a connection the
+    ///     drain gave up on; the default is long enough that a test holding one blocks the swap.
+    /// </summary>
+    private const string DrainSeconds = "Index:DrainSeconds";
 
     // Substring throughout: nothing here asserts ranking, and pinning the engine keeps the suite
     // proving the same thing offline as on a machine that can install fts.
@@ -79,7 +86,7 @@ public sealed class RefreshTests : IDisposable
         // A one-second drain, so a test that deliberately never lets the swap through is over in a
         // second rather than in the default thirty. What it proves does not depend on the length: the
         // searches below run while the drain is waiting, which is the state this is about.
-        using var host = new TestHost(SearchEngine.Substring, 1);
+        using var host = new TestHost(SearchEngine.Substring, (DrainSeconds, 1));
         await host.IndexedProjectAsync("alpha", Fixture());
         host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
 
@@ -112,7 +119,7 @@ public sealed class RefreshTests : IDisposable
     {
         // Zero drain: the swap gives up waiting at once, which is the hard timeout the ticket asks
         // for and the only way to produce a connection that outlived its catalog on purpose.
-        using var host = new TestHost(SearchEngine.Substring, 0);
+        using var host = new TestHost(SearchEngine.Substring, (DrainSeconds, 0));
         await host.IndexedProjectAsync("alpha", Fixture());
 
         using var stale = await host.OpenIndexAsync("alpha");
@@ -552,7 +559,7 @@ public sealed class RefreshTests : IDisposable
     public async Task A_refresh_is_refused_when_the_disk_would_not_hold_the_shadow_index()
     {
         // More free space than any disk has, so the guard fires on a machine of any size.
-        using var host = new TestHost(SearchEngine.Substring, minimumFreeBytes: long.MaxValue);
+        using var host = new TestHost(SearchEngine.Substring, (FreeSpace.MinimumSetting, long.MaxValue));
         await host.CreateProjectAsync("alpha");
         await host.AddRepositoryAsync("alpha", "one",
             host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" }));
@@ -644,7 +651,7 @@ public sealed class RefreshTests : IDisposable
         await _host.IndexedProjectAsync("alpha", Fixture());
         // A clone left in the broken state by a version without the fix. Recovering it is the refresh's
         // job because the alternative is the operator editing HEAD inside the clone directory by hand.
-        TestHost.BreakHead(_host.ClonePath("alpha", "one"), "gone");
+        GitFixtures.BreakHead(_host.ClonePath("alpha", "one"), "gone");
 
         var summary = await _host.RefreshAsync("alpha");
 
@@ -658,7 +665,7 @@ public sealed class RefreshTests : IDisposable
         await _host.IndexedProjectAsync("alpha", Fixture());
         // A detached HEAD is advertised as a commit id, which names no reference: before #260 looking
         // it up as one threw, and every refresh of the repository failed.
-        TestHost.DetachHead(_host.FixtureGitPath("one"), _host.HeadOf("one"));
+        GitFixtures.DetachHead(_host.FixtureGitPath("one"), _host.HeadOf("one"));
 
         // Twice, because the refresh that keeps the clone's branch must leave it as the next one needs it.
         await _host.RefreshAsync("alpha");
@@ -676,7 +683,7 @@ public sealed class RefreshTests : IDisposable
         _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
         // Detached at the older commit, so a refresh that followed the detached HEAD would miss the new
         // file: the clone's HEAD follows its branch, and the branch has moved on.
-        TestHost.DetachHead(_host.FixtureGitPath("one"), before);
+        GitFixtures.DetachHead(_host.FixtureGitPath("one"), before);
 
         var summary = await _host.RefreshAsync("alpha");
 
@@ -691,7 +698,7 @@ public sealed class RefreshTests : IDisposable
         string remote = _host.CreateGitRepository("one", new Dictionary<string, string> { [OldFile] = "class A;\n" });
         string branch = _host.BranchOf("one");
         string first = _host.HeadOf("one");
-        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
+        GitFixtures.DetachHead(_host.FixtureGitPath("one"), first);
         await _host.AddRepositoryAsync("alpha", "one", remote);
         var cloned = await _host.RefreshAsync("alpha");
 
@@ -728,7 +735,7 @@ public sealed class RefreshTests : IDisposable
         string first = _host.HeadOf("one");
         _host.CreateBranch("one", expected);
         _host.CreateBranch("one", other);
-        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
+        GitFixtures.DetachHead(_host.FixtureGitPath("one"), first);
         await _host.AddRepositoryAsync("alpha", "one", remote);
         await _host.RefreshAsync("alpha");
 
@@ -747,7 +754,7 @@ public sealed class RefreshTests : IDisposable
         _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
         // Detached at a commit no branch ends at, so only the fallback rule can name one: the fixture's
         // branch is main or master, whichever init.defaultBranch says.
-        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
+        GitFixtures.DetachHead(_host.FixtureGitPath("one"), first);
         await _host.AddRepositoryAsync("alpha", "one", remote);
 
         var cloned = await _host.RefreshAsync("alpha");
@@ -769,9 +776,9 @@ public sealed class RefreshTests : IDisposable
         // The state a first clone of a detached remote left a local copy in before #288, against a
         // remote still detached, so the remote's HEAD names nothing to repair it with.
         string first = _host.HeadOf("one");
-        TestHost.DetachHead(_host.ClonePath("alpha", "one"), first);
+        GitFixtures.DetachHead(_host.ClonePath("alpha", "one"), first);
         _host.CommitToGitRepository("one", new Dictionary<string, string> { [NewFile] = "class B;\n" });
-        TestHost.DetachHead(_host.FixtureGitPath("one"), first);
+        GitFixtures.DetachHead(_host.FixtureGitPath("one"), first);
 
         var summary = await _host.RefreshAsync("alpha");
 
@@ -798,7 +805,7 @@ public sealed class RefreshTests : IDisposable
         // A remote that has branches but whose own HEAD names none of them: nothing can be followed,
         // and the branch the clone was on is pruned, so its HEAD is left naming nothing either.
         _host.RenameDefaultBranch("one", "trunk");
-        TestHost.BreakHead(_host.FixtureGitPath("one"), "main");
+        GitFixtures.BreakHead(_host.FixtureGitPath("one"), "main");
 
         string error = await FailedRefreshErrorAsync();
 
@@ -1026,7 +1033,7 @@ public sealed class RefreshTests : IDisposable
         string objects = Path.Combine(clone, "objects");
         using (var repository = new LibGit2Sharp.Repository(clone))
             repository.ObjectDatabase.Pack(new LibGit2Sharp.PackBuilderOptions(Path.Combine(objects, "pack")));
-        foreach (string loose in Directory.EnumerateDirectories(objects, "??")) TestHost.DeleteTree(loose);
+        foreach (string loose in Directory.EnumerateDirectories(objects, "??")) GitFixtures.DeleteTree(loose);
     }
 
     /// <summary>
@@ -1154,7 +1161,7 @@ public sealed class RefreshTests : IDisposable
         // The same break the message test uses: no branch is left to follow, so the refresh fails
         // partway through rather than being refused before it starts and reporting nothing at all.
         _host.RenameDefaultBranch("one", "trunk");
-        TestHost.BreakHead(_host.FixtureGitPath("one"), "main");
+        GitFixtures.BreakHead(_host.FixtureGitPath("one"), "main");
 
         using (var response = await _host.RequestRefreshAsync("alpha"))
             Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);

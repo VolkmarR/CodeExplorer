@@ -29,9 +29,13 @@ public sealed class ProcessWideGitSettings;
 [Collection(nameof(ProcessWideGitSettings))]
 public sealed class StalledRemoteTests : IDisposable
 {
+    /// <summary>
+    ///     Lowered to seconds so a stalled remote gives up within a test's patience. The limit is
+    ///     libgit2's and process-wide, which is why this class runs alone.
+    /// </summary>
     private const int StallSeconds = 2;
 
-    private readonly TestHost _host = new(SearchEngine.Substring, transferStallSeconds: StallSeconds);
+    private readonly TestHost _host = new(SearchEngine.Substring, (TransferStallLimit.Setting, StallSeconds));
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
     private readonly ConcurrentBag<Socket> _accepted = [];
 
@@ -118,7 +122,7 @@ public sealed class StalledRemoteTests : IDisposable
     {
         // A limit no test would wait out, so only the cancellation can end the refresh in time. Its own
         // host, because the class's has the lowered limit and building it would put that one back.
-        using var host = new TestHost(SearchEngine.Substring, transferStallSeconds: 120);
+        using var host = new TestHost(SearchEngine.Substring, (TransferStallLimit.Setting, 120));
         Serve(_ => { });
         await host.CreateProjectAsync("alpha");
         await host.AddRepositoryAsync("alpha", "stalled", RemoteUrl);

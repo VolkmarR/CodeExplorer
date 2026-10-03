@@ -30,7 +30,7 @@ public sealed class FtsExtensionTests : IDisposable
         {
             // No retry: the one file that refuses here stays mapped until the run ends, so waiting for
             // it would only add half a second to every test in this class.
-            TestHost.DeleteTree(_root, retry: false);
+            GitFixtures.DeleteTree(_root, retry: false);
         }
         catch (UnauthorizedAccessException)
         {
@@ -58,8 +58,10 @@ public sealed class FtsExtensionTests : IDisposable
         FtsExtension.InstallTo(Extensions);
 
         // Fts and not Auto: Auto would fall back to substring scan and pass while proving nothing,
-        // which is exactly the silent downgrade the image exists to prevent.
-        _host = new TestHost(SearchEngine.Fts, extensionDirectory: Extensions);
+        // which is exactly the silent downgrade the image exists to prevent. The extension directory is
+        // absent everywhere else, which leaves DuckDB's own default; the container arrangement (#14) is
+        // the one thing that sets it, so the one test that asserts on it is the one that passes it.
+        _host = new TestHost(SearchEngine.Fts, ("Index:ExtensionDirectory", Extensions));
         await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
         {
             ["one"] = new() { ["src/Orders.cs"] = "class Orders\n{\n    void Needle() {}\n}\n" }
