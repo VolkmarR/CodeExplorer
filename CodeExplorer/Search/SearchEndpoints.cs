@@ -170,10 +170,9 @@ internal static class SearchEndpoints
         var project = api.MapProject();
 
         // A project with no index answers with the explanation rather than an empty page of results:
-        // "nothing matched" and "there is nothing to match against" mean opposite things. The search
-        // route says it as a 400 like every other problem it has; the browsing routes below tell a 404
-        // for no index from a 400 for a repository that does not exist, because the view draws them
-        // differently.
+        // "nothing matched" and "there is nothing to match against" mean opposite things. It is a 404
+        // here as on every route below (Status), which the view draws as the state a new project
+        // starts in; a 400 is kept for a request the caller asked wrongly.
         project.MapGet("/search", async (
                 Project project, string q, GrepSearch search, CancellationToken ct,
                 bool regex = false, bool caseSensitive = false, string? path = null,

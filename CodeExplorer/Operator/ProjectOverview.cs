@@ -112,8 +112,8 @@ public sealed record ProjectDetail(
 ///     comes from the control database and how much of it is searchable comes from the index, and
 ///     removing a project touches the control database, the index file and the local copies. Creating
 ///     a project and adding a repository touch only the control database and stay in <c>Control/</c>;
-///     putting the composition here keeps <c>Control/</c> from depending on <c>Index/</c>, which
-///     already depends on it (ADR-0005).
+///     putting the composition here keeps <c>Control/</c> from depending on <c>Index/</c>, an arrow
+///     the allow-list in ADR-0005 does not grant.
 /// </summary>
 public sealed class ProjectOverview(
     ControlDatabase control,

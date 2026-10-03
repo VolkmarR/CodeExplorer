@@ -264,8 +264,9 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         }
         finally
         {
-            // In a finally for the reason Materialise drops its scratch: a failed build must not leave
-            // it on a connection the pool hands out again.
+            // Dropped as soon as the replay ends, as Materialise drops its scratch, rather than carried
+            // through the rest of the build; the shadow's connection is never pooled, so there is no
+            // later borrower to protect.
             connection.Execute("DROP TABLE IF EXISTS touched_paths", CancellationToken.None);
         }
     }
@@ -447,8 +448,10 @@ public sealed class HistoryBuilder(ILogger<HistoryBuilder> logger)
         }
         finally
         {
-            // In a finally so a cancelled or failed build does not leave the scratch behind on a
-            // connection the pool hands out again.
+            // Dropped the moment the update is done with it, because it is the largest thing the build
+            // holds — the ten million rows measured above — and the steps after this run on the same
+            // connection. Memory is the whole reason: the shadow's connection is never pooled, so a TEMP
+            // table could not outlive the build for anyone else to find.
             connection.Execute("DROP TABLE IF EXISTS attributed_lines", CancellationToken.None);
         }
 
