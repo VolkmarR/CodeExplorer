@@ -37,7 +37,12 @@ internal static class ControlEndpoints
                 (CreateProjectOutcome.Created, { } created) => Results.Created($"/projects/{created.Slug}/mcp", created),
                 (CreateProjectOutcome.InvalidSlug, _) => ApiError.BadRequest(ControlDatabase.SlugRule),
                 (CreateProjectOutcome.MissingName, _) => ApiError.BadRequest("Name is required."),
-                _ => ApiError.Conflict($"A project with slug '{request.Slug}' already exists.")
+                (CreateProjectOutcome.SlugTaken, _) => ApiError.Conflict(
+                    $"A project with slug '{request.Slug}' already exists."),
+                // A create answered without its project is a defect in CreateAsync, and reporting it as
+                // a slug clash would tell the operator something false about a project that was made.
+                var unexpected => throw new InvalidOperationException(
+                    $"CreateAsync answered {unexpected.Outcome} without the project it created.")
             });
 
         // The project is bound from the route (BoundProject): an unknown slug never reaches these.
