@@ -110,7 +110,7 @@ public static class Telemetry
     /// </summary>
     public const string AnsweredOutcome = "answered";
 
-    /// <summary>A lease that was granted. <see cref="_absentOutcome" /> is a project with no index to lease.</summary>
+    /// <summary>A lease that was granted. "absent" is a project with no index to lease.</summary>
     public const string OpenedOutcome = "opened";
 
     /// <summary>An index build that finished. A build has no second answer: it either completed or threw.</summary>
