@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { PageHeader } from '@/components/PageHeader'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 
@@ -10,8 +11,9 @@ import { cn } from '@/lib/utils'
  * loose sections on the background and the reader had to find the title again on every one; the
  * card is also what gives a result list or a table somewhere to nest, instead of floating.
  *
- * `title` is the page's `h1` and there is exactly one per view, so the heading order of every page
- * in this app is decided here rather than six times.
+ * `title` is the page's `h1` and there is exactly one per view. The heading's style lives in
+ * `PageHeader`, which this card renders; a page outside a card frame (the project list, for
+ * one) renders `PageHeader` directly, so every page's heading looks the same.
  */
 export function PageCard({
   title,
@@ -34,11 +36,10 @@ export function PageCard({
 }) {
   return (
     <Card className={cn('gap-0', className)}>
-      <CardHeader className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-        {hint ? <span className="text-sm text-muted-foreground">{hint}</span> : null}
-        {badges}
-        {actions ? <div className="ml-auto flex items-center gap-2">{actions}</div> : null}
+      <CardHeader>
+        <PageHeader title={title} hint={hint} actions={actions}>
+          {badges}
+        </PageHeader>
       </CardHeader>
       {tabs ? <div className="mt-4 px-(--card-spacing)">{tabs}</div> : null}
       <Separator className="mt-4" />
