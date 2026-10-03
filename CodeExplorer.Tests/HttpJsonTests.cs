@@ -180,10 +180,20 @@ public sealed class HttpJsonFixture : IAsyncLifetime
 
                                         """,
                 ["web/site.css"] = ".panel { color: red; }\n",
-                ["build/notes.rst"] = "nothing here\n"
+                ["build/notes.rst"] = "nothing here\n",
+                ["vendor/lib.js"] = "var lib = 1;\n"
             }
         });
         await Host.CreateProjectAsync(Unbuilt);
+
+        // For ApiContractTests, whose snapshot sees a shape only where the answer holds one: an
+        // excluded path set after the build, so the overview has excluded files to count, and a tool
+        // call, so the call statistics have a row. The statistics are process-wide (ToolStatistics),
+        // so without one of its own the project-less list would be empty or not depending on which
+        // other tests ran first.
+        await Host.SetExcludedPathsAsync(Built, ["one/vendor/**"]);
+        await using var client = await Host.ConnectAsync(Built);
+        await TestHost.CallAsync(client, "which_project", []);
     }
 
     public ValueTask DisposeAsync()
