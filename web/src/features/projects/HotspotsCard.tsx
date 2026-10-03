@@ -1,13 +1,11 @@
 import type { OverviewChurn, OverviewHotspots } from '@/features/projects/api'
-import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { HotspotScatter } from '@/features/projects/HotspotScatter'
 import { FilePathLink } from '@/components/FilePathLink'
+import { OverviewCard } from '@/features/projects/OverviewCard'
 import { RankedList } from '@/features/projects/RankedList'
 import { RankedRow } from '@/features/projects/RankedRow'
 import { ShareBar } from '@/features/projects/ShareBar'
 import { formatCount, formatCountOf } from '@/lib/format'
-import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /**
  * The files at HEAD that are both large and busy (#211): commits in the filter bar's window times
@@ -28,63 +26,51 @@ export function HotspotsCard({
   const { files } = hotspots
   const top = files[0]?.score ?? 0
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Hotspots</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {!historyWindow(churn) ? (
-          <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
-        ) : (
-          <>
-            <p className="pb-3 text-xs text-muted-foreground">
-              Large files that keep changing: commits in the {churn.days} days to the newest
-              recorded commit, times lines at HEAD. Counted in commits, so a sweep adds one to every
-              file it touches and moves nothing to the top.
-            </p>
-            {files.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No file at HEAD was changed in this window.
-              </p>
-            ) : (
-              <>
-                <HotspotScatter files={files} />
-                <RankedList className="mt-3">
-                  {files.map((file, i) => (
-                    <RankedRow key={file.qualifiedPath}>
-                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary font-sans text-xs font-semibold text-primary-foreground">
-                        {i + 1}
-                      </span>
-                      <span className="w-12 shrink-0 text-right tabular-nums text-muted-foreground">
-                        {formatCount(file.commits)}&times;
-                      </span>
-                      <span className="w-24 shrink-0 text-right tabular-nums text-muted-foreground">
-                        {formatCountOf(file.lines, 'line')}
-                      </span>
-                      <FilePathLink
-                        project={project}
-                        qualifiedPath={file.qualifiedPath}
-                        atHead
-                        origin={{ view: 'overview' }}
-                      />
-                      {/* Relative to the top file, so it reads as how far behind it each one is. */}
-                      <ShareBar
-                        share={top ? (file.score / top) * 100 : 0}
-                        className="ml-auto w-16 shrink-0"
-                      />
-                    </RankedRow>
-                  ))}
-                </RankedList>
-              </>
-            )}
-            <ExcludedNote
-              project={project}
-              files={hotspots.excluded ?? undefined}
-              what="this window at HEAD"
-            />
-          </>
-        )}
-      </CardContent>
-    </Card>
+    <OverviewCard
+      title="Hotspots"
+      history={churn}
+      note={
+        <>
+          Large files that keep changing: commits in the {churn.days} days to the newest recorded
+          commit, times lines at HEAD. Counted in commits, so a sweep adds one to every file it
+          touches and moves nothing to the top.
+        </>
+      }
+      excluded={{ files: hotspots.excluded ?? undefined, project, what: 'this window at HEAD' }}
+    >
+      {files.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No file at HEAD was changed in this window.</p>
+      ) : (
+        <>
+          <HotspotScatter files={files} />
+          <RankedList className="mt-3">
+            {files.map((file, i) => (
+              <RankedRow key={file.qualifiedPath}>
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary font-sans text-xs font-semibold text-primary-foreground">
+                  {i + 1}
+                </span>
+                <span className="w-12 shrink-0 text-right tabular-nums text-muted-foreground">
+                  {formatCount(file.commits)}&times;
+                </span>
+                <span className="w-24 shrink-0 text-right tabular-nums text-muted-foreground">
+                  {formatCountOf(file.lines, 'line')}
+                </span>
+                <FilePathLink
+                  project={project}
+                  qualifiedPath={file.qualifiedPath}
+                  atHead
+                  origin={{ view: 'overview' }}
+                />
+                {/* Relative to the top file, so it reads as how far behind it each one is. */}
+                <ShareBar
+                  share={top ? (file.score / top) * 100 : 0}
+                  className="ml-auto w-16 shrink-0"
+                />
+              </RankedRow>
+            ))}
+          </RankedList>
+        </>
+      )}
+    </OverviewCard>
   )
 }
