@@ -31,6 +31,7 @@ test('the extension decides the language, and an unknown one is plaintext', () =
     expect(languageFor(`main/src/Api/File.${extension}`)).toBe('xml')
   }
   expect(languageFor('main/src/Api/Directory.Build.PROPS')).toBe('xml')
+  expect(languageFor('main/Forms/Main.dfm')).toBe('dfm')
   expect(languageFor('main/README')).toBe('plaintext')
   expect(languageFor('main/.gitignore')).toBe('plaintext')
 })
