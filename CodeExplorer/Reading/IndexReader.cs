@@ -529,7 +529,7 @@ public sealed partial class IndexReader : IDisposable
             singleRepository = reader.FlagOrFalse("single_repository");
         }
 
-        _paths = new ProjectPaths(singleRepository, repositories.Count > 0 ? repositories[0].Slug : ProjectSlug);
+        _paths = ProjectPaths.For(singleRepository, repositories.Select(r => r.Slug), ProjectSlug);
         _repositories = repositories;
     }
 
