@@ -4,6 +4,8 @@ import type {
   RepositoryCoupling,
 } from '@/features/projects/api'
 import { featuredRepository, pairShare, sharedCommits } from '@/features/projects/folderCoupling'
+import { RankedList } from '@/features/projects/RankedList'
+import { RankedRow } from '@/features/projects/RankedRow'
 import { cell, defineChart } from '@tanstack/charts'
 import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
@@ -69,12 +71,9 @@ export function FolderCouplingCard({
               many files it touched in a folder.
             </p>
             <Heatmap repository={featured} />
-            <ol className="mt-3 divide-y rounded-lg border bg-card font-mono text-xs">
+            <RankedList className="mt-3">
               {featured.pairs.slice(0, PAIRS_SHOWN).map((pair) => (
-                <li
-                  key={`${pair.first}\u0000${pair.second}`}
-                  className="flex items-center gap-3 px-4 py-2"
-                >
+                <RankedRow key={`${pair.first}\u0000${pair.second}`}>
                   <span className="min-w-0 flex-1 truncate">
                     {pair.first} + {pair.second}
                   </span>
@@ -87,9 +86,9 @@ export function FolderCouplingCard({
                   >
                     {formatPercent(pairShare(featured, pair))}
                   </span>
-                </li>
+                </RankedRow>
               ))}
-            </ol>
+            </RankedList>
           </>
         )}
         {others.length > 0 && (

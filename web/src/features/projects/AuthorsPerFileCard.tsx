@@ -1,6 +1,8 @@
 import type { OverviewAuthorsPerFile, OverviewChurn } from '@/features/projects/api'
 import { AUTHOR_SEGMENTS, AuthorSplit } from '@/features/projects/AuthorSplit'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
+import { RankedList } from '@/features/projects/RankedList'
+import { RankedRow } from '@/features/projects/RankedRow'
 import { FilePathLink } from '@/components/FilePathLink'
 import { formatCountOf, formatPercent } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -53,9 +55,9 @@ export function AuthorsPerFileCard({
                 No file at HEAD has a recorded commit.
               </p>
             ) : (
-              <ol className="divide-y rounded-lg border bg-card font-mono text-xs">
+              <RankedList>
                 {authors.files.map((file) => (
-                  <li key={file.qualifiedPath} className="flex items-center gap-3 px-4 py-2">
+                  <RankedRow key={file.qualifiedPath}>
                     <span className="w-20 shrink-0 text-right tabular-nums text-muted-foreground">
                       {formatCountOf(file.authors, 'author')}
                     </span>
@@ -72,9 +74,9 @@ export function AuthorsPerFileCard({
                       atHead
                       origin={{ view: 'overview' }}
                     />
-                  </li>
+                  </RankedRow>
                 ))}
-              </ol>
+              </RankedList>
             )}
             <ExcludedNote
               project={project}
