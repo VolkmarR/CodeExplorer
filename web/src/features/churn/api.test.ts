@@ -1,6 +1,6 @@
 import { expect, test } from 'vite-plus/test'
 import { fetchChurn } from '@/features/churn/api'
-import { recordRequest } from '@/lib/recordRequest'
+import { recordRequest } from '@/testing/recordRequest'
 
 /** The ranking's request, pinned byte for byte: every unset scope and filter is left off. */
 test('a churn ranking sends its window always and the rest only when set', async () => {

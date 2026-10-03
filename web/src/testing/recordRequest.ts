@@ -1,7 +1,10 @@
 import { vi } from 'vite-plus/test'
 
 /**
- * For tests: the URL a call through `http` asks for, read off the request ky hands to `fetch`, which
+ * `src/testing/` holds what tests share and nothing else: it imports the test runner, so no
+ * production module may import from here.
+ *
+ * The URL a call through `http` asks for, read off the request ky hands to `fetch`, which
  * answers with an empty object so the call resolves. The query string is compared byte for byte,
  * because a shared link and a request that moved a parameter or dropped one read the same to a
  * reader and differently to the server.

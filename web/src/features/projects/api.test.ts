@@ -6,7 +6,7 @@ import {
   fetchProjectOverview,
   fetchProjects,
 } from '@/features/projects/api'
-import { recordRequest } from '@/lib/recordRequest'
+import { recordRequest } from '@/testing/recordRequest'
 
 /**
  * The overview's request, pinned byte for byte. The default view is the bare URL, the same one the
