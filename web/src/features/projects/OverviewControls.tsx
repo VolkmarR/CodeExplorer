@@ -1,19 +1,11 @@
 import type { RepositoryDetail } from '@/features/projects/api'
-import { RepositorySelect } from '@/features/projects/RepositorySelect'
-import { describeWindow, windowsWith } from '@/lib/urls/churnParams'
+import { RepositoryFilter } from '@/features/projects/RepositoryFilter'
 import {
   DEFAULT_OVERVIEW_DAYS,
   OVERVIEW_WINDOWS,
   type OverviewParameters,
 } from '@/lib/urls/overviewParams'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { WindowSelect } from '@/components/WindowSelect'
 import { Toggle } from '@/components/ui/toggle'
 
 /**
@@ -38,44 +30,23 @@ export function OverviewControls({
   showWindow?: boolean
   onChange: (change: Partial<OverviewParameters>) => void
 }) {
-  const days = search.days ?? DEFAULT_OVERVIEW_DAYS
   return (
     <div className="flex flex-wrap items-center gap-3">
       {showWindow ? (
-        <div className="flex items-center gap-2">
-          <Label htmlFor="overview-window" className="text-xs text-muted-foreground">
-            Window
-          </Label>
-          <Select value={String(days)} onValueChange={(next) => onChange({ days: Number(next) })}>
-            <SelectTrigger id="overview-window" className="w-36">
-              <SelectValue>{describeWindow(days)}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {windowsWith(OVERVIEW_WINDOWS, days).map((offered) => (
-                <SelectItem key={offered} value={String(offered)}>
-                  {describeWindow(offered)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <WindowSelect
+          id="overview-window"
+          offered={OVERVIEW_WINDOWS}
+          days={search.days ?? DEFAULT_OVERVIEW_DAYS}
+          onChange={(days) => onChange({ days })}
+        />
       ) : null}
 
-      {repositories.length > 1 ? (
-        <div className="flex items-center gap-2">
-          <Label htmlFor="overview-repository" className="text-xs text-muted-foreground">
-            Repository
-          </Label>
-          <div className="w-48">
-            <RepositorySelect
-              id="overview-repository"
-              repositories={repositories}
-              value={search.repository ?? ''}
-              onChange={(repository) => onChange({ repository })}
-            />
-          </div>
-        </div>
-      ) : null}
+      <RepositoryFilter
+        id="overview-repository"
+        repositories={repositories}
+        value={search.repository ?? ''}
+        onChange={(repository) => onChange({ repository })}
+      />
 
       {excludedPatterns > 0 ? (
         <Toggle

@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { RepositorySelect } from '@/features/projects/RepositorySelect'
+import { RepositoryFilter } from '@/features/projects/RepositoryFilter'
 import { formatCount, nounFor } from '@/lib/format'
 
 /** Every repository: the select's value for "no scope", since Base UI wants a value and not undefined. */
@@ -62,7 +62,6 @@ export function SearchForm({ project, search }: { project: string; search: Searc
 
   // Which repository the path glob names, if it is exactly the shape the select writes.
   const scoped = detail.repositories.find((r) => `${r.slug}/*` === draft.path)?.slug ?? ALL
-  const multiRepository = !detail.singleRepository && detail.repositories.length > 1
 
   return (
     <form
@@ -141,23 +140,13 @@ export function SearchForm({ project, search }: { project: string; search: Searc
 
         <Separator orientation="vertical" className="mx-1 h-6" />
 
-        {multiRepository ? (
-          <div className="flex items-center gap-2">
-            <Label htmlFor="search-repository" className="text-xs text-muted-foreground">
-              Repository
-            </Label>
-            <div className="w-44">
-              <RepositorySelect
-                id="search-repository"
-                repositories={detail.repositories}
-                value={scoped}
-                onChange={(slug) =>
-                  setDraft({ ...draft, path: slug === ALL ? undefined : `${slug}/*` })
-                }
-              />
-            </div>
-          </div>
-        ) : null}
+        <RepositoryFilter
+          id="search-repository"
+          repositories={detail.repositories}
+          value={scoped}
+          onChange={(slug) => setDraft({ ...draft, path: slug === ALL ? undefined : `${slug}/*` })}
+          className="w-44"
+        />
         <div className="flex items-center gap-2">
           {/* "Extension" and not "Language": the index filters on the extension, and a project may
               write one language in two of them. Calling it the language would promise a mapping the

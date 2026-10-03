@@ -5,10 +5,9 @@ import { newestImportedAt } from '@/features/history/historyWindow'
 import { commitsQuery } from '@/features/history/queries'
 import { historySearch } from '@/lib/urls/historyParams'
 import { projectQuery } from '@/features/projects/queries'
-import { RepositorySelect } from '@/features/projects/RepositorySelect'
+import { RepositoryFilter } from '@/features/projects/RepositoryFilter'
 import { PageCard } from '@/components/PageCard'
 import { WindowNote } from '@/components/WindowNote'
-import { Label } from '@/components/ui/label'
 import { formatCountOf, formatDate } from '@/lib/format'
 
 /**
@@ -26,8 +25,9 @@ export function HistoryPage() {
   const { data: detail } = useSuspenseQuery(projectQuery(project))
   const { data: log } = useSuspenseQuery(commitsQuery(project, search))
 
-  // One repository needs no filter; the choice is offered only where there is one to make.
-  const filterable = detail.repositories.length > 1
+  // The filter and the rows' repository only where there is more than one. Checked here as well as
+  // in the filter, because the card draws its actions slot for anything it is handed.
+  const several = detail.repositories.length > 1
   const scoped = search.repository
     ? detail.repositories.filter((r) => r.slug === search.repository)
     : detail.repositories
@@ -55,26 +55,19 @@ export function HistoryPage() {
             : `${formatCountOf(log.total, 'commit')} on the default branch, newest first`
         }
         actions={
-          filterable ? (
-            <div className="flex items-center gap-2">
-              <Label htmlFor="history-repository" className="text-xs text-muted-foreground">
-                Repository
-              </Label>
-              <div className="w-48">
-                <RepositorySelect
-                  id="history-repository"
-                  repositories={detail.repositories}
-                  value={search.repository ?? ''}
-                  onChange={(repository) =>
-                    void navigate({
-                      params: { project },
-                      search: historySearch(repository),
-                      to: '/projects/$project/history',
-                    })
-                  }
-                />
-              </div>
-            </div>
+          several ? (
+            <RepositoryFilter
+              id="history-repository"
+              repositories={detail.repositories}
+              value={search.repository ?? ''}
+              onChange={(repository) =>
+                void navigate({
+                  params: { project },
+                  search: historySearch(repository),
+                  to: '/projects/$project/history',
+                })
+              }
+            />
           ) : null
         }
       >
@@ -87,7 +80,7 @@ export function HistoryPage() {
           <CommitList
             project={project}
             log={log}
-            showRepository={filterable && search.repository === undefined}
+            showRepository={several && search.repository === undefined}
           />
         )}
       </PageCard>
