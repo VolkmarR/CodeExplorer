@@ -30,7 +30,7 @@ export function ProjectList() {
         title="Projects"
         hint="A project is what an agent connects to, and what a search spans."
         actions={
-          <Button render={<Link to="/projects/new" />}>
+          <Button nativeButton={false} render={<Link to="/projects/new" />}>
             <Plus />
             New project
           </Button>
@@ -73,6 +73,7 @@ export function ProjectList() {
                       {formatCountOf(project.repositories, 'repository', 'repositories')}
                     </span>
                     <Button
+                      nativeButton={false}
                       render={
                         <Link to="/projects/$project/settings" params={{ project: project.slug }} />
                       }

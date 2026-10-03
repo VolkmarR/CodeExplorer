@@ -53,6 +53,7 @@ export function Pager({
       <Button
         variant="outline"
         size="sm"
+        nativeButton={false}
         render={
           <Link
             to="."

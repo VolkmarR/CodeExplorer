@@ -13,7 +13,7 @@ export function NotFound() {
         title="Not found"
         hint="That page does not exist. A file view needs a qualified path — the repository slug, then the path inside it."
       />
-      <Button render={<Link to="/" />} variant="secondary">
+      <Button nativeButton={false} render={<Link to="/" />} variant="secondary">
         Back to projects
       </Button>
     </div>

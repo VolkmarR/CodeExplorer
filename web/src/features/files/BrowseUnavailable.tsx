@@ -38,6 +38,7 @@ export function BrowseUnavailable({ error }: { error: unknown }) {
         </p>
         {status === 404 ? (
           <Button
+            nativeButton={false}
             render={<Link to="/projects/$project/settings" params={{ project }} />}
             variant="outline"
             className="mt-4"
@@ -46,6 +47,7 @@ export function BrowseUnavailable({ error }: { error: unknown }) {
           </Button>
         ) : (
           <Button
+            nativeButton={false}
             render={
               <Link to="/projects/$project/files" params={{ project }} search={treeSearch()} />
             }
