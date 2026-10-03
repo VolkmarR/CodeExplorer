@@ -66,6 +66,10 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
 - **Pin the search engine in every search test, and cover both paths.** `INSTALL fts` fails offline
   and silently leaves `FtsAvailable = false`, so an unpinned suite tests full-text search on a
   laptop and a substring scan on CI, and the two rank results differently.
+- **A new GET route under `/api` gets a request in `ApiContractTests`**, chosen so its answer is
+  not empty, or a reason on that test's exclusion list; the test fails until it has one. Its snapshot
+  is rewritten only on request, with `CODEEXPLORER_UPDATE_API_CONTRACT=1`, and the diff is reviewed
+  like code.
 - Cover the states a client can catch the server in, not just the happy path: project restoring,
   rebuild in progress, a swap mid-query.
 - **No test hooks in committed code.** A seam added to production code only so a test can pause it
@@ -188,8 +192,11 @@ Two kinds of failure, two mechanisms. Never mix them.
   and `web/src/hooks/` what more than one feature reuses. A feature folder is a boundary, not a
   bucket.
 - **A response shape is declared by the feature that reads it**, never in `lib/`: the shapes are
-  hand-mirrored from the C# records with no OpenAPI document to generate them from, so drift is
-  caught at runtime, and the feature that would see it is the one that should hold the declaration.
+  hand-mirrored from the C# records with no OpenAPI document to generate them from, and the feature
+  that would see a mismatch is the one that should hold the declaration. `ApiContractTests` pins the
+  JSON property names of every GET answer under `/api` in `CodeExplorer.Tests/ApiContract.txt`, so
+  a renamed, removed or added server property fails the server's suite; a pull request that changes
+  that snapshot changes the web type mirroring the route in the same pull request.
   A shape two features read is imported from the feature that owns the concept — `CommitRef` from
   `features/history` — and a shared component under `components/`, which may not reach into a
   feature at all, declares the fields it renders as its own prop type. The one exception is the auth
