@@ -25,18 +25,6 @@ internal static class TransferStallLimit
 
     public const string Setting = "Git:TransferStallSeconds";
 
-    // The native library LibGit2Sharp ships and has already loaded; the name carries the libgit2 commit
-    // it was built from, so it changes with the LibGit2Sharp package. A mismatch throws
-    // DllNotFoundException the first time GitClones is built, which every refresh test does. This file,
-    // BlobReader, NativeDiff and NativeRepository all bind to the library through this constant, so an
-    // update of the package changes the name here and nowhere else. It sits here because this was the
-    // first of the four; it is no more this class's than theirs.
-    internal const string Library = "git2-5853918";
-
-    // git_libgit2_opt_t in libgit2 1.7 and later, which the bundled 1.9 is.
-    private const int _setServerConnectTimeout = 39;
-    private const int _setServerTimeout = 41;
-
     /// <summary>
     ///     Reads the configured limit and hands it to libgit2 as its connect and read timeouts. Returns
     ///     the limit in seconds, for the sentence that reports a remote which ran into it.
@@ -50,8 +38,8 @@ internal static class TransferStallLimit
             throw new InvalidOperationException(
                 $"{Setting} is {seconds}, but must be a number of seconds between 1 and {int.MaxValue / 1000}.");
 
-        Set(_setServerConnectTimeout, seconds * 1000);
-        Set(_setServerTimeout, seconds * 1000);
+        Set(LibGit2.SetServerConnectTimeout, seconds * 1000);
+        Set(LibGit2.SetServerTimeout, seconds * 1000);
         return seconds;
     }
 
@@ -69,21 +57,11 @@ internal static class TransferStallLimit
     /// </summary>
     public static bool RemoteAnswered(Exception failure)
     {
-        nint last = LastError();
+        nint last = LibGit2.LastError();
         if (last == 0) return false;
-        var error = Marshal.PtrToStructure<GitError>(last);
-        return error.Class == _httpErrorClass && Marshal.PtrToStringUTF8(error.Message) == failure.Message;
+        var error = Marshal.PtrToStructure<LibGit2.GitError>(last);
+        return error.Class == LibGit2.HttpErrorClass && Marshal.PtrToStringUTF8(error.Message) == failure.Message;
     }
-
-    // GIT_ERROR_HTTP in libgit2 1.9's git_error_t.
-    private const int _httpErrorClass = 34;
-
-    // libgit2's git_error: the message, then the class.
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct GitError(nint Message, int Class);
-
-    [DllImport(Library, EntryPoint = "git_error_last", CallingConvention = CallingConvention.Cdecl)]
-    private static extern nint LastError();
 
     private static void Set(int option, int milliseconds)
     {
@@ -91,18 +69,11 @@ internal static class TransferStallLimit
         // one would; there, variadic arguments go on the stack and the seven unused registers must be
         // filled first, which is what LibGit2Sharp's own osx-arm64 declarations do.
         int result = OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64
-            ? SetOptionOnAppleSilicon(option, 0, 0, 0, 0, 0, 0, 0, milliseconds)
-            : SetOption(option, milliseconds);
+            ? LibGit2.SetOptionOnAppleSilicon(option, 0, 0, 0, 0, 0, 0, 0, milliseconds)
+            : LibGit2.SetOption(option, milliseconds);
         if (result != 0)
             throw new InvalidOperationException(
                 $"libgit2 refused its server timeout (option {option}, error {result}); the bundled libgit2 "
-                + "is older than 1.7 or the option numbers above no longer match it.");
+                + "is older than 1.7 or the option numbers in LibGit2 no longer match it.");
     }
-
-    [DllImport(Library, EntryPoint = "git_libgit2_opts", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int SetOption(int option, int value);
-
-    [DllImport(Library, EntryPoint = "git_libgit2_opts", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int SetOptionOnAppleSilicon(int option, nint unused1, nint unused2, nint unused3,
-        nint unused4, nint unused5, nint unused6, nint unused7, int value);
 }
