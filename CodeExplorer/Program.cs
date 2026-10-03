@@ -127,14 +127,20 @@ api.MapControl();
 api.MapRefresh();
 api.MapSearch();
 api.MapOperator();
+// Any /api path no endpoint above matched, in the error shape every other /api answer has. Without it
+// the SPA fallback below took such a GET and answered index.html with a 200, which the web client
+// parsed as JSON and failed on with a parse error instead of a sentence.
+api.MapFallback("{*path}", (HttpRequest request) =>
+    Results.NotFound(new { error = $"No API endpoint answers {request.Method} {request.Path}." }));
 
 // One MCP endpoint per project (ADR-0002), bound from the route before the SDK sees the request.
 app.MapGroup("/projects/{project}").BindProject().MapMcp("/mcp").ProtectMcp(authentication).SameOriginOnly();
 
 // The operator web UI is a Vite build into wwwroot. It is absent until someone runs that build, and
 // the server must still start: MapFallbackToFile would 404 at request time, which is the same answer
-// the browser gets today for an unbuilt UI. Every client-side route falls back to index.html, and the
-// fallback runs last so it cannot shadow /api or /projects/{slug}/mcp.
+// the browser gets today for an unbuilt UI. Every client-side route falls back to index.html. Being a
+// fallback, it loses to every endpoint that matches, but it would match an unknown /api path as readily
+// as a page — which is why /api has a fallback of its own above, more specific than this one.
 //
 // The fallback is an endpoint and is therefore behind the fallback policy, so a browser asking for a
 // page is sent to sign in. The files beside it are not: MapFallbackToFile matches `{*path:nonfile}`,
