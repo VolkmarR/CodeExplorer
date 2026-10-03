@@ -49,16 +49,12 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
     private const string _wayIn =
         "Run list_declarations on it, then find_references on one of the names it declares, to find the files that use it.";
 
-    /// <summary>
-    ///     How the edges were read, which decides the lead clause of the caveat. Derived from the
-    ///     answers rather than written as a fact (ADR-0008): the day a parser-backed analyser is
-    ///     registered for a language, a reply that still called itself textual would understate what
-    ///     it knows, and nothing here would have to change for it to stop.
-    /// </summary>
+    /// <summary>How the edges were read, which decides the lead clause of the caveat.</summary>
     private static string How(IEnumerable<Evidence> evidence) =>
-        evidence.All(e => e == Evidence.Text)
-            ? "Import edges are read from the text of the import lines, not from a compiler,"
-            : "Import edges are parsed where the language has a parser here and read from the text elsewhere,";
+        EvidenceClause.Of(evidence,
+            "Import edges are read from the text of the import lines, not from a compiler,",
+            "Import edges are parsed by a real parser for this language,",
+            "Import edges are parsed where the language has a parser here and read from the text elsewhere,");
 
     [McpServerTool(Name = "imports", ReadOnly = true, Idempotent = true, Title = "What a file imports")]
     [Description("""
