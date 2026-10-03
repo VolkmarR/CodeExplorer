@@ -44,7 +44,7 @@ internal static class IndexQueries
 
         if (excluded.Matching("f.qualified_path", "x", parameters) is { } matching)
             conditions.Add($"NOT {matching}");
-        scope += $" {OverviewQueries.Where(conditions)}";
+        scope += $" {IndexQuery.Where(conditions)}";
 
         await using var command = connection.Query($"""
                                                     SELECT f.extension,
@@ -525,7 +525,7 @@ internal static class IndexQueries
             parameters.Add(new DuckDBParameter("m", $"%{Escaped(message)}%"));
         }
 
-        return (clauses.Count == 0 ? "" : $"WHERE {string.Join(" AND ", clauses)}", parameters);
+        return (IndexQuery.Where(clauses), parameters);
     }
 
     /// <summary>The LIKE metacharacters, made literal, so caller text matches as the text it is.</summary>

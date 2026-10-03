@@ -217,7 +217,7 @@ internal static class ExcludedPathSuggestions
                                                    FROM bumped b
                                                    JOIN repositories r ON r.slug = b.repo_slug
                                                    JOIN files f ON f.repo_id = r.repo_id AND f.path = b.path
-                                                   {OverviewQueries.Where(conditions)})
+                                                   {IndexQuery.Where(conditions)})
                                                SELECT c.*, (SELECT count(*) FROM files n WHERE lower(n.name) = lower(c.name))::INTEGER AS named
                                                FROM candidates c
                                                ORDER BY c.commits DESC, c.qualified_path

@@ -144,7 +144,7 @@ internal static partial class OverviewQueries
     ///     The same for <c>commits c</c>: the repository alone, because each history section applies the
     ///     exclusions its own way — a path at a time, or a commit at a time.
     /// </summary>
-    private static List<string> CommitScope(OverviewScope scope, List<DuckDBParameter> parameters)
+    private static List<string> CommitConditions(OverviewScope scope, List<DuckDBParameter> parameters)
     {
         var conditions = new List<string>(2);
         if (scope.RepositorySlug is not null)
@@ -155,10 +155,6 @@ internal static partial class OverviewQueries
 
         return conditions;
     }
-
-    /// <summary>A WHERE clause from conditions ANDed, or nothing where there are none.</summary>
-    internal static string Where(List<string> conditions) =>
-        conditions.Count == 0 ? "" : $"WHERE {string.Join(" AND ", conditions)}";
 
     /// <summary>
     ///     Counts by language. What an extension counts as is <see cref="IndexQueries" />'s, so this and
@@ -203,7 +199,7 @@ internal static partial class OverviewQueries
         DuckDBConnection connection, ProjectPaths paths, OverviewScope scope, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
-        string where = Where(FileScope(scope, parameters));
+        string where = IndexQuery.Where(FileScope(scope, parameters));
         // Grouped before the join, not after: the aggregate reduces every file in the project to a few
         // dozen top-level rows, and joining repositories onto those costs a lookup per row instead of
         // one per source file.
@@ -264,7 +260,7 @@ internal static partial class OverviewQueries
         await using var command = connection.Query($"""
                                                     SELECT qualified_path, line_count, size_bytes
                                                     FROM files
-                                                    {Where(conditions)}
+                                                    {IndexQuery.Where(conditions)}
                                                     ORDER BY size_bytes DESC, qualified_path
                                                     LIMIT $limit
                                                     """, [.. parameters, new("limit", _largestFilesShown)]);
@@ -284,7 +280,7 @@ internal static partial class OverviewQueries
         ProjectPaths paths, OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
-        var conditions = CommitScope(scope, parameters);
+        var conditions = CommitConditions(scope, parameters);
         if (window is not null) IndexQueries.InWindow(window, conditions, parameters);
         if (scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters) is { } excluded)
             // A commit counts while it touched one file the page still shows. One that recorded no
@@ -304,7 +300,7 @@ internal static partial class OverviewQueries
                                                            -- gives.
                                                            epoch(max(authored_at)) AS last_commit
                                                     FROM commits c
-                                                    {Where(conditions)}
+                                                    {IndexQuery.Where(conditions)}
                                                     GROUP BY author_email
                                                     ORDER BY commits DESC, author_email
                                                     LIMIT $limit
@@ -323,8 +319,8 @@ internal static partial class OverviewQueries
         var parameters = new List<DuckDBParameter>();
         var conditions = FileScope(scope with { Excluded = ExcludedPaths.None }, parameters);
         conditions.Add(scope.Excluded.Matching("qualified_path", "x", parameters)!);
-        return (int)await connection.CountAsync($"SELECT count(*) FROM files {Where(conditions)}", parameters,
-            cancellationToken);
+        return (int)await connection.CountAsync($"SELECT count(*) FROM files {IndexQuery.Where(conditions)}",
+            parameters, cancellationToken);
     }
 
     /// <summary>
@@ -336,14 +332,14 @@ internal static partial class OverviewQueries
         OverviewScope scope, HistoryWindow? window, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
-        var conditions = CommitScope(scope, parameters);
+        var conditions = CommitConditions(scope, parameters);
         if (window is not null) IndexQueries.InWindow(window, conditions, parameters);
         conditions.Add(scope.Excluded.Matching(IndexQueries.CommittedPath(paths), "x", parameters)!);
         return (int)await connection.CountAsync($"""
                                                  SELECT count(*) FROM (
                                                      SELECT DISTINCT c.repo_slug, cf.path
                                                      FROM commit_files cf JOIN commits c USING (commit_id)
-                                                     {Where(conditions)})
+                                                     {IndexQuery.Where(conditions)})
                                                  """, parameters, cancellationToken);
     }
 }

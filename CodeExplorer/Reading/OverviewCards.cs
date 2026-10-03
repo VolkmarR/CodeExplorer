@@ -216,7 +216,7 @@ internal static partial class OverviewQueries
             periods.Select(p => string.Create(CultureInfo.InvariantCulture, $"({p.Since}, {p.Until})")));
 
         var parameters = new List<DuckDBParameter> { new("since", since), new("until", until) };
-        var conditions = CommitScope(scope, parameters);
+        var conditions = CommitConditions(scope, parameters);
         // The join onto the periods would cut the span by itself; filtered here as well so that the join
         // sees only the window's rows and not the whole history.
         conditions.Add("epoch(c.authored_at) >= $since AND epoch(c.authored_at) < $until");
@@ -229,7 +229,7 @@ internal static partial class OverviewQueries
                                                     changes AS (
                                                         SELECT epoch(c.authored_at) AS at, cf.change_kind
                                                         FROM commit_files cf JOIN commits c USING (commit_id)
-                                                        {Where(conditions)})
+                                                        {IndexQuery.Where(conditions)})
                                                     SELECT count(*) FILTER (WHERE change_kind = 'added')::INTEGER AS added,
                                                            count(*) FILTER (WHERE change_kind = 'deleted')::INTEGER AS deleted,
                                                            count(*) FILTER (WHERE change_kind = 'renamed')::INTEGER AS renamed
@@ -270,7 +270,7 @@ internal static partial class OverviewQueries
         OverviewScope scope, CancellationToken cancellationToken)
     {
         var parameters = new List<DuckDBParameter>();
-        string where = Where(FileScope(scope, parameters));
+        string where = IndexQuery.Where(FileScope(scope, parameters));
         // A file's folders, down to the deepest level looked at: its path without the file name,
         // at most _couplingDepth segments. Root files have none and count only towards the total.
         await using var command = connection.Query($"""
@@ -592,7 +592,7 @@ internal static partial class OverviewQueries
                      FROM commit_files cf
                      JOIN commits c USING (commit_id)
                      JOIN at_head h ON h.repo_slug = c.repo_slug AND h.path = cf.path
-                     {Where(CommitScope(scope, parameters))})
+                     {IndexQuery.Where(CommitConditions(scope, parameters))})
                  """, parameters);
     }
 
@@ -652,7 +652,7 @@ internal static partial class OverviewQueries
                 at_head AS (
                     SELECT r.slug AS repo_slug, f.path, f.qualified_path, f.line_count
                     FROM files f JOIN repositories r USING (repo_id)
-                    {Where(conditions)})
+                    {IndexQuery.Where(conditions)})
                 """;
     }
 }
