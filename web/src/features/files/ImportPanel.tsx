@@ -2,9 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { IMPORT_EVIDENCE, importsNote } from '@/features/files/imports'
 import { importsQuery } from '@/features/files/queries'
 import { RailEntries } from '@/features/files/RailEntries'
-import { RailPanelAnswer } from '@/features/files/RailPanelAnswer'
-import { RailWaiting } from '@/features/files/RailWaiting'
-import { tally } from '@/features/files/tally'
+import { RailPanel } from '@/features/files/RailPanel'
 import { FilePathLink } from '@/components/FilePathLink'
 
 /**
@@ -24,14 +22,15 @@ import { FilePathLink } from '@/components/FilePathLink'
 export function ImportPanel({ project, path }: { project: string; path: string }) {
   const { data, error, isPending } = useQuery(importsQuery(project, path))
 
-  if (isPending || error) return <RailWaiting title="Imports" error={error} />
+  if (isPending || error) return <RailPanel title="Imports" pending error={error} />
 
   return (
-    <RailPanelAnswer
+    <RailPanel
       title="Imports"
       // No number where there is no list to count: an extension no profile covers and a language
       // with no imports both answer in prose, and a `0` beside it would read as a measurement.
-      count={data.profiled && data.hasImports ? tally(data.imports.length, data.capped) : undefined}
+      count={data.profiled && data.hasImports ? data.imports.length : undefined}
+      capped={data.capped}
       note={importsNote(data)}
       evidence={IMPORT_EVIDENCE}
     >
@@ -72,6 +71,6 @@ export function ImportPanel({ project, path }: { project: string; path: string }
           </li>
         )}
       </RailEntries>
-    </RailPanelAnswer>
+    </RailPanel>
   )
 }

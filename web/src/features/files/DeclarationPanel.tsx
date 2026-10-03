@@ -9,9 +9,7 @@ import {
 import { fileSearch } from '@/lib/urls/fileParams'
 import { declarationsQuery } from '@/features/files/queries'
 import { RailEntries } from '@/features/files/RailEntries'
-import { RailPanelAnswer } from '@/features/files/RailPanelAnswer'
-import { RailWaiting } from '@/features/files/RailWaiting'
-import { tally } from '@/features/files/tally'
+import { RailPanel } from '@/features/files/RailPanel'
 
 /**
  * What the file declares, read from the index rather than from the file on screen. It is the same
@@ -34,16 +32,15 @@ export function DeclarationPanel({
 }) {
   const { data, error, isPending } = useQuery(declarationsQuery(project, path))
 
-  if (isPending || error) return <RailWaiting title="Declarations" error={error} />
+  if (isPending || error) return <RailPanel title="Declarations" pending error={error} />
 
   return (
-    <RailPanelAnswer
+    <RailPanel
       title="Declarations"
       // No number where there is no list to count: a `0` beside the heading would read as a
       // measurement where the answer is prose about why nothing was read.
-      count={
-        data.declarations.length > 0 ? tally(data.declarations.length, data.capped) : undefined
-      }
+      count={data.declarations.length > 0 ? data.declarations.length : undefined}
+      capped={data.capped}
       note={declarationsNote(data)}
       // Nothing was read, so there is no claim to qualify.
       evidence={data.coverage === 'unreadable' ? undefined : DECLARATION_EVIDENCE}
@@ -77,6 +74,6 @@ export function DeclarationPanel({
           )
         }}
       </RailEntries>
-    </RailPanelAnswer>
+    </RailPanel>
   )
 }
