@@ -22,12 +22,13 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
     private readonly TestHost _host = fixture.Host;
 
     /// <summary>
-    ///     Every member of every enum the web holds a union for, spelled through the server's HTTP
-    ///     options. The endpoint tests below can reach only the members their fixture produces; this
-    ///     is the whole list the unions in <c>web/src</c> are written against.
+    ///     Every member of every enum an HTTP answer carries, spelled through the server's HTTP options.
+    ///     The endpoint tests below can reach only the members their fixture produces; this is the
+    ///     whole list the unions in <c>web/src</c> are written against, and the import shape the web
+    ///     does not read yet.
     /// </summary>
     [Fact]
-    public void Every_enum_the_web_compares_against_is_sent_by_its_member_name()
+    public void Every_enum_the_api_sends_goes_out_by_its_member_name()
     {
         Assert.Equal(["NeverRun", "Queued", "Running", "Succeeded", "Failed"], Spelled<RefreshState>());
         Assert.Equal(["GitAttributes", "WellKnownName", "History"], Spelled<SuggestionRule>());
