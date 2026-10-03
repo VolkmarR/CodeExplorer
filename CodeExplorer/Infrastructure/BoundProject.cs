@@ -66,8 +66,8 @@ internal static class BoundProject
                 .FindAsync(slug, http.RequestAborted);
             if (project is null)
             {
-                http.Response.StatusCode = StatusCodes.Status404NotFound;
-                await http.Response.WriteAsJsonAsync(new { error = NotFound(slug) }, http.RequestAborted);
+                await ApiError.WriteAsync(http.Response, StatusCodes.Status404NotFound, NotFound(slug),
+                    http.RequestAborted);
                 return;
             }
 
