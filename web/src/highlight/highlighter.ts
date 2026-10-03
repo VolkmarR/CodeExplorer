@@ -22,6 +22,7 @@ import { vue } from '@tanstack/highlight/languages/vue'
 import { yaml } from '@tanstack/highlight/languages/yaml'
 import { splitFileName } from '@/lib/format'
 import { csharp } from '@/highlight/csharp'
+import { xml } from '@/highlight/xml'
 import { xsharp } from '@/highlight/xsharp'
 
 /**
@@ -34,13 +35,20 @@ import { xsharp } from '@/highlight/xsharp'
  * Named one import each rather than filtered out of `allLanguages` at run time, because a filter
  * keeps every definition in the bundle: only an import the bundler can see is absent is absent.
  */
+const HTML_WITHOUT_XML = {
+  ...html,
+  // The library's html grammar claims `xml` as an alias. Left in, which grammar answers to `xml`
+  // would depend on the order of the list below, as the later name wins.
+  aliases: html.aliases?.filter((alias) => alias !== 'xml'),
+}
+
 const BUNDLED = [
   cpp,
   css,
   dockerfile,
   env,
   go,
-  html,
+  HTML_WITHOUT_XML,
   js,
   json,
   jsx,
@@ -58,6 +66,7 @@ const BUNDLED = [
   yaml,
   csharp,
   xsharp,
+  xml,
 ] as const
 
 /**
@@ -86,8 +95,10 @@ const LANGUAGE_BY_EXTENSION: Record<string, BundledLanguage> = {
   c: 'cpp',
   cc: 'cpp',
   cjs: 'js',
+  config: 'xml',
   cpp: 'cpp',
   cs: 'csharp',
+  csproj: 'xml',
   csx: 'csharp',
   css: 'css',
   dockerfile: 'dockerfile',
@@ -101,22 +112,31 @@ const LANGUAGE_BY_EXTENSION: Record<string, BundledLanguage> = {
   json: 'json',
   jsonc: 'json',
   jsx: 'jsx',
+  manifest: 'xml',
   md: 'markdown',
   mjs: 'js',
+  nuspec: 'xml',
   php: 'php',
   ppo: 'xsharp',
   prg: 'xsharp',
+  props: 'xml',
   ps1: 'shell',
   py: 'python',
+  resx: 'xml',
   sh: 'shell',
   sql: 'sql',
   svelte: 'svelte',
+  targets: 'xml',
   toml: 'toml',
   ts: 'ts',
   tsx: 'tsx',
+  vbproj: 'xml',
   vh: 'xsharp',
   vue: 'vue',
+  xaml: 'xml',
   xh: 'xsharp',
+  xml: 'xml',
+  xsproj: 'xml',
   yaml: 'yaml',
   yml: 'yaml',
 }
