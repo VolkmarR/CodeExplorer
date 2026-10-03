@@ -119,7 +119,7 @@ public sealed class StdioProxy : IDisposable
         endpoint.IsAbsoluteUri && endpoint.Scheme is "http" or "https" && endpoint.IsLoopback;
 
     /// <summary>The MCP endpoint of one project on a server (ADR-0002).</summary>
-    public static Uri Endpoint(Uri server, string project) =>
+    private static Uri Endpoint(Uri server, string project) =>
         new(server, $"projects/{Uri.EscapeDataString(project)}/mcp");
 
     /// <summary>
