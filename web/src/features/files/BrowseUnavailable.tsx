@@ -1,6 +1,7 @@
 import { Link, useParams } from '@tanstack/react-router'
 import { treeSearch } from '@/lib/urls/browseParams'
 import { ApiError } from '@/lib/http'
+import { PageHeader } from '@/components/PageHeader'
 import { RouteError } from '@/components/RouteError'
 import { Button } from '@/components/ui/button'
 
@@ -20,9 +21,13 @@ export function BrowseUnavailable({ error }: { error: unknown }) {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">
-        Files <span className="font-mono text-lg font-normal text-muted-foreground">{project}</span>
-      </h1>
+      <PageHeader
+        title={
+          <>
+            Files <span className="font-mono font-normal text-muted-foreground">{project}</span>
+          </>
+        }
+      />
       <div className="rounded-lg border bg-card px-4 py-6">
         <p className="text-sm font-medium">
           {status === 404 ? 'Nothing to browse yet' : 'Nothing here'}

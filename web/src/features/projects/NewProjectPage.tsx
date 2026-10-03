@@ -1,4 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
+import { PageHeader } from '@/components/PageHeader'
 import { NewProjectForm } from '@/features/projects/NewProjectForm'
 
 /**
@@ -11,13 +12,10 @@ export function NewProjectPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">New project</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          A project is what an agent connects to, and what a search spans. Add its repositories once
-          it exists.
-        </p>
-      </div>
+      <PageHeader
+        title="New project"
+        hint="A project is what an agent connects to, and what a search spans. Add its repositories once it exists."
+      />
 
       <NewProjectForm onCancel={toList} onCreated={toList} />
     </div>
