@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using CodeExplorer.Index;
 using CodeExplorer.Language;
 using CodeExplorer.Reading;
@@ -10,10 +9,11 @@ using Xunit;
 namespace CodeExplorer.Tests;
 
 /// <summary>
-///     The JSON the web UI compares against, read as text: the property names and every enum value
-///     the browser holds a string union for. Read raw rather than through the server's records,
-///     because a typed read accepts either spelling of an enum value and would pass whichever one the
-///     server wrote — and the spelling is the contract, since the web's unions are written by hand.
+///     The JSON values the web UI compares against, read as text: every enum value the browser holds a
+///     string union for. Read raw rather than through the server's records, because a typed read
+///     accepts either spelling of an enum value and would pass whichever one the server wrote — and the
+///     spelling is the contract, since the web's unions are written by hand. The property names are
+///     <see cref="ApiContractTests" />' question, for every route at once.
 ///     At the root of the tests and not in a module's folder, because what it pins is the one
 ///     serializer setting in <c>Program.cs</c> that every module's endpoints answer through.
 /// </summary>
@@ -51,8 +51,6 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
     public async Task A_refresh_status_names_its_state()
     {
         var never = await _host.GetJsonNodeAsync($"/api/projects/{HttpJsonFixture.Unbuilt}/refresh");
-        Assert.Equal(["project", "state", "phase", "startedAt", "finishedAt", "summary", "error", "progress", "phases"],
-            Names(never));
         Assert.Equal("NeverRun", (string?)never["state"]);
 
         var built = await _host.GetJsonNodeAsync($"/api/projects/{HttpJsonFixture.Built}/refresh");
@@ -77,17 +75,7 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
         var detail = await _host.GetJsonNodeAsync($"/api/projects/{HttpJsonFixture.Built}/overview");
 
         var changes = detail["cards"]!["fileChanges"]!;
-        Assert.Equal(["period", "periods"], Names(changes));
         Assert.Equal("Week", (string?)changes["period"]);
-    }
-
-    [Fact]
-    public async Task A_repository_names_its_newest_commit()
-    {
-        var detail = await _host.GetJsonNodeAsync($"/api/projects/{HttpJsonFixture.Built}");
-
-        var repository = Assert.Single(detail["repositories"]!.AsArray())!;
-        Assert.Equal(["sha", "authorName", "authoredAt", "subject"], Names(repository["newestCommit"]!));
     }
 
     [Fact]
@@ -95,10 +83,7 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
     {
         var imports = await _host.GetJsonNodeAsync(Route("imports", "one/src/Orders.cs"));
 
-        Assert.Equal(["qualifiedPath", "languageName", "profiled", "hasImports", "module", "capped", "imports"],
-            Names(imports));
         var edge = Assert.Single(imports["imports"]!.AsArray())!;
-        Assert.Equal(["name", "shape", "lineNumber", "targetPath", "unresolved", "evidence"], Names(edge));
         Assert.Equal("System.Text", (string?)edge["name"]);
         Assert.Equal("Module", (string?)edge["shape"]);
         Assert.Equal("Text", (string?)edge["evidence"]);
@@ -109,7 +94,6 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
     {
         var declarations = await _host.GetJsonNodeAsync(Route("declarations", "one/src/Customers.pas"));
 
-        Assert.Equal(["qualifiedPath", "languageName", "coverage", "capped", "offset", "declarations"], Names(declarations));
         Assert.Equal("Read", (string?)declarations["coverage"]);
         Assert.Equal(
             [
@@ -133,13 +117,13 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
 
     private static string Route(string direction, string path) =>
         $"/api/projects/{HttpJsonFixture.Built}/file/{direction}?path={Uri.EscapeDataString(path)}";
-
-    private static List<string> Names(JsonNode node) => [.. node.AsObject().Select(p => p.Key)];
 }
 
 /// <summary>
 ///     One built project holding a file for every enum the web compares against, and one project never
-///     refreshed, whose status is the idle one. Built once, because every test here only reads.
+///     refreshed, whose status is the idle one. Built once, because every test here only reads. Shared
+///     with <see cref="ApiContractTests" />, which needs a built project with history, imports and
+///     declarations too, and would otherwise build the same one again.
 /// </summary>
 public sealed class HttpJsonFixture : IAsyncLifetime
 {
