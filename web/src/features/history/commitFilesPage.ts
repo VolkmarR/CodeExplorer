@@ -18,5 +18,5 @@ export const COMMIT_FILES_PAGE_SIZE = 50
  */
 export function commitFilesPage<T>(files: readonly T[], requested: number) {
   const { page, lastPage, first, last } = pageSpan(requested, COMMIT_FILES_PAGE_SIZE, files.length)
-  return { first, lastPage, page, rows: files.slice(first - 1, last), total: files.length }
+  return { first, last, lastPage, page, rows: files.slice(first - 1, last), total: files.length }
 }

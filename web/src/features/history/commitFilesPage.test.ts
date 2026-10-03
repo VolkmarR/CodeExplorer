@@ -8,13 +8,21 @@ test('a commit that fits on one page is one page of all its files', () => {
     page: 1,
     lastPage: 1,
     first: 1,
+    last: 3,
     rows: [1, 2, 3],
     total: 3,
   })
 })
 
 test('a commit with no files is still one page, so the pager stays hidden', () => {
-  expect(commitFilesPage([], 1)).toEqual({ page: 1, lastPage: 1, first: 1, rows: [], total: 0 })
+  expect(commitFilesPage([], 1)).toEqual({
+    page: 1,
+    lastPage: 1,
+    first: 1,
+    last: 0,
+    rows: [],
+    total: 0,
+  })
 })
 
 test('a later page starts where the one before it ended', () => {
