@@ -21,8 +21,8 @@ import { tsx } from '@tanstack/highlight/languages/tsx'
 import { vue } from '@tanstack/highlight/languages/vue'
 import { yaml } from '@tanstack/highlight/languages/yaml'
 import { splitFileName } from '@/lib/format'
-import { csharp } from './csharp'
-import { xsharp } from './xsharp'
+import { csharp } from '@/highlight/csharp'
+import { xsharp } from '@/highlight/xsharp'
 
 /**
  * The grammars the extension map below names, and nothing else. `allLanguages` was the first

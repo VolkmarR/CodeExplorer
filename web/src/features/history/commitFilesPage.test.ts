@@ -1,5 +1,5 @@
 import { expect, test } from 'vite-plus/test'
-import { COMMIT_FILES_PAGE_SIZE, commitFilesPage } from './commitFilesPage'
+import { COMMIT_FILES_PAGE_SIZE, commitFilesPage } from '@/features/history/commitFilesPage'
 
 const files = (count: number) => Array.from({ length: count }, (_, index) => index + 1)
 

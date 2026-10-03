@@ -1,4 +1,4 @@
-import type { IndexState } from '@/features/projects/indexState'
+import type { IndexState } from '@/app/indexState'
 
 const DOT: Record<IndexState | 'refreshing', string> = {
   fresh: 'bg-success',

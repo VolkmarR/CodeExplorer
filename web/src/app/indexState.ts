@@ -14,8 +14,8 @@ const STALE_AFTER = 24 * 60 * 60 * 1000
 
 /**
  * What an index can be, in one word. The whole vocabulary lives here, with the rule that decides
- * it, because two places say it — the sidebar on every page and the badge on the project page —
- * and a project the frame calls stale must not be a project the page calls built.
+ * it, beside the frame that says it: the sidebar names it beside the project and again at its foot,
+ * and the two must not disagree.
  *
  * `refreshing` is not a state of the index but of the job beside it; the mark that draws these takes
  * it in the same union because the two are shown in the same spot and only one can be true at a time.

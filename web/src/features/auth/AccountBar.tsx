@@ -3,8 +3,8 @@ import { useLocation } from '@tanstack/react-router'
 import { LogIn, LogOut } from 'lucide-react'
 import { signInHref, signOutAction } from '@/lib/http'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { authQuery } from './queries'
-import { initials } from './initials'
+import { authQuery } from '@/features/auth/queries'
+import { initials } from '@/features/auth/initials'
 
 const ACTION =
   'flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-foreground'

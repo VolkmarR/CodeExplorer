@@ -5,8 +5,8 @@ import { createRoot } from 'react-dom/client'
 import { RouteError } from '@/components/RouteError'
 import { RoutePending } from '@/components/RoutePending'
 import { Toaster } from '@/components/ui/toast'
-import { routeTree } from './routeTree.gen'
-import './styles.css'
+import { routeTree } from '@/routeTree.gen'
+import '@/styles.css'
 
 // Retries are off for the same reason as in the API client: the server's failures are decisions
 // about the request, not transient faults.
