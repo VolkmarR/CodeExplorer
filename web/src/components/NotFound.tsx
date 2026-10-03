@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router'
+import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -8,13 +9,10 @@ import { Button } from '@/components/ui/button'
 export function NotFound() {
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Not found</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          That page does not exist. A file view needs a qualified path — the repository slug, then
-          the path inside it.
-        </p>
-      </div>
+      <PageHeader
+        title="Not found"
+        hint="That page does not exist. A file view needs a qualified path — the repository slug, then the path inside it."
+      />
       <Button render={<Link to="/" />} variant="secondary">
         Back to projects
       </Button>

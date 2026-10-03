@@ -2,6 +2,7 @@ import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Plus, Settings } from 'lucide-react'
 import { IndexStatus } from '@/features/projects/IndexStatus'
+import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { projectsQuery } from '@/features/projects/queries'
@@ -23,20 +24,18 @@ export function ProjectList() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            A project is what an agent connects to, and what a search spans.
-          </p>
-        </div>
-        {/* The one thing to do on this page that is not opening a project, so it gets the filled
-            button; the per-card Settings stay quiet beside it. */}
-        <Button render={<Link to="/projects/new" />}>
-          <Plus />
-          New project
-        </Button>
-      </div>
+      {/* New project is the one thing to do on this page that is not opening a project, so it
+          gets the filled button; the per-card Settings stay quiet beside it. */}
+      <PageHeader
+        title="Projects"
+        hint="A project is what an agent connects to, and what a search spans."
+        actions={
+          <Button render={<Link to="/projects/new" />}>
+            <Plus />
+            New project
+          </Button>
+        }
+      />
 
       {projects.length === 0 ? (
         <p className="text-sm text-muted-foreground">
