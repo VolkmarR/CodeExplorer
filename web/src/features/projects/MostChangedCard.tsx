@@ -52,7 +52,13 @@ export function MostChangedCard({
               </Link>
             </p>
             {churn.files.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No file changed in this window.</p>
+              // Never "nothing changed" where the excluded paths took the rows: the window has
+              // commits by construction, and a filtered list must not read as a quiet one.
+              <p className="text-sm text-muted-foreground">
+                {excluded
+                  ? 'Every file that changed in this window is left out by the excluded paths.'
+                  : 'No file changed in this window.'}
+              </p>
             ) : (
               // The churn page's own list, so the same ranking reads the same in both places.
               <ChurnList project={project} files={churn.files} />

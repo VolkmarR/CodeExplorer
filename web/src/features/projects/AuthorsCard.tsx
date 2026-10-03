@@ -27,9 +27,14 @@ export function AuthorsCard({
         {!historyWindow(overview.churn) ? (
           <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
         ) : overview.authors.length === 0 ? (
-          // History, and none of it left in this window: the filters took it, which the note below
-          // says, and a project with no history reads differently (CODING_STANDARDS, Errors).
-          <p className="text-sm text-muted-foreground">No commits in this window.</p>
+          // History, and no author left in this window. Where the excluded paths took every commit
+          // that is said rather than "no commits", which would read as a quiet project rather than a
+          // filtered one (CODING_STANDARDS, Errors).
+          <p className="text-sm text-muted-foreground">
+            {excluded
+              ? 'Every commit in this window touched only files the excluded paths leave out.'
+              : 'No commits in this window.'}
+          </p>
         ) : (
           <>
             {/* Said once, at the top, rather than per row: it is a caveat about the whole list, and
