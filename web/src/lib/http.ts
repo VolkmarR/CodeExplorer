@@ -8,7 +8,9 @@ import ky, { HTTPError } from 'ky'
  * A feature hands its typed parameters to `searchParams` as they are: ky writes numbers and booleans
  * as text and leaves an `undefined` field off entirely, which is what keeps an unset repository out
  * of the request rather than sent as a blank the server would read as a repository named "". The
- * blank never gets this far: every `validate*Search` in `lib/urls` reads an empty field as absent.
+ * blank never gets this far: `lib/urls` reads an empty optional field — a repository, a filter —
+ * as absent (`text`). An empty string ky does send, so a field that keeps one (`textOrEmpty`, such
+ * as the browse glob or a tree path) is sent as `glob=` on purpose.
  */
 
 /**
