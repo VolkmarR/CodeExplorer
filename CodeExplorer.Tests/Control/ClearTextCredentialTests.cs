@@ -39,7 +39,7 @@ public sealed class ClearTextCredentialTests : IDisposable
         string body = await response.Content.ReadAsStringAsync(Ct);
         Assert.Contains(Refusal, body);
         Assert.DoesNotContain(Secret, body);
-        Assert.Empty(await http.GetFromJsonAsync<object[]>("/api/projects/alpha/repositories", Ct) ?? []);
+        Assert.Empty(await _host.GetJsonAsync<object[]>("/api/projects/alpha/repositories"));
     }
 
     [Theory]

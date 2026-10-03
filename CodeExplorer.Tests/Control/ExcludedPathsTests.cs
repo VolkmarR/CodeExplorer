@@ -28,7 +28,7 @@ public sealed class ExcludedPathsTests : IDisposable
     {
         await _host.CreateProjectAsync("alpha");
 
-        Assert.Empty(await ReadAsync("alpha"));
+        Assert.Empty((await _host.GetJsonAsync<Body>("/api/projects/alpha/excluded-paths")).Patterns);
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public sealed class ExcludedPathsTests : IDisposable
         // A repeat differing only by case is a repeat: matching is case-insensitive.
         string[] expected = ["**/*.rc", "**/AssemblyInfo.*", "**/*.verified.txt"];
         Assert.Equal(expected, saved);
-        Assert.Equal(expected, await ReadAsync("alpha"));
+        Assert.Equal(expected, (await _host.GetJsonAsync<Body>("/api/projects/alpha/excluded-paths")).Patterns);
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class ExcludedPathsTests : IDisposable
             Enumerable.Range(0, ExcludedPaths.MaxPatterns + 1).Select(i => $"**/{i}.txt").ToArray());
 
         Assert.Equal(HttpStatusCode.BadRequest, status);
-        Assert.Equal(["**/*.rc"], await ReadAsync("alpha"));
+        Assert.Equal(["**/*.rc"], (await _host.GetJsonAsync<Body>("/api/projects/alpha/excluded-paths")).Patterns);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public sealed class ExcludedPathsTests : IDisposable
         // Refused as a sentence naming the pattern, rather than stored and failing every overview after.
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains("'**/[z-a].txt'", await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
-        Assert.Equal(["**/*.rc"], await ReadAsync("alpha"));
+        Assert.Equal(["**/*.rc"], (await _host.GetJsonAsync<Body>("/api/projects/alpha/excluded-paths")).Patterns);
     }
 
     /// <summary>A class GLOB would take and RE2 refuses, beside a pattern that is fine.</summary>
@@ -109,21 +109,14 @@ public sealed class ExcludedPathsTests : IDisposable
         await WriteAsync("alpha", ["**/*.rc"]);
 
         _host.Restart();
-        Assert.Equal(["**/*.rc"], await ReadAsync("alpha"));
+        Assert.Equal(["**/*.rc"], (await _host.GetJsonAsync<Body>("/api/projects/alpha/excluded-paths")).Patterns);
 
         using (var http = _host.CreateClient())
         using (var deleted = await http.DeleteAsync("/api/projects/alpha", Ct))
             Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
         // The same slug again is a new project, and must not open with the old one's exclusions.
         await _host.CreateProjectAsync("alpha");
-        Assert.Empty(await ReadAsync("alpha"));
-    }
-
-    private async Task<string[]> ReadAsync(string slug)
-    {
-        using var http = _host.CreateClient();
-        var body = await http.GetFromJsonAsync<Body>($"/api/projects/{slug}/excluded-paths", Ct);
-        return Assert.IsType<Body>(body).Patterns;
+        Assert.Empty((await _host.GetJsonAsync<Body>("/api/projects/alpha/excluded-paths")).Patterns);
     }
 
     private async Task<(HttpStatusCode Status, string[]? Saved)> WriteAsync(string slug, string[] patterns)

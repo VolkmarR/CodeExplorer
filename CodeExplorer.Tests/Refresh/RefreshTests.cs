@@ -333,7 +333,7 @@ public sealed class RefreshTests : IDisposable
         }
 
         await _host.WaitForRefreshesAsync();
-        Assert.Equal("one", Assert.Single((await DetailAsync("alpha")).Repositories).Slug);
+        Assert.Equal("one", Assert.Single((await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha")).Repositories).Slug);
         Assert.True(Directory.Exists(_host.ClonePath("alpha", "one")));
     }
 
@@ -363,7 +363,7 @@ public sealed class RefreshTests : IDisposable
         }
 
         await _host.WaitForRefreshesAsync();
-        Assert.Equal("two", Assert.Single((await DetailAsync("beta")).Repositories).Slug);
+        Assert.Equal("two", Assert.Single((await _host.GetJsonAsync<ProjectDetail>("/api/projects/beta")).Repositories).Slug);
         Assert.True(Directory.Exists(_host.ClonePath("beta", "two")));
     }
 
@@ -394,7 +394,7 @@ public sealed class RefreshTests : IDisposable
         }
 
         await _host.WaitForRefreshesAsync();
-        Assert.Equal("one", Assert.Single((await DetailAsync("alpha")).Repositories).Slug);
+        Assert.Equal("one", Assert.Single((await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha")).Repositories).Slug);
         Assert.True(File.Exists(_host.IndexFile("alpha")));
         Assert.True(Directory.Exists(_host.ClonePath("alpha", "one")));
 
@@ -426,7 +426,7 @@ public sealed class RefreshTests : IDisposable
         }
 
         await _host.WaitForRefreshesAsync();
-        Assert.Equal("two", Assert.Single((await DetailAsync("beta")).Repositories).Slug);
+        Assert.Equal("two", Assert.Single((await _host.GetJsonAsync<ProjectDetail>("/api/projects/beta")).Repositories).Slug);
         Assert.True(Directory.Exists(_host.ClonePath("beta", "two")));
     }
 
@@ -481,7 +481,7 @@ public sealed class RefreshTests : IDisposable
             using var removed = await RemoveRepositoryAsync("beta", "two");
 
             Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
-            Assert.Equal("three", Assert.Single((await DetailAsync("beta")).Repositories).Slug);
+            Assert.Equal("three", Assert.Single((await _host.GetJsonAsync<ProjectDetail>("/api/projects/beta")).Repositories).Slug);
             Assert.False(Directory.Exists(_host.ClonePath("beta", "two")));
         }
 
@@ -942,9 +942,8 @@ public sealed class RefreshTests : IDisposable
 
         // The slug reused: the new project has never been built, and must not open the old one's files.
         await _host.CreateProjectAsync("alpha");
-        using var reader = _host.CreateClient();
-        var detail = await reader.GetFromJsonAsync<ProjectDetail>("/api/projects/alpha", Ct);
-        Assert.Null(detail!.Index.BuiltAt);
+        var detail = await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha");
+        Assert.Null(detail.Index.BuiltAt);
         Assert.False(File.Exists(_host.IndexFile("alpha")));
     }
 
@@ -1233,14 +1232,6 @@ public sealed class RefreshTests : IDisposable
     {
         using var http = _host.CreateClient();
         return await http.DeleteAsync($"/api/projects/{project}/repositories/{repository}", Ct);
-    }
-
-    private async Task<ProjectDetail> DetailAsync(string project)
-    {
-        using var http = _host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectDetail>($"/api/projects/{project}", Ct);
-        Assert.NotNull(detail);
-        return detail;
     }
 
     private static async Task<string> ErrorAsync(HttpResponseMessage response)

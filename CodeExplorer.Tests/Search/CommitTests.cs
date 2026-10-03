@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Http.Json;
 using System.Text.Json;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Search;
@@ -360,10 +359,7 @@ public sealed class CommitTests(CommitFixture fixture) : IClassFixture<CommitFix
             new Dictionary<string, string> { ["src/Widget.cs"] = "class Widget { }\n" }, true);
         await using var client = await _host.ConnectAsync("onlyone");
 
-        using var http = _host.CreateClient();
-        var page = await http.GetFromJsonAsync<ChangeLogAnswer>("/api/projects/onlyone/commits",
-            TestContext.Current.CancellationToken);
-        Assert.NotNull(page);
+        var page = await _host.GetJsonAsync<ChangeLogAnswer>("/api/projects/onlyone/commits");
 
         string reply = await TestHost.CallAsync(client, "commit_files",
             new Dictionary<string, object?> { ["sha"] = page.Commits[0].Sha });
@@ -393,18 +389,13 @@ public sealed class CommitTests(CommitFixture fixture) : IClassFixture<CommitFix
         await _host.AddRepositoryAsync("twinned", "right", source);
         await _host.RefreshAsync("twinned");
 
-        using var http = _host.CreateClient();
-        var log = await http.GetFromJsonAsync<ChangeLogAnswer>("/api/projects/twinned/commits",
-            TestContext.Current.CancellationToken);
-        Assert.NotNull(log);
+        var log = await _host.GetJsonAsync<ChangeLogAnswer>("/api/projects/twinned/commits");
         Assert.Equal(4, log.Total);
         string sha = log.Commits.Single(c => c.RepositorySlug == "left" && c.Subject == "Add the module").Sha;
         var copies = log.Commits.Where(c => c.Sha == sha).ToList();
         Assert.Equal(["left", "right"], copies.Select(c => c.RepositorySlug).Order());
 
-        var one = await http.GetFromJsonAsync<LoggedCommit>($"/api/projects/twinned/commits/{sha}",
-            TestContext.Current.CancellationToken);
-        Assert.NotNull(one);
+        var one = await _host.GetJsonAsync<LoggedCommit>($"/api/projects/twinned/commits/{sha}");
         Assert.Equal(copies[^1], one);
         Assert.Equal(2, one.FilesChanged);
         Assert.Equal(3, one.Added);
@@ -432,13 +423,10 @@ public sealed class CommitTests(CommitFixture fixture) : IClassFixture<CommitFix
         await _host.RefreshAsync("paged");
 
         string plans = _host.ScratchFile("change-log-plans");
-        using var http = _host.CreateClient();
-        ChangeLogAnswer? page;
+        ChangeLogAnswer page;
         using (_host.RecordPlans(plans))
-            page = await http.GetFromJsonAsync<ChangeLogAnswer>("/api/projects/paged/commits?repository=paged&pageSize=1",
-                TestContext.Current.CancellationToken);
+            page = await _host.GetJsonAsync<ChangeLogAnswer>("/api/projects/paged/commits?repository=paged&pageSize=1");
 
-        Assert.NotNull(page);
         var commit = Assert.Single(page.Commits);
         Assert.Equal("Change one", commit.Subject);
         Assert.Equal((1, 1, 1), (commit.FilesChanged, commit.Added, commit.Deleted));
@@ -469,10 +457,7 @@ public sealed class CommitTests(CommitFixture fixture) : IClassFixture<CommitFix
     /// </summary>
     private async Task<string> ShaOfAsync(string project, string subject)
     {
-        using var http = _host.CreateClient();
-        var page = await http.GetFromJsonAsync<ChangeLogAnswer>($"/api/projects/{project}/commits",
-            TestContext.Current.CancellationToken);
-        Assert.NotNull(page);
+        var page = await _host.GetJsonAsync<ChangeLogAnswer>($"/api/projects/{project}/commits");
         return page.Commits.Single(c => c.Subject.StartsWith(subject, StringComparison.Ordinal)).Sha;
     }
 }

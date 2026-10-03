@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Http.Json;
 using System.Reflection;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
@@ -56,7 +55,7 @@ public sealed class TelemetryTests
         using var host = await ProjectAsync(engine, slug);
         using var probe = new TelemetryProbe(slug);
 
-        var result = await SearchAsync(host, $"/api/projects/{slug}/search?q=Widget");
+        var result = await host.GetJsonAsync<GrepResult>($"/api/projects/{slug}/search?q=Widget");
         Assert.Equal(3, result.TotalFiles);
 
         var duration = Assert.Single(probe.For(Telemetry.SearchDuration));
@@ -141,7 +140,7 @@ public sealed class TelemetryTests
         using var host = await ProjectAsync(SearchEngine.Substring, slug);
 
         using var probe = new TelemetryProbe(slug);
-        await SearchAsync(host, $"/api/projects/{slug}/search?q=Widget");
+        await host.GetJsonAsync<GrepResult>($"/api/projects/{slug}/search?q=Widget");
 
         var lease = Assert.Single(probe.For(Telemetry.LeaseDuration));
         Assert.Equal(
@@ -336,7 +335,7 @@ public sealed class TelemetryTests
 
         await host.IndexedProjectAsync(slug,
             new Dictionary<string, Dictionary<string, string>> { ["one"] = new() { ["a.cs"] = "class A;\n" } });
-        await SearchAsync(host, $"/api/projects/{slug}/search?q=class");
+        await host.GetJsonAsync<GrepResult>($"/api/projects/{slug}/search?q=class");
 
         // Asserted over everything this server emitted rather than instrument by instrument, which is
         // the shape of the rule: with several projects on one replica, untagged telemetry cannot
@@ -381,15 +380,7 @@ public sealed class TelemetryTests
         // than assumed: a broken registration would otherwise fail every test at once and read as a
         // search defect.
         using var host = await ProjectAsync(SearchEngine.Substring, "tele-offline");
-        Assert.Equal(3, (await SearchAsync(host, "/api/projects/tele-offline/search?q=Widget")).TotalFiles);
-    }
-
-    private static async Task<GrepResult> SearchAsync(TestHost host, string url)
-    {
-        using var http = host.CreateClient();
-        var result = await http.GetFromJsonAsync<GrepResult>(url, Ct);
-        Assert.NotNull(result);
-        return result;
+        Assert.Equal(3, (await host.GetJsonAsync<GrepResult>("/api/projects/tele-offline/search?q=Widget")).TotalFiles);
     }
 
     /// <summary>

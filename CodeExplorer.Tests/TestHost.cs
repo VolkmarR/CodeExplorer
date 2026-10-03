@@ -810,13 +810,8 @@ public sealed class TestHost : IDisposable
         return values;
     }
 
-    public async Task<RefreshStatus> RefreshStatusAsync(string project)
-    {
-        using var http = Fixture();
-        var status = await http.GetFromJsonAsync<RefreshStatus>($"/api/projects/{project}/refresh", Ct);
-        Assert.NotNull(status);
-        return status;
-    }
+    public Task<RefreshStatus> RefreshStatusAsync(string project) =>
+        GetJsonAsync<RefreshStatus>($"/api/projects/{project}/refresh");
 
     /// <summary>A project of the given repositories (slug to files), created, added and indexed.</summary>
     public async Task<IndexSummary> IndexedProjectAsync(string project,
@@ -885,12 +880,20 @@ public sealed class TestHost : IDisposable
     }
 
     /// <summary>The overview page's read, as the browser receives it, with the page's filters in <paramref name="query" />.</summary>
-    public async Task<ProjectOverviewDetail> OverviewDetailAsync(string project, string query = "")
+    public Task<ProjectOverviewDetail> OverviewDetailAsync(string project, string query = "") =>
+        GetJsonAsync<ProjectOverviewDetail>($"/api/projects/{project}/overview{query}");
+
+    /// <summary>
+    ///     A GET whose answer is JSON, read as <typeparamref name="T" /> and asserted present, through the
+    ///     client the fixture steps use. A non-success status throws, so a test that reads an answer
+    ///     cannot be passed by a refusal; a test whose subject is the status sends its own request.
+    /// </summary>
+    public async Task<T> GetJsonAsync<T>(string path)
     {
-        using var http = CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectOverviewDetail>($"/api/projects/{project}/overview{query}", Ct);
-        Assert.NotNull(detail);
-        return detail;
+        using var http = Fixture();
+        var value = await http.GetFromJsonAsync<T>(path, Ct);
+        Assert.NotNull(value);
+        return value;
     }
 
     /// <summary>

@@ -26,7 +26,7 @@ public sealed class OperatorEndpointTests : IDisposable
             new Dictionary<string, Dictionary<string, string>>
                 { ["one"] = new() { ["src/A.cs"] = "class A;\nclass B;\n" } });
 
-        var projects = await ListAsync();
+        var projects = await _host.GetJsonAsync<List<ProjectSummary>>("/api/projects");
 
         var unbuilt = Assert.Single(projects, p => p.Slug == "unbuilt");
         Assert.Equal("unbuilt", unbuilt.Name);
@@ -50,7 +50,7 @@ public sealed class OperatorEndpointTests : IDisposable
         await _host.AddRepositoryAsync("alpha", "two", _host.CreateGitRepository("two", new Dictionary<string, string>
             { ["src/B.cs"] = "class B;\n" }));
 
-        var detail = await DetailAsync("alpha");
+        var detail = await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha");
 
         Assert.NotNull(detail.Index.BuiltAt);
         var one = Assert.Single(detail.Repositories, r => r.Slug == "one");
@@ -73,7 +73,7 @@ public sealed class OperatorEndpointTests : IDisposable
         string json = await http.GetStringAsync("/api/projects/alpha", Ct);
 
         Assert.DoesNotContain("s3cret-token", json, StringComparison.Ordinal);
-        var detail = await DetailAsync("alpha");
+        var detail = await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha");
         Assert.True(Assert.Single(detail.Repositories, r => r.Slug == "with").HasCredential);
         Assert.False(Assert.Single(detail.Repositories, r => r.Slug == "without").HasCredential);
     }
@@ -93,7 +93,7 @@ public sealed class OperatorEndpointTests : IDisposable
         using var response = await http.DeleteAsync("/api/projects/alpha", Ct);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-        Assert.Empty(await ListAsync());
+        Assert.Empty(await _host.GetJsonAsync<List<ProjectSummary>>("/api/projects"));
         Assert.False(File.Exists(index));
         Assert.False(Directory.Exists(clones));
     }
@@ -109,7 +109,7 @@ public sealed class OperatorEndpointTests : IDisposable
                 { ["one"] = new() { ["src/B.cs"] = "class B;\n" } });
         await _host.InterruptBuildAsync("broken");
 
-        var projects = await ListAsync();
+        var projects = await _host.GetJsonAsync<List<ProjectSummary>>("/api/projects");
 
         Assert.Null(Assert.Single(projects, p => p.Slug == "broken").Index.BuiltAt);
         Assert.NotNull(Assert.Single(projects, p => p.Slug == "healthy").Index.BuiltAt);
@@ -138,7 +138,7 @@ public sealed class OperatorEndpointTests : IDisposable
         using var response = await http.DeleteAsync("/api/projects/alpha/repositories/one", Ct);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-        var detail = await DetailAsync("alpha");
+        var detail = await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha");
         Assert.Equal("two", Assert.Single(detail.Repositories).Slug);
         Assert.False(Directory.Exists(_host.ClonePath("alpha", "one")));
         Assert.True(Directory.Exists(_host.ClonePath("alpha", "two")));
@@ -177,22 +177,6 @@ public sealed class OperatorEndpointTests : IDisposable
 
     private sealed record ErrorBody(string Error);
 
-    private async Task<IReadOnlyList<ProjectSummary>> ListAsync()
-    {
-        using var http = _host.CreateClient();
-        var projects = await http.GetFromJsonAsync<List<ProjectSummary>>("/api/projects", Ct);
-        Assert.NotNull(projects);
-        return projects;
-    }
-
-    private async Task<ProjectDetail> DetailAsync(string slug)
-    {
-        using var http = _host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectDetail>($"/api/projects/{slug}", Ct);
-        Assert.NotNull(detail);
-        return detail;
-    }
-
     [Fact]
     public async Task Project_page_computes_the_overview_live_from_the_index()
     {
@@ -207,7 +191,7 @@ public sealed class OperatorEndpointTests : IDisposable
                 }
             });
 
-        var detail = await OverviewAsync("alpha");
+        var detail = await _host.OverviewDetailAsync("alpha");
 
         Assert.NotNull(detail.Overview);
         // The same grouping the tool reports, computed live by the same statements: C# and X# by
@@ -230,7 +214,7 @@ public sealed class OperatorEndpointTests : IDisposable
     {
         await _host.CreateProjectAsync("unbuilt");
 
-        var detail = await OverviewAsync("unbuilt");
+        var detail = await _host.OverviewDetailAsync("unbuilt");
 
         // Null and not an overview of nothing: every project passes through this state, and empty
         // sections would read as a project that really is empty. The prose comes with it, so the page
@@ -238,13 +222,5 @@ public sealed class OperatorEndpointTests : IDisposable
         Assert.Null(detail.Overview);
         Assert.NotNull(detail.Unavailable);
         Assert.Contains("has no index to read from", detail.Unavailable, StringComparison.Ordinal);
-    }
-
-    private async Task<ProjectOverviewDetail> OverviewAsync(string slug)
-    {
-        using var http = _host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ProjectOverviewDetail>($"/api/projects/{slug}/overview", Ct);
-        Assert.NotNull(detail);
-        return detail;
     }
 }

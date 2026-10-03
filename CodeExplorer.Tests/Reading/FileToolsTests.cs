@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Reading;
 using CodeExplorer.Search;
@@ -376,14 +375,11 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
     [Fact]
     public async Task Browsing_past_the_page_size_ceiling_reaches_every_file_exactly_once()
     {
-        using var http = _host.CreateClient();
         var seen = new List<string>();
         for (int page = 1; page <= 3; page++)
         {
-            var listing = await http.GetFromJsonAsync<FileListResponse>(
-                $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=5000&page={page}",
-                TestContext.Current.CancellationToken);
-            Assert.NotNull(listing);
+            var listing = await _host.GetJsonAsync<FileListResponse>(
+                $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=5000&page={page}");
             Assert.Equal(2100, listing.Total);
             Assert.Equal(2000, listing.PageSize);
             seen.AddRange(listing.Files.Select(f => f.QualifiedPath));
@@ -393,19 +389,17 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
         Assert.Equal(2100, seen.Distinct(StringComparer.Ordinal).Count());
 
         // The largest page is past the end like any other, not an offset wrapped negative.
-        var last = await http.GetFromJsonAsync<FileListResponse>(
-            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=5000&page={int.MaxValue}",
-            TestContext.Current.CancellationToken);
-        Assert.NotNull(last);
+        var last = await _host.GetJsonAsync<FileListResponse>(
+            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=5000&page={int.MaxValue}");
         Assert.Equal(2100, last.Total);
         Assert.Empty(last.Files);
 
         // A page size of zero is a page of one, so page 2 is the second row and not the first again.
-        string OnlyPath(FileListResponse? l) => Assert.Single(Assert.IsType<FileListResponse>(l).Files).QualifiedPath;
-        var zeroFirst = await http.GetFromJsonAsync<FileListResponse>(
-            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=0&page=1", TestContext.Current.CancellationToken);
-        var zeroSecond = await http.GetFromJsonAsync<FileListResponse>(
-            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=0&page=2", TestContext.Current.CancellationToken);
+        string OnlyPath(FileListResponse l) => Assert.Single(l.Files).QualifiedPath;
+        var zeroFirst = await _host.GetJsonAsync<FileListResponse>(
+            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=0&page=1");
+        var zeroSecond = await _host.GetJsonAsync<FileListResponse>(
+            $"/api/projects/{FileToolsFixture.Wide}/files?glob=*&pageSize=0&page=2");
         Assert.Equal(seen[0], OnlyPath(zeroFirst));
         Assert.Equal(seen[1], OnlyPath(zeroSecond));
     }

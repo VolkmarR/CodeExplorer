@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Operator;
 using CodeExplorer.Reading;
@@ -178,7 +177,8 @@ public sealed class ExcludedPathSuggestionsTests : IDisposable
     {
         await _host.CreateProjectAsync("alpha");
 
-        var detail = await DetailAsync("alpha");
+        var detail =
+            await _host.GetJsonAsync<ExcludedPathSuggestionsDetail>("/api/projects/alpha/excluded-paths/suggestions");
 
         Assert.Empty(detail.Suggestions);
         Assert.NotNull(detail.Unavailable);
@@ -190,17 +190,9 @@ public sealed class ExcludedPathSuggestionsTests : IDisposable
 
     private async Task<IReadOnlyList<ExcludedPathSuggestion>> SuggestAsync(string slug)
     {
-        var detail = await DetailAsync(slug);
+        var detail =
+            await _host.GetJsonAsync<ExcludedPathSuggestionsDetail>($"/api/projects/{slug}/excluded-paths/suggestions");
         Assert.Null(detail.Unavailable);
         return detail.Suggestions;
-    }
-
-    private async Task<ExcludedPathSuggestionsDetail> DetailAsync(string slug)
-    {
-        using var http = _host.CreateClient();
-        var detail = await http.GetFromJsonAsync<ExcludedPathSuggestionsDetail>(
-            $"/api/projects/{slug}/excluded-paths/suggestions", Ct);
-        Assert.NotNull(detail);
-        return detail;
     }
 }

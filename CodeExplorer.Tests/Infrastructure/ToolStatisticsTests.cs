@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
 using ModelContextProtocol;
@@ -106,16 +105,13 @@ public sealed class ToolStatisticsTests
             await TestHost.CallAsync(client, "grep", new Dictionary<string, object?> { ["query"] = "Beta" });
         }
 
-        using var http = host.CreateClient();
-        var statistics = await http.GetFromJsonAsync<ToolCallStatistics>($"/api/projects/{slug}/tool-calls", Ct);
-        Assert.NotNull(statistics);
+        var statistics = await host.GetJsonAsync<ToolCallStatistics>($"/api/projects/{slug}/tool-calls");
         Assert.Equal(2, statistics.CallsLastHour);
         Assert.Equal(0, statistics.FailedLastHour);
         var grep = Assert.Single(statistics.Tools);
         Assert.Equal(("grep", 2L, 0L), (grep.Tool, grep.Calls, grep.Failed));
 
-        var activity = await http.GetFromJsonAsync<ProjectToolActivity[]>("/api/tool-calls", Ct);
-        Assert.NotNull(activity);
+        var activity = await host.GetJsonAsync<ProjectToolActivity[]>("/api/tool-calls");
         Assert.Equal(2, Assert.Single(activity, a => a.Project == slug).CallsLastHour);
     }
 
@@ -144,10 +140,8 @@ public sealed class ToolStatisticsTests
         Assert.Equal(Telemetry.FailedOutcome,
             Assert.Single(probe.For(Telemetry.ToolDuration)).Tags[Telemetry.OutcomeTag]);
 
-        using var http = host.CreateClient();
-        var statistics = await http.GetFromJsonAsync<ToolCallStatistics>($"/api/projects/{slug}/tool-calls", Ct);
-        Assert.NotNull(statistics);
-        Assert.Equal(1, statistics.FailedLastHour);
+        var statistics = await host.GetJsonAsync<ToolCallStatistics>($"/api/projects/{slug}/tool-calls");
+        Assert.Equal(1,statistics.FailedLastHour);
         Assert.True(Assert.Single(statistics.Recent).Failed);
     }
 
