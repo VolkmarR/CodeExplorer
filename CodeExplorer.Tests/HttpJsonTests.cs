@@ -67,8 +67,10 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
         Assert.Equal(["qualifiedPath", "languageName", "profiled", "hasImports", "module", "capped", "imports"],
             Names(imports));
         var edge = Assert.Single(imports["imports"]!.AsArray())!;
-        Assert.Equal(["name", "lineNumber", "targetPath", "unresolved"], Names(edge));
+        Assert.Equal(["name", "shape", "lineNumber", "targetPath", "unresolved", "evidence"], Names(edge));
         Assert.Equal("System.Text", (string?)edge["name"]);
+        Assert.Equal("Module", (string?)edge["shape"]);
+        Assert.Equal("Text", (string?)edge["evidence"]);
     }
 
     [Fact]
@@ -76,21 +78,21 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture) : IClassFixture<HttpJ
     {
         var declarations = await _host.GetJsonNodeAsync(Route("declarations", "one/src/Customers.pas"));
 
-        Assert.Equal(["qualifiedPath", "languageName", "coverage", "capped", "declarations"], Names(declarations));
-        Assert.Equal("read", (string?)declarations["coverage"]);
+        Assert.Equal(["qualifiedPath", "languageName", "coverage", "capped", "offset", "declarations"], Names(declarations));
+        Assert.Equal("Read", (string?)declarations["coverage"]);
         Assert.Equal(
             [
-                """{"lineNumber":6,"text":"  TCustomer = class(TObject)","type":"TCustomer","member":null,"role":"declaration","evidence":"text"}""",
-                """{"lineNumber":7,"text":"    procedure Save;","type":null,"member":"Save","role":"declaration","evidence":"text"}""",
-                """{"lineNumber":12,"text":"procedure TCustomer.Save;","type":"TCustomer","member":"Save","role":"implementation","evidence":"text"}"""
+                """{"lineNumber":6,"text":"  TCustomer = class(TObject)","type":"TCustomer","member":null,"role":"Declaration","evidence":"Text"}""",
+                """{"lineNumber":7,"text":"    procedure Save;","type":null,"member":"Save","role":"Declaration","evidence":"Text"}""",
+                """{"lineNumber":12,"text":"procedure TCustomer.Save;","type":"TCustomer","member":"Save","role":"Implementation","evidence":"Text"}"""
             ],
             declarations["declarations"]!.AsArray().Select(d => d!.ToJsonString()));
     }
 
-    /// <summary>The two coverages besides <c>read</c>, which an empty declarations panel tells apart.</summary>
+    /// <summary>The two coverages besides <c>Read</c>, which an empty declarations panel tells apart.</summary>
     [Theory]
-    [InlineData("one/web/site.css", "unreadable")]
-    [InlineData("one/build/notes.rst", "unprofiled")]
+    [InlineData("one/web/site.css", "Unreadable")]
+    [InlineData("one/build/notes.rst", "Unprofiled")]
     public async Task An_empty_declaration_list_names_its_coverage(string path, string coverage)
     {
         var declarations = await _host.GetJsonNodeAsync(Route("declarations", path));

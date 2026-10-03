@@ -32,64 +32,6 @@ internal sealed record FileContentResponse(
 /// </summary>
 internal sealed record BlameResponse(string QualifiedPath, IReadOnlyList<AttributedLines> Runs);
 
-/// <summary>
-///     One name a file imports. <paramref name="TargetPath" /> and <paramref name="Unresolved" /> are
-///     exclusive: the first is a qualified path the file route opens, the second the server's own
-///     prose saying why there is no path to open. The raw <paramref name="Name" /> is there either
-///     way, because an edge shown only when it resolves would read as a dependency the file does not
-///     have (CONTEXT.md, Import).
-/// </summary>
-internal sealed record ImportEdgeResponse(string Name, int LineNumber, string? TargetPath, string? Unresolved);
-
-/// <summary>
-///     What a file imports, and what the server was able to say about the question at all.
-///     <paramref name="Profiled" /> and <paramref name="HasImports" /> are the two ways an empty list
-///     means something other than "this file imports nothing" — an extension no profile covers was
-///     never read, and a language with no import concept has none to read — and the panel draws the
-///     three apart. <paramref name="Capped" /> says the list stopped at the ceiling rather than at the
-///     end of the file.
-/// </summary>
-internal sealed record FileImportsResponse(
-    string QualifiedPath,
-    string LanguageName,
-    bool Profiled,
-    bool HasImports,
-    string? Module,
-    bool Capped,
-    IReadOnlyList<ImportEdgeResponse> Imports);
-
-/// <summary>
-///     One declaration the file page's rail lists. <paramref name="Type" /> and
-///     <paramref name="Member" /> are what the line declares — either may be null, and a line that
-///     reads as both fills both — and <paramref name="Text" /> is the line itself, which is what the
-///     panel shows.
-///     <paramref name="Role" /> is <c>"declaration"</c> or <c>"implementation"</c> where the language
-///     announces a routine in one place and writes it in another, and null otherwise; a string and
-///     not the enum, because every other enum on this boundary is one and a number would be a value
-///     the browser has to hold a table for.
-/// </summary>
-internal sealed record DeclarationResponse(
-    int LineNumber,
-    string Text,
-    string? Type,
-    string? Member,
-    string? Role,
-    string Evidence);
-
-/// <summary>
-///     What a file declares. <paramref name="Coverage" /> is what an empty list means and
-///     <paramref name="Capped" /> whether the list is short, both as
-///     <see cref="DeclarationsResult" /> explains them; it is one of <c>"unprofiled"</c>,
-///     <c>"unreadable"</c> or <c>"read"</c>, a lowercase name like the two on
-///     <see cref="DeclarationResponse" /> and for the same reason.
-/// </summary>
-internal sealed record FileDeclarationsResponse(
-    string QualifiedPath,
-    string LanguageName,
-    string Coverage,
-    bool Capped,
-    IReadOnlyList<DeclarationResponse> Declarations);
-
 /// <summary>One path a commit touched; <see cref="QualifiedPath" /> links to the file when it is still at HEAD.</summary>
 internal sealed record CommitFileResponse(string Path, string ChangeKind, int Added, int Deleted, string? QualifiedPath);
 
@@ -214,20 +156,24 @@ internal static class SearchEndpoints
         // Its own route beside the file's content rather than a field on it, for the reason blame is
         // one: the rail draws the imports when they arrive and the code does not wait for them.
         // There was a `/file/dependents` beside this answering the reverse direction, gone with the
-        // panel that drew it (#160).
+        // panel that drew it (#160). The read's own record, as the change log is: the response record
+        // this had was the same fields again, less each edge's shape and evidence, with nothing
+        // decided on the way.
         project.MapGet("/file/imports",
             async (Project project, string path, ImportGraph graph, CancellationToken ct) =>
-                Answer<ImportsResult>(await graph.ImportsAsync(project.Slug, path, ct), Imports));
+                Answer<ImportsResult>(await graph.ImportsAsync(project.Slug, path, ct), Results.Ok));
 
         // What the file declares, beside the two import directions, because the rail asks all three
         // of one file and draws each as it arrives. A route of its own rather than a field on /file:
         // the scan reads the lines above every candidate to place it, and the code should be on
-        // screen before that comes back — the same reason blame is its own route.
+        // screen before that comes back — the same reason blame is its own route. The read's own
+        // record too: the copy this had existed to spell its three enums in lowercase, and the HTTP
+        // options now spell every enum one way (Program.cs).
         project.MapGet("/file/declarations",
             async (Project project, string path, FileDeclarations declarations, CancellationToken ct,
                     int offset = 0) =>
                 Answer<DeclarationsResult>(await declarations.ForFileAsync(project.Slug, path, offset, ct),
-                    Declarations));
+                    Results.Ok));
 
         // The change log, paged. The files a commit touched are their own route, like blame is: a
         // page of fifty commits touching a few hundred paths each would be mostly paths nobody opens.
@@ -351,25 +297,6 @@ internal static class SearchEndpoints
             file.SizeBytes, file.SkipReason, string.Join('\n', read.Lines), read.History?.First,
             read.History?.Last));
     }
-
-    private static IResult Imports(ImportsResult result) =>
-        Results.Ok(new FileImportsResponse(result.QualifiedPath, result.LanguageName,
-            result.Profiled, result.HasImports, result.Module, result.Capped,
-            result.Imports
-                .Select(i => new ImportEdgeResponse(i.Name, i.LineNumber, i.TargetPath, i.Unresolved))
-                .ToList()));
-
-    /// <summary>
-    ///     What a file declares, in the order the file writes them. The role and the evidence are
-    ///     lowercase names rather than numbers, so the panel reads the answer instead of decoding it.
-    /// </summary>
-    private static IResult Declarations(DeclarationsResult result) =>
-        Results.Ok(new FileDeclarationsResponse(result.QualifiedPath, result.LanguageName,
-            result.Coverage.ToString().ToLowerInvariant(), result.Capped,
-            result.Declarations
-                .Select(d => new DeclarationResponse(d.LineNumber, d.Text, d.Type, d.Member,
-                    d.Role?.ToString().ToLowerInvariant(), d.Evidence.ToString().ToLowerInvariant()))
-                .ToList()));
 
     /// <summary>
     ///     A file's attribution as runs. A file with no history answers with no runs rather than a

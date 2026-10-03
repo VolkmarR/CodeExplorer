@@ -83,13 +83,15 @@ export interface Blame {
  * One name a file imports. `targetPath` and `unresolved` are exclusive: the first is a qualified
  * path the file view opens, the second the server's prose saying why there is none. The `name` is
  * there either way — an edge shown only when it resolves would read as a dependency the file does
- * not have.
+ * not have. `shape` is whether the name was a module or a path, and `evidence` how it was read.
  */
 export interface ImportEdge {
   name: string
+  shape: 'Module' | 'Path'
   lineNumber: number
   targetPath: string | null
   unresolved: string | null
+  evidence: 'Text' | 'Parsed'
 }
 
 /**
@@ -119,31 +121,35 @@ export interface Declaration {
   text: string
   type: string | null
   member: string | null
-  role: 'declaration' | 'implementation' | null
-  evidence: 'text' | 'parsed'
+  role: 'Declaration' | 'Implementation' | null
+  evidence: 'Text' | 'Parsed'
 }
 
 /**
  * How much of a file's declarations the server was in a position to read, which is what keeps an
  * empty list from reading as "this file declares nothing":
  *
- * - `unprofiled` — no profile covers the extension, so it was read with the conservative default
+ * - `Unprofiled` — no profile covers the extension, so it was read with the conservative default
  *   shapes. A list may still come back, thinner than a covered language's would be.
- * - `unreadable` — the language is covered and its declarations cannot be read from a line (CSS).
+ * - `Unreadable` — the language is covered and its declarations cannot be read from a line (CSS).
  *   Nothing was scanned, which is not the same as scanning and finding nothing.
- * - `read` — the language is covered and its declaration shapes were read.
+ * - `Read` — the language is covered and its declaration shapes were read.
  *
  * One field rather than two flags, because only these three of four combinations are reachable and a
  * fourth would be a state the panel could render the wrong sentence for.
  */
-export type DeclarationCoverage = 'unprofiled' | 'unreadable' | 'read'
+export type DeclarationCoverage = 'Unprofiled' | 'Unreadable' | 'Read'
 
-/** What a file declares. `capped` says the list is short of what the file declares. */
+/**
+ * What a file declares. `capped` says the list is short of what the file declares, and `offset` how
+ * many declarations were skipped to reach this page.
+ */
 export interface FileDeclarations {
   qualifiedPath: string
   languageName: string
   coverage: DeclarationCoverage
   capped: boolean
+  offset: number
   declarations: Declaration[]
 }
 

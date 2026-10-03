@@ -3,7 +3,7 @@ import { declarationsNote } from '@/features/files/declarations'
 import type { Declaration, FileDeclarations } from '@/features/files/api'
 
 const declaration = (member: string): Declaration => ({
-  evidence: 'text',
+  evidence: 'Text',
   lineNumber: 12,
   member,
   role: null,
@@ -13,9 +13,10 @@ const declaration = (member: string): Declaration => ({
 
 const declared = (fields: Partial<FileDeclarations>): FileDeclarations => ({
   capped: false,
-  coverage: 'read',
+  coverage: 'Read',
   declarations: [],
   languageName: 'C#',
+  offset: 0,
   qualifiedPath: 'one/src/Orders.cs',
   ...fields,
 })
@@ -27,10 +28,10 @@ const declared = (fields: Partial<FileDeclarations>): FileDeclarations => ({
  * believe the file.
  */
 test('an empty declarations panel says which kind of empty it is', () => {
-  expect(declarationsNote(declared({ coverage: 'unprofiled', languageName: '.rst' }))).toContain(
+  expect(declarationsNote(declared({ coverage: 'Unprofiled', languageName: '.rst' }))).toContain(
     'No language profile covers',
   )
-  expect(declarationsNote(declared({ coverage: 'unreadable', languageName: 'CSS' }))).toContain(
+  expect(declarationsNote(declared({ coverage: 'Unreadable', languageName: 'CSS' }))).toContain(
     'CSS declarations',
   )
   expect(declarationsNote(declared({}))).toContain('declares nothing')
