@@ -1,4 +1,5 @@
-import { http, scoped } from '@/lib/http'
+import { http } from '@/lib/http'
+import type { HistoryParameters } from '@/lib/urls/historyParams'
 
 /** The change log's shapes and calls. Each shape mirrors a record in the C# host; nothing is invented here. */
 
@@ -50,11 +51,9 @@ export interface CommitFiles {
   files: CommitFile[]
 }
 
-export function fetchCommits(project: string, page: number, repository?: string) {
+export function fetchCommits(project: string, { page, repository }: HistoryParameters) {
   return http
-    .get(`projects/${project}/commits`, {
-      searchParams: scoped({ page: String(page) }, repository),
-    })
+    .get(`projects/${project}/commits`, { searchParams: { page, repository } })
     .json<CommitList>()
 }
 

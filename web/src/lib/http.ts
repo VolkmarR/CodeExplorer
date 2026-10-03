@@ -3,8 +3,12 @@ import ky, { HTTPError } from 'ky'
 /**
  * The one client every feature calls `/api` through, and nothing about what it answers with: a
  * response shape belongs to the feature that reads it, in `features/<concept>/api.ts`. What is here
- * is what all of them share — the instance, the two hooks, the error they see, and the one helper
- * for a parameter more than one endpoint takes.
+ * is what all of them share — the instance, the two hooks and the error they see.
+ *
+ * A feature hands its typed parameters to `searchParams` as they are: ky writes numbers and booleans
+ * as text and leaves an `undefined` field off entirely, which is what keeps an unset repository out
+ * of the request rather than sent as a blank the server would read as a repository named "". The
+ * blank never gets this far: every `validate*Search` in `lib/urls` reads an empty field as absent.
  */
 
 /**
@@ -78,17 +82,3 @@ export const http = ky.create({
   // progress is polled — but a search over a large project is still seconds rather than milliseconds.
   timeout: 30_000,
 })
-
-/**
- * Adds the repository to a request that has one, and leaves it off entirely when there is none:
- * the server reads a blank `repository` as a request to scope to one named "".
- *
- * Shared rather than per-feature because the mistake it avoids is the same one in every feature that
- * can narrow an answer to a repository, and three of them can.
- */
-export function scoped(
-  params: Record<string, string>,
-  repository?: string,
-): Record<string, string> {
-  return repository ? { ...params, repository } : params
-}

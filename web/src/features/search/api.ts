@@ -26,14 +26,14 @@ export interface GrepResult {
   filesMatchingWithoutFilters: number | null
 }
 
-export function fetchSearch(project: string, query: SearchParameters) {
-  const searchParams: Record<string, string> = {
-    caseSensitive: String(query.caseSensitive),
-    page: String(query.page),
-    q: query.q,
-    regex: String(query.regex),
-  }
-  if (query.extension) searchParams.extension = query.extension
-  if (query.path) searchParams.path = query.path
-  return http.get(`projects/${project}/search`, { searchParams }).json<GrepResult>()
+export function fetchSearch(
+  project: string,
+  { caseSensitive, page, q, regex, extension, path }: SearchParameters,
+) {
+  // Listed rather than spread so the query string keeps the order it has always been sent in.
+  return http
+    .get(`projects/${project}/search`, {
+      searchParams: { caseSensitive, page, q, regex, extension, path },
+    })
+    .json<GrepResult>()
 }
