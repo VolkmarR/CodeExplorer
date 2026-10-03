@@ -253,6 +253,11 @@
 /api/projects/{project}/refresh phases[].seconds
 /api/projects/{project}/refresh phases[].step
 /api/projects/{project}/refresh progress
+/api/projects/{project}/refresh progress.done
+/api/projects/{project}/refresh progress.phase
+/api/projects/{project}/refresh progress.step
+/api/projects/{project}/refresh progress.total
+/api/projects/{project}/refresh progress.totalSteps
 /api/projects/{project}/refresh project
 /api/projects/{project}/refresh startedAt
 /api/projects/{project}/refresh state
