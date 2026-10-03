@@ -87,18 +87,13 @@ public sealed partial class ProjectIndexes
             // to settle.
             if (!_withoutFullText.TryRemove(slug, out _) || !HasIndex(slug)) return;
 
-            string path = RestorePath(slug);
-            string catalog = RestoreCatalog(slug);
-            string refusal = NotPutInPlace(slug, "restored index",
-                "The index restored without a full-text index still serves; the next refresh builds one.");
-            await using (var connection = await ConnectAsync(cancellationToken))
-            {
-                await AttachEmptyAsync(connection, catalog, path, cancellationToken);
-                await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
-                await CopyWithFullTextAsync(connection, slug, cancellationToken);
-                await PutInPlaceAsync(connection, connection.Dispose, slug, catalog, path, refusal,
-                    "the restored index was put in place anyway", cancellationToken);
-            }
+            await RebuildFileAsync(slug,
+                "The index restored without a full-text index still serves; the next refresh builds one.",
+                async connection =>
+                {
+                    await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
+                    await CopyWithFullTextAsync(connection, slug, cancellationToken);
+                }, cancellationToken);
         }
     }
 
@@ -159,22 +154,38 @@ public sealed partial class ProjectIndexes
             using var copy = await _durable.FetchAsync(slug, cancellationToken);
             if (copy is null) return false;
 
-            string path = RestorePath(slug);
-            string catalog = RestoreCatalog(slug);
-            string refusal = NotPutInPlace(slug, "restored index",
-                "Nothing was restored; the next read of the project tries again.");
-            await using (var connection = await ConnectAsync(cancellationToken))
-            {
-                await AttachEmptyAsync(connection, catalog, path, cancellationToken);
-                await _durable.LoadAsync(connection, copy, fullText, cancellationToken);
-                await PutInPlaceAsync(connection, connection.Dispose, slug, catalog, path, refusal,
-                    "the restored index was put in place anyway", cancellationToken);
-            }
+            await RebuildFileAsync(slug, "Nothing was restored; the next read of the project tries again.",
+                connection => _durable.LoadAsync(connection, copy, fullText, cancellationToken), cancellationToken);
 
             if (_logger.IsEnabled(LogLevel.Information))
                 _logger.LogInformation("Restored project {Project} from its durable copy", slug);
             return true;
         }
+    }
+
+    /// <summary>
+    ///     Builds a project's file beside the live one and puts it in place, for both restores: an empty
+    ///     file under the restore catalog, filled by <paramref name="fill" /> on a connection of its own
+    ///     that is <c>USE</c>ing it, then <see cref="PutInPlaceAsync" />. Run by a caller holding the
+    ///     writer gate, which the two restores hold for more than this.
+    /// </summary>
+    /// <param name="slug">The project whose file is rebuilt.</param>
+    /// <param name="remedy">The refusal's last sentence: what still serves, and what tries again.</param>
+    /// <param name="fill">Writes every table into the empty file; the only step the restores differ in.</param>
+    /// <param name="cancellationToken">Threaded through the attach, the fill and the move.</param>
+    private async Task RebuildFileAsync(string slug, string remedy, Func<DuckDBConnection, Task> fill,
+        CancellationToken cancellationToken)
+    {
+        string path = RestorePath(slug);
+        string catalog = RestoreCatalog(slug);
+        string refusal = NotPutInPlace(slug, "restored index", remedy);
+        // Closed by the put-in-place between its checkpoint and the move, because the move cannot take
+        // a file this connection still holds; the using is for a fill or a checkpoint that throws.
+        await using var connection = await ConnectAsync(cancellationToken);
+        await AttachEmptyAsync(connection, catalog, path, cancellationToken);
+        await fill(connection);
+        await PutInPlaceAsync(connection, connection.Dispose, slug, catalog, path, refusal,
+            "the restored index was put in place anyway", cancellationToken);
     }
 
     private string RestorePath(string slug) => Path.Combine(_directory, slug + ".restore.duckdb");
