@@ -2,6 +2,8 @@ import type { OverviewChurn, OverviewHotspots } from '@/features/projects/api'
 import { ExcludedNote } from '@/features/projects/ExcludedNote'
 import { HotspotScatter } from '@/features/projects/HotspotScatter'
 import { FilePathLink } from '@/components/FilePathLink'
+import { RankedList } from '@/features/projects/RankedList'
+import { RankedRow } from '@/features/projects/RankedRow'
 import { ShareBar } from '@/features/projects/ShareBar'
 import { formatCount, formatCountOf } from '@/lib/format'
 import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
@@ -47,9 +49,9 @@ export function HotspotsCard({
             ) : (
               <>
                 <HotspotScatter files={files} />
-                <ol className="mt-3 divide-y rounded-lg border bg-card font-mono text-xs">
+                <RankedList className="mt-3">
                   {files.map((file, i) => (
-                    <li key={file.qualifiedPath} className="flex items-center gap-3 px-4 py-2">
+                    <RankedRow key={file.qualifiedPath}>
                       <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary font-sans text-xs font-semibold text-primary-foreground">
                         {i + 1}
                       </span>
@@ -70,9 +72,9 @@ export function HotspotsCard({
                         share={top ? (file.score / top) * 100 : 0}
                         className="ml-auto w-16 shrink-0"
                       />
-                    </li>
+                    </RankedRow>
                   ))}
-                </ol>
+                </RankedList>
               </>
             )}
             <ExcludedNote
