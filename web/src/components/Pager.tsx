@@ -12,11 +12,14 @@ import { pageSpan } from '@/lib/paging'
  * It renders nothing on a single page: a pager that says "Page 1 of 1" is a row of disabled buttons
  * asking to be read.
  *
- * `page` is the page the list answered with, never the one the URL asked for: a page past the end
- * comes back as the last one, and the pager must offer to leave where the reader is.
+ * `page` is the page the list answered with, never the one the URL asked for. The file listing
+ * answers a page past the end as the last one; search and the change log answer it as itself, with
+ * no rows, so from past the end the way back leads to the last page rather than to the one before.
  *
  * The buttons are links to the same view with only the page changed, so every other parameter
  * travels with it without the pager knowing what they are, and a page can be opened in a new tab.
+ * They do not preload on hover as the router's other links do: the next page of a search is a whole
+ * search, and passing the mouse over the pager is not asking for one.
  */
 export function Pager({
   page,
@@ -53,6 +56,7 @@ export function Pager({
         render={
           <Link
             to="."
+            preload={false}
             search={(previous: Record<string, unknown>) => ({
               ...previous,
               page: firstPageBare && target === 1 ? undefined : target,
@@ -71,7 +75,7 @@ export function Pager({
         Page {formatCount(page)} of {formatCount(lastPage)}
       </span>
       <div className="ml-auto flex gap-2">
-        {step(page - 1, previousLabel, page <= 1)}
+        {step(Math.min(page - 1, lastPage), previousLabel, page <= 1)}
         {step(page + 1, nextLabel, page >= lastPage)}
       </div>
     </div>
