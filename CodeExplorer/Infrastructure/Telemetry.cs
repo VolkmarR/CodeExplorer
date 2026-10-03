@@ -314,10 +314,13 @@ public static class Telemetry
         };
 
     /// <summary>The chokepoint for one index build, called from <c>IndexBuilder</c> and nowhere else.</summary>
-    public static IndexBuildRecording IndexBuild(string slug) => new(slug);
+    public static BuildRecording IndexBuild(string slug) =>
+        new(slug, IndexSpan, _indexSeconds, new(_indexFileCount, FilesTag), new(_indexLineCount, LinesTag));
 
     /// <summary>The chokepoint for the history pass of one build, called from <c>HistoryBuilder</c> and nowhere else.</summary>
-    public static HistoryBuildRecording HistoryBuild(string slug) => new(slug);
+    public static BuildRecording HistoryBuild(string slug) =>
+        new(slug, _historySpan, _historySeconds, new(_historyCommitCount, _commitsTag),
+            new(_historyFileCount, FilesTag));
 
     /// <summary>
     ///     The chokepoint for one move of a project's durable copy, called from <c>DurableIndex</c> and
@@ -478,48 +481,44 @@ public static class Telemetry
         }
     }
 
-    /// <summary>One index build, from the first blob read to the last.</summary>
-    public sealed class IndexBuildRecording : IDisposable
-    {
-        private readonly Operation _operation;
-        private string _outcome = FailedOutcome;
-
-        internal IndexBuildRecording(string slug) => _operation = new Operation(IndexSpan, slug);
-
-        public void Dispose() => _operation.Complete(_indexSeconds, _outcome);
-
-        public void Built(long files, long lines)
-        {
-            _outcome = BuiltOutcome;
-            _indexFileCount.Record(files, _operation.Tags);
-            _indexLineCount.Record(lines, _operation.Tags);
-            _operation.Tag(FilesTag, files);
-            _operation.Tag(LinesTag, lines);
-        }
-    }
-
     /// <summary>
-    ///     The history pass of one build. Appending nothing and blaming nothing is the ordinary outcome
-    ///     of refreshing a repository that did not change, and is recorded as a build rather than as an
-    ///     absence: the useful question of this metric is how often a pass is the cheap kind.
+    ///     One pass of a build: the file pass, from the first blob read to the last, or the history pass.
+    ///     One class with the pass's instruments handed in, because the two were the same class twice
+    ///     and differed only in which span, histograms and tags they named.
+    ///     A history pass that appends nothing and blames nothing is the ordinary outcome of refreshing
+    ///     a repository that did not change, and is recorded as a build rather than as an absence: the
+    ///     useful question of that metric is how often a pass is the cheap kind.
     /// </summary>
-    public sealed class HistoryBuildRecording : IDisposable
+    public sealed class BuildRecording : IDisposable
     {
         private readonly Operation _operation;
+        private readonly Histogram<double> _seconds;
+        private readonly Count _first;
+        private readonly Count _second;
         private string _outcome = FailedOutcome;
 
-        internal HistoryBuildRecording(string slug) => _operation = new Operation(_historySpan, slug);
+        internal BuildRecording(string slug, string span, Histogram<double> seconds, Count first, Count second)
+        {
+            _operation = new Operation(span, slug);
+            _seconds = seconds;
+            _first = first;
+            _second = second;
+        }
 
-        public void Dispose() => _operation.Complete(_historySeconds, _outcome);
+        public void Dispose() => _operation.Complete(_seconds, _outcome);
 
-        public void Built(long commits, long files)
+        /// <summary>The pass finished, with its two counts in the order its <see cref="Count" />s were given.</summary>
+        public void Built(long first, long second)
         {
             _outcome = BuiltOutcome;
-            _historyCommitCount.Record(commits, _operation.Tags);
-            _historyFileCount.Record(files, _operation.Tags);
-            _operation.Tag(_commitsTag, commits);
-            _operation.Tag(FilesTag, files);
+            _first.Histogram.Record(first, _operation.Tags);
+            _second.Histogram.Record(second, _operation.Tags);
+            _operation.Tag(_first.Tag, first);
+            _operation.Tag(_second.Tag, second);
         }
+
+        /// <summary>One count a pass reports: the histogram it is recorded in and the tag its span carries it as.</summary>
+        internal readonly record struct Count(Histogram<long> Histogram, string Tag);
     }
 
     /// <summary>
