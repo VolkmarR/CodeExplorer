@@ -131,7 +131,7 @@ api.MapOperator();
 // the SPA fallback below took such a GET and answered index.html with a 200, which the web client
 // parsed as JSON and failed on with a parse error instead of a sentence.
 api.MapFallback("{*path}", (HttpRequest request) =>
-    Results.NotFound(new { error = $"No API endpoint answers {request.Method} {request.Path}." }));
+    ApiError.NotFound($"No API endpoint answers {request.Method} {request.Path}."));
 
 // One MCP endpoint per project (ADR-0002), bound from the route before the SDK sees the request.
 app.MapGroup("/projects/{project}").BindProject().MapMcp("/mcp").ProtectMcp(authentication).SameOriginOnly();

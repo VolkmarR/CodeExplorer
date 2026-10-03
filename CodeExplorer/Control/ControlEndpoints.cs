@@ -35,9 +35,9 @@ internal static class ControlEndpoints
             await control.CreateAsync(request.Slug, request.Name, request.SingleRepository, ct) switch
             {
                 (CreateProjectOutcome.Created, { } created) => Results.Created($"/projects/{created.Slug}/mcp", created),
-                (CreateProjectOutcome.InvalidSlug, _) => Results.BadRequest(new { error = ControlDatabase.SlugRule }),
-                (CreateProjectOutcome.MissingName, _) => Results.BadRequest(new { error = "Name is required." }),
-                _ => Results.Conflict(new { error = $"A project with slug '{request.Slug}' already exists." })
+                (CreateProjectOutcome.InvalidSlug, _) => ApiError.BadRequest(ControlDatabase.SlugRule),
+                (CreateProjectOutcome.MissingName, _) => ApiError.BadRequest("Name is required."),
+                _ => ApiError.Conflict($"A project with slug '{request.Slug}' already exists.")
             });
 
         // The project is bound from the route (BoundProject): an unknown slug never reaches these.
@@ -52,23 +52,17 @@ internal static class ControlEndpoints
                         $"/api/projects/{project.Slug}/repositories",
                         new RepositoryResponse(added.Slug, added.Url, added.HasCredential)),
                     // Bound a moment ago and gone now: an operator deleted it between the two reads.
-                    (AddRepositoryOutcome.NoProject, _) => Results.NotFound(new
-                        { error = BoundProject.NotFound(project.Slug) }),
-                    (AddRepositoryOutcome.InvalidSlug, _) => Results.BadRequest(
-                        new { error = ControlDatabase.SlugRule }),
-                    (AddRepositoryOutcome.InvalidUrl, _) => Results.BadRequest(new { error = RepositoryUrl.Rule }),
-                    (AddRepositoryOutcome.LocalNotAllowed, _) => Results.BadRequest(new
-                        { error = $"The repository was not added. {RepositoryUrl.LocalRefusal}" }),
-                    (AddRepositoryOutcome.ClearTextCredential, _) => Results.BadRequest(new
-                        { error = $"The repository was not added. {RepositoryUrl.ClearTextCredentialRefusal}" }),
-                    (AddRepositoryOutcome.ProjectIsFull, _) => Results.Conflict(new
-                    {
-                        error =
-                            $"Project '{project.Slug}' was created as a single-repository project and already has its repository. "
-                            + "That cannot be changed, because its files are named without a repository slug. Create another project for a second repository."
-                    }),
-                    _ => Results.Conflict(new
-                        { error = $"Project '{project.Slug}' already has a repository with slug '{request.Slug}'." })
+                    (AddRepositoryOutcome.NoProject, _) => ApiError.NotFound(BoundProject.NotFound(project.Slug)),
+                    (AddRepositoryOutcome.InvalidSlug, _) => ApiError.BadRequest(ControlDatabase.SlugRule),
+                    (AddRepositoryOutcome.InvalidUrl, _) => ApiError.BadRequest(RepositoryUrl.Rule),
+                    (AddRepositoryOutcome.LocalNotAllowed, _) => ApiError.BadRequest(
+                        $"The repository was not added. {RepositoryUrl.LocalRefusal}"),
+                    (AddRepositoryOutcome.ClearTextCredential, _) => ApiError.BadRequest(
+                        $"The repository was not added. {RepositoryUrl.ClearTextCredentialRefusal}"),
+                    (AddRepositoryOutcome.ProjectIsFull, _) => ApiError.Conflict(
+                        $"Project '{project.Slug}' was created as a single-repository project and already has its repository. "
+                        + "That cannot be changed, because its files are named without a repository slug. Create another project for a second repository."),
+                    _ => ApiError.Conflict($"Project '{project.Slug}' already has a repository with slug '{request.Slug}'.")
                 });
 
         project.MapGet("/repositories",
@@ -86,9 +80,8 @@ internal static class ControlEndpoints
                 {
                     (ExcludedPathsOutcome.Saved, { } saved, _) => Results.Ok(new ExcludedPathsBody(saved)),
                     // Bound a moment ago and gone now, as for a repository above.
-                    (ExcludedPathsOutcome.NoProject, _, _) => Results.NotFound(new
-                        { error = BoundProject.NotFound(project.Slug) }),
-                    (_, _, var problem) => Results.BadRequest(new { error = problem })
+                    (ExcludedPathsOutcome.NoProject, _, _) => ApiError.NotFound(BoundProject.NotFound(project.Slug)),
+                    (_, _, var problem) => ApiError.BadRequest(problem)
                 });
     }
 }

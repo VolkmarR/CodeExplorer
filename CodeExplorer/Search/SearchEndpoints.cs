@@ -398,6 +398,6 @@ internal static class SearchEndpoints
     /// </summary>
     private static IResult Status(Problem problem) =>
         problem.Kind is ProblemKind.NoIndex or ProblemKind.Missing or ProblemKind.Historical
-        ? Results.NotFound(new { error = problem.Explanation })
-        : Results.BadRequest(new { error = problem.Explanation });
+        ? ApiError.NotFound(problem.Explanation)
+        : ApiError.BadRequest(problem.Explanation);
 }
