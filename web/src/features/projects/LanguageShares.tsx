@@ -3,10 +3,9 @@ import { Chart } from '@tanstack/charts/react'
 import { scaleBand } from '@tanstack/charts/scales/band'
 import { scaleLinear } from '@tanstack/charts/scales/linear'
 import { tooltip } from '@tanstack/charts/tooltip'
-import type { IndexOverview } from '@/features/projects/api'
-import { ExcludedNote } from '@/features/projects/ExcludedNote'
+import type { LanguageShare } from '@/features/projects/api'
+import { OverviewCard } from '@/features/projects/OverviewCard'
 import { formatCountOf, formatPercent } from '@/lib/format'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /** The languages drawn by name; every one after them is folded into "Other". */
 const NAMED = 5
@@ -38,21 +37,22 @@ interface Segment {
  */
 export function LanguageShares({
   project,
-  overview,
+  languages,
   excluded,
 }: {
   project: string
-  overview: IndexOverview
+  /** Largest first, as the overview counts them. */
+  languages: LanguageShare[]
   /** Files at HEAD the excluded paths left out, if any were. */
   excluded: number | undefined
 }) {
-  const segments: Segment[] = overview.languages.slice(0, NAMED).map((language, i) => ({
+  const segments: Segment[] = languages.slice(0, NAMED).map((language, i) => ({
     colour: COLOURS[i],
     files: language.files,
     lines: language.lines,
     name: language.name,
   }))
-  const rest = overview.languages.slice(NAMED)
+  const rest = languages.slice(NAMED)
   if (rest.length > 0)
     segments.push({
       colour: OTHER_COLOUR,
@@ -85,34 +85,32 @@ export function LanguageShares({
   })
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Languages</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {total > 0 ? (
-          <>
-            <div className="overflow-hidden rounded-full">
-              <Chart definition={definition} height={10} ariaLabel="Lines at HEAD by language" />
-            </div>
-            <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              {segments.map((segment) => (
-                <li key={segment.name} className="flex items-center gap-1.5">
-                  <span
-                    aria-hidden
-                    className="size-2.5 rounded-xs bg-(--swatch)"
-                    style={{ '--swatch': segment.colour } as React.CSSProperties}
-                  />
-                  {segment.name} {formatPercent(segment.lines / total)}
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          <p className="text-sm text-muted-foreground">No lines indexed at HEAD.</p>
-        )}
-        <ExcludedNote project={project} files={excluded} what="the files at HEAD" />
-      </CardContent>
-    </Card>
+    <OverviewCard
+      title="Languages"
+      excluded={{ files: excluded, project, what: 'the files at HEAD' }}
+      className="space-y-3"
+    >
+      {total > 0 ? (
+        <>
+          <div className="overflow-hidden rounded-full">
+            <Chart definition={definition} height={10} ariaLabel="Lines at HEAD by language" />
+          </div>
+          <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            {segments.map((segment) => (
+              <li key={segment.name} className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="size-2.5 rounded-xs bg-(--swatch)"
+                  style={{ '--swatch': segment.colour } as React.CSSProperties}
+                />
+                {segment.name} {formatPercent(segment.lines / total)}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">No lines indexed at HEAD.</p>
+      )}
+    </OverviewCard>
   )
 }

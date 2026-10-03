@@ -80,8 +80,17 @@ export function ProjectOverview({
       <div className={page === 'code' ? 'grid gap-4' : 'grid gap-4 lg:grid-cols-2'}>
         {page === 'code' ? (
           <>
-            <LanguageShares project={project} overview={overview} excluded={excluded?.files} />
-            <TopLevelCard project={project} overview={overview} excluded={excluded?.files} />
+            <LanguageShares
+              project={project}
+              languages={overview.languages}
+              excluded={excluded?.files}
+            />
+            <TopLevelCard
+              project={project}
+              tree={overview.tree}
+              otherFolders={overview.otherFolders}
+              excluded={excluded?.files}
+            />
           </>
         ) : null}
         {page === 'activity' ? (
@@ -123,7 +132,11 @@ export function ProjectOverview({
                 />
               </>
             ) : null}
-            <LargestFilesCard project={project} overview={overview} excluded={excluded?.files} />
+            <LargestFilesCard
+              project={project}
+              files={overview.largestFiles}
+              excluded={excluded?.files}
+            />
           </>
         ) : null}
       </div>
