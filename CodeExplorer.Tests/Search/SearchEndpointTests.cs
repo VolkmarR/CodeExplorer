@@ -1,5 +1,6 @@
 using System.Net;
 using CodeExplorer.Index;
+using CodeExplorer.Language;
 using CodeExplorer.Search;
 using Xunit;
 
@@ -498,7 +499,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     [Fact]
     public async Task The_file_page_reads_both_directions_of_the_import_graph()
     {
-        var imports = await _host.GetJsonAsync<FileImportsResponse>(Imports("one/src/Orders.cs"));
+        var imports = await _host.GetJsonAsync<ImportsResult>(Imports("one/src/Orders.cs"));
 
         Assert.True(imports.Profiled);
         Assert.True(imports.HasImports);
@@ -511,7 +512,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
         Assert.All(imports.Imports, i => Assert.Null(i.TargetPath));
         Assert.All(imports.Imports, i => Assert.NotNull(i.Unresolved));
 
-        var resolved = await _host.GetJsonAsync<FileImportsResponse>(Imports("one/src/Report.cs"));
+        var resolved = await _host.GetJsonAsync<ImportsResult>(Imports("one/src/Report.cs"));
         var edge = Assert.Single(resolved.Imports);
         // The link the panel draws: a qualified path the file route accepts, not the name as written.
         Assert.Equal("one/src/Orders.cs", edge.TargetPath);
@@ -529,19 +530,19 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     public async Task An_empty_answer_says_which_kind_of_empty_it_is()
     {
         // A language with imports, and a file that writes none.
-        var none = await _host.GetJsonAsync<FileImportsResponse>(Imports("one/src/Storage.cs"));
+        var none = await _host.GetJsonAsync<ImportsResult>(Imports("one/src/Storage.cs"));
         Assert.True(none.Profiled);
         Assert.True(none.HasImports);
         Assert.Empty(none.Imports);
 
         // A language with no import concept at all.
-        var sql = await _host.GetJsonAsync<FileImportsResponse>(Imports("one/db/install.sql"));
+        var sql = await _host.GetJsonAsync<ImportsResult>(Imports("one/db/install.sql"));
         Assert.True(sql.Profiled);
         Assert.False(sql.HasImports);
         Assert.Equal("SQL", sql.LanguageName);
 
         // An extension no profile covers: its import lines were never read.
-        var uncovered = await _host.GetJsonAsync<FileImportsResponse>(Imports("one/build/notes.rst"));
+        var uncovered = await _host.GetJsonAsync<ImportsResult>(Imports("one/build/notes.rst"));
         Assert.False(uncovered.Profiled);
         Assert.Empty(uncovered.Imports);
     }
@@ -554,12 +555,12 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     [Fact]
     public async Task A_list_that_fills_the_ceiling_is_told_apart_from_one_the_ceiling_cut_short()
     {
-        var exactly = await _host.GetJsonAsync<FileImportsResponse>(
+        var exactly = await _host.GetJsonAsync<ImportsResult>(
             Route(SearchEndpointFixture.ImportCeiling, "imports", "one/src/Exactly.cs"));
         Assert.Equal(ImportGraph.MaxEdges, exactly.Imports.Count);
         Assert.False(exactly.Capped);
 
-        var more = await _host.GetJsonAsync<FileImportsResponse>(
+        var more = await _host.GetJsonAsync<ImportsResult>(
             Route(SearchEndpointFixture.ImportCeiling, "imports", "one/src/OneMore.cs"));
         // Still only the ceiling is reported, and now the reply says the list is short of the answer.
         Assert.Equal(ImportGraph.MaxEdges, more.Imports.Count);
@@ -574,11 +575,11 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     [Fact]
     public async Task The_file_page_reads_what_a_file_declares()
     {
-        var declared = await _host.GetJsonAsync<FileDeclarationsResponse>(Declarations("one/src/Orders.cs"));
+        var declared = await _host.GetJsonAsync<DeclarationsResult>(Declarations("one/src/Orders.cs"));
 
         Assert.Equal("one/src/Orders.cs", declared.QualifiedPath);
         Assert.Equal("C#", declared.LanguageName);
-        Assert.Equal("read", declared.Coverage);
+        Assert.Equal(DeclarationCoverage.Read, declared.Coverage);
         Assert.False(declared.Capped);
 
         // The type and its members, in the order the file writes them. The field on line 5 is among
@@ -590,7 +591,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
         Assert.Equal([(3, "OrderService"), (5, "Count"), (7, "Place"), (8, "Cancel")],
             declared.Declarations.Select(d => (d.LineNumber, d.Type ?? d.Member)));
         // Read from line shape and not from a compiler, which is what the panel says beside the list.
-        Assert.All(declared.Declarations, d => Assert.Equal("text", d.Evidence));
+        Assert.All(declared.Declarations, d => Assert.Equal(Evidence.Text, d.Evidence));
         // C# announces a routine where it writes it, so there is no side of a split to report.
         Assert.All(declared.Declarations, d => Assert.Null(d.Role));
     }
@@ -604,21 +605,21 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     public async Task An_empty_declaration_list_says_which_kind_of_empty_it_is()
     {
         // A language whose declarations are read, and a file that writes none.
-        var none = await _host.GetJsonAsync<FileDeclarationsResponse>(Declarations("one/src/Empty.cs"));
-        Assert.Equal("read", none.Coverage);
+        var none = await _host.GetJsonAsync<DeclarationsResult>(Declarations("one/src/Empty.cs"));
+        Assert.Equal(DeclarationCoverage.Read, none.Coverage);
         Assert.Empty(none.Declarations);
 
         // A language a profile covers and whose declarations this cannot read: it was never scanned,
         // which is not the same as having been scanned and found to declare nothing.
-        var css = await _host.GetJsonAsync<FileDeclarationsResponse>(Declarations("one/web/site.css"));
+        var css = await _host.GetJsonAsync<DeclarationsResult>(Declarations("one/web/site.css"));
         Assert.Equal("CSS", css.LanguageName);
-        Assert.Equal("unreadable", css.Coverage);
+        Assert.Equal(DeclarationCoverage.Unreadable, css.Coverage);
         Assert.Empty(css.Declarations);
 
         // An extension no profile covers: it was read with the conservative default shapes, so the
         // list is thin for a reason the panel has to be able to name.
-        var uncovered = await _host.GetJsonAsync<FileDeclarationsResponse>(Declarations("one/build/notes.rst"));
-        Assert.Equal("unprofiled", uncovered.Coverage);
+        var uncovered = await _host.GetJsonAsync<DeclarationsResult>(Declarations("one/build/notes.rst"));
+        Assert.Equal(DeclarationCoverage.Unprofiled, uncovered.Coverage);
         Assert.Equal(".rst", uncovered.LanguageName);
         Assert.Empty(uncovered.Declarations);
     }
@@ -632,12 +633,12 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     [Fact]
     public async Task A_declaration_list_that_fills_the_ceiling_is_told_apart_from_one_it_cut_short()
     {
-        var exactly = await _host.GetJsonAsync<FileDeclarationsResponse>(
+        var exactly = await _host.GetJsonAsync<DeclarationsResult>(
             Route(SearchEndpointFixture.DeclarationCeiling, "declarations", "one/src/Exactly.cs"));
         Assert.Equal(FileDeclarations.MaxDeclarations, exactly.Declarations.Count);
         Assert.False(exactly.Capped);
 
-        var more = await _host.GetJsonAsync<FileDeclarationsResponse>(
+        var more = await _host.GetJsonAsync<DeclarationsResult>(
             Route(SearchEndpointFixture.DeclarationCeiling, "declarations", "one/src/OneMore.cs"));
         // Still only the ceiling is reported, and now the reply says the list is short of the answer.
         Assert.Equal(FileDeclarations.MaxDeclarations, more.Declarations.Count);

@@ -11,11 +11,11 @@ export function declarationsNote(file: FileDeclarations): string | null {
   // the checks was itself load-bearing before, and getting it wrong printed a true sentence about
   // the wrong fact.
   switch (file.coverage) {
-    case 'unprofiled':
+    case 'Unprofiled':
       return `No language profile covers this extension, so this file was read with the conservative default shapes. A declaration form this does not know is one it did not find, not one that is not there.`
-    case 'unreadable':
+    case 'Unreadable':
       return `${file.languageName} declarations are not something this can read from a line, so nothing was scanned here. That is a different thing from the file declaring nothing.`
-    case 'read':
+    case 'Read':
       break
   }
 
@@ -39,6 +39,15 @@ export function declarationsNote(file: FileDeclarations): string | null {
 export const DECLARATION_EVIDENCE =
   'Read from the shape of each line, not from a compiler. A form no profile knows is one this did ' +
   'not find rather than one that is not there. Strong evidence, not proof.'
+
+/**
+ * The side of a declaration/implementation split as the list prints it. The server sends the
+ * enum's member name, which is a value to compare against and not the word a reader is shown.
+ */
+export const ROLE_LABEL: Record<NonNullable<Declaration['role']>, string> = {
+  Declaration: 'declaration',
+  Implementation: 'implementation',
+}
 
 /**
  * What to call a declaration in the list. The member where there is one, because that is the name a

@@ -3,8 +3,10 @@ import { importsNote } from '@/features/files/imports'
 import type { FileImports, ImportEdge } from '@/features/files/api'
 
 const edge = (name: string, targetPath: string | null): ImportEdge => ({
+  evidence: 'Text',
   lineNumber: 1,
   name,
+  shape: 'Module',
   targetPath,
   unresolved: targetPath === null ? 'nothing in this project declares this name' : null,
 })
