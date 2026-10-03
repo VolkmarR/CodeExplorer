@@ -115,13 +115,13 @@ public sealed partial class ProjectIndexes
             // attach of the live catalog — one that would quietly re-bind a connection ADR-0003 says the
             // swap must strand — and a store that is unreachable leaves the old index serving.
             await _durable.StoreAsync(shadow.Connection, slug, cancellationToken);
-            await PutInPlaceAsync(shadow.Connection, () =>
-                {
-                    shadow.Dispose();
-                    report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.SwapPhase));
-                }, slug, ShadowCatalog(slug), ShadowPath(slug),
+            // Closing the shadow's connection is all disposing the shadow does; the refresh's own using
+            // disposes it again on every path.
+            await PutInPlaceAsync(shadow.Connection, slug, ShadowCatalog(slug), ShadowPath(slug),
                 NotPutInPlace(slug, "new index", "The index that was serving still is; refresh the project to try again."),
-                "the new index was swapped in anyway", cancellationToken);
+                "the new index was swapped in anyway",
+                () => report(new RefreshProgress(RefreshProgress.SwapStep, RefreshProgress.SwapPhase)),
+                cancellationToken);
             // The shadow built its own full-text index, so a restore it replaced has nothing to settle.
             _withoutFullText.TryRemove(slug, out _);
             return true;
@@ -139,28 +139,30 @@ public sealed partial class ProjectIndexes
 
     /// <summary>
     ///     Makes a finished file the project's live one, the same way for a swap and for both restores:
-    ///     <see cref="CheckpointAsync" /> on the connection that filled it, then <paramref name="release" />,
+    ///     <see cref="CheckpointAsync" /> on the connection that filled it, then that connection closed,
     ///     then <see cref="MoveIntoPlace" /> under <see cref="ReplaceFileAsync" />. One method, because
     ///     the order is the durability: the checkpoint before the drain so the flush holds no reader out,
     ///     and inside the move the new catalog's detach, the refusal of a log left beside it, the live
     ///     catalog's detach and the one overwriting move. Run by a caller holding the writer gate.
     /// </summary>
-    /// <param name="filled">The connection that filled the file, still attached to it.</param>
-    /// <param name="release">
-    ///     Run between the checkpoint and the move, and not when the checkpoint refuses: what closes
-    ///     <paramref name="filled" />, and anything the caller reports as the move starts.
+    /// <param name="filled">
+    ///     The connection that filled the file, still attached to it. Closed here once the checkpoint has
+    ///     passed, because the move cannot take a file it still holds; left open when the checkpoint
+    ///     refuses, for the caller's own cleanup.
     /// </param>
     /// <param name="slug">The project whose live file is replaced.</param>
     /// <param name="catalog">The catalog the finished file is attached under.</param>
     /// <param name="path">The finished file.</param>
     /// <param name="refusal">Thrown when the file is not written out; see <see cref="NotPutInPlace" />.</param>
     /// <param name="timedOut">Logged when the drain gives up; see <see cref="ReplaceFileAsync" />.</param>
+    /// <param name="moving">Told after the close and before the drain, which is where a swap's phase begins.</param>
     /// <param name="cancellationToken">Threaded through the checkpoint, the drain and the move.</param>
-    private async Task PutInPlaceAsync(DuckDBConnection filled, Action release, string slug, string catalog,
-        string path, string refusal, string timedOut, CancellationToken cancellationToken)
+    private async Task PutInPlaceAsync(DuckDBConnection filled, string slug, string catalog, string path,
+        string refusal, string timedOut, Action? moving, CancellationToken cancellationToken)
     {
         await CheckpointAsync(filled, slug, catalog, refusal, cancellationToken);
-        release();
+        filled.Dispose();
+        moving?.Invoke();
         await ReplaceFileAsync(slug, timedOut, MoveIntoPlace(slug, catalog, path, refusal, cancellationToken),
             cancellationToken);
     }

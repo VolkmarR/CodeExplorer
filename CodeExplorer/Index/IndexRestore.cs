@@ -179,13 +179,13 @@ public sealed partial class ProjectIndexes
         string path = RestorePath(slug);
         string catalog = RestoreCatalog(slug);
         string refusal = NotPutInPlace(slug, "restored index", remedy);
-        // Closed by the put-in-place between its checkpoint and the move, because the move cannot take
-        // a file this connection still holds; the using is for a fill or a checkpoint that throws.
+        // The put-in-place closes it before the move; the using is for an attach, a fill or a checkpoint
+        // that throws first.
         await using var connection = await ConnectAsync(cancellationToken);
         await AttachEmptyAsync(connection, catalog, path, cancellationToken);
         await fill(connection);
-        await PutInPlaceAsync(connection, connection.Dispose, slug, catalog, path, refusal,
-            "the restored index was put in place anyway", cancellationToken);
+        await PutInPlaceAsync(connection, slug, catalog, path, refusal, "the restored index was put in place anyway",
+            null, cancellationToken);
     }
 
     private string RestorePath(string slug) => Path.Combine(_directory, slug + ".restore.duckdb");

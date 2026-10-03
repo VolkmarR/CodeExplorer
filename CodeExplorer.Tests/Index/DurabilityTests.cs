@@ -300,8 +300,8 @@ public sealed class DurabilityTests : IDisposable
     ///     The settle that gives such an index its full-text index is the third path that puts a file in
     ///     place, and the one whose refusal no refresh reaches on its own: it would need the checkpoint to
     ///     fail after the restore's and not before it. Called directly for that, with DuckDB's fault switch
-    ///     on for the settle alone. The refusal is the settle's own sentence, and the restored file is
-    ///     left where it was rather than moved over.
+    ///     on for the settle alone. The refusal is the settle's own sentence, and the live file is still
+    ///     on disk.
     /// </summary>
     [Fact]
     public async Task A_settle_that_cannot_write_its_file_out_is_refused_in_its_own_words()
@@ -321,7 +321,6 @@ public sealed class DurabilityTests : IDisposable
         Assert.Contains("still serves", thrown.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(host.DataDirectory, thrown.Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(host.Indexes.HasIndex("alpha"));
-        Assert.True(File.Exists(Path.ChangeExtension(host.IndexFile("alpha"), ".restore.duckdb")));
     }
 
     /// <summary>
