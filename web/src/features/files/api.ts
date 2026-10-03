@@ -158,22 +158,17 @@ export function fetchTree(project: string, path: string) {
   return http.get(`projects/${project}/tree`, { searchParams: { path } }).json<TreeLevel>()
 }
 
-export function fetchFile(project: string, path: string) {
-  return http.get(`projects/${project}/file`, { searchParams: { path } }).json<FileContent>()
+/**
+ * A read of one file, by qualified path: the content and the three answers the rail and the gutter
+ * draw beside it. They differ in the endpoint and the shape and in nothing else, so they are made
+ * here rather than written four times.
+ */
+function fileRead<T>(endpoint: string) {
+  return (project: string, path: string) =>
+    http.get(`projects/${project}/${endpoint}`, { searchParams: { path } }).json<T>()
 }
 
-export function fetchBlame(project: string, path: string) {
-  return http.get(`projects/${project}/file/blame`, { searchParams: { path } }).json<Blame>()
-}
-
-export function fetchImports(project: string, path: string) {
-  return http
-    .get(`projects/${project}/file/imports`, { searchParams: { path } })
-    .json<FileImports>()
-}
-
-export function fetchDeclarations(project: string, path: string) {
-  return http
-    .get(`projects/${project}/file/declarations`, { searchParams: { path } })
-    .json<FileDeclarations>()
-}
+export const fetchFile = fileRead<FileContent>('file')
+export const fetchBlame = fileRead<Blame>('file/blame')
+export const fetchImports = fileRead<FileImports>('file/imports')
+export const fetchDeclarations = fileRead<FileDeclarations>('file/declarations')

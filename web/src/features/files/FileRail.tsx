@@ -91,10 +91,7 @@ function RecentCommits({
   origin?: Origin
 }) {
   const hasHistory = file.lastCommit !== null
-  const blame = useQuery({
-    ...blameQuery(project, file.qualifiedPath),
-    enabled: hasHistory && file.skipReason === null,
-  })
+  const blame = useQuery(blameQuery(project, file))
 
   if (!hasHistory) {
     return (
