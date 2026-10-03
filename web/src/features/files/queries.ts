@@ -74,9 +74,12 @@ export function treeQuery(project: string, path: string) {
  * fixed under a given index like everything else read from it.
  */
 export function browseQuery(project: string, parameters: BrowseParameters) {
+  // Keyed by what the request sends, not by the whole URL: the tree's `path` stays out of a glob's
+  // request, so two paths over one glob are one answer and one cache entry.
+  const { glob, page, repository } = parameters
   return queryOptions({
     queryFn: () => fetchBrowse(project, parameters),
-    queryKey: [...projectKey(project), 'browse', parameters],
+    queryKey: [...projectKey(project), 'browse', { glob, page, repository }],
     staleTime: Infinity,
   })
 }
