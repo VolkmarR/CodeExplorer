@@ -42,9 +42,7 @@ export function FileChangesCard({
   churn: OverviewChurn
   changes: OverviewFileChanges
 }) {
-  // The server sends no periods exactly where there is no window, so the second test never decides
-  // alone; it is kept so the chart is never drawn over nothing.
-  if (!historyWindow(churn) || changes.periods.length === 0) {
+  if (!historyWindow(churn)) {
     return (
       <Card>
         <CardHeader>{title}</CardHeader>
