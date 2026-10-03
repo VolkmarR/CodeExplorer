@@ -1,11 +1,10 @@
 import { Link } from '@tanstack/react-router'
 import { ChurnList } from '@/features/churn/ChurnList'
-import type { IndexOverview } from '@/features/projects/api'
-import { ExcludedNote } from '@/features/projects/ExcludedNote'
+import type { OverviewChurn } from '@/features/projects/api'
+import { OverviewCard } from '@/features/projects/OverviewCard'
 import { formatDate } from '@/lib/format'
 import { CHURN_DEFAULTS, churnSearch } from '@/lib/urls/churnParams'
-import { historyWindow, NO_HISTORY } from '@/features/projects/noHistory'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { historyWindow } from '@/features/projects/noHistory'
 
 /**
  * The same ranking the churn page shows, over the filter bar's window and without the project's
@@ -15,58 +14,55 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 export function MostChangedCard({
   project,
   repository,
-  overview,
+  churn,
   excluded,
 }: {
   project: string
   /** The repository the page is narrowed to, carried into the link to the whole ranking. */
   repository: string | undefined
-  overview: IndexOverview
+  churn: OverviewChurn
   /** Files the window's commits touched that the excluded paths left out, if any were. */
   excluded: number | undefined
 }) {
-  const { churn } = overview
+  // Read here as well as by the frame, which says there is no history where this is null, for the
+  // dates the note names.
   const window = historyWindow(churn)
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Most changed</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {!window ? (
-          <p className="text-sm text-muted-foreground">{NO_HISTORY}</p>
-        ) : (
+    <OverviewCard
+      title="Most changed"
+      history={churn}
+      note={
+        window ? (
           <>
-            <p className="pb-3 text-xs text-muted-foreground">
-              {formatDate(window.since)} to {formatDate(window.until)}, the {churn.days} days to the
-              newest recorded commit.{' '}
-              {/* The churn page knows nothing of the excluded paths, which are this page's setting,
-                  so its ranking is the whole of the window. */}
-              <Link
-                to="/projects/$project/churn"
-                params={{ project }}
-                search={churnSearch(CHURN_DEFAULTS, { days: churn.days, repository })}
-                className="hover:text-primary hover:underline"
-              >
-                See the whole ranking
-              </Link>
-            </p>
-            {churn.files.length === 0 ? (
-              // Never "nothing changed" where the excluded paths took the rows: the window has
-              // commits by construction, and a filtered list must not read as a quiet one.
-              <p className="text-sm text-muted-foreground">
-                {excluded
-                  ? 'Every file that changed in this window is left out by the excluded paths.'
-                  : 'No file changed in this window.'}
-              </p>
-            ) : (
-              // The churn page's own list, so the same ranking reads the same in both places.
-              <ChurnList project={project} files={churn.files} />
-            )}
-            <ExcludedNote project={project} files={excluded} what="this window" />
+            {formatDate(window.since)} to {formatDate(window.until)}, the {churn.days} days to the
+            newest recorded commit.{' '}
+            {/* The churn page knows nothing of the excluded paths, which are this page's setting,
+                so its ranking is the whole of the window. */}
+            <Link
+              to="/projects/$project/churn"
+              params={{ project }}
+              search={churnSearch(CHURN_DEFAULTS, { days: churn.days, repository })}
+              className="hover:text-primary hover:underline"
+            >
+              See the whole ranking
+            </Link>
           </>
-        )}
-      </CardContent>
-    </Card>
+        ) : null
+      }
+      excluded={{ files: excluded, project, what: 'this window' }}
+    >
+      {churn.files.length === 0 ? (
+        // Never "nothing changed" where the excluded paths took the rows: the window has commits by
+        // construction, and a filtered list must not read as a quiet one.
+        <p className="text-sm text-muted-foreground">
+          {excluded
+            ? 'Every file that changed in this window is left out by the excluded paths.'
+            : 'No file changed in this window.'}
+        </p>
+      ) : (
+        // The churn page's own list, so the same ranking reads the same in both places.
+        <ChurnList project={project} files={churn.files} />
+      )}
+    </OverviewCard>
   )
 }
