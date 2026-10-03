@@ -101,21 +101,23 @@ public sealed class MatchList(IndexReaders readers)
         // parenthesis that was never wrong. A pattern that does not compile has no groups to count, so
         // it is compiled alone before the count refuses, and before a whole-word wrapping balances it.
         int groups = Re2.CaptureGroups(query);
+        Problem? missingGroup = request.Group > groups
+            ? new Problem(
+                $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
+                + "Put parentheses around the part that varies, or use group=0 for the whole match.")
+            : null;
         return await request.Filter.OverIndexAsync(readers, slug,
             (index, filter, token) => PatternQuery.GuardedAsync(index.Connection, query,
-                request.WholeWord || request.Group > groups,
-                () => QueryAsync(index, request, filter, query, groups, token), token),
+                request.WholeWord || missingGroup is not null,
+                () => missingGroup is not null
+                    ? Task.FromResult<Outcome>(missingGroup)
+                    : QueryAsync(index, request, filter, query, token), token),
             cancellationToken);
     }
 
     private static async Task<Outcome> QueryAsync(IndexReader index, MatchListRequest request, FileFilter filter,
-        string query, int groups, CancellationToken cancellationToken)
+        string query, CancellationToken cancellationToken)
     {
-        if (request.Group > groups)
-            return new Problem(
-                $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
-                + "Put parentheses around the part that varies, or use group=0 for the whole match.");
-
         var connection = index.Connection;
         int limit = Math.Clamp(request.Limit, 1, MaxLimit);
 
@@ -123,11 +125,9 @@ public sealed class MatchList(IndexReaders readers)
         // whose group 2 is the caller's whole match and so whose group n + 2 is the caller's group n. The
         // rest of a line after its last whole word comes back as an empty value, so empty values are
         // dropped before unnest rather than after, where each would have been a row.
+        var lineParameters = PatternQuery.LineParameters(query, request.WholeWord, request.CaseSensitive);
         List<DuckDBParameter> matchParameters =
-        [
-            .. PatternQuery.LineParameters(query, request.WholeWord, request.CaseSensitive),
-            new("extract", request.WholeWord ? SymbolText.WholeWordMatches(query) : query)
-        ];
+            [.. lineParameters, new("extract", request.WholeWord ? SymbolText.WholeWordMatches(query) : query)];
         int group = request.WholeWord ? request.Group + 2 : request.Group;
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
@@ -182,7 +182,7 @@ public sealed class MatchList(IndexReaders readers)
             // Same pattern, no file filters: a second pass only on the empty answer, so the common
             // case pays nothing.
             withoutFilters = await PatternQuery.FilesMatchingAsync(connection, PatternQuery.LineMatch,
-                matchParameters, cancellationToken);
+                lineParameters, cancellationToken);
 
         return new MatchListResult(totalDistinct, totalMatches, totalFiles, matches, withoutFilters);
     }
