@@ -46,9 +46,11 @@ export function FolderCouplingCard({
       note={
         heatmapRepository ? (
           <>
-            Folders the same commits touched, darker for more shared commits. A folder holding
-            nearly the whole repository is shown by its subfolders. One commit counts once however
-            many files it touched in a folder.
+            {/* "Stronger" and not "darker": the shades mix the primary into the ground, so on the
+                dark theme a busier cell is lighter. */}
+            Folders the same commits touched, stronger colour for more shared commits. A folder
+            holding nearly the whole repository is shown by its subfolders. One commit counts once
+            however many files it touched in a folder.
           </>
         ) : null
       }
