@@ -586,6 +586,40 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
     }
 
     /// <summary>
+    ///     The header both replies share counts its files and lines the way the rows under it do: it
+    ///     said "1 files, 1 lines" for a project of one file while the repository row said "1 file".
+    /// </summary>
+    [Fact]
+    public async Task The_project_header_says_one_file_and_one_line_in_the_singular()
+    {
+        using var host = new TestHost(SearchEngine.Substring);
+        await host.IndexedProjectAsync("single", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["main"] = new() { ["only.txt"] = "x\n" }
+        }, true);
+        await using var client = await host.ConnectAsync("single");
+
+        string info = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
+        string overview = await CallAsync(client, "project_overview", new Dictionary<string, object?>());
+
+        Assert.Contains("1 repository indexed, 1 file, 1 line.", info);
+        Assert.Contains("1 repository, 1 file, 1 line.", overview);
+    }
+
+    /// <summary>A file count past a thousand carries its separator in the header, as the line count does.</summary>
+    [Fact]
+    public async Task The_project_header_writes_a_file_count_past_a_thousand_with_a_separator()
+    {
+        await using var client = await _host.ConnectAsync(FileToolsFixture.Wide);
+
+        string info = await CallAsync(client, "repo_info", new Dictionary<string, object?>());
+        string overview = await CallAsync(client, "project_overview", new Dictionary<string, object?>());
+
+        Assert.Contains("1 repository indexed, 2,100 files, ", info);
+        Assert.Contains("1 repository, 2,100 files, ", overview);
+    }
+
+    /// <summary>
     ///     How much history a repository holds and what it spans, which is the pair of facts an agent
     ///     otherwise establishes by bisecting the log: one measured evaluation spent 15 of its 28 calls
     ///     on `git_log(limit=1, page=N)` doing exactly that (#108).
