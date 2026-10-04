@@ -307,11 +307,12 @@ public sealed class RefreshService(
         {
             await indexes.SettleRestoreAsync(slug, cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             // Safe to swallow: the host is stopping, which is the one way this token is cancelled, and
-            // a settle is deliberately not run then. Logged as a failure, it read as a settle that had
-            // been tried and refused.
+            // a settle is deliberately not run then. Any exception, not only a cancellation: one that
+            // stopping cut short part-way fails as DuckDB's interrupt or as a disposed instance. Logged
+            // as a failure, it read as a settle that had been tried and refused.
         }
         catch (Exception ex)
         {
