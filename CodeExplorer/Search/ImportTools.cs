@@ -56,7 +56,7 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
 
                  - Use it to see a file's dependencies without reading it. There is no reverse tool: for what depends on THIS file, run list_declarations on it and find_references on a name it declares, which answers whether or not the language writes import lines at all.
                  - A name that resolves is shown with the file it names. One that does not is shown as written, with the reason: nothing in this project declares it (a framework or a package), several files declare it, or the path names nothing here. An unresolved name is still a dependency; it is just one outside what this index can see.
-                 - IMPORTANT: this reads import lines as text, in the forms the file's language profile knows. A language with no import concept — SQL, PL/SQL — says so, and an extension no profile covers says that instead, so an empty list never has to be read as "this file depends on nothing".
+                 - IMPORTANT: this reads import lines as text, in the forms the file's language profile knows. A language with no import concept — SQL, PL/SQL — says so, an extension no profile covers says that instead, and a file the index skipped (binary or over-size) says it is not indexed, so an empty list never has to be read as "this file depends on nothing".
                  - A C# namespace or a Delphi unit resolves against what another file declares itself to be, so a namespace spread over several files resolves to none of them and says so. A relative path resolves against the importing file's own directory.
                  - IMPORTANT: an answer where every name is a framework or a package is NOT evidence that the file has no project-local dependencies. Where a language or dialect expresses those by global visibility, inheritance, reflection, dynamic construction or a project-level reference, there is no import line to find, and this tool is the wrong question. The one that works is list_declarations on the file, then find_references on a name it declares.
                  """)]
@@ -71,6 +71,12 @@ internal sealed class ImportTools(IHttpContextAccessor httpContextAccessor, Impo
 
     private static string Format(ImportsResult result)
     {
+        // Before the profile: a skipped file has no lines, so blaming the extension for an empty
+        // answer would name the wrong reason, and a covered one would read as importing nothing.
+        if (result.SkipReason is { } reason)
+            return string.Create(CultureInfo.InvariantCulture,
+                $"{result.QualifiedPath} is not indexed ({reason}). Nothing was read from it, so what it imports is not known here, which is a different thing from it importing nothing. Its content is not in the index, so it cannot be read here.\n");
+
         if (!result.Profiled)
             return string.Create(CultureInfo.InvariantCulture,
                 $"{result.QualifiedPath} is a {result.LanguageName} file, and no language profile covers that extension. Its import lines were never read, which is a different thing from it importing nothing — read the top of the file, or grep it.\n");

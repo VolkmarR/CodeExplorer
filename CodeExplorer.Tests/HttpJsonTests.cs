@@ -128,6 +128,9 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture)
 
         Assert.Equal("Skipped", (string?)declarations["coverage"]);
         Assert.Equal("binary", (string?)declarations["skipReason"]);
+
+        var imports = await _host.GetJsonNodeAsync(Route("imports", "one/assets/logo.bin"));
+        Assert.Equal("binary", (string?)imports["skipReason"]);
     }
 
     private static string Route(string direction, string path) =>

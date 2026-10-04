@@ -26,6 +26,9 @@ public sealed record ImportedFrom(
 ///     something other than "this file imports nothing": an extension no profile covers was never
 ///     read for imports, and a language with no import concept has none to read. Three answers, kept
 ///     apart, because they send an agent to three different places.
+///     <see cref="SkipReason" /> is a fourth, asked before the other two: set, the build skipped the
+///     file (binary, over-size) and nothing was read from it, whatever its extension says about the
+///     profile (#370). The two flags still describe the extension and say nothing about the file then.
 ///     <see cref="Capped" /> says the list stopped at <see cref="ImportGraph.MaxEdges" /> rather than
 ///     at the end of the file. It is decided where the query runs, because the ceiling is that
 ///     query's, and every reader of the answer would otherwise re-derive the same comparison.
@@ -35,6 +38,7 @@ public sealed record ImportsResult(
     string LanguageName,
     bool Profiled,
     bool HasImports,
+    string? SkipReason,
     string? Module,
     bool Capped,
     IReadOnlyList<ImportedFrom> Imports) : Outcome;
@@ -94,7 +98,7 @@ public sealed class ImportGraph(IndexReaders readers)
                 ImportColumns.Strength(reader.Text("evidence"))), token);
 
             bool capped = RowCap.Trim(edges, MaxEdges);
-            return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, file.Module,
-                capped, edges);
+            return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, file.SkipReason,
+                file.Module, capped, edges);
         }, cancellationToken);
 }

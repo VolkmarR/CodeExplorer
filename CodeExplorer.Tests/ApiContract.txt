@@ -150,6 +150,7 @@
 /api/projects/{project}/file/imports module
 /api/projects/{project}/file/imports profiled
 /api/projects/{project}/file/imports qualifiedPath
+/api/projects/{project}/file/imports skipReason
 /api/projects/{project}/files
 /api/projects/{project}/files files[]
 /api/projects/{project}/files files[].lineCount

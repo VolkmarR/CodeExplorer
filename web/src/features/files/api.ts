@@ -95,13 +95,16 @@ export interface ImportEdge {
 /**
  * What a file imports. `profiled` and `hasImports` are why an empty list is not the sentence "this
  * file imports nothing": an extension no profile covers was never read for imports, and a language
- * with no import concept has none to read. `capped` says the list stopped at the server's ceiling.
+ * with no import concept has none to read. `skipReason`, set, is asked before both: the build skipped
+ * the file (binary, over-size) and nothing was read from it, whatever the two flags say about its
+ * extension. `capped` says the list stopped at the server's ceiling.
  */
 export interface FileImports {
   qualifiedPath: string
   languageName: string
   profiled: boolean
   hasImports: boolean
+  skipReason: string | null
   module: string | null
   capped: boolean
   imports: ImportEdge[]
