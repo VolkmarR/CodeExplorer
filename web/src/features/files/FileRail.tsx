@@ -72,8 +72,8 @@ export function FileRail({
           edge has to fit too. `pr` is wider still, because it also keeps a panel's text out from
           under the scrollbar. */}
       <aside className="space-y-4 p-1 xl:pr-2.5">
-        {/* A skipped file was never read, so neither panel asks: the server would answer as for an
-            extension it has no profile for, and say the file "was read" with the default shapes. */}
+        {/* A skipped file was never read, so neither panel asks: the file view already knows it is
+            skipped, and the server's answer would only say "not indexed" again (#370). */}
         {isSkipped(file) ? (
           ['Declarations', 'Imports'].map((title) => (
             <RailPanel key={title} title={title} note={NOTHING_READ} />

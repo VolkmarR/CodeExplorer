@@ -12,8 +12,8 @@ export const IMPORT_EVIDENCE =
 /**
  * What the imports panel has to say beside its list, or null when the list speaks for itself. The
  * four empty answers are four different facts — the file is not indexed, the extension was never
- * read, the language has no imports, the file writes none — and a panel that drew them alike would tell a reader a file
- * depends on nothing when what happened is that nothing looked.
+ * read, the language has no imports, the file writes none — and a panel that drew them alike would
+ * tell a reader a file depends on nothing when what happened is that nothing looked.
  */
 export function importsNote(file: FileImports): string | null {
   // Before the profile: a skipped file has no lines, and its extension is not why nothing came back.
