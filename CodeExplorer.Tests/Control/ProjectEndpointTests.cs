@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using CodeExplorer.Control;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
+using CodeExplorer.Operator;
 using ModelContextProtocol.Client;
 using Xunit;
 
@@ -173,8 +174,8 @@ public sealed class ProjectEndpointTests : IDisposable
         // The slug sent with the first repository is ignored: a single-repository project heads no path
         // with one, so the system assigns it and the operator is never asked (ADR-0006).
         await _host.AddRepositoryAsync("solo", "ignored", "https://example.com/one.git");
-        var repositories = await _host.GetJsonAsync<RepositoryResponse[]>("/api/projects/solo/repositories");
-        Assert.Equal("solo", Assert.Single(repositories).Slug);
+        var detail = await _host.GetJsonAsync<ProjectDetail>("/api/projects/solo");
+        Assert.Equal("solo", Assert.Single(detail.Repositories).Slug);
 
         using var second = await http.PostAsJsonAsync("/api/projects/solo/repositories",
             new { slug = "two", url = "https://example.com/two.git", credential = (string?)null }, Ct);

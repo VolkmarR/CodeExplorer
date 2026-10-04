@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
+using CodeExplorer.Operator;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -52,7 +53,7 @@ public sealed class LocalRepositoryTests : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains(Setting, await response.Content.ReadAsStringAsync(Ct));
-        Assert.Empty(await _host.GetJsonAsync<object[]>("/api/projects/alpha/repositories"));
+        Assert.Empty((await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha")).Repositories);
     }
 
     [Theory]
