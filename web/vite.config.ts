@@ -175,10 +175,11 @@ export default defineConfig({
     // `vp check` reported it unformatted and `vp check --fix` then rewrote it to the same bytes,
     // which is a gate no commit could ever pass.
     ignorePatterns: ['src/routeTree.gen.ts'],
-    // The ending this checkout gave its files, read off this file: `* text=auto` stores LF and
-    // checks out CRLF on Windows and LF elsewhere. oxfmt has no `auto`, defaults to LF and would
-    // otherwise take `.editorconfig`'s, so a fixed value fails every file on the other platform.
-    endOfLine: readFileSync(import.meta.filename, 'utf8').includes('\r\n') ? 'crlf' : 'lf',
+    // The ending this checkout gave its files, read off this file's first line: `* text=auto` stores
+    // LF and checks out CRLF on Windows and LF elsewhere. oxfmt has no `auto` and defaults to LF, so
+    // a fixed value fails every file on the other platform.
+    endOfLine:
+      /\r?\n/.exec(readFileSync(import.meta.filename, 'utf8'))?.[0] === '\r\n' ? 'crlf' : 'lf',
     semi: false,
     singleQuote: true,
   },
