@@ -108,11 +108,6 @@ export function childViews(parent: View) {
   return PROJECT_VIEWS.filter((item) => 'parent' in item && item.parent === parent)
 }
 
-/** What each view is called, for whatever has to name one without listing them all. */
-export const VIEW_NAMES: Record<View, string> = Object.fromEntries(
-  PROJECT_VIEWS.map((item) => [item.view, item.label]),
-) as Record<View, string>
-
 /** The project-relative segment each view sits at, from the table above. Empty for the overview. */
 const VIEW_SEGMENTS = new Map<string, View>(
   PROJECT_VIEWS.map((item) => [item.link.to.replace(/^\/projects\/\$project\/?/, ''), item.view]),
@@ -143,7 +138,7 @@ const LINKED_PAGES = [
 const VIEW_ALIASES = new Map<string, View>(LINKED_PAGES.map((page) => [page.segment, page.under]))
 
 /**
- * One step of the breadcrumb below the project. A view is named from `VIEW_NAMES` and links to
+ * One step of the breadcrumb below the project. A view is named by its `PROJECT_VIEWS` label and links to
  * itself; a commit and a file are named by what they are and are the page they sit on, so the
  * renderer decides which of them is a link from its position in the trail and not from its kind.
  */

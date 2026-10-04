@@ -11,13 +11,14 @@
  * has already set it before React ran. This module reads it back rather than re-deciding it.
  */
 
-export type ThemePreference = 'light' | 'dark' | 'system'
+/** Every preference, and the one place the type below is spelled, so a new one is also read back. */
+const PREFERENCES = ['light', 'dark', 'system'] as const
+
+export type ThemePreference = (typeof PREFERENCES)[number]
 export type Theme = 'light' | 'dark'
 
 /** The `localStorage` key. The inline script in `index.html` spells the same string. */
 const THEME_KEY = 'codeexplorer.theme'
-
-const PREFERENCES = new Set(['light', 'dark', 'system'])
 
 /**
  * One `MediaQueryList`, lazily made and kept. Each call to `matchMedia` allocates another, and this
@@ -38,7 +39,7 @@ function systemPrefersDark() {
  * callers keep the `try`/`catch` that reading `localStorage` needs in a locked-down browser.
  */
 export function readPreference(raw: string | null): ThemePreference {
-  return raw !== null && PREFERENCES.has(raw) ? (raw as ThemePreference) : 'system'
+  return PREFERENCES.find((preference) => preference === raw) ?? 'system'
 }
 
 /** The stored preference, or the default where storage is blocked or empty. */

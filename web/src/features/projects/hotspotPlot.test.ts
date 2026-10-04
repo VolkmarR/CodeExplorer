@@ -76,7 +76,7 @@ describe('spreadPoints', () => {
   test('separates points at the very same place', () => {
     const [a, b] = spreadPoints([at(1, 0.5, 0.5), at(2, 0.5, 0.5)], plot)
 
-    expect(apart(a!, b!)).toBeGreaterThanOrEqual(2 * plot.radius)
+    expect(apart(a, b)).toBeGreaterThanOrEqual(2 * plot.radius)
   })
 
   test('keeps the true position beside the shown one, and every dot inside the plot', () => {

@@ -37,5 +37,5 @@ export interface Origin {
 
 /** A view's name if that is what this is, and undefined for anything else a URL might carry. */
 export function asView(value: unknown): View | undefined {
-  return VIEWS.some((view) => view === value) ? (value as View) : undefined
+  return VIEWS.find((view) => view === value)
 }

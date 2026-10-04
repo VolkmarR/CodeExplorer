@@ -11,6 +11,8 @@ import { stripSearchParams, type SearchMiddleware } from '@tanstack/react-router
  */
 export function bareFirstPage<T extends { page?: number }>(): SearchMiddleware<T> {
   // The cast is the library's own type in another spelling: an object of defaults is a partial of
-  // the schema, and `page` is the one key of it every paged schema shares.
+  // the schema, and `page` is the one key of it every paged schema shares. The compiler cannot see
+  // that for a `T` it has not met: one could declare `page` as the literal 2, which `1` is not.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return stripSearchParams<T>({ page: 1 } as Partial<T>)
 }

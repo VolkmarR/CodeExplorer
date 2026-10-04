@@ -1,7 +1,7 @@
 import type { HighlightRenderNode } from '@tanstack/highlight'
 import { Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useEffect, useRef, type CSSProperties } from 'react'
+import { useEffect, useRef } from 'react'
 import { languageFor } from '@/highlight/highlighter'
 import { codeLines } from '@/highlight/lines'
 import type { Origin } from '@/lib/urls/views'
@@ -115,7 +115,7 @@ export function CodeView({
       <ScrollArea className="max-h-(--reading-pane)" viewportRef={viewport}>
         <div
           className="relative h-(--rows-height) w-full font-mono text-xs"
-          style={{ '--rows-height': `${rows.getTotalSize()}px` } as CSSProperties}
+          style={{ '--rows-height': `${rows.getTotalSize()}px` }}
         >
           {rows.getVirtualItems().map((row) => {
             const number = row.index + 1
@@ -135,7 +135,7 @@ export function CodeView({
                   wrap ? 'w-full' : 'min-w-full',
                   number === line && 'bg-primary/15',
                 )}
-                style={{ '--row-start': `${row.start}px` } as CSSProperties}
+                style={{ '--row-start': `${row.start}px` }}
               >
                 {gutter ? (
                   <div
