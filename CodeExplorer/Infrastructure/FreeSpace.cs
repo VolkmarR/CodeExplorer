@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace CodeExplorer.Infrastructure;
 
 /// <summary>
@@ -23,6 +25,14 @@ public static class FreeSpace
     ///     refresh of any project refused for room.
     /// </summary>
     public const long DefaultMinimumBytes = 512L * 1024 * 1024;
+
+    /// <summary>
+    ///     A free-space figure as the refresh's refusal and the settle's skip both state it (#363). MiB,
+    ///     not <c>ToolReply.Bytes</c>'s scaled MB: it sits next to the 8 GiB ceiling ADR-0003 documents,
+    ///     and the two are only comparable in the same units.
+    /// </summary>
+    public static string Mib(long bytes) =>
+        string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.#} MiB");
 
     /// <summary>The configured <see cref="MinimumSetting" />, or its default.</summary>
     public static long Minimum(IConfiguration configuration) =>
