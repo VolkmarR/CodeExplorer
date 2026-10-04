@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Globalization;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
@@ -361,18 +360,11 @@ public sealed class RefreshService(
         return room.Enough
             ? null
             : new RefreshRefusal(
-                $"A refresh of project '{slug}' needs about {Mib(room.Required)} free where the indexes live, and only {Mib(room.Free)} is left. "
+                $"A refresh of project '{slug}' needs about {FreeSpace.Mib(room.Required)} free where the indexes live, and only {FreeSpace.Mib(room.Free)} is left. "
                 + "That disk holds every project's index, the shadow index a refresh builds beside it, and the local copies — which hold full git history since ADR-0007 — and it cannot be enlarged (ADR-0003). "
                 + "Delete a project that is no longer needed, then refresh again.",
                 // 507 rather than another 409: a cron reading only the status line still learns that
                 // this is about storage and not about another rebuild holding the slot.
                 StatusCodes.Status507InsufficientStorage);
     }
-
-    /// <summary>
-    ///     MiB, not <c>ToolReply.Bytes</c>'s scaled MB: this figure sits next to the 8 GiB ceiling
-    ///     ADR-0003 documents, and the two are only comparable in the same units.
-    /// </summary>
-    private static string Mib(long bytes) =>
-        string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.#} MiB");
 }

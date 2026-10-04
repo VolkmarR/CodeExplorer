@@ -1,3 +1,4 @@
+using CodeExplorer.Infrastructure;
 using CodeExplorer.Reading;
 using DuckDB.NET.Data;
 using ModelContextProtocol;
@@ -12,10 +13,6 @@ namespace CodeExplorer.Index;
 /// </summary>
 public sealed partial class ProjectIndexes
 {
-    // MiB, as the refresh's own refusal for room names its figures, so an operator reading both
-    // compares like with like.
-    private const double _bytesPerMib = 1024.0 * 1024.0;
-
     /// <summary>
     ///     Puts the project's file on disk from its durable copy when the disk has none. The check
     ///     outside the writer gate is the fast path; <see cref="RestoreAsync" /> asks again inside it.
@@ -118,9 +115,9 @@ public sealed partial class ProjectIndexes
                 if (!skipLogged && _logger.IsEnabled(LogLevel.Information))
                     _logger.LogInformation(
                         "Project {Project} is not given back its full-text index yet: the copy needs about "
-                        + "{RequiredMib:0.#} MiB free where the indexes live and {FreeMib:0.#} MiB is left. "
+                        + "{Required} free where the indexes live and {Free} is left. "
                         + "It is searched by substring scan until a settle or a refresh succeeds",
-                        slug, room.Required / _bytesPerMib, room.Free / _bytesPerMib);
+                        slug, FreeSpace.Mib(room.Required), FreeSpace.Mib(room.Free));
                 _withoutFullText[slug] = true;
                 return;
             }
