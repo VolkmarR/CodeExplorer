@@ -82,6 +82,12 @@ public sealed class ImportGraph(IndexReaders readers)
             // extension at all. Asked twice they could only ever disagree by accident.
             var (name, profiled) = Languages.Name(extension);
 
+            // A skipped file has no lines, so it has no import rows either: the answer is decided
+            // without asking.
+            if (file.SkipReason is { } reason)
+                return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, reason,
+                    file.Module, Capped: false, []);
+
             await using var command = index.Connection.Query("""
                                                              SELECT i.name, i.shape, i.line_number, i.unresolved,
                                                                     i.evidence, t.qualified_path AS target_path
@@ -98,7 +104,7 @@ public sealed class ImportGraph(IndexReaders readers)
                 ImportColumns.Strength(reader.Text("evidence"))), token);
 
             bool capped = RowCap.Trim(edges, MaxEdges);
-            return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports, file.SkipReason,
-                file.Module, capped, edges);
+            return new ImportsResult(file.QualifiedPath, name, profiled, analyzer.HasImports,
+                SkipReason: null, file.Module, capped, edges);
         }, cancellationToken);
 }
