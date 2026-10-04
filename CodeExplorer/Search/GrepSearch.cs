@@ -179,6 +179,12 @@ public sealed partial class GrepSearch(IndexReaders readers, IConfiguration conf
                 "The query is empty. Pass the text or RE2 pattern to search for.", out string query) is { } refused)
             return refused;
 
+        // A text query runs no caller pattern, so it has nothing the limit's refusal could tell the caller
+        // to simplify; only a pattern search is stopped (SearchTimeout).
+        if (!regex)
+            return await readers.OverIndexAsync(slug, null,
+                (index, token) => QueryAsync(index, request, query, regex, token), cancellationToken);
+
         return await PatternQuery.TimedAsync(_timeoutSeconds,
             limited => readers.OverIndexAsync(slug, null,
                 (index, _) => QueryAsync(index, request, query, regex, limited()), cancellationToken),

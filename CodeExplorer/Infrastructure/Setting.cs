@@ -21,6 +21,21 @@ public static class Setting
     public static string DataDirectory(IConfiguration configuration) => configuration[DataDirectoryKey] ?? "data";
 
     /// <summary>
+    ///     A limit in whole seconds, or <paramref name="fallback" /> when it is absent. A value that cannot
+    ///     be one is refused naming the setting: zero or less would be no limit or a limit nothing passes,
+    ///     and the upper bound keeps the milliseconds inside the <see cref="int" /> a timer takes.
+    ///     <see cref="InvalidOperationException" /> for the reason <see cref="Url" /> gives.
+    /// </summary>
+    public static int Seconds(IConfiguration configuration, string key, int fallback)
+    {
+        int seconds = configuration.GetValue(key, fallback);
+        if (seconds is <= 0 or > int.MaxValue / 1000)
+            throw new InvalidOperationException(
+                $"{key} is {seconds}, but must be a number of seconds between 1 and {int.MaxValue / 1000}.");
+        return seconds;
+    }
+
+    /// <summary>
     ///     The setting as an absolute URL, or null when it is absent. A value that is not a URL names
     ///     the setting rather than crashing with <c>UriFormatException</c>: the server refuses to start
     ///     over this, and "Invalid URI: The format of the URI could not be determined" does not say

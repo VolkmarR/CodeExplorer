@@ -220,9 +220,12 @@ setting exists to end, so it is refused with an error naming the setting rather 
 `Search:TimeoutSeconds` — 20 by default — is how long grep and `list_matches` may run a caller's
 pattern. A pattern RE2 can only run the slow way, such as a dot repeated thousands of times across
 lines, can hold a connection and a core for minutes; past the limit the search is stopped and the
-caller is told to narrow it, with no partial results. The stop lands at DuckDB's next check between
-chunks of work, so a reply can come a little after the limit. It must be between 1 and 2147483, or the
-server refuses to start and names the setting.
+caller is told to narrow it, with no partial results. A text grep is not limited. The stop lands at
+DuckDB's next check between chunks of work, which is usually within a second or two of the limit. Two
+cases run on longer: a line search whose pattern matches almost nothing checks only at the end of
+each block of about 123,000 lines, and a multiline search cannot stop inside the match over one
+file, so one very large file can hold it for minutes. It must be between 1 and 2147483, or the server
+refuses to start and names the setting.
 
 `Git:RepackPackThreshold` — 50 by default — and `Git:RepackLooseObjectThreshold` — 5000 by default —
 decide when a refresh repacks a local copy. Every fetch adds a pack and nothing else ever folds them

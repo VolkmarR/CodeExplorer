@@ -31,12 +31,9 @@ internal static class TransferStallLimit
     /// </summary>
     public static int Apply(IConfiguration configuration)
     {
-        int seconds = configuration.GetValue(Setting, DefaultSeconds);
         // A zero would be libgit2's "no timeout", which is the hang this exists to end, so it is refused
         // rather than honoured; the upper bound keeps the milliseconds inside the int libgit2 takes.
-        if (seconds is <= 0 or > int.MaxValue / 1000)
-            throw new InvalidOperationException(
-                $"{Setting} is {seconds}, but must be a number of seconds between 1 and {int.MaxValue / 1000}.");
+        int seconds = Infrastructure.Setting.Seconds(configuration, Setting, DefaultSeconds);
 
         Set(LibGit2.SetServerConnectTimeout, seconds * 1000);
         Set(LibGit2.SetServerTimeout, seconds * 1000);

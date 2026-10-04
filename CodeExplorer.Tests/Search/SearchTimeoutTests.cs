@@ -108,7 +108,7 @@ public sealed class SearchTimeoutTests(SearchTimeoutFixture fixture) : IClassFix
         using var gaveUp = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         gaveUp.CancelAfter(TimeSpan.FromMilliseconds(300));
         var thrown = await Record.ExceptionAsync(() => search(gaveUp.Token));
-        Assert.True(thrown is OperationCanceledException or DuckDBException,
+        Assert.True(thrown is OperationCanceledException || (thrown is DuckDBException duck && PatternQuery.IsInterrupt(duck)),
             $"Expected the cancellation, got {thrown?.GetType().Name ?? "an answer"}.");
     }
 
