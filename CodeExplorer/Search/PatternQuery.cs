@@ -53,30 +53,32 @@ internal static class PatternQuery
     ///     and propagates.
     /// </summary>
     /// <param name="connection">The index's connection, for the compile.</param>
-    /// <param name="pattern">
-    ///     The caller's pattern. Only a pattern search comes through here: a text query hands a parser
-    ///     nothing, so a DuckDB error on one is never the caller's to fix.
-    /// </param>
     /// <param name="compileAlone">
-    ///     Whether the pattern is compiled on its own first (<see cref="Re2.RejectionAsync" />): needed
-    ///     wherever the search runs a wrapped form of it, because a wrapper can balance what the caller
-    ///     left unbalanced. A bare pattern is compiled by the search itself.
+    ///     The patterns compiled on their own first, in order, each with <see cref="Re2.RejectionAsync" />;
+    ///     the first refused is the answer. Only a pattern search comes through here: a text query hands
+    ///     a parser nothing, so a DuckDB error on one is never the caller's to fix.
+    ///     The caller's bare pattern leads wherever the search runs a wrapped form of it, because a
+    ///     wrapper can balance what the caller left unbalanced. A form the search runs is compiled by the
+    ///     search itself, and needs listing only where the search may answer without running it: a
+    ///     refusal for size or syntax comes before any other answer (#372).
     /// </param>
     /// <param name="flags">
-    ///     The flags the search runs the pattern with, and so the ones it is compiled alone with: the
-    ///     flags decide whether it fits RE2's size limit (#364), and a compile that used others would
+    ///     The flags the search runs its patterns with, and so the ones they are compiled alone with: the
+    ///     flags decide whether one fits RE2's size limit (#364), and a compile that used others would
     ///     refuse a pattern the search runs, or pass one the search then refuses.
     /// </param>
     /// <param name="search">The search, which runs its own statements so their plans carry its name.</param>
     /// <param name="cancellationToken">Threaded to the compile, as every async path here is.</param>
-    public static async Task<Outcome> GuardedAsync(DuckDBConnection connection, string pattern, bool compileAlone,
+    public static async Task<Outcome> GuardedAsync(DuckDBConnection connection, IReadOnlyList<string> compileAlone,
         string flags, Func<Task<Outcome>> search, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(compileAlone);
         ArgumentNullException.ThrowIfNull(search);
         try
         {
-            if (compileAlone && await Re2.RejectionAsync(connection, pattern, flags, cancellationToken) is { } rejection)
-                return new Problem(Re2.Rejected(rejection));
+            foreach (string pattern in compileAlone)
+                if (await Re2.RejectionAsync(connection, pattern, flags, cancellationToken) is { } rejection)
+                    return new Problem(Re2.Rejected(rejection));
             return await search();
         }
         catch (DuckDBException ex) when (Re2.IsPatternRejection(ex))
@@ -93,9 +95,17 @@ internal static class PatternQuery
     /// </summary>
     public static List<DuckDBParameter> LineParameters(string pattern, bool wholeWord, bool caseSensitive) =>
     [
-        new("q", wholeWord ? SymbolText.WholeWord(pattern) : pattern),
+        new("q", LinePattern(pattern, wholeWord)),
         new("flags", LineFlags(caseSensitive))
     ];
+
+    /// <summary>
+    ///     The pattern <see cref="LineMatch" /> runs: the caller's, anchored on word boundaries when the
+    ///     caller asked for whole words. The one spelling, so a compile alone in <see cref="GuardedAsync" />
+    ///     checks the pattern the search runs.
+    /// </summary>
+    public static string LinePattern(string pattern, bool wholeWord) =>
+        wholeWord ? SymbolText.WholeWord(pattern) : pattern;
 
     /// <summary>
     ///     The RE2 flags of <see cref="LineMatch" />: case-insensitive unless the caller asked otherwise.

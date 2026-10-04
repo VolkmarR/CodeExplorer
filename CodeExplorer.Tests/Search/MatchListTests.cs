@@ -33,6 +33,15 @@ public sealed class MatchListTests : IDisposable
         }
     };
 
+    /// <summary>
+    ///     A pattern RE2 compiles alone and refuses as too large once wrapped in whole-word boundaries, with
+    ///     case folded: 87,200 repeated letters, where the bare form stops fitting near 87,370 and the
+    ///     wrapped one near 86,980 (#372). It requires a literal no file holds, so nothing is scanned if
+    ///     it ever runs.
+    /// </summary>
+    internal static readonly string WrappedTooLarge =
+        "Unicorn" + string.Concat(Enumerable.Repeat("(?:[a-z]{1000})", 87)) + "[a-z]{200}";
+
     private TestHost? _host;
 
     public void Dispose() => _host?.Dispose();
@@ -283,6 +292,30 @@ public sealed class MatchListTests : IDisposable
         string exact = await ListAsync(client,
             new Dictionary<string, object?> { ["query"] = large, ["group"] = 1, ["caseSensitive"] = true });
         Assert.Contains("The pattern has no capture groups, so group=1 cannot be extracted.", exact);
+    }
+
+    /// <summary>
+    ///     With whole words, the pattern compiled alone is the wrapped one the search runs (#372). The
+    ///     word boundaries are character classes RE2 compiles too, so this pattern fits RE2's size limit
+    ///     bare and not wrapped: with only the bare form compiled, it passed, and the reply blamed the
+    ///     missing group.
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task A_pattern_too_large_once_wrapped_as_a_whole_word_is_refused_before_its_groups_are_counted(
+        SearchEngine engine)
+    {
+        await using var client = await StartAsync(engine);
+        string large = WrappedTooLarge;
+
+        string wrapped = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = large, ["group"] = 1, ["wholeWord"] = true });
+        Assert.Contains("not a valid RE2", wrapped);
+        Assert.Contains("pattern too large", wrapped);
+
+        string bare = await ListAsync(client, new Dictionary<string, object?> { ["query"] = large, ["group"] = 1 });
+        Assert.Contains("The pattern has no capture groups, so group=1 cannot be extracted.", bare);
     }
 
     [Fact]
