@@ -2,8 +2,8 @@ import type { Declaration, FileDeclarations } from '@/features/files/api'
 
 /**
  * What the declarations panel has to say beside its list, or null when the list speaks for itself.
- * The three empty answers are three different facts — the extension was never covered, the language
- * has no declarations this can read, the file declares none — and a panel that drew them alike would
+ * The four empty answers are four different facts — the file is not indexed, the extension was never
+ * covered, the language has no declarations this can read, the file declares none — and a panel that drew them alike would
  * tell a reader a file declares nothing when what happened is that nothing looked.
  */
 export function declarationsNote(file: FileDeclarations): string | null {
@@ -11,6 +11,8 @@ export function declarationsNote(file: FileDeclarations): string | null {
   // the checks was itself load-bearing before, and getting it wrong printed a true sentence about
   // the wrong fact.
   switch (file.coverage) {
+    case 'Skipped':
+      return `This file is not indexed (${file.skipReason}), so nothing was read from it. What it declares is not known here, which is a different thing from it declaring nothing.`
     case 'Unprofiled':
       return `No language profile covers this extension, so this file was read with the conservative default shapes. A declaration form this does not know is one it did not find, not one that is not there.`
     case 'Unreadable':

@@ -135,6 +135,7 @@
 /api/projects/{project}/file/declarations languageName
 /api/projects/{project}/file/declarations offset
 /api/projects/{project}/file/declarations qualifiedPath
+/api/projects/{project}/file/declarations skipReason
 /api/projects/{project}/file/imports
 /api/projects/{project}/file/imports capped
 /api/projects/{project}/file/imports hasImports

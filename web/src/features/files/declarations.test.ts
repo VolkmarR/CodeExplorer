@@ -17,6 +17,7 @@ const declared = (fields: Partial<FileDeclarations>): FileDeclarations => ({
   declarations: [],
   languageName: 'C#',
   qualifiedPath: 'one/src/Orders.cs',
+  skipReason: null,
   ...fields,
 })
 
@@ -34,6 +35,18 @@ test('an empty declarations panel says which kind of empty it is', () => {
     'CSS declarations',
   )
   expect(declarationsNote(declared({}))).toContain('declares nothing')
+})
+
+/**
+ * A file the build skipped was never read, whatever its extension, so the note names why and claims
+ * no reading (#370). The rail does not ask for such a file today; the server can still answer it.
+ */
+test('a skipped file is not indexed, and nothing was read from it', () => {
+  const note = declarationsNote(declared({ coverage: 'Skipped', skipReason: 'binary' }))
+
+  expect(note).toContain('not indexed (binary)')
+  expect(note).toContain('nothing was read')
+  expect(note).not.toContain('declares nothing')
 })
 
 test('a file with declarations has nothing to explain, and one cut short says so', () => {

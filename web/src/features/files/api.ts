@@ -127,22 +127,29 @@ export interface Declaration {
  * How much of a file's declarations the server was in a position to read, which is what keeps an
  * empty list from reading as "this file declares nothing":
  *
+ * - `Skipped` — the build skipped the file (binary, over-size), so nothing was read from it, whatever
+ *   its extension. `skipReason` says why.
  * - `Unprofiled` — no profile covers the extension, so it was read with the conservative default
  *   shapes. A list may still come back, thinner than a covered language's would be.
  * - `Unreadable` — the language is covered and its declarations cannot be read from a line (CSS).
  *   Nothing was scanned, which is not the same as scanning and finding nothing.
  * - `Read` — the language is covered and its declaration shapes were read.
  *
- * One field rather than two flags, because only these three of four combinations are reachable and a
- * fourth would be a state the panel could render the wrong sentence for.
+ * One field rather than two flags, because only three of the four combinations those flags spell are
+ * reachable and a fourth would be a state the panel could render the wrong sentence for. `Skipped` is
+ * decided before either flag is asked.
  */
-export type DeclarationCoverage = 'Unprofiled' | 'Unreadable' | 'Read'
+export type DeclarationCoverage = 'Skipped' | 'Unprofiled' | 'Unreadable' | 'Read'
 
-/** What a file declares. `capped` says the list is short of what the file declares. */
+/**
+ * What a file declares. `capped` says the list is short of what the file declares, and `skipReason`
+ * is set exactly when `coverage` is `Skipped`.
+ */
 export interface FileDeclarations {
   qualifiedPath: string
   languageName: string
   coverage: DeclarationCoverage
+  skipReason: string | null
   capped: boolean
   declarations: Declaration[]
 }

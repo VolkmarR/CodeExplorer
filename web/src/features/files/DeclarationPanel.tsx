@@ -43,7 +43,11 @@ export function DeclarationPanel({
       capped={data.capped}
       note={declarationsNote(data)}
       // Nothing was read, so there is no claim to qualify.
-      evidence={data.coverage === 'Unreadable' ? undefined : DECLARATION_EVIDENCE}
+      evidence={
+        data.coverage === 'Unreadable' || data.coverage === 'Skipped'
+          ? undefined
+          : DECLARATION_EVIDENCE
+      }
     >
       {/* A screenful, with the rest a click away, like the import panels below it: a generated file
           declaring seventy names would otherwise fill the whole rail and push every other panel out
