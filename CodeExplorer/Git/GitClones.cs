@@ -43,8 +43,10 @@ public sealed class GitClones(
     // A gate is never removed. Removing one safely would take a count of its holders and waiters kept
     // in step with the dictionary, and a gate dropped while anyone holds or waits on it lets the next
     // caller take a fresh one beside them, so two operations share a folder and Settled no longer sees
-    // the first (#350). The keys are folder paths of repositories and projects the control database has
-    // configured during this process's life, a bounded set, and each entry holds nothing but a count.
+    // the first (#350). So the dictionary keeps one entry for every repository and project folder used
+    // during this process's life, removed ones included: it grows with how many have ever been added,
+    // not with what the control database holds now. Each entry is a semaphore holding a count, small
+    // beside the clone it guarded, and the holder count removal would need is what this leaves out.
     // A dictionary of its own and not a KeyedGate, though the reasoning is the same: Settled has to
     // reach every gate, and a transfer's gate is released on another task (ReleaseAfterAsync).
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
