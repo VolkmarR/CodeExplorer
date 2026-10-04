@@ -9,7 +9,7 @@ import type {
   OverviewFileChanges,
   PeriodChanges,
 } from '@/features/projects/api'
-import { barScale, fileChangeTotals } from '@/features/projects/fileChanges'
+import { barScale, countRoom, fileChangeTotals } from '@/features/projects/fileChanges'
 import { OverviewCard } from '@/features/projects/OverviewCard'
 import {
   formatCount,
@@ -65,6 +65,13 @@ export function FileChangesCard({
   )
 }
 
+/** The chart's height where no count is drawn: the plot, its top margin and the axis labels. */
+const CHART_HEIGHT = 170
+
+/** The top margin where no added count is drawn, and the library's own gap above the axis labels. */
+const TOP_MARGIN = 8
+const TICK_PADDING = 4
+
 /** One half of a period's column: the added half is drawn up from the line, the deleted half down. */
 interface Half {
   period: PeriodChanges
@@ -96,6 +103,13 @@ function PeriodChart({ changes }: { changes: OverviewFileChanges }) {
   )
   const broken = halves.filter((half) => half.count > scale)
   const ticks = axisTicks(periods, period)
+  // Room for the upright counts: above the plot for an added one, and between the plot and the axis
+  // labels for a deleted one, which hangs down to where the labels sit. Sized by the longest count
+  // on that side, and added to the chart's height so the ordinary bars keep their length.
+  const brokenAdded = broken.flatMap((half) => (half.added ? [half.count] : []))
+  const brokenDeleted = broken.flatMap((half) => (half.added ? [] : [half.count]))
+  const top = brokenAdded.length > 0 ? countRoom(brokenAdded) : TOP_MARGIN
+  const padding = brokenDeleted.length > 0 ? countRoom(brokenDeleted) : TICK_PADDING
 
   const definition = defineChart({
     marks: [
@@ -127,15 +141,14 @@ function PeriodChart({ changes }: { changes: OverviewFileChanges }) {
         scale: scaleBand()
           .domain(periods.map((p) => p.start))
           .padding(0.1),
-        axis: { line: false, ticks: { size: 0, ...ticks } },
+        axis: { line: false, ticks: { size: 0, padding, ...ticks } },
       },
       y: {
         scale: scaleLinear().domain([-scale, scale]),
         axis: false,
       },
     },
-    // Room above the line for the upright counts of the periods drawn broken.
-    margin: { top: broken.some((half) => half.added) ? 36 : 8 },
+    margin: { top },
     focus: 'group-x',
     keyboard: false,
     tooltip: {
@@ -147,7 +160,7 @@ function PeriodChart({ changes }: { changes: OverviewFileChanges }) {
   return (
     <Chart
       definition={definition}
-      height={170}
+      height={CHART_HEIGHT + (top - TOP_MARGIN) + (padding - TICK_PADDING)}
       className="text-xs text-muted-foreground"
       ariaLabel={`Files added and deleted ${PER[changes.period]}`}
     />
