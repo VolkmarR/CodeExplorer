@@ -222,20 +222,15 @@ public sealed partial class ProjectIndexes
     ///     <c>DETACH DATABASE IF EXISTS</c> succeeds on an invalidated database. It runs on a connection of
     ///     its own, as the shadow's discard does, because the one that filled the file is closed first.
     ///     Uncancelled, like the shadow's discard after a refresh that failed: the cleanup is a detach
-    ///     and two deletes, and a cancelled restore is as much in need of it as a refused one. The live
-    ///     file is not touched: a failure before the move left it as it was, and the move is the one
-    ///     overwriting step that either replaced it or did not.
+    ///     and two deletes, and a restore an agent abandoned is as much in need of it as a refused one.
+    ///     The live file is not touched: a failure before the move left it as it was, and the move is the
+    ///     one overwriting step that either replaced it or did not.
     /// </summary>
     private async Task DiscardRestoreAsync(string slug, string catalog, string path)
     {
         try
         {
-            await using var connection = await ConnectAsync(CancellationToken.None);
-            await UnderAttachGateAsync(async () =>
-            {
-                await DetachAsync(connection, catalog, CancellationToken.None);
-                DeleteIndexFile(path);
-            }, CancellationToken.None);
+            await DiscardFileAsync(catalog, path, CancellationToken.None);
         }
         catch (Exception ex)
         {
