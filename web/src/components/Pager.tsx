@@ -22,6 +22,11 @@ import { pageSpan } from '@/lib/paging'
  * search, and passing the mouse over the pager is not asking for one. Whether page 1 is written into
  * the URL is the router's decision and not the pager's: the root route leaves it out for every
  * view (`bareFirstPage`).
+ *
+ * The buttons are Previous and Next, in list order, except on the change log, which calls them Newer
+ * and Older. The two pairs are deliberate: a page of a log is a stretch of time, and which way is
+ * "back" in one is the opposite of what a reader would guess, while a search's hits or a commit's
+ * files have no direction but the list's own.
  */
 export function Pager({
   page,
