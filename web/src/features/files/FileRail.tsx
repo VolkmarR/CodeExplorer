@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { Origin } from '@/lib/urls/views'
 import { DeclarationPanel } from '@/features/files/DeclarationPanel'
 import { ImportPanel } from '@/features/files/ImportPanel'
-import { blameQuery, canBlame } from '@/features/files/queries'
+import { blameQuery, isSkipped } from '@/features/files/queries'
 import { RailPanel } from '@/features/files/RailPanel'
 import { CommitLine } from '@/components/CommitLine'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -15,6 +15,12 @@ import type { FileContent } from '@/features/files/api'
  * History is a view of its own.
  */
 const RECENT_COMMITS = 6
+
+/** How every panel opens on a file the build skipped, so the rail says it the same way three times. */
+const NOT_INDEXED = 'This file is not indexed'
+
+/** What Declarations and Imports say on a skipped file, which neither asks the server about. */
+const NOTHING_READ = `${NOT_INDEXED}, so nothing was read from it.`
 
 /**
  * What else is known about the file beside it: what it declares, what it imports, and what has been
@@ -66,9 +72,18 @@ export function FileRail({
           edge has to fit too. `pr` is wider still, because it also keeps a panel's text out from
           under the scrollbar. */}
       <aside className="space-y-4 p-1 xl:pr-2.5">
-        <DeclarationPanel project={project} path={file.qualifiedPath} origin={origin} />
-
-        <ImportPanel project={project} path={file.qualifiedPath} />
+        {/* A skipped file was never read, so neither panel asks: the server would answer as for an
+            extension it has no profile for, and say the file "was read" with the default shapes. */}
+        {isSkipped(file) ? (
+          ['Declarations', 'Imports'].map((title) => (
+            <RailPanel key={title} title={title} note={NOTHING_READ} />
+          ))
+        ) : (
+          <>
+            <DeclarationPanel project={project} path={file.qualifiedPath} origin={origin} />
+            <ImportPanel project={project} path={file.qualifiedPath} />
+          </>
+        )}
 
         <RecentCommits project={project} file={file} origin={origin} />
       </aside>
@@ -106,22 +121,33 @@ function RecentCommits({
     )
   }
 
-  // A file the build skipped has history and no lines, so `canBlame` holds the request back. Said
-  // in words, because a disabled query stays pending and the panel would wait for ever.
-  if (!canBlame(file)) {
-    return (
-      <RailPanel title="Recent commits">
-        <p className="text-sm text-muted-foreground">
-          This file is not indexed, so it has no lines to name the commits of.
-        </p>
-      </RailPanel>
-    )
-  }
+  // A file the build skipped has history and no lines, so `canBlame` holds the request back: a
+  // disabled query stays pending and the panel would wait for ever. The file's own first and last
+  // commits are still known, and the header already names the last one, so the panel names them
+  // too rather than say there is nothing.
+  const skipped = isSkipped(file)
+  const commits = skipped
+    ? distinctCommits([{ by: file.lastCommit }, { by: file.firstCommit }])
+    : distinctCommits(blame.data?.runs ?? [])
 
   return (
-    <RailPanel title="Recent commits" pending={blame.isPending}>
+    <RailPanel
+      title="Recent commits"
+      pending={!skipped && blame.isPending}
+      // Said of the imported history and not of the file: history may not reach the beginning of
+      // the repository (CONTEXT.md), so the first commit it has is not known to be the one that
+      // added the file. One row where the two are the same commit, and "first and last" over a
+      // single row would read as a row missing.
+      note={
+        skipped
+          ? commits.length === 1
+            ? `${NOT_INDEXED}, so only the one commit the imported history has of it is shown.`
+            : `${NOT_INDEXED}, so only the first and last commits the imported history has of it are shown.`
+          : null
+      }
+    >
       <ul className="space-y-2.5">
-        {distinctCommits(blame.data?.runs ?? []).map((commit) => (
+        {commits.map((commit) => (
           <li key={commit.sha} className="min-w-0 text-xs">
             <p className="truncate">{commit.subject}</p>
             <CommitLine
