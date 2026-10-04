@@ -85,7 +85,12 @@ public sealed partial class ProjectIndexes
         {
             // Asked again under the gate, where a swap or a delete clears it: either has left nothing
             // to settle.
-            if (!_withoutFullText.TryRemove(slug, out _) || !HasIndex(slug)) return;
+            if (!_withoutFullText.ContainsKey(slug)) return;
+            if (!HasIndex(slug))
+            {
+                _withoutFullText.TryRemove(slug, out _);
+                return;
+            }
 
             await RebuildFileAsync(slug,
                 "The index restored without a full-text index still serves; the next refresh builds one.",
@@ -94,6 +99,9 @@ public sealed partial class ProjectIndexes
                     await AttachAsync(connection, slug, FilePath(slug), cancellationToken);
                     await CopyWithFullTextAsync(connection, slug, cancellationToken);
                 }, cancellationToken);
+            // Only once the file is in place (#349). Cleared before the rebuild, a settle that was
+            // refused or failed left the project unmarked, and nothing in this process tried again.
+            _withoutFullText.TryRemove(slug, out _);
         }
     }
 
