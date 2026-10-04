@@ -11,8 +11,9 @@ export interface CommitParameters {
   /** The view the reader came from, so the trail says how they got here and not where the route is. */
   from?: Origin['view']
   /**
-   * Which page of the commit's files. Left out for the first, so every link to a commit stays the
-   * short URL it was before the list was paged.
+   * Which page of the commit's files. Optional, and undefined for the first, so `commitSearch` and
+   * the four places that link to a commit need not name a page. Keeping page 1 out of the URL is not
+   * this type's job but the root route's (`bareFirstPage`), as it is for every paged view.
    */
   page?: number
 }
