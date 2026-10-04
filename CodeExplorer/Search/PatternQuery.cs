@@ -72,14 +72,19 @@ internal static class PatternQuery
         {
             return await search(() =>
             {
-                limit.CancelAfter(TimeSpan.FromSeconds(seconds));
+                // Not while plans are being written: each statement then runs twice, once profiled and
+                // once for real, and a search measured at half its cost would be refused instead of
+                // measured (CODING_STANDARDS, Performance).
+                if (!QueryPlan.Enabled) limit.CancelAfter(TimeSpan.FromSeconds(seconds));
                 return limit.Token;
             });
         }
         // DuckDB answers an interrupted statement with its own exception rather than a cancellation, and
         // a token checked between statements throws the cancellation; both are the limit's doing only when
-        // it fired and the caller's token did not.
-        catch (Exception ex) when (ex is OperationCanceledException or DuckDBException
+        // it fired and the caller's token did not. Any other DuckDB failure is infrastructure even after
+        // the limit fired, and propagates: a statement still running past the limit can fail for its own
+        // reasons, and that is not the pattern's to answer for.
+        catch (Exception ex) when ((ex is OperationCanceledException || (ex is DuckDBException duck && IsInterrupt(duck)))
                                    && limit.IsCancellationRequested
                                    && !cancellationToken.IsCancellationRequested)
         {
@@ -90,6 +95,15 @@ internal static class PatternQuery
                 + "Narrow it with `path` or `extension`, or use a simpler pattern, for example without `.*` spanning lines.");
         }
     }
+
+    /// <summary>
+    ///     Whether DuckDB raised this because the statement was interrupted, which is how it reports the
+    ///     cancellation of a token threaded into a command (<c>DuckDBCommand.Cancel</c> interrupts the
+    ///     connection). Keyed on the error type DuckDB prefixes its message with, as
+    ///     <see cref="Re2.IsPatternRejection" /> is.
+    /// </summary>
+    public static bool IsInterrupt(DuckDBException exception) =>
+        exception.Message.StartsWith("INTERRUPT Error", StringComparison.Ordinal);
 
     /// <summary>
     ///     Runs <paramref name="search" />, and answers RE2 refusing the caller's pattern with a
