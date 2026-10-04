@@ -382,18 +382,18 @@ public sealed partial class GrepSearch(IndexReaders readers)
         request.WithHistory ? ", p.sha, p.author_name, p.authored_at, p.subject" : "";
 
     /// <summary>
-    ///     Whole-file regex, reassembled in the engine because the index stores text only as lines (#4).
-    ///     Candidates are narrowed by the file filters and by a literal the pattern requires, then each
-    ///     candidate is <c>string_agg</c>-ed in line order and matched with the <c>s</c> flag so <c>.</c>
-    ///     crosses newlines. Two passes: counts without content, then content only for the page shown.
-    /// </summary>
-    /// <summary>
     ///     The RE2 flags of a multiline search: <c>s</c> so <c>.</c> crosses newlines, and case-insensitive
     ///     unless the caller asked otherwise. One spelling for the search and for the compile alone
     ///     that guards it (<see cref="PatternQuery.GuardedAsync" />).
     /// </summary>
     private static string MultilineFlags(bool caseSensitive) => caseSensitive ? "s" : "si";
 
+    /// <summary>
+    ///     Whole-file regex, reassembled in the engine because the index stores text only as lines (#4).
+    ///     Candidates are narrowed by the file filters and by a literal the pattern requires, then each
+    ///     candidate is <c>string_agg</c>-ed in line order and matched with the <c>s</c> flag so <c>.</c>
+    ///     crosses newlines. Two passes: counts without content, then content only for the page shown.
+    /// </summary>
     private static async Task<Outcome> SearchMultilineAsync(
         DuckDBConnection connection, GrepRequest request, string query, Bounds bounds,
         CancellationToken cancellationToken)
