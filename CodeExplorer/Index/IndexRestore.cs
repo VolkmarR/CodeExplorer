@@ -85,11 +85,11 @@ public sealed partial class ProjectIndexes
     ///     refresh failed. The cost lands only on a refresh that did.
     ///     Not started without room for it (#363): the copy is a second index beside the live one and the
     ///     BM25 build works on top, which is what a shadow costs, so <see cref="RoomForShadow" /> judges
-    ///     it with the floor a refresh is granted. A refresh refused for room is one that hands a project
-    ///     here, and on a near-full disk a copy started anyway re-ran on every refused refresh and failed
-    ///     the same way. Skipped, the project stays marked for the next settle, and the skip is logged at
-    ///     information level once per mark: the project is still served, so it is not a failure, and a
-    ///     line on every attempt would only repeat the first.
+    ///     it with the floor a refresh is granted. A refresh refused for room after its restore is one that
+    ///     hands a project here, and on a near-full disk a copy started anyway re-ran after every such
+    ///     refresh and failed the same way. Skipped, the project stays marked for the next settle, and the
+    ///     skip is logged at information level once until a settle gets room: the project is still served,
+    ///     so it is not a failure, and a line on every attempt would only repeat the first.
     /// </summary>
     /// <param name="slug">The project whose restored index is settled.</param>
     /// <param name="floor">The least free space a refresh is granted, set by the caller's configuration.</param>
@@ -121,6 +121,10 @@ public sealed partial class ProjectIndexes
                 _withoutFullText[slug] = true;
                 return;
             }
+
+            // A settle that had room starts the count again: if it fails and the disk then fills, the
+            // operator's last line would otherwise be that failure and not the wait for room.
+            _withoutFullText[slug] = false;
 
             await RebuildFileAsync(slug,
                 "The index restored without a full-text index still serves; the next refresh builds one.",
