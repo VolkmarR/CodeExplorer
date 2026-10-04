@@ -42,7 +42,16 @@ type Blameable = Pick<FileContent, 'qualifiedPath' | 'lastCommit' | 'skipReason'
  * rail's recent commits, the gutter and the button that offers it cannot disagree.
  */
 export function canBlame(file: Blameable) {
-  return file.lastCommit !== null && file.skipReason === null
+  return file.lastCommit !== null && !isSkipped(file)
+}
+
+/**
+ * Whether the build skipped the file — binary, or over the size cap — so it is in the tree with no
+ * lines and nothing was read from it. Asked by the header, the rail's three panels and `canBlame`
+ * alike, so none of them can come to mean something else by it.
+ */
+export function isSkipped(file: Pick<FileContent, 'skipReason'>) {
+  return file.skipReason !== null
 }
 
 /**

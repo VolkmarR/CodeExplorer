@@ -6,7 +6,7 @@ import { CodeView } from '@/features/files/CodeView'
 import { FileRail } from '@/features/files/FileRail'
 import { PathTrail } from '@/components/PathTrail'
 import { treeSearch } from '@/lib/urls/browseParams'
-import { blameQuery, canBlame, fileQuery } from '@/features/files/queries'
+import { blameQuery, canBlame, fileQuery, isSkipped } from '@/features/files/queries'
 import { CommitLine } from '@/components/CommitLine'
 import { ErrorPanel } from '@/components/ErrorPanel'
 import { PageCard } from '@/components/PageCard'
@@ -44,6 +44,7 @@ export function FilePage() {
   // the rail's recent commits read, so turning the gutter on costs nothing once the rail has them.
   const [blaming, setBlaming] = useState(false)
   const blame = useQuery(blameQuery(project, file, blaming))
+  const skipped = isSkipped(file)
 
   return (
     <PageCard
@@ -63,9 +64,16 @@ export function FilePage() {
       }
       badges={
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{languageFor(file.qualifiedPath)}</Badge>
+          {/* A skipped file was never read, so it has no language the index knows of and no lines;
+              naming either would claim a read that did not happen. Its size is git's and holds. */}
+          {skipped ? (
+            <Badge variant="outline">Not indexed</Badge>
+          ) : (
+            <Badge variant="secondary">{languageFor(file.qualifiedPath)}</Badge>
+          )}
           <span className="text-xs text-muted-foreground tabular-nums">
-            {formatCountOf(file.lineCount, 'line')} · {formatBytes(file.sizeBytes)}
+            {skipped ? null : `${formatCountOf(file.lineCount, 'line')} · `}
+            {formatBytes(file.sizeBytes)}
           </span>
           {/* The last commit is the one a reader asks about — "who touched this?" — so it carries
               the subject. Nothing is shown for a file without history rather than "never changed",
@@ -103,10 +111,13 @@ export function FilePage() {
             />
             <TooltipContent>Copy the qualified path</TooltipContent>
           </Tooltip>
-          <Toggle size="sm" pressed={wrap} onPressedChange={setWrap}>
-            <WrapText />
-            Wrap
-          </Toggle>
+          {/* No lines to fold on a skipped file. */}
+          {skipped ? null : (
+            <Toggle size="sm" pressed={wrap} onPressedChange={setWrap}>
+              <WrapText />
+              Wrap
+            </Toggle>
+          )}
           {/* Offered only where it can answer: a file whose repository has no history in the index
               would show an empty gutter, and a button that does nothing is worse than none. */}
           {canBlame(file) ? (
@@ -126,7 +137,7 @@ export function FilePage() {
 
           {/* A file committed but not indexed — binary, or over the size cap — has no lines to show,
               and saying which is more use than an empty pane. */}
-          {file.skipReason ? (
+          {skipped ? (
             <p className="rounded-lg border px-4 py-3 text-sm text-muted-foreground">
               Not indexed: {file.skipReason}.
             </p>
