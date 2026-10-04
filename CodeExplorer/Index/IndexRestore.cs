@@ -68,10 +68,16 @@ public sealed partial class ProjectIndexes
 
     /// <summary>
     ///     Gives an index <see cref="RestoreForRefreshAsync" /> restored without its BM25 index one of its
-    ///     own, for a refresh that ended without the swap that would have replaced it — cancelled,
-    ///     refused for disk, or failed. Left as it was, the project would be searched by substring scan
-    ///     until a later refresh succeeded, which on a disk that is not wiped can be indefinitely. Nothing
-    ///     to do after a swap, which is the ordinary case.
+    ///     own, for a refresh that ended without the swap that would have replaced it — refused for disk,
+    ///     or failed. Left as it was, the project would be searched by substring scan until a later
+    ///     refresh succeeded, which on a disk that is not wiped can be indefinitely. Nothing to do after a
+    ///     swap, which is the ordinary case.
+    ///     Not run once <paramref name="cancellationToken" /> is cancelled: it throws at the writer gate
+    ///     and the project stays marked for the next settle. A refresh passes the host's
+    ///     <c>ApplicationStopping</c>, so a refresh cancelled by shutdown does not settle. That is
+    ///     deliberate: nothing waits for a refresh once the host stops, and the host disposes this
+    ///     instance, so a copy and a full-text build started then (ADR-0009) would be cut off part-way
+    ///     rather than finished.
     ///     Built into a copy of the live file and moved into place like a restore, because a live index
     ///     is never mutated (CODING_STANDARDS.md); copied from the local file rather than fetched again,
     ///     because the transfer is most of what a restore costs and the store is the likeliest reason the

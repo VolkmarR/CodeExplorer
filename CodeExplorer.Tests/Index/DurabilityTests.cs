@@ -395,6 +395,31 @@ public sealed class DurabilityTests : IDisposable
     }
 
     /// <summary>
+    ///     A settle asked for on a cancelled token does not run (#349). A refresh hands it the host's
+    ///     <c>ApplicationStopping</c>, which is cancelled by the time a refresh that shutdown cut short
+    ///     gets to it, and the settle is a copy and a full-text build that nothing waits for once the
+    ///     host stops. So it is not started then rather than cut off part-way, it leaves no restore file,
+    ///     and the project stays marked: a settle that does get to run still builds the index.
+    /// </summary>
+    [Fact]
+    public async Task A_settle_on_a_cancelled_token_does_nothing_and_leaves_the_project_to_the_next_one()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\nvoid Needle() {}\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            host.Indexes.SettleRestoreAsync("alpha", new CancellationToken(true)));
+
+        Assert.Equal(["false"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+        await AssertNoRestoreLeftAsync(host, "alpha");
+        await host.Indexes.SettleRestoreAsync("alpha", Ct);
+        Assert.Equal(["true"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+    }
+
+    /// <summary>
     ///     What a refused restore or settle must not leave: its file, the log beside it, or its catalog
     ///     attached to the instance every project shares.
     /// </summary>
