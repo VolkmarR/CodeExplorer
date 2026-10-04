@@ -91,8 +91,11 @@ public sealed record GrepResult(
 ///     9.5-million-line project. The <c>\b…\b</c> tests here are the same rule against the same
 ///     tokeniser, which is why the answers are identical and the query is two to three times faster.
 /// </summary>
-public sealed partial class GrepSearch(IndexReaders readers)
+public sealed partial class GrepSearch(IndexReaders readers, IConfiguration configuration)
 {
+    /// <summary>How long a search may run before it is stopped and refused (<see cref="SearchTimeout" />).</summary>
+    private readonly int _timeoutSeconds = SearchTimeout.Seconds(configuration);
+
     /// <summary>
     ///     What a text query is answered by when the project's lines were tokenised: every identifier
     ///     piece of the query matched as a whole token, then verified with <c>contains</c>. Named for
@@ -176,8 +179,10 @@ public sealed partial class GrepSearch(IndexReaders readers)
                 "The query is empty. Pass the text or RE2 pattern to search for.", out string query) is { } refused)
             return refused;
 
-        return await readers.OverIndexAsync(slug, null,
-            (index, token) => QueryAsync(index, request, query, regex, token), cancellationToken);
+        return await PatternQuery.TimedAsync(_timeoutSeconds,
+            limited => readers.OverIndexAsync(slug, null,
+                (index, _) => QueryAsync(index, request, query, regex, limited()), cancellationToken),
+            cancellationToken);
     }
 
     private static Task<Outcome> QueryAsync(IndexReader index, GrepRequest request, string query, bool regex,

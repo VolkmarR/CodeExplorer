@@ -50,8 +50,11 @@ public sealed record MatchListResult(
 ///     deduplication is a <c>GROUP BY</c>, so the whole answer is computed in DuckDB (ADR-0004) and
 ///     only the distinct values cross the wire. Nothing here opens <c>control.duckdb</c> (ADR-0005).
 /// </summary>
-public sealed class MatchList(IndexReaders readers)
+public sealed class MatchList(IndexReaders readers, IConfiguration configuration)
 {
+    /// <summary>How long a listing may run before it is stopped and refused (<see cref="SearchTimeout" />).</summary>
+    private readonly int _timeoutSeconds = SearchTimeout.Seconds(configuration);
+
     /// <summary>Named on the search telemetry, so a dashboard can tell this apart from a grep.</summary>
     public const string Engine = "match list";
 
@@ -112,12 +115,16 @@ public sealed class MatchList(IndexReaders readers)
         string[] compileAlone = missingGroup is null
             ? request.WholeWord ? [query] : []
             : [query, .. request.WholeWord ? WholeWordPatterns(query) : []];
-        return await request.Filter.OverIndexAsync(readers, slug,
-            (index, filter, token) => PatternQuery.GuardedAsync(index.Connection, compileAlone,
-                PatternQuery.LineFlags(request.CaseSensitive),
-                () => missingGroup is not null
-                    ? Task.FromResult<Outcome>(missingGroup)
-                    : QueryAsync(index, request, filter, query, token), token),
+        return await PatternQuery.TimedAsync(_timeoutSeconds,
+            limited => request.Filter.OverIndexAsync(readers, slug, (index, filter, _) =>
+            {
+                var token = limited();
+                return PatternQuery.GuardedAsync(index.Connection, compileAlone,
+                    PatternQuery.LineFlags(request.CaseSensitive),
+                    () => missingGroup is not null
+                        ? Task.FromResult<Outcome>(missingGroup)
+                        : QueryAsync(index, request, filter, query, token), token);
+            }, cancellationToken),
             cancellationToken);
     }
 

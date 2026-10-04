@@ -61,6 +61,9 @@ builder.Services.AddSingleton<ImportBuilder>();
 builder.Services.AddSingleton<IndexBuilder>();
 builder.Services.AddSingleton<ProjectRefresh>();
 builder.Services.AddSingleton<RefreshService>();
+// Read here and not first by grep and list_matches, for the reason the repack settings are: thrown from
+// those singletons, a mistyped limit would fail every pattern search instead of stopping the server.
+_ = SearchTimeout.Seconds(builder.Configuration);
 builder.Services.AddSingleton<GrepSearch>();
 builder.Services.AddSingleton<FileQueries>();
 builder.Services.AddSingleton<HistoryQueries>();

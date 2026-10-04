@@ -48,6 +48,50 @@ internal static class PatternQuery
     }
 
     /// <summary>
+    ///     Runs <paramref name="search" /> under the limit of <see cref="SearchTimeout" />, and answers a
+    ///     search the limit stopped with a <see cref="Problem" /> rather than partial results (#373).
+    ///     The clock starts when <paramref name="search" /> asks for the token, which it does once the index
+    ///     is open: restoring an index on a cold replica is not the pattern's cost, and stopping it would
+    ///     refuse a cheap pattern as an expensive one.
+    ///     The refusal is made here, outside the index's lease, so the interrupted statement's exception
+    ///     passes through the lease first and its connection is closed rather than pooled: a lease is
+    ///     pooled only once its reads returned (<see cref="IndexReaders" />).
+    /// </summary>
+    /// <param name="seconds">The limit, which is also what the refusal says.</param>
+    /// <param name="search">The search, handed a function that starts the clock and returns the token every statement runs with.</param>
+    /// <param name="cancellationToken">
+    ///     The caller's. When it is the one cancelled, the cancellation propagates as it always has: an
+    ///     agent that gave up is not waiting for a sentence.
+    /// </param>
+    public static async Task<Outcome> TimedAsync(int seconds,
+        Func<Func<CancellationToken>, Task<Outcome>> search, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(search);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        try
+        {
+            return await search(() =>
+            {
+                limit.CancelAfter(TimeSpan.FromSeconds(seconds));
+                return limit.Token;
+            });
+        }
+        // DuckDB answers an interrupted statement with its own exception rather than a cancellation, and
+        // a token checked between statements throws the cancellation; both are the limit's doing only when
+        // it fired and the caller's token did not.
+        catch (Exception ex) when (ex is OperationCanceledException or DuckDBException
+                                   && limit.IsCancellationRequested
+                                   && !cancellationToken.IsCancellationRequested)
+        {
+            // Swallowed because it is the answer: the limit stopped the search, and saying so is the
+            // reply. The exception says nothing the caller can act on that the sentence does not.
+            return new Problem(
+                $"The search was stopped after {seconds} s: this pattern is too expensive to run over the index. "
+                + "Narrow it with `path` or `extension`, or use a simpler pattern, for example without `.*` spanning lines.");
+        }
+    }
+
+    /// <summary>
     ///     Runs <paramref name="search" />, and answers RE2 refusing the caller's pattern with a
     ///     <see cref="Problem" /> rather than an exception. Anything else DuckDB raises is infrastructure
     ///     and propagates.
