@@ -100,15 +100,25 @@ public sealed class MatchList(IndexReaders readers)
         // as an invalid argument, which reads as a broken pattern and sends the caller off fixing a
         // parenthesis that was never wrong. A pattern that does not compile has no groups to count, so
         // it is compiled alone before the count refuses, and before a whole-word wrapping balances it.
+        // The count answers without running the search, so it also comes after a compile of each
+        // wrapped form the search would have run: one can be too large for RE2 where the bare pattern
+        // fits, and that refusal is the one to fix first (#372).
         int groups = Re2.CaptureGroups(query);
         Problem? missingGroup = request.Group > groups
             ? new Problem(
                 $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
                 + "Put parentheses around the part that varies, or use group=0 for the whole match.")
             : null;
+        string[] compileAlone = (missingGroup, request.WholeWord) switch
+        {
+            (not null, true) =>
+                [query, PatternQuery.LinePattern(query, true), ExtractPattern(query, true)],
+            (not null, false) or (null, true) => [query],
+            _ => []
+        };
         return await request.Filter.OverIndexAsync(readers, slug,
-            (index, filter, token) => PatternQuery.GuardedAsync(index.Connection, query,
-                request.WholeWord || missingGroup is not null, PatternQuery.LineFlags(request.CaseSensitive),
+            (index, filter, token) => PatternQuery.GuardedAsync(index.Connection, compileAlone,
+                PatternQuery.LineFlags(request.CaseSensitive),
                 () => missingGroup is not null
                     ? Task.FromResult<Outcome>(missingGroup)
                     : QueryAsync(index, request, filter, query, token), token),
@@ -127,7 +137,7 @@ public sealed class MatchList(IndexReaders readers)
         // dropped before unnest rather than after, where each would have been a row.
         var lineParameters = PatternQuery.LineParameters(query, request.WholeWord, request.CaseSensitive);
         List<DuckDBParameter> matchParameters =
-            [.. lineParameters, new("extract", request.WholeWord ? SymbolText.WholeWordMatches(query) : query)];
+            [.. lineParameters, new("extract", ExtractPattern(query, request.WholeWord))];
         int group = request.WholeWord ? request.Group + 2 : request.Group;
         var fileParameters = new List<DuckDBParameter>();
         string fileFilter = filter.Sql(fileParameters);
@@ -186,4 +196,12 @@ public sealed class MatchList(IndexReaders readers)
 
         return new MatchListResult(totalDistinct, totalMatches, totalFiles, matches, withoutFilters);
     }
+
+    /// <summary>
+    ///     The pattern the values are extracted with: the caller's, or for whole words the form whose
+    ///     group 2 is the caller's whole match (<see cref="SymbolText.WholeWordMatches" />). The one
+    ///     spelling, so the compile alone before a missing group is named checks what the search runs.
+    /// </summary>
+    private static string ExtractPattern(string query, bool wholeWord) =>
+        wholeWord ? SymbolText.WholeWordMatches(query) : query;
 }

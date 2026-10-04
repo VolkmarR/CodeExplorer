@@ -617,6 +617,26 @@ public sealed class GrepTests : IDisposable
         Assert.StartsWith("No matches", text);
     }
 
+    /// <summary>
+    ///     Grep's whole-word line search compiles only the bare pattern alone, and needs no more: it then
+    ///     runs the wrapped one, and RE2 refusing that is answered as a refusal too (#372). Pinned so that
+    ///     a pattern that fits bare and not wrapped stays a refusal rather than a miss.
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task A_pattern_too_large_once_wrapped_as_a_whole_word_is_refused(SearchEngine engine)
+    {
+        await using var client = await StartAsync(engine);
+
+        string text = await GrepAsync(client,
+            new Dictionary<string, object?>
+                { ["query"] = MatchListTests.WrappedTooLarge, ["regex"] = true, ["wholeWord"] = true });
+
+        Assert.Contains("not a valid RE2", text);
+        Assert.Contains("pattern too large", text);
+    }
+
     private async Task<McpClient> StartAsync(SearchEngine engine)
     {
         _host = new TestHost(engine);
