@@ -57,6 +57,10 @@ export default defineConfig({
     // routeTree.gen.ts is written by the router plugin on every run; linting it would only ever
     // report on generated code nobody edits.
     ignorePatterns: ['src/routeTree.gen.ts', 'dist'],
+    // `vp check` is the gate (ADR-0004), and without these it never type-checks: a TypeScript error
+    // passed it and was only caught by a separate `tsc -b`. Together they make the lint step run
+    // tsgolint, which reports the compiler's errors and enables the type-aware rules.
+    options: { typeAware: true, typeCheck: true },
     // `unicorn` and `oxc` are on by default and are named here because listing plugins replaces that
     // default. `react-perf` is deliberately absent: its rules forbid the inline handlers and object
     // props that React Compiler exists to memoize, so it would argue with the compiler.
@@ -113,6 +117,12 @@ export default defineConfig({
       'react-doctor/react-in-jsx-scope': 'off',
       // The Tailwind entry is imported for its side effect; that is how a Vite CSS entry is written.
       'import/no-unassigned-import': 'off',
+      // `typeAware` (above, for the type check) also switches on the type-aware rules. These three
+      // fired on code that predates them — 20 sites, the vendored ui/ files among them — and are off
+      // until a change of their own decides each site, rather than riding in with the type check.
+      'typescript/no-unsafe-type-assertion': 'off',
+      'typescript/no-unnecessary-type-assertion': 'off',
+      'typescript/consistent-return': 'off',
     },
     // The one boundary the folder layout rests on, checked rather than remembered — the server has a
     // test for the same rule between its modules. `components/` is what every feature uses and

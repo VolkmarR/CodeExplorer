@@ -17,7 +17,7 @@ same name would make `vp run <name>` ambiguous.
 | `vp install`     | Install dependencies. Run it after pulling.                  |
 | `vp dev`         | Dev server on 5173, proxying `/api` to the server on 5000.   |
 | `vp build`       | Production build into `../CodeExplorer/wwwroot`.             |
-| `vp check --fix` | Format with oxfmt, then lint with oxlint and React Doctor.   |
+| `vp check --fix` | Format (oxfmt), lint (oxlint, React Doctor), type-check.     |
 | `vp test`        | Vitest. Today that is the C# and X# highlighter definitions. |
 
 `vp` is the global CLI; `./node_modules/.bin/vp` is the project-local one and does the same thing.

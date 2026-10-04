@@ -224,8 +224,9 @@ Two kinds of failure, two mechanisms. Never mix them.
   sharing the pattern collector in `highlight/patterns.ts`. A language the library lacks gets a
   definition here, not a second highlighter, and gets tests: a bad pattern mis-colours a file
   instead of throwing, so pattern order is asserted rather than eyeballed.
-- `vp check` and `vp test` are the gate (ADR-0004). Lint rules are configured in `vite.config.ts`;
-  a rule switched off carries the decision it conflicts with, never "it was noisy".
+- `vp check` and `vp test` are the gate (ADR-0004). `vp check` type-checks as well as formatting and
+  linting (`lint.options.typeCheck`), so no separate `tsc -b` is needed. Lint rules are configured in
+  `vite.config.ts`; a rule switched off carries the decision it conflicts with, never "it was noisy".
 - React Compiler is on, so memoisation is its job: no hand-written `useMemo` or `useCallback`. One
   kept anyway carries a comment naming the measurement that justified it — the profile that showed
   the compiler missing it, not an assumption that a render was slow. The exception is a value a
