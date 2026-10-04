@@ -126,6 +126,30 @@ public sealed class ImportTests : IDisposable
     }
 
     /// <summary>
+    ///     A file the build skipped has no lines, so its import lines were never read (#370). The reply
+    ///     blamed a missing profile for the binary and told the over-size C# file it "imports nothing";
+    ///     neither is why nothing came back.
+    /// </summary>
+    [Fact]
+    public async Task A_skipped_file_says_it_is_not_indexed_and_claims_no_reading()
+    {
+        _host = new TestHost(SearchEngine.Substring, FileToolsTests.SkippingCeiling);
+        await _host.IndexedProjectAsync("alpha", FileToolsTests.Skipping);
+        await using var client = await _host.ConnectAsync("alpha");
+
+        foreach (var (path, reason) in FileToolsTests.SkippedFiles)
+        {
+            string text = await ImportsAsync(client, path);
+            Assert.Contains($"{path} is not indexed ({reason}", text);
+            Assert.Contains("Nothing was read from it", text);
+            Assert.DoesNotContain("no language profile covers", text);
+            Assert.DoesNotContain("imports nothing", text);
+            Assert.DoesNotContain("No import line was read", text);
+            Assert.DoesNotContain("Strong evidence", text);
+        }
+    }
+
+    /// <summary>
     ///     A relative path resolves against the importing file's own directory, with the extension
     ///     supplied the way the language would — which is the half of resolution a namespace lookup
     ///     cannot do.

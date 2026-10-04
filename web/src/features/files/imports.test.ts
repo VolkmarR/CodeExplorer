@@ -17,6 +17,7 @@ const imports = (fields: Partial<FileImports>): FileImports => ({
   module: null,
   profiled: true,
   qualifiedPath: 'one/src/Orders.cs',
+  skipReason: null,
   ...fields,
 })
 
@@ -32,6 +33,19 @@ test('an empty imports panel says which kind of empty it is', () => {
     'SQL has no import concept',
   )
   expect(importsNote(imports({}))).toContain('imports nothing')
+})
+
+/**
+ * A file the build skipped was never read, so the note names why rather than blaming the profile or
+ * saying it imports nothing (#370). The rail does not ask for such a file today; the server can
+ * still answer it.
+ */
+test('a skipped file is not indexed, and nothing was read from it', () => {
+  const note = importsNote(imports({ skipReason: 'larger than 25 MiB' }))
+
+  expect(note).toContain('not indexed (larger than 25 MiB)')
+  expect(note).toContain('nothing was read')
+  expect(note).not.toContain('imports nothing')
 })
 
 test('a file with imports has nothing to explain, and one cut off at the ceiling says so', () => {

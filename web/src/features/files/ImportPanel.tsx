@@ -28,11 +28,17 @@ export function ImportPanel({ project, path }: { project: string; path: string }
     <RailPanel
       title="Imports"
       // No number where there is no list to count: an extension no profile covers and a language
-      // with no imports both answer in prose, and a `0` beside it would read as a measurement.
-      count={data.profiled && data.hasImports ? data.imports.length : undefined}
+      // with no imports both answer in prose, and a `0` beside it would read as a measurement. So
+      // does a file the build skipped, which was not read at all.
+      count={
+        data.skipReason === null && data.profiled && data.hasImports
+          ? data.imports.length
+          : undefined
+      }
       capped={data.capped}
       note={importsNote(data)}
-      evidence={IMPORT_EVIDENCE}
+      // Nothing was read from a skipped file, so there is no claim to qualify.
+      evidence={data.skipReason === null ? IMPORT_EVIDENCE : undefined}
     >
       {/* In the order the file wrote them, resolved and unresolved together. Sorting the resolved
           ones first would push the unresolved ones out of the collapsed panel, which is the reading
