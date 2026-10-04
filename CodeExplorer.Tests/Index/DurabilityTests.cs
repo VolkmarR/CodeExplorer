@@ -8,6 +8,7 @@ using CodeExplorer.Refresh;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using Xunit;
 
@@ -315,7 +316,7 @@ public sealed class DurabilityTests : IDisposable
         ExplainedFailureException thrown;
         await using (await host.FailingCheckpointsAsync())
             thrown = await Assert.ThrowsAsync<ExplainedFailureException>(() =>
-                host.Indexes.SettleRestoreAsync("alpha", Ct));
+                host.Indexes.SettleRestoreAsync("alpha", FreeSpace.DefaultMinimumBytes, Ct));
 
         Assert.Contains("'alpha'", thrown.Message, StringComparison.Ordinal);
         Assert.Contains("still serves", thrown.Message, StringComparison.Ordinal);
@@ -341,7 +342,8 @@ public sealed class DurabilityTests : IDisposable
         await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
 
         await using (await host.FailingCheckpointsAsync())
-            await Assert.ThrowsAsync<ExplainedFailureException>(() => host.Indexes.SettleRestoreAsync("alpha", Ct));
+            await Assert.ThrowsAsync<ExplainedFailureException>(() =>
+                host.Indexes.SettleRestoreAsync("alpha", FreeSpace.DefaultMinimumBytes, Ct));
 
         Assert.Equal(["class Beta {}"], await host.ScalarsAsync("beta", "SELECT content FROM lines"));
         Assert.Equal(["false"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
@@ -383,9 +385,10 @@ public sealed class DurabilityTests : IDisposable
         host.Restart();
         await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
         await using (await host.FailingCheckpointsAsync())
-            await Assert.ThrowsAsync<ExplainedFailureException>(() => host.Indexes.SettleRestoreAsync("alpha", Ct));
+            await Assert.ThrowsAsync<ExplainedFailureException>(() =>
+                host.Indexes.SettleRestoreAsync("alpha", FreeSpace.DefaultMinimumBytes, Ct));
 
-        await host.Indexes.SettleRestoreAsync("alpha", Ct);
+        await host.Indexes.SettleRestoreAsync("alpha", FreeSpace.DefaultMinimumBytes, Ct);
 
         Assert.Equal(["true"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
         Assert.Equal(["void Needle() {}"], await host.ScalarsAsync("alpha", """
@@ -411,12 +414,60 @@ public sealed class DurabilityTests : IDisposable
         await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            host.Indexes.SettleRestoreAsync("alpha", new CancellationToken(true)));
+            host.Indexes.SettleRestoreAsync("alpha", FreeSpace.DefaultMinimumBytes, new CancellationToken(true)));
 
         Assert.Equal(["false"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
         await AssertNoRestoreLeftAsync(host, "alpha");
-        await host.Indexes.SettleRestoreAsync("alpha", Ct);
+        await host.Indexes.SettleRestoreAsync("alpha", FreeSpace.DefaultMinimumBytes, Ct);
         Assert.Equal(["true"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+    }
+
+    /// <summary>
+    ///     A settle without disk room for its copy does not start (#363). It copies the whole index and
+    ///     builds the BM25 index beside it, and one of the refreshes that hands it a project is one
+    ///     refused for room, so on a near-full disk every refresh re-ran a copy likely to fail the same
+    ///     way. The floor is the free-space minimum a refresh is granted, set above any disk here as the
+    ///     refresh's own disk test sets it. Skipped, the project stays marked: the next settle with room
+    ///     builds the index.
+    /// </summary>
+    [Fact]
+    public async Task A_settle_without_disk_room_does_not_copy_and_leaves_the_project_to_the_next_one()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\nvoid Needle() {}\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
+
+        await host.Indexes.SettleRestoreAsync("alpha", long.MaxValue, Ct);
+
+        Assert.Equal(["false"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+        await AssertNoRestoreLeftAsync(host, "alpha");
+        await host.Indexes.SettleRestoreAsync("alpha", FreeSpace.DefaultMinimumBytes, Ct);
+        Assert.Equal(["true"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+    }
+
+    /// <summary>
+    ///     A settle skipped for room says so once, at information level (#363). It is not a failure: the
+    ///     project is still served, by substring scan, and the next settle tries again. A warning on every
+    ///     refused refresh of a near-full disk was the noise the operator would learn to ignore.
+    /// </summary>
+    [Fact]
+    public async Task A_settle_skipped_for_room_is_logged_once_at_information_level()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
+
+        await host.Indexes.SettleRestoreAsync("alpha", long.MaxValue, Ct);
+        await host.Indexes.SettleRestoreAsync("alpha", long.MaxValue, Ct);
+
+        var logged = host.Logs.Matching("full-text index");
+        Assert.Equal([LogLevel.Information], logged.Select(entry => entry.Level));
+        Assert.Contains("alpha", logged[0].Message, StringComparison.Ordinal);
+        Assert.Contains("MiB", logged[0].Message, StringComparison.Ordinal);
     }
 
     /// <summary>

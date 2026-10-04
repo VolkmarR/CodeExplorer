@@ -35,6 +35,16 @@ public sealed class LogProbe : ILoggerProvider
                                             && entry.Message.Contains(containing, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    ///     Every entry whose message contains the text, at any level, in the order logged: for a test
+    ///     whose subject is the level a line is logged at and how often, not only that it was.
+    /// </summary>
+    public IReadOnlyList<LogEntry> Matching(string containing)
+    {
+        lock (_sync)
+            return _entries.Where(entry => entry.Message.Contains(containing, StringComparison.Ordinal)).ToList();
+    }
+
     private void Add(LogEntry entry)
     {
         lock (_sync) _entries.Add(entry);

@@ -299,13 +299,14 @@ public sealed class RefreshService(
     ///     Gives back the full-text index a refresh's restore skipped, when the refresh ended without the
     ///     swap that would have replaced it (#290). Not when the host is stopping: the token is
     ///     <c>ApplicationStopping</c>, and <see cref="ProjectIndexes.SettleRestoreAsync" /> does not run
-    ///     on a cancelled one (#349).
+    ///     on a cancelled one (#349). Nor without room for it, by the same floor a refresh is granted: a
+    ///     skip is not a failure, so it is not warned about here, and the settle logs it itself (#363).
     /// </summary>
     private async Task SettleRestoreAsync(string slug, CancellationToken cancellationToken)
     {
         try
         {
-            await indexes.SettleRestoreAsync(slug, cancellationToken);
+            await indexes.SettleRestoreAsync(slug, _minimumFreeBytes, cancellationToken);
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {

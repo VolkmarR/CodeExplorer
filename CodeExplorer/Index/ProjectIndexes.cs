@@ -93,8 +93,9 @@ public sealed partial class ProjectIndexes : IDisposable
     private readonly ConcurrentDictionary<string, long> _discards = new(StringComparer.Ordinal);
 
     // The projects whose live index a refresh restored without its BM25 index and has not yet swapped
-    // out (#290); see SettleRestoreAsync. Written under the writer gate, like the count above.
-    private readonly ConcurrentDictionary<string, byte> _withoutFullText = new(StringComparer.Ordinal);
+    // out (#290); see SettleRestoreAsync. Written under the writer gate, like the count above. The
+    // value is whether a settle skipped for disk room has said so since the restore marked it (#363).
+    private readonly ConcurrentDictionary<string, bool> _withoutFullText = new(StringComparer.Ordinal);
 
     // One gate per project, kept for the life of the process: the count is bounded by the control
     // database, and a gate holds nothing but a reader count.
