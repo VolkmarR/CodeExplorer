@@ -23,8 +23,8 @@ public sealed class RepositoryEndpointTests : IDisposable
 
     /// <summary>
     ///     Write-only, on every read that lists the repository: the answer to the request that stored the
-    ///     credential, the repository list, and the project page, which says whether one is set and
-    ///     nothing more.
+    ///     credential, and the project page, which lists the repositories and says whether one is set
+    ///     and nothing more.
     /// </summary>
     [Fact]
     public async Task A_credential_is_reported_as_set_and_never_returned()
@@ -39,10 +39,6 @@ public sealed class RepositoryEndpointTests : IDisposable
         Assert.DoesNotContain(Secret, createdBody);
         Assert.Contains("\"hasCredential\":true", createdBody);
         await _host.AddRepositoryAsync("alpha", "plain", "https://example.invalid/plain.git");
-
-        string listBody = await http.GetStringAsync("/api/projects/alpha/repositories", Ct);
-        Assert.DoesNotContain(Secret, listBody);
-        Assert.Contains("main", listBody);
 
         string json = await http.GetStringAsync("/api/projects/alpha", Ct);
         Assert.DoesNotContain(Secret, json, StringComparison.Ordinal);

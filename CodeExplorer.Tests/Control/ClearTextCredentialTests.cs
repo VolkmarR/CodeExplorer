@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text;
 using CodeExplorer.Index;
+using CodeExplorer.Operator;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -39,7 +40,7 @@ public sealed class ClearTextCredentialTests : IDisposable
         string body = await response.Content.ReadAsStringAsync(Ct);
         Assert.Contains(Refusal, body);
         Assert.DoesNotContain(Secret, body);
-        Assert.Empty(await _host.GetJsonAsync<object[]>("/api/projects/alpha/repositories"));
+        Assert.Empty((await _host.GetJsonAsync<ProjectDetail>("/api/projects/alpha")).Repositories);
     }
 
     [Theory]
