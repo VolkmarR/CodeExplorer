@@ -127,6 +127,8 @@ public sealed class IndexBuilder(
             // maps then prune by repo_id and file_id without an index. Materialised anyway by the sort,
             // so the count is free and the step can say how far through the tree it is.
             var entries = clone.Files().OrderBy(e => e.Path, StringComparer.Ordinal).ToList();
+            // Written once rather than for each file over the limit, which every one of them shares.
+            string oversizedReason = $"larger than {Limit(_maxFileBytes)}";
             foreach (var entry in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -141,7 +143,7 @@ public sealed class IndexBuilder(
                 // blob, so asking for it first inflated every oversized binary on every refresh (#230).
                 bool oversized = entry.Size > _maxFileBytes;
                 string? content = oversized ? null : entry.Text();
-                string? skipReason = oversized ? $"larger than {Limit(_maxFileBytes)}" :
+                string? skipReason = oversized ? oversizedReason :
                     content is null ? "binary" : null;
                 var text = content is null ? [] : SplitLines(content);
                 for (int i = 0; i < text.Count; i++)
@@ -203,23 +205,22 @@ public sealed class IndexBuilder(
     }
 
     /// <summary>
-    ///     The size limit as the skip reason states it: in the largest of MiB and KiB that holds it as at
-    ///     least one unit and exactly in at most two decimals, otherwise in bytes — "25 MiB", "1.5 MiB",
-    ///     "1 KiB", "1000 bytes" (#379). Whole MiB only read "0 MiB" for any limit under one. Not
+    ///     The size limit as the skip reason states it: in the largest of MiB and KiB that it is at least
+    ///     one of and a whole number of quarters of, otherwise in bytes — "25 MiB", "1.25 MiB", "1 KiB",
+    ///     "1,000 bytes" (#379). A quarter is what two decimals can state exactly of a power-of-two unit,
+    ///     so the reason never rounds. Whole MiB only read "0 MiB" for any limit under one. Not
     ///     <c>ToolReply.Bytes</c> or <c>FreeSpace.Mib</c>: both round, which suits a file's size or the
     ///     free space but not a limit: a limit of 1100 bytes would read "larger than 1.1 KB", which a
     ///     skipped file of 1101 bytes is not.
     /// </summary>
     private static string Limit(long bytes)
     {
-        foreach (var (unit, name) in new[] { (1024L * 1024, "MiB"), (1024L, "KiB") })
-        {
-            decimal value = (decimal)bytes / unit;
-            if (value >= 1 && value == decimal.Round(value, 2))
-                return string.Create(CultureInfo.InvariantCulture, $"{value:0.##} {name}");
-        }
+        const long kib = 1024, mib = 1024 * kib;
+        foreach (var (unit, name) in new[] { (mib, "MiB"), (kib, "KiB") })
+            if (bytes >= unit && bytes % (unit / 4) == 0)
+                return string.Create(CultureInfo.InvariantCulture, $"{(decimal)bytes / unit:0.##} {name}");
 
-        return string.Create(CultureInfo.InvariantCulture, $"{bytes} {ToolReply.Plural(bytes, "byte")}");
+        return string.Create(CultureInfo.InvariantCulture, $"{bytes:N0} {ToolReply.Plural(bytes, "byte")}");
     }
 
     /// <summary>

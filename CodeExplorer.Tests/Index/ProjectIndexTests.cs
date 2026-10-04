@@ -99,15 +99,17 @@ public sealed class ProjectIndexTests : IDisposable
     /// <summary>
     ///     The size reason states the configured limit as it is (#379). It divided down to whole MiB, so
     ///     any limit under one MiB read "larger than 0 MiB" and 1.5 MiB read "larger than 1 MiB". The
-    ///     limit is now written in the largest of MiB, KiB and bytes that holds it exactly in at most two
-    ///     decimals and at least one whole unit; the 25 MiB default keeps its wording, pinned above.
+    ///     limit is now written in the largest of MiB and KiB that it is at least one of and a whole number
+    ///     of quarters of, otherwise in bytes; the 25 MiB default keeps its wording, pinned above.
     /// </summary>
     [Theory]
     [InlineData(1024, "larger than 1 KiB")]
-    [InlineData(1536, "larger than 1.5 KiB")]
-    [InlineData(1000, "larger than 1000 bytes")]
+    [InlineData(1792, "larger than 1.75 KiB")]
+    [InlineData(1000, "larger than 1,000 bytes")]
+    [InlineData(1, "larger than 1 byte")]
     [InlineData(512 * 1024, "larger than 512 KiB")]
     [InlineData(1536 * 1024, "larger than 1.5 MiB")]
+    [InlineData(1280 * 1024, "larger than 1.25 MiB")]
     public async Task A_size_reason_states_the_limit_exactly(long limit, string reason)
     {
         _host = new TestHost(SearchEngine.Substring, ("Index:MaxFileBytes", limit));
