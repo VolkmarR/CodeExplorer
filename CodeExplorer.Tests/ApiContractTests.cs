@@ -60,7 +60,6 @@ public sealed class ApiContractTests(HttpJsonFixture fixture)
         ["/api/projects/{project}/overview"] = Project("/overview"),
         ["/api/projects/{project}/excluded-paths"] = Project("/excluded-paths"),
         ["/api/projects/{project}/excluded-paths/suggestions"] = Project("/excluded-paths/suggestions"),
-        ["/api/projects/{project}/repositories"] = Project("/repositories"),
         ["/api/projects/{project}/refresh"] = Project("/refresh"),
         ["/api/projects/{project}/search"] = Project("/search?q=class"),
         ["/api/projects/{project}/files"] = Project("/files"),

@@ -70,11 +70,6 @@ internal static class ControlEndpoints
                     _ => ApiError.Conflict($"Project '{project.Slug}' already has a repository with slug '{request.Slug}'.")
                 });
 
-        project.MapGet("/repositories",
-            async (Project project, ControlDatabase control, CancellationToken ct) =>
-                (await control.ListRepositoriesAsync(project.Slug, ct))
-                .Select(r => new RepositoryResponse(r.Slug, r.Url, r.HasCredential)));
-
         // The overview page's setting (#216). Nothing is rebuilt: the page reads it on its next load.
         project.MapGet("/excluded-paths", async (Project project, ControlDatabase control, CancellationToken ct) =>
             new ExcludedPathsBody(await control.ExcludedPathsAsync(project.Slug, ct)));
