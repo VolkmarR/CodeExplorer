@@ -96,6 +96,30 @@ public sealed class ProjectIndexTests : IDisposable
         Assert.Equal(["52428834"], bytes);
     }
 
+    /// <summary>
+    ///     The size reason states the configured limit as it is (#379). It divided down to whole MiB, so
+    ///     any limit under one MiB read "larger than 0 MiB" and 1.5 MiB read "larger than 1 MiB". The
+    ///     limit is now written in the largest of MiB, KiB and bytes that holds it exactly in at most two
+    ///     decimals and at least one whole unit; the 25 MiB default keeps its wording, pinned above.
+    /// </summary>
+    [Theory]
+    [InlineData(1024, "larger than 1 KiB")]
+    [InlineData(1536, "larger than 1.5 KiB")]
+    [InlineData(1000, "larger than 1000 bytes")]
+    [InlineData(512 * 1024, "larger than 512 KiB")]
+    [InlineData(1536 * 1024, "larger than 1.5 MiB")]
+    public async Task A_size_reason_states_the_limit_exactly(long limit, string reason)
+    {
+        _host = new TestHost(SearchEngine.Substring, ("Index:MaxFileBytes", limit));
+        await _host.IndexedProjectAsync("alpha", new Dictionary<string, Dictionary<string, string>>
+        {
+            ["main"] = new() { ["dump.sql"] = new string('x', (int)limit + 1) }
+        });
+
+        var skipped = await _host.ScalarsAsync("alpha", "SELECT skip_reason FROM files");
+        Assert.Equal([reason], skipped);
+    }
+
     [Fact]
     public async Task A_refresh_reports_what_it_indexed()
     {
