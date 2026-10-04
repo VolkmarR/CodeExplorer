@@ -5,6 +5,9 @@ enforced by `.editorconfig` and the compiler — they are deliberately absent he
 quality is also absent: assume the reader already knows that duplicated code and mysterious names
 are bad.
 
+Line endings: LF in the repository and CRLF in a Windows working tree, by `* text=auto` in
+`.gitattributes`.
+
 Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules follow from.
 
 ## Dependencies
