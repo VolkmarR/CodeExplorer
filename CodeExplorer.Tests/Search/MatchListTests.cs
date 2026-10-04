@@ -265,6 +265,26 @@ public sealed class MatchListTests : IDisposable
         Assert.Contains("    3      2  Status.Open", quoted);
     }
 
+    /// <summary>
+    ///     The pattern is compiled alone with the flags the search runs it with (#364). Case folding
+    ///     widens every class RE2 compiles, so this one fits RE2's size limit without <c>i</c> and not
+    ///     with it: compiled without, it passed, and the reply blamed the missing group instead.
+    /// </summary>
+    [Fact]
+    public async Task A_pattern_too_large_once_case_is_folded_is_refused_before_its_groups_are_counted()
+    {
+        await using var client = await StartAsync(SearchEngine.Substring);
+        string large = string.Concat(Enumerable.Repeat("(?:[a-z]{1000})", 100));
+
+        string folded = await ListAsync(client, new Dictionary<string, object?> { ["query"] = large, ["group"] = 1 });
+        Assert.Contains("not a valid RE2", folded);
+        Assert.Contains("pattern too large", folded);
+
+        string exact = await ListAsync(client,
+            new Dictionary<string, object?> { ["query"] = large, ["group"] = 1, ["caseSensitive"] = true });
+        Assert.Contains("The pattern has no capture groups, so group=1 cannot be extracted.", exact);
+    }
+
     [Fact]
     public async Task A_malformed_pattern_is_explained()
     {

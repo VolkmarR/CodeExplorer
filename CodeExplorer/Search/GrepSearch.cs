@@ -188,6 +188,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         if (!regex) return SearchLinesAsync(index, request, query, regex, bounds, cancellationToken);
         // Only a wrapped pattern needs compiling alone first: whole words and multiline wrap it.
         return PatternQuery.GuardedAsync(index.Connection, query, request.WholeWord || request.Multiline,
+            request.Multiline ? "" : PatternQuery.LineFlags(request.CaseSensitive),
             () => request.Multiline
                 ? SearchMultilineAsync(index.Connection, request, query, bounds, cancellationToken)
                 : SearchLinesAsync(index, request, query, regex, bounds, cancellationToken),

@@ -62,15 +62,20 @@ internal static class PatternQuery
     ///     wherever the search runs a wrapped form of it, because a wrapper can balance what the caller
     ///     left unbalanced. A bare pattern is compiled by the search itself.
     /// </param>
+    /// <param name="flags">
+    ///     The flags the search runs the pattern with, and so the ones it is compiled alone with: the
+    ///     flags decide whether it fits RE2's size limit (#364), and a compile that used others would
+    ///     refuse a pattern the search runs, or pass one the search then refuses.
+    /// </param>
     /// <param name="search">The search, which runs its own statements so their plans carry its name.</param>
     /// <param name="cancellationToken">Threaded to the compile, as every async path here is.</param>
     public static async Task<Outcome> GuardedAsync(DuckDBConnection connection, string pattern, bool compileAlone,
-        Func<Task<Outcome>> search, CancellationToken cancellationToken)
+        string flags, Func<Task<Outcome>> search, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(search);
         try
         {
-            if (compileAlone && await Re2.RejectionAsync(connection, pattern, "", cancellationToken) is { } rejection)
+            if (compileAlone && await Re2.RejectionAsync(connection, pattern, flags, cancellationToken) is { } rejection)
                 return new Problem(Re2.Rejected(rejection));
             return await search();
         }
@@ -89,8 +94,15 @@ internal static class PatternQuery
     public static List<DuckDBParameter> LineParameters(string pattern, bool wholeWord, bool caseSensitive) =>
     [
         new("q", wholeWord ? SymbolText.WholeWord(pattern) : pattern),
-        new("flags", caseSensitive ? "" : "i")
+        new("flags", LineFlags(caseSensitive))
     ];
+
+    /// <summary>
+    ///     The RE2 flags of <see cref="LineMatch" />: case-insensitive unless the caller asked otherwise.
+    ///     The one spelling, so the compile alone in <see cref="GuardedAsync" /> cannot use other flags
+    ///     than the search it guards.
+    /// </summary>
+    public static string LineFlags(bool caseSensitive) => caseSensitive ? "" : "i";
 
     /// <summary>
     ///     How many files hold a line <paramref name="match" /> accepts, with no file filter: asked only
