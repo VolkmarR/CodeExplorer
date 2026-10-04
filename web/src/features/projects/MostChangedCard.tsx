@@ -45,6 +45,7 @@ export function MostChangedCard({
             >
               See the whole ranking
             </Link>
+            .
           </>
         ) : null
       }
