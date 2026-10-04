@@ -80,8 +80,13 @@ to make it legible rather than to hide it or to trade an invariant for it.
   without the project's file, a refresh restores the durable copy before it fetches, and that restore
   used to build the BM25 index the shadow was about to build again. It skips the build now. Between
   the restore and the swap the project is served by substring scan, which `index_info` records. That
-  is a window of minutes on a replica that has just woken up, not a live index changed in place. A
-  refresh that ends without its swap copies the restored index into a new file, builds the full-text
-  index there and moves that file into place, so the gap never outlasts the refresh. The restore also reports a phase of its
-  own, so what it cost is on the timeline, and a failed restore is reported under its own name rather
+  is usually a window of minutes on a replica that has just woken up, not a live index changed in
+  place. A refresh that ends without its swap settles: it copies the restored index into a new file,
+  builds the full-text index there and moves that file into place. The gap lasts until a settle or a
+  refresh succeeds, and two things can extend it past the refresh. A refresh cut short by shutdown
+  does not settle (#349), and the mark that would have the next settle try again is held in memory,
+  so it goes with the process and the next refresh that succeeds ends the gap. A settle without disk
+  room for its copy does not start (#363); the project stays marked, and the next settle, after the
+  next refresh that ends without its swap, tries again. The restore also reports a phase of its own,
+  so what it cost is on the timeline, and a failed restore is reported under its own name rather
   than under `Starting`.
