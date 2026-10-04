@@ -370,6 +370,31 @@ public sealed class DurabilityTests : IDisposable
     }
 
     /// <summary>
+    ///     A refused settle is tried again (#349): the project stays marked as lacking its full-text
+    ///     index, so the next settle builds one. Cleared before the rebuild, the mark made the refusal's
+    ///     "the next refresh builds one" untrue for the rest of the process.
+    /// </summary>
+    [Fact]
+    public async Task The_settle_after_a_refused_one_builds_the_full_text_index()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\nvoid Needle() {}\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
+        await using (await host.FailingCheckpointsAsync())
+            await Assert.ThrowsAsync<ExplainedFailureException>(() => host.Indexes.SettleRestoreAsync("alpha", Ct));
+
+        await host.Indexes.SettleRestoreAsync("alpha", Ct);
+
+        Assert.Equal(["true"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+        Assert.Equal(["void Needle() {}"], await host.ScalarsAsync("alpha", """
+                                                                           SELECT content FROM lines
+                                                                           WHERE fts_main_lines.match_bm25(line_id, 'needle') IS NOT NULL
+                                                                           """));
+    }
+
+    /// <summary>
     ///     What a refused restore or settle must not leave: its file, the log beside it, or its catalog
     ///     attached to the instance every project shares.
     /// </summary>
