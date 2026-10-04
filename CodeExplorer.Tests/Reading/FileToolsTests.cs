@@ -748,6 +748,59 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
         Assert.Contains("Strong evidence, not proof.", quiet);
     }
 
+    /// <summary>
+    ///     A file the build skipped has no lines in the index, so nothing was read from it (#370). The
+    ///     reply said it "was read with the conservative default shapes" for the binary, whose extension
+    ///     no profile covers, and that the over-size C# file "declares nothing" — two readings that never
+    ///     happened. A skipped file is a fourth kind of empty, and it says why it is one.
+    /// </summary>
+    [Fact]
+    public async Task List_declarations_says_a_skipped_file_is_not_indexed_and_claims_no_reading()
+    {
+        using var host = new TestHost(SearchEngine.Substring, SkippingCeiling);
+        await host.IndexedProjectAsync("alpha", Skipping);
+        await using var client = await host.ConnectAsync("alpha");
+
+        foreach (var (path, reason) in SkippedFiles)
+        {
+            string text = await DeclarationsAsync(client, path);
+            Assert.Contains($"{path} is not indexed ({reason}", text);
+            Assert.Contains("Nothing was read from it", text);
+            Assert.DoesNotContain("was read with", text);
+            Assert.DoesNotContain("conservative default shapes", text);
+            Assert.DoesNotContain("declares nothing", text);
+            Assert.DoesNotContain("found no declaration", text);
+            // The caveat is about what a scan of line shapes can miss, and no scan ran.
+            Assert.DoesNotContain("Strong evidence", text);
+        }
+    }
+
+    /// <summary>
+    ///     <c>Index:MaxFileBytes</c> lowered to a kilobyte, so a fixture can cross it without committing
+    ///     the 25 MiB the shipped default would take.
+    /// </summary>
+    internal static readonly (string, object?) SkippingCeiling = ("Index:MaxFileBytes", 1024);
+
+    /// <summary>
+    ///     The two ways the build skips a file: a binary, whose extension no profile covers, and a C#
+    ///     file over the size ceiling, whose language would otherwise be read.
+    /// </summary>
+    internal static readonly Dictionary<string, Dictionary<string, string>> Skipping = new()
+    {
+        ["one"] = new Dictionary<string, string>
+        {
+            // A NUL byte makes libgit2 classify the blob as binary.
+            ["assets/logo.bin"] = "\0\0binary",
+            ["src/Huge.cs"] = "using System.Text;\n\npublic class Huge\n{\n"
+                              + string.Concat(Enumerable.Range(0, 100).Select(i => $"    public void M{i}() {{ }}\n"))
+                              + "}\n"
+        }
+    };
+
+    /// <summary>Each skipped file in <see cref="Skipping" /> and the start of the reason the build gives.</summary>
+    internal static readonly (string Path, string Reason)[] SkippedFiles =
+        [("one/assets/logo.bin", "binary"), ("one/src/Huge.cs", "larger than")];
+
     [Fact]
     public async Task List_declarations_explains_a_path_that_names_no_file()
     {

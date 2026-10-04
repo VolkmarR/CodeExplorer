@@ -12,10 +12,18 @@ namespace CodeExplorer.Search;
 ///     One field and not a pair of flags: only three of the four combinations two booleans can spell
 ///     are reachable — the fallback profile reads the C-family shapes, so an extension no profile
 ///     covers is never also unreadable — and a fourth state that compiles is a fourth state a caller
-///     can render the wrong sentence for.
+///     can render the wrong sentence for. <see cref="Skipped" /> sits outside that pair: it is decided
+///     before either flag is asked, because a file the build skipped has no lines for any profile to read.
 /// </summary>
 public enum DeclarationCoverage
 {
+    /// <summary>
+    ///     The build skipped the file — binary, or over the size ceiling — so it has no lines in the
+    ///     index and nothing was read from it (#370). Its extension says nothing here: a skipped C# file
+    ///     is no more read than a skipped image.
+    /// </summary>
+    Skipped,
+
     /// <summary>
     ///     No profile claims the extension, so the file was read with the conservative default shapes.
     ///     A list may still come back; it is thinner than a profiled language's would be.
@@ -53,7 +61,8 @@ public sealed record FileDeclaration(
 /// <summary>
 ///     What one file declares. <see cref="Coverage" /> is what an empty list means, and
 ///     <see cref="Capped" /> says the list stopped at <see cref="FileDeclarations.MaxDeclarations" />
-///     rather than at the end of the file.
+///     rather than at the end of the file. <see cref="SkipReason" /> is why the build skipped the file,
+///     set exactly when <see cref="Coverage" /> is <see cref="DeclarationCoverage.Skipped" />.
 ///     <see cref="Offset" /> is how many declarations were skipped to reach this page, so a caller can
 ///     say where the listing starts and what to ask for next. An empty list with an offset past every
 ///     declaration the file has is the end of the paging and not a file that declares nothing — two
@@ -63,6 +72,7 @@ public sealed record DeclarationsResult(
     string QualifiedPath,
     string LanguageName,
     DeclarationCoverage Coverage,
+    string? SkipReason,
     bool Capped,
     int Offset,
     IReadOnlyList<FileDeclaration> Declarations) : Outcome;
@@ -113,12 +123,18 @@ public sealed class FileDeclarations(IndexReaders readers)
             // extension at all. Asked twice they could only ever disagree by accident.
             var (name, profiled) = Languages.Name(extension);
 
+            // Before the profile is asked anything: a skipped file has no lines, so every coverage the
+            // extension implies would describe a read that never ran.
+            if (file.SkipReason is { } reason)
+                return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Skipped, reason,
+                    false, offset, []);
+
             var parameters = new List<DuckDBParameter> { new("f", file.FileId) };
             // Null for a language that declares nothing this can read, which is not a test that is
             // always false and must not become one: CSS is not scanned at all rather than scanned for
             // every line of it, and the answer says the scan never ran.
             if (SearchQuery.CandidateTest(analyzer.DeclarationCandidates, "d", parameters) is not { } test)
-                return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Unreadable, false,
+                return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Unreadable, null, false,
                     offset, []);
 
             // Every line of the file, each saying whether it could be a declaration, in one read. The
@@ -163,7 +179,7 @@ public sealed class FileDeclarations(IndexReaders readers)
 
             bool capped = RowCap.Trim(declarations, MaxDeclarations);
             return new DeclarationsResult(file.QualifiedPath, name,
-                profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled,
+                profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled, null,
                 capped, offset, declarations);
         }, cancellationToken);
 }

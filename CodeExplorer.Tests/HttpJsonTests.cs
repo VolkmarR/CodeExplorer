@@ -34,7 +34,7 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture)
         Assert.Equal(["NeverRun", "Queued", "Running", "Succeeded", "Failed"], Spelled<RefreshState>());
         Assert.Equal(["GitAttributes", "WellKnownName", "History"], Spelled<SuggestionRule>());
         Assert.Equal(["Day", "Week", "Month"], Spelled<ChangePeriod>());
-        Assert.Equal(["Unprofiled", "Unreadable", "Read"], Spelled<DeclarationCoverage>());
+        Assert.Equal(["Skipped", "Unprofiled", "Unreadable", "Read"], Spelled<DeclarationCoverage>());
         Assert.Equal(["Declaration", "Implementation"], Spelled<DeclarationRole>());
         Assert.Equal(["Text", "Parsed"], Spelled<Evidence>());
         Assert.Equal(["Module", "Path"], Spelled<ImportShape>());
@@ -114,6 +114,20 @@ public sealed class HttpJsonTests(HttpJsonFixture fixture)
         var declarations = await _host.GetJsonNodeAsync(Route("declarations", path));
 
         Assert.Equal(coverage, (string?)declarations["coverage"]);
+        Assert.Null((string?)declarations["skipReason"]);
+    }
+
+    /// <summary>
+    ///     A file the build skipped answers <c>Skipped</c> with the build's reason, and not the coverage
+    ///     its extension would have earned had it been read (#370).
+    /// </summary>
+    [Fact]
+    public async Task A_skipped_file_names_its_coverage_and_why()
+    {
+        var declarations = await _host.GetJsonNodeAsync(Route("declarations", "one/assets/logo.bin"));
+
+        Assert.Equal("Skipped", (string?)declarations["coverage"]);
+        Assert.Equal("binary", (string?)declarations["skipReason"]);
     }
 
     private static string Route(string direction, string path) =>
@@ -169,6 +183,8 @@ public sealed class HttpJsonFixture : IAsyncLifetime
                                         """,
                 ["web/site.css"] = ".panel { color: red; }\n",
                 ["build/notes.rst"] = "nothing here\n",
+                // A NUL byte makes libgit2 classify the blob as binary, so the build skips it.
+                ["assets/logo.bin"] = "\0\0binary",
                 ["vendor/lib.js"] = "var lib = 1;\n"
             }
         });

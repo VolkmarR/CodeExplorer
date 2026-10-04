@@ -434,7 +434,7 @@ internal sealed partial class FileTools(
                  - Takes a qualified path exactly as grep, glob, list_tree and read_file print one (`main/src/Api/Orders.cs`).
                  - Use it to orient, then read_file the line ranges that turn out to matter. find_definition is the other direction: it takes a name and finds the file, this takes a file and lists the names.
                  - IMPORTANT: declarations are read from the shape of each line in the language the file is written in, not from a compiler. A form no profile knows is one this did not find rather than one that is not there. Strong evidence, not proof.
-                 - An empty answer always says which kind of empty it is: no profile covers the extension, or the language has no declarations that can be read from a line, or the file genuinely declares none. Those are three different facts and are never worded alike.
+                 - An empty answer always says which kind of empty it is: the file is not indexed (binary or over-size), or no profile covers the extension, or the language has no declarations that can be read from a line, or the file genuinely declares none. Those are four different facts and are never worded alike.
                  - Where a language announces a routine in one place and writes it in another — Delphi, a C header beside its source — each entry says which of the two it is.
                  - A page holds at most 500 declarations. A file with more is paged with `offset`, so the back half of a long file is reachable without reading it; the reply says how many it listed and which line it reached.
                  """)]
@@ -470,8 +470,12 @@ internal sealed partial class FileTools(
 
     private static string Format(DeclarationsResult result)
     {
-        // The three empty answers before anything is counted, because two of them mean nothing was
+        // The empty answers before anything is counted, because three of them mean nothing was
         // scanned and a count of zero would be a fact about a scan that never ran.
+        if (result.Coverage == DeclarationCoverage.Skipped)
+            return string.Create(CultureInfo.InvariantCulture,
+                $"{result.QualifiedPath} is not indexed ({result.SkipReason}). Nothing was read from it, so what it declares is not known here, which is a different thing from it declaring nothing. Its content is not in the index, so it cannot be read here.\n");
+
         if (result.Coverage == DeclarationCoverage.Unreadable)
             return string.Create(CultureInfo.InvariantCulture,
                 $"{result.QualifiedPath} is {result.LanguageName}, whose declarations are not something that can be read from a line. Nothing was scanned here, which is a different thing from the file declaring nothing. Read it with read_file, or grep it for what you are after.\n");
