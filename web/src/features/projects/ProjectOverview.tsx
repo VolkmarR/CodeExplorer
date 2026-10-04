@@ -76,8 +76,10 @@ export function ProjectOverview({
   return (
     <div className="space-y-6">
       {controls}
-      {/* One column on Code: the language bar reads best at full width, and the layout is a list. */}
-      <div className={page === 'code' ? 'grid gap-4' : 'grid gap-4 lg:grid-cols-2'}>
+      {/* One column on Code: the language bar reads best at full width, and the layout is a list.
+          `items-start` so each card is as tall as what it holds: stretched to its neighbour, a short
+          ranking ended in a few hundred pixels of empty card. */}
+      <div className={page === 'code' ? 'grid gap-4' : 'grid items-start gap-4 lg:grid-cols-2'}>
         {page === 'code' ? (
           <>
             <LanguageShares
