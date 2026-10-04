@@ -6,7 +6,8 @@ quality is also absent: assume the reader already knows that duplicated code and
 are bad.
 
 Line endings: LF in the repository and CRLF in a Windows working tree, by `* text=auto` in
-`.gitattributes`.
+`.gitattributes`. Nothing else picks one: `.editorconfig` sets no `end_of_line`, so an editor keeps
+a file's ending, and oxfmt writes the ending the checkout gave `web/vite.config.ts`.
 
 Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules follow from.
 

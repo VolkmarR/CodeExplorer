@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
@@ -174,6 +175,10 @@ export default defineConfig({
     // `vp check` reported it unformatted and `vp check --fix` then rewrote it to the same bytes,
     // which is a gate no commit could ever pass.
     ignorePatterns: ['src/routeTree.gen.ts'],
+    // The ending this checkout gave its files, read off this file: `* text=auto` stores LF and
+    // checks out CRLF on Windows and LF elsewhere. oxfmt has no `auto`, defaults to LF and would
+    // otherwise take `.editorconfig`'s, so a fixed value fails every file on the other platform.
+    endOfLine: readFileSync(import.meta.filename, 'utf8').includes('\r\n') ? 'crlf' : 'lf',
     semi: false,
     singleQuote: true,
   },
