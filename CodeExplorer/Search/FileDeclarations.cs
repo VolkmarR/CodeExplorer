@@ -127,15 +127,15 @@ public sealed class FileDeclarations(IndexReaders readers)
             // extension implies would describe a read that never ran.
             if (file.SkipReason is { } reason)
                 return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Skipped, reason,
-                    false, offset, []);
+                    Capped: false, offset, []);
 
             var parameters = new List<DuckDBParameter> { new("f", file.FileId) };
             // Null for a language that declares nothing this can read, which is not a test that is
             // always false and must not become one: CSS is not scanned at all rather than scanned for
             // every line of it, and the answer says the scan never ran.
             if (SearchQuery.CandidateTest(analyzer.DeclarationCandidates, "d", parameters) is not { } test)
-                return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Unreadable, null, false,
-                    offset, []);
+                return new DeclarationsResult(file.QualifiedPath, name, DeclarationCoverage.Unreadable,
+                    SkipReason: null, Capped: false, offset, []);
 
             // Every line of the file, each saying whether it could be a declaration, in one read. The
             // lines between the candidates are not waste: placing a candidate means knowing what the
@@ -179,7 +179,7 @@ public sealed class FileDeclarations(IndexReaders readers)
 
             bool capped = RowCap.Trim(declarations, MaxDeclarations);
             return new DeclarationsResult(file.QualifiedPath, name,
-                profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled, null,
+                profiled ? DeclarationCoverage.Read : DeclarationCoverage.Unprofiled, SkipReason: null,
                 capped, offset, declarations);
         }, cancellationToken);
 }
