@@ -108,7 +108,7 @@ public sealed class MatchList(IndexReaders readers)
             : null;
         return await request.Filter.OverIndexAsync(readers, slug,
             (index, filter, token) => PatternQuery.GuardedAsync(index.Connection, query,
-                request.WholeWord || missingGroup is not null,
+                request.WholeWord || missingGroup is not null, PatternQuery.LineFlags(request.CaseSensitive),
                 () => missingGroup is not null
                     ? Task.FromResult<Outcome>(missingGroup)
                     : QueryAsync(index, request, filter, query, token), token),
