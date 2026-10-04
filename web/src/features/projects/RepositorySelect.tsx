@@ -8,6 +8,12 @@ import {
 } from '@/components/ui/select'
 
 /**
+ * The choice of every repository, said the same in the closed select as in its list: the trigger
+ * said "All" and the item "All repositories", which read as two different choices.
+ */
+const ALL = 'All repositories'
+
+/**
  * One of a project's repositories, or all of them. The search form and the browse filter both narrow
  * to a repository, and both used to ask for its slug in a text box — which the operator had to know
  * or go and look up. The project already knows them, so this offers them.
@@ -29,12 +35,10 @@ export function RepositorySelect({
   return (
     <Select value={value} onValueChange={(next) => onChange(next ?? '')}>
       <SelectTrigger id={id} className="w-full">
-        <SelectValue>
-          {value === '' ? 'All' : <span className="font-mono">{value}</span>}
-        </SelectValue>
+        <SelectValue>{value === '' ? ALL : <span className="font-mono">{value}</span>}</SelectValue>
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="">All repositories</SelectItem>
+        <SelectItem value="">{ALL}</SelectItem>
         {repositories.map((repository) => (
           <SelectItem key={repository.slug} value={repository.slug}>
             <span className="font-mono">{repository.slug}</span>
