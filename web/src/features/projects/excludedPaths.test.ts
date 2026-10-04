@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vite-plus/test'
-import { withPattern } from '@/features/projects/excludedPaths'
+import { excludedLead, withPattern } from '@/features/projects/excludedPaths'
+
+describe('excludedLead', () => {
+  it('says which files were left out as a sentence that runs on into the link', () => {
+    // Under a thousand, so the test does not depend on the machine's digit grouping.
+    expect(excludedLead(712, 'at HEAD')).toBe('712 files at HEAD are left out by the')
+  })
+
+  it('agrees with a single file', () => {
+    expect(excludedLead(1, 'at HEAD')).toBe('1 file at HEAD is left out by the')
+  })
+
+  it('names the section it was left out of, where two on a page count the same files', () => {
+    expect(excludedLead(712, 'at HEAD', 'the language shares')).toBe(
+      '712 files at HEAD are left out of the language shares by the',
+    )
+  })
+})
 
 describe('withPattern', () => {
   it('adds the pattern on its own line after what the operator wrote', () => {

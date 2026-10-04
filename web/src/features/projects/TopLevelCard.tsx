@@ -25,7 +25,7 @@ export function TopLevelCard({
   return (
     <OverviewCard
       title="Top level"
-      excluded={{ files: excluded, project, what: 'the files at HEAD' }}
+      excluded={{ files: excluded, project, which: 'at HEAD', from: 'the folder counts' }}
       className="space-y-1 font-mono text-xs"
     >
       {tree.flatMap((root) => [

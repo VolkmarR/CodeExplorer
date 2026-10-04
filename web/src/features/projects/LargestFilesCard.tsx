@@ -20,7 +20,7 @@ export function LargestFilesCard({
   return (
     <OverviewCard
       title="Largest files"
-      excluded={{ files: excluded, project, what: 'the files at HEAD' }}
+      excluded={{ files: excluded, project, which: 'at HEAD' }}
       className="space-y-1 font-mono text-xs"
     >
       {files.length > 0 ? (

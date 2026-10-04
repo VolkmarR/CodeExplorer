@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { formatCountOf } from '@/lib/format'
+import { excludedLead } from '@/features/projects/excludedPaths'
 
 /**
  * How many files the project's excluded paths kept out of one section (#216). Said on every section
@@ -11,17 +11,23 @@ import { formatCountOf } from '@/lib/format'
 export function ExcludedNote({
   project,
   files,
-  what,
+  which,
+  from,
+  remark,
 }: {
   project: string
   files: number | undefined
-  /** What the files were left out of, e.g. "the files at HEAD". */
-  what: string
+  /** Which files were counted, read after the noun: "at HEAD", "changed in this window". */
+  which: string
+  /** The section they were left out of, where another card on the page counts the same files. */
+  from?: string
+  /** A sentence after the note, for a count that needs one to be read right. */
+  remark?: string
 }) {
   if (!files) return null
   return (
     <p className="pt-2 font-sans text-xs text-muted-foreground">
-      {formatCountOf(files, 'file')} of {what} left out by the{' '}
+      {excludedLead(files, which, from)}{' '}
       <Link
         to="/projects/$project/settings"
         params={{ project }}
@@ -29,7 +35,7 @@ export function ExcludedNote({
       >
         excluded paths
       </Link>
-      .
+      .{remark ? ` ${remark}` : null}
     </p>
   )
 }

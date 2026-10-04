@@ -55,7 +55,7 @@ const card = (history: OverviewChurn | undefined) =>
     OverviewCard({
       aside: 'per week',
       children: 'the ranking',
-      excluded: { files: 3, project: 'demo', what: 'this window' },
+      excluded: { files: 3, project: 'demo', which: 'changed in this window' },
       history,
       note: 'how to read it',
       title: 'Most changed',
@@ -67,7 +67,7 @@ describe('OverviewCard', () => {
     const { text, elements } = card(churn('2026-01-01', '2026-03-31'))
     expect(text).toBe('Most changed per week how to read it the ranking')
     const note = elements.find((e) => e.type === ExcludedNote)
-    expect(note?.props).toEqual({ files: 3, project: 'demo', what: 'this window' })
+    expect(note?.props).toEqual({ files: 3, project: 'demo', which: 'changed in this window' })
   })
 
   it('says there is no history in place of everything but its title where there is none', () => {

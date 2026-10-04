@@ -87,7 +87,7 @@ export function LanguageShares({
   return (
     <OverviewCard
       title="Languages"
-      excluded={{ files: excluded, project, what: 'the files at HEAD' }}
+      excluded={{ files: excluded, project, which: 'at HEAD', from: 'the language shares' }}
       className="space-y-3"
     >
       {total > 0 ? (

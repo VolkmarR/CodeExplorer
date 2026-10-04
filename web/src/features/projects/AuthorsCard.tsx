@@ -39,7 +39,8 @@ export function AuthorsCard({
       excluded={{
         files: excluded,
         project,
-        what: "the window's commits (a commit still counts while it touched one file shown)",
+        which: 'touched in this window',
+        remark: 'A commit still counts while one file it touched is shown.',
       }}
       className="space-y-1 text-sm"
     >
