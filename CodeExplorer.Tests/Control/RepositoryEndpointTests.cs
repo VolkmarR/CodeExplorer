@@ -73,4 +73,24 @@ public sealed class RepositoryEndpointTests : IDisposable
         using var dup = await http.PostAsJsonAsync("/api/projects/alpha/repositories", body, Ct);
         Assert.Equal(HttpStatusCode.Conflict, dup.StatusCode);
     }
+
+    /// <summary>
+    ///     The repositories are read from the project page; the list of its own went for want of a
+    ///     client (#340). Its path still takes a POST, and a GET answers like any unknown API path.
+    /// </summary>
+    [Fact]
+    public async Task Listing_the_repositories_on_their_own_is_not_found()
+    {
+        await _host.CreateProjectAsync("alpha");
+        await _host.AddRepositoryAsync("alpha", "main", "https://example.invalid/repo.git");
+        using var http = _host.CreateClient();
+
+        using var response = await http.GetAsync("/api/projects/alpha/repositories", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorBody>(Ct);
+        Assert.Contains("/api/projects/alpha/repositories", error?.Error, StringComparison.Ordinal);
+    }
+
+    private sealed record ErrorBody(string Error);
 }

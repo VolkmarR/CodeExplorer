@@ -267,11 +267,6 @@
 /api/projects/{project}/refresh summary.notes[]
 /api/projects/{project}/refresh summary.repositories
 /api/projects/{project}/refresh summary.skipped[]
-/api/projects/{project}/repositories
-/api/projects/{project}/repositories []
-/api/projects/{project}/repositories [].hasCredential
-/api/projects/{project}/repositories [].slug
-/api/projects/{project}/repositories [].url
 /api/projects/{project}/search
 /api/projects/{project}/search engine
 /api/projects/{project}/search filesMatchingWithoutFilters
