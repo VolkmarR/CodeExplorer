@@ -109,13 +109,9 @@ public sealed class MatchList(IndexReaders readers)
                 $"The pattern has {(groups == 0 ? "no capture groups" : $"only {groups} capture {ToolReply.Plural(groups, "group")}")}, so group={request.Group} cannot be extracted. "
                 + "Put parentheses around the part that varies, or use group=0 for the whole match.")
             : null;
-        string[] compileAlone = (missingGroup, request.WholeWord) switch
-        {
-            (not null, true) =>
-                [query, PatternQuery.LinePattern(query, true), ExtractPattern(query, true)],
-            (not null, false) or (null, true) => [query],
-            _ => []
-        };
+        string[] compileAlone = missingGroup is null
+            ? request.WholeWord ? [query] : []
+            : [query, .. request.WholeWord ? WholeWordPatterns(query) : []];
         return await request.Filter.OverIndexAsync(readers, slug,
             (index, filter, token) => PatternQuery.GuardedAsync(index.Connection, compileAlone,
                 PatternQuery.LineFlags(request.CaseSensitive),
@@ -204,4 +200,14 @@ public sealed class MatchList(IndexReaders readers)
     /// </summary>
     private static string ExtractPattern(string query, bool wholeWord) =>
         wholeWord ? SymbolText.WholeWordMatches(query) : query;
+
+    /// <summary>
+    ///     Every pattern <see cref="QueryAsync" /> binds for a whole-word listing: the line test
+    ///     (<see cref="PatternQuery.LineParameters" />) and the extract. Kept beside the extract, so a
+    ///     form added to the search is added to the compile that stands in for it when a missing group
+    ///     keeps the search from running (#372). Both are compiled, rather than the larger one alone,
+    ///     because which is larger is RE2's accounting and not something to rely on here.
+    /// </summary>
+    private static string[] WholeWordPatterns(string query) =>
+        [PatternQuery.LinePattern(query, true), ExtractPattern(query, true)];
 }
