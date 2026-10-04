@@ -618,20 +618,27 @@ public sealed class GrepTests : IDisposable
     }
 
     /// <summary>
-    ///     Grep's whole-word line search compiles only the bare pattern alone, and needs no more: it then
-    ///     runs the wrapped one, and RE2 refusing that is answered as a refusal too (#372). Pinned so that
-    ///     a pattern that fits bare and not wrapped stays a refusal rather than a miss.
+    ///     Grep compiles only the bare pattern alone, and needs no more: it then runs the wrapped forms,
+    ///     and RE2 refusing one is answered as a refusal too (#372). Pinned so that a pattern that fits
+    ///     bare and not wrapped stays a refusal rather than a miss, in multiline mode as well, where the
+    ///     literal prefilter leaves the wrapped forms no document to run over.
     /// </summary>
     [Theory]
-    [InlineData(SearchEngine.Fts)]
-    [InlineData(SearchEngine.Substring)]
-    public async Task A_pattern_too_large_once_wrapped_as_a_whole_word_is_refused(SearchEngine engine)
+    [InlineData(SearchEngine.Fts, false)]
+    [InlineData(SearchEngine.Substring, false)]
+    [InlineData(SearchEngine.Fts, true)]
+    [InlineData(SearchEngine.Substring, true)]
+    public async Task A_pattern_too_large_once_wrapped_as_a_whole_word_is_refused(SearchEngine engine,
+        bool multiline)
     {
         await using var client = await StartAsync(engine);
 
         string text = await GrepAsync(client,
             new Dictionary<string, object?>
-                { ["query"] = MatchListTests.WrappedTooLarge, ["regex"] = true, ["wholeWord"] = true });
+            {
+                ["query"] = LargePatterns.WrappedTooLarge, ["regex"] = true, ["multiline"] = multiline,
+                ["wholeWord"] = true
+            });
 
         Assert.Contains("not a valid RE2", text);
         Assert.Contains("pattern too large", text);

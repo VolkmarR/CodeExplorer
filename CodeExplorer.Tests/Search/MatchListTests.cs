@@ -33,15 +33,6 @@ public sealed class MatchListTests : IDisposable
         }
     };
 
-    /// <summary>
-    ///     A pattern RE2 compiles alone and refuses as too large once wrapped in whole-word boundaries, with
-    ///     case folded: 87,200 repeated letters, where the bare form stops fitting near 87,370 and the
-    ///     wrapped one near 86,980 (#372). It requires a literal no file holds, so nothing is scanned if
-    ///     it ever runs.
-    /// </summary>
-    internal static readonly string WrappedTooLarge =
-        "Unicorn" + string.Concat(Enumerable.Repeat("(?:[a-z]{1000})", 87)) + "[a-z]{200}";
-
     private TestHost? _host;
 
     public void Dispose() => _host?.Dispose();
@@ -307,7 +298,7 @@ public sealed class MatchListTests : IDisposable
         SearchEngine engine)
     {
         await using var client = await StartAsync(engine);
-        string large = WrappedTooLarge;
+        string large = LargePatterns.WrappedTooLarge;
 
         string wrapped = await ListAsync(client,
             new Dictionary<string, object?> { ["query"] = large, ["group"] = 1, ["wholeWord"] = true });
