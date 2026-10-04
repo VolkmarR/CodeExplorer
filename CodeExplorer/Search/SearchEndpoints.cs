@@ -169,10 +169,11 @@ internal static class SearchEndpoints
         // screen before that comes back — the same reason blame is its own route. The read's own
         // record too: the copy this had existed to spell its three enums in lowercase, and the HTTP
         // options now spell every enum one way (Program.cs).
+        // Always the first page: the rail never asks for a later one, so the offset the service takes
+        // is the MCP tool's alone.
         project.MapGet("/file/declarations",
-            async (Project project, string path, FileDeclarations declarations, CancellationToken ct,
-                    int offset = 0) =>
-                Answer<DeclarationsResult>(await declarations.ForFileAsync(project.Slug, path, offset, ct),
+            async (Project project, string path, FileDeclarations declarations, CancellationToken ct) =>
+                Answer<DeclarationsResult>(await declarations.ForFileAsync(project.Slug, path, 0, ct),
                     Results.Ok));
 
         // The change log, paged. The files a commit touched are their own route, like blame is: a
@@ -197,15 +198,17 @@ internal static class SearchEndpoints
         // the page holds them as two things: a repository is chosen from a list and a directory is
         // walked into. The directory wins where both arrive, and it already carries the repository —
         // it is a qualified path, which is how a project spells one (ADR-0006).
+        //
+        // The page shows a screenful and excludes nothing, so the count and the exclusion the service
+        // takes are the MCP tool's alone.
         project.MapGet("/churn",
             async (Project project, HistoryQueries history, CancellationToken ct, string? repository = null,
                     string? directory = null, int? depth = null, string? extensions = null,
-                    string? exclude = null, int days = HistoryWindow.DefaultDays,
-                    int limit = _churnFilesShown) =>
+                    int days = HistoryWindow.DefaultDays) =>
                 Answer<ChurnAnswer>(
                     await history.ChurnAsync(project.Slug,
-                        new ChurnRequest(string.IsNullOrEmpty(directory) ? repository : directory, days, limit,
-                            depth, exclude, extensions), ct), Churn));
+                        new ChurnRequest(string.IsNullOrEmpty(directory) ? repository : directory, days,
+                            _churnFilesShown, depth, Extensions: extensions), ct), Churn));
 
         // One commit, for the page a link to a SHA opens. Its own route rather than a filter on the
         // change log: the page arrives knowing only the SHA, and finding it in the log would mean
@@ -232,7 +235,7 @@ internal static class SearchEndpoints
     private static IResult Commits(ChangeLogAnswer answer) => Results.Ok(answer);
 
     /// <summary>
-    ///     Files in a churn ranking when the caller does not say. A screenful: the ranking is read from
+    ///     Files in the page's churn ranking. A screenful: the ranking is read from
     ///     the top down, and its tail is noise.
     /// </summary>
     private const int _churnFilesShown = 25;
