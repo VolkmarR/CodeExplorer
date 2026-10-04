@@ -248,15 +248,21 @@ public sealed partial class ProjectIndexes
     ///     Removes the shadow file after a refresh failed part-way. The live index is untouched and
     ///     still serving, which is the whole point of building beside it rather than in place.
     /// </summary>
-    public async Task DiscardShadowAsync(string slug, CancellationToken cancellationToken)
+    public Task DiscardShadowAsync(string slug, CancellationToken cancellationToken) =>
+        DiscardFileAsync(ShadowCatalog(slug), ShadowPath(slug), cancellationToken);
+
+    /// <summary>
+    ///     Detaches a file nobody reads yet — a shadow, or a restore's file — and deletes it with its log.
+    ///     No drain: nothing reads such a file, so there is nobody to wait for. These are the attach-gate
+    ///     callers that are not replacing what the readers are using.
+    /// </summary>
+    private async Task DiscardFileAsync(string catalog, string path, CancellationToken cancellationToken)
     {
         await using var connection = await ConnectAsync(cancellationToken);
-        // No drain: nothing reads a shadow, so there is nobody to wait for. This is the one attach-gate
-        // caller that is not replacing what the readers are using.
         await UnderAttachGateAsync(async () =>
         {
-            await DetachAsync(connection, ShadowCatalog(slug), cancellationToken);
-            DeleteIndexFile(ShadowPath(slug));
+            await DetachAsync(connection, catalog, cancellationToken);
+            DeleteIndexFile(path);
         }, cancellationToken);
     }
 
