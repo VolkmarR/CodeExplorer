@@ -182,10 +182,55 @@ public sealed partial class ProjectIndexes
         // The put-in-place closes it before the move; the using is for an attach, a fill or a checkpoint
         // that throws first.
         await using var connection = await ConnectAsync(cancellationToken);
-        await AttachEmptyAsync(connection, catalog, path, cancellationToken);
-        await fill(connection);
-        await PutInPlaceAsync(connection, slug, catalog, path, refusal, "the restored index was put in place anyway",
-            null, cancellationToken);
+        try
+        {
+            await AttachEmptyAsync(connection, catalog, path, cancellationToken);
+            await fill(connection);
+            await PutInPlaceAsync(connection, slug, catalog, path, refusal,
+                "the restored index was put in place anyway", null, cancellationToken);
+        }
+        catch
+        {
+            // Closed first, because the file cannot be deleted while it is held.
+            await connection.DisposeAsync();
+            await DiscardRestoreAsync(slug, catalog, path);
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     Removes what a restore or a settle that failed part-way left behind, the way
+    ///     <see cref="DiscardShadowAsync" /> does for a shadow: its catalog and its file (#349). Left
+    ///     attached, a catalog whose checkpoint failed is one DuckDB has invalidated, and every
+    ///     <c>duckdb_tables()</c> on the instance then throws, so the first open of every project on the
+    ///     replica failed until the next restore of this one happened to detach it. DuckDB's own error
+    ///     asks for exactly this ("Detach and reattach it before using it again"), and
+    ///     <c>DETACH DATABASE IF EXISTS</c> succeeds on an invalidated database. It runs on a connection of
+    ///     its own, as the shadow's discard does, because the one that filled the file is closed first.
+    ///     Uncancelled, like the shadow's discard after a refresh that failed: the cleanup is a detach
+    ///     and two deletes, and a cancelled restore is as much in need of it as a refused one. The live
+    ///     file is not touched: a failure before the move left it as it was, and the move is the one
+    ///     overwriting step that either replaced it or did not.
+    /// </summary>
+    private async Task DiscardRestoreAsync(string slug, string catalog, string path)
+    {
+        try
+        {
+            await using var connection = await ConnectAsync(CancellationToken.None);
+            await UnderAttachGateAsync(async () =>
+            {
+                await DetachAsync(connection, catalog, CancellationToken.None);
+                DeleteIndexFile(path);
+            }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Safe to swallow: the failure being cleaned up after is the one the caller must see, and
+            // whatever is left here is detached and deleted by the next restore of the project, whose
+            // AttachEmptyAsync starts by doing exactly this.
+            _logger.LogWarning(ex, "What a failed restore of project {Project} left behind could not be removed",
+                slug);
+        }
     }
 
     private string RestorePath(string slug) => Path.Combine(_directory, slug + ".restore.duckdb");

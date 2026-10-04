@@ -324,6 +324,66 @@ public sealed class DurabilityTests : IDisposable
     }
 
     /// <summary>
+    ///     A refused settle leaves nothing of itself behind (#349). Its checkpoint failing invalidates the
+    ///     restore catalog, and while that stayed attached every <c>duckdb_tables()</c> on the instance
+    ///     threw, so the first open of any project failed. <c>beta</c> is opened for the first time after
+    ///     the refusal, which is what asks that question; <c>alpha</c> is still served by its own file,
+    ///     without a full-text index, which is what the refusal's remedy promises.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_settle_leaves_the_project_and_every_other_one_readable()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\n"));
+        await host.IndexedProjectAsync("beta", Repository("class Beta {}\n", "two"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
+
+        await using (await host.FailingCheckpointsAsync())
+            await Assert.ThrowsAsync<ExplainedFailureException>(() => host.Indexes.SettleRestoreAsync("alpha", Ct));
+
+        Assert.Equal(["class Beta {}"], await host.ScalarsAsync("beta", "SELECT content FROM lines"));
+        Assert.Equal(["false"], await host.ScalarsAsync("alpha", "SELECT fts_indexed::VARCHAR FROM index_info"));
+        await AssertNoRestoreLeftAsync(host, "alpha");
+    }
+
+    /// <summary>
+    ///     The same for a restore an agent's read started: refused, it leaves no restore catalog or file,
+    ///     so another project's first open succeeds, and the next read of the project restores it.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_restore_leaves_every_other_project_readable_and_nothing_of_itself()
+    {
+        var host = Start(SearchEngine.Substring);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha;\n"));
+        await host.IndexedProjectAsync("beta", Repository("class Beta;\n", "two"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+
+        await using (await host.FailingCheckpointsAsync())
+            await Assert.ThrowsAsync<McpException>(() => host.Indexes.OpenAsync("alpha", Ct));
+
+        await AssertNoRestoreLeftAsync(host, "alpha");
+        Assert.Equal(["class Beta;"], await host.ScalarsAsync("beta", "SELECT content FROM lines"));
+        Assert.Equal(["class Alpha;"], await host.ScalarsAsync("alpha", "SELECT content FROM lines"));
+    }
+
+    /// <summary>
+    ///     What a refused restore or settle must not leave: its file, the log beside it, or its catalog
+    ///     attached to the instance every project shares.
+    /// </summary>
+    private static async Task AssertNoRestoreLeftAsync(TestHost host, string slug)
+    {
+        string restore = Path.Combine(host.DataDirectory, "indexes", slug + ".restore.duckdb");
+        Assert.False(File.Exists(restore));
+        Assert.False(File.Exists(restore + ".wal"));
+        await using var instance = await host.OpenIndexInstanceAsync();
+        Assert.Equal(0, await instance.CountAsync("SELECT count(*) FROM duckdb_databases() WHERE database_name = $name",
+            [new DuckDBParameter("name", slug + "$restore")], Ct));
+    }
+
+    /// <summary>
     ///     A restore that fails inside a refresh names the restore, not "Starting" (#290): an operator
     ///     reading the status has to be able to tell that the durable copy was what failed. The failure
     ///     is the lines table held open exclusively, so its transfer fails part-way through the fetch.
