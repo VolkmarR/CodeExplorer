@@ -119,8 +119,11 @@ public sealed class TestHost : GitFixtures
         {
             // Warning and up only: that is every line a test asserts on so far, and capturing each
             // Information line of every host in the suite would hold the whole refresh chatter in memory.
+            // ProjectIndexes is the exception: its Information lines are a restore and a settle skipped
+            // for room (#363), one each at most per restore, and the second is asserted on.
             builder.ConfigureServices(services => services.AddLogging(logging =>
-                logging.AddProvider(Logs).AddFilter<LogProbe>(null, LogLevel.Warning)));
+                logging.AddProvider(Logs).AddFilter<LogProbe>(null, LogLevel.Warning)
+                    .AddFilter<LogProbe>(typeof(ProjectIndexes).FullName, LogLevel.Information)));
             builder.UseSetting("Storage:DataDirectory", DataDirectory);
             builder.UseSetting("Storage:DurableDirectory", DurableDirectory);
             builder.UseSetting("Index:SearchEngine", _engine.ToString());

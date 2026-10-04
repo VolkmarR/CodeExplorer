@@ -12,6 +12,10 @@ namespace CodeExplorer.Index;
 /// </summary>
 public sealed partial class ProjectIndexes
 {
+    // MiB, as the refresh's own refusal for room names its figures, so an operator reading both
+    // compares like with like.
+    private const double _bytesPerMib = 1024.0 * 1024.0;
+
     /// <summary>
     ///     Puts the project's file on disk from its durable copy when the disk has none. The check
     ///     outside the writer gate is the fast path; <see cref="RestoreAsync" /> asks again inside it.
@@ -63,7 +67,7 @@ public sealed partial class ProjectIndexes
         CancellationToken cancellationToken)
     {
         if (!HasIndex(slug) && await RestoreAsync(slug, false, report, cancellationToken) && FtsAvailable)
-            _withoutFullText[slug] = 0;
+            _withoutFullText[slug] = false;
     }
 
     /// <summary>
@@ -82,8 +86,18 @@ public sealed partial class ProjectIndexes
     ///     is never mutated (CODING_STANDARDS.md); copied from the local file rather than fetched again,
     ///     because the transfer is most of what a restore costs and the store is the likeliest reason the
     ///     refresh failed. The cost lands only on a refresh that did.
+    ///     Not started without room for it (#363): the copy is a second index beside the live one and the
+    ///     BM25 build works on top, which is what a shadow costs, so <see cref="RoomForShadow" /> judges
+    ///     it with the floor a refresh is granted. A refresh refused for room is one that hands a project
+    ///     here, and on a near-full disk a copy started anyway re-ran on every refused refresh and failed
+    ///     the same way. Skipped, the project stays marked for the next settle, and the skip is logged at
+    ///     information level once per mark: the project is still served, so it is not a failure, and a
+    ///     line on every attempt would only repeat the first.
     /// </summary>
-    public async Task SettleRestoreAsync(string slug, CancellationToken cancellationToken)
+    /// <param name="slug">The project whose restored index is settled.</param>
+    /// <param name="floor">The least free space a refresh is granted, set by the caller's configuration.</param>
+    /// <param name="cancellationToken">Cancelled by the host stopping, when no settle is started.</param>
+    public async Task SettleRestoreAsync(string slug, long floor, CancellationToken cancellationToken)
     {
         if (!_withoutFullText.ContainsKey(slug)) return;
 
@@ -91,10 +105,23 @@ public sealed partial class ProjectIndexes
         {
             // Asked again under the gate, where a swap or a delete clears it: either has left nothing
             // to settle.
-            if (!_withoutFullText.ContainsKey(slug)) return;
+            if (!_withoutFullText.TryGetValue(slug, out bool skipLogged)) return;
             if (!HasIndex(slug))
             {
                 _withoutFullText.TryRemove(slug, out _);
+                return;
+            }
+
+            var room = RoomForShadow(slug, floor);
+            if (!room.Enough)
+            {
+                if (!skipLogged && _logger.IsEnabled(LogLevel.Information))
+                    _logger.LogInformation(
+                        "Project {Project} is not given back its full-text index yet: the copy needs about "
+                        + "{RequiredMib:0.#} MiB free where the indexes live and {FreeMib:0.#} MiB is left. "
+                        + "It is searched by substring scan until a settle or a refresh succeeds",
+                        slug, room.Required / _bytesPerMib, room.Free / _bytesPerMib);
+                _withoutFullText[slug] = true;
                 return;
             }
 
