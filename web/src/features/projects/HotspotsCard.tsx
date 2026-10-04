@@ -36,7 +36,11 @@ export function HotspotsCard({
           touches and moves nothing to the top.
         </>
       }
-      excluded={{ files: hotspots.excluded ?? undefined, project, what: 'this window at HEAD' }}
+      excluded={{
+        files: hotspots.excluded ?? undefined,
+        project,
+        which: 'at HEAD changed in this window',
+      }}
     >
       {files.length === 0 ? (
         <p className="text-sm text-muted-foreground">No file at HEAD was changed in this window.</p>

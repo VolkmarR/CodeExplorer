@@ -36,7 +36,7 @@ export function AuthorsPerFileCard({
           so a rename starts a file&rsquo;s count again.
         </>
       }
-      excluded={{ files: authors.excluded ?? undefined, project, what: 'the history at HEAD' }}
+      excluded={{ files: authors.excluded ?? undefined, project, which: 'at HEAD with history' }}
     >
       <div className="flex flex-wrap gap-4 pb-3 text-xs text-muted-foreground">
         {AUTHOR_SEGMENTS.map(({ label, className }) => (

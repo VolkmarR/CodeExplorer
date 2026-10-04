@@ -48,7 +48,7 @@ export function MostChangedCard({
           </>
         ) : null
       }
-      excluded={{ files: excluded, project, what: 'this window' }}
+      excluded={{ files: excluded, project, which: 'changed in this window' }}
     >
       {churn.files.length === 0 ? (
         // Never "nothing changed" where the excluded paths took the rows: the window has commits by
