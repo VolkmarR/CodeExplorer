@@ -87,6 +87,8 @@ to make it legible rather than to hide it or to trade an invariant for it.
   does not settle (#349), and the mark that would have the next settle try again is held in memory,
   so it goes with the process and the next refresh that succeeds ends the gap. A settle without disk
   room for its copy does not start (#363); the project stays marked, and the next settle, after the
-  next refresh that ends without its swap, tries again. The restore also reports a phase of its own,
+  next refresh that ends without its swap, tries again. On a disk that stays that full, refreshes are
+  refused before they start and none settles, so the gap lasts until room is freed and a refresh is
+  accepted. The restore also reports a phase of its own,
   so what it cost is on the timeline, and a failed restore is reported under its own name rather
   than under `Starting`.
