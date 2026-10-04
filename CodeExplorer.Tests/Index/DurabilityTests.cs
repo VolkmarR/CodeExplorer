@@ -471,6 +471,30 @@ public sealed class DurabilityTests : IDisposable
     }
 
     /// <summary>
+    ///     Once a settle had room, a later skip for room is said again: a settle that got room and then
+    ///     failed leaves its failure as the last line, and the operator must not read that as the reason
+    ///     the project is still on substring scan once the disk has filled again.
+    /// </summary>
+    [Fact]
+    public async Task A_settle_skipped_for_room_after_one_that_had_room_is_logged_again()
+    {
+        var host = Start(SearchEngine.Fts);
+        await host.IndexedProjectAsync("alpha", Repository("class Alpha {}\n"));
+        host.DeleteIndexFile("alpha");
+        host.Restart();
+        await host.Indexes.RestoreForRefreshAsync("alpha", static _ => { }, Ct);
+
+        await host.Indexes.SettleRestoreAsync("alpha", long.MaxValue, Ct);
+        await using (await host.FailingCheckpointsAsync())
+            await Assert.ThrowsAsync<ExplainedFailureException>(() =>
+                host.Indexes.SettleRestoreAsync("alpha", FreeSpace.DefaultMinimumBytes, Ct));
+        await host.Indexes.SettleRestoreAsync("alpha", long.MaxValue, Ct);
+
+        Assert.Equal([LogLevel.Information, LogLevel.Information],
+            host.Logs.Matching("is not given back its full-text index yet").Select(entry => entry.Level));
+    }
+
+    /// <summary>
     ///     What a refused restore or settle must not leave: its file, the log beside it, or its catalog
     ///     attached to the instance every project shares.
     /// </summary>
