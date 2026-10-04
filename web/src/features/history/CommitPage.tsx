@@ -92,14 +92,7 @@ export function CommitPage() {
                 </li>
               ))}
             </ul>
-            {/* Page 1 stays out of the URL, so every link to a commit is the short one it was
-                before the list was paged. */}
-            <Pager
-              page={shown.page}
-              total={shown.total}
-              pageSize={COMMIT_FILES_PAGE_SIZE}
-              firstPageBare
-            />
+            <Pager page={shown.page} total={shown.total} pageSize={COMMIT_FILES_PAGE_SIZE} />
           </div>
         ) : (
           <Skeleton className="h-4 w-64" />

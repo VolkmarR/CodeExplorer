@@ -19,7 +19,9 @@ import { pageSpan } from '@/lib/paging'
  * The buttons are links to the same view with only the page changed, so every other parameter
  * travels with it without the pager knowing what they are, and a page can be opened in a new tab.
  * They do not preload on hover as the router's other links do: the next page of a search is a whole
- * search, and passing the mouse over the pager is not asking for one.
+ * search, and passing the mouse over the pager is not asking for one. Whether page 1 is written into
+ * the URL is the router's decision and not the pager's: the root route leaves it out for every
+ * view (`bareFirstPage`).
  */
 export function Pager({
   page,
@@ -27,7 +29,6 @@ export function Pager({
   pageSize,
   previousLabel = 'Previous',
   nextLabel = 'Next',
-  firstPageBare = false,
 }: {
   page: number
   total: number
@@ -35,40 +36,9 @@ export function Pager({
   /** What the two directions are called, where a view names them for what it holds — a log is older and newer. */
   previousLabel?: string
   nextLabel?: string
-  /** Leaves `page` out of the URL for the first page, for a view whose plain link is that page. */
-  firstPageBare?: boolean
 }) {
   const { lastPage } = pageSpan(page, pageSize, total)
   if (lastPage <= 1) return null
-
-  function step(target: number, label: string, disabled: boolean) {
-    if (disabled) {
-      return (
-        <Button variant="outline" size="sm" disabled>
-          {label}
-        </Button>
-      )
-    }
-    return (
-      <Button
-        variant="outline"
-        size="sm"
-        nativeButton={false}
-        render={
-          <Link
-            to="."
-            preload={false}
-            search={(previous: Record<string, unknown>) => ({
-              ...previous,
-              page: firstPageBare && target === 1 ? undefined : target,
-            })}
-          />
-        }
-      >
-        {label}
-      </Button>
-    )
-  }
 
   return (
     <div className="flex items-center gap-4 pt-1">
@@ -80,5 +50,32 @@ export function Pager({
         {step(page + 1, nextLabel, page >= lastPage)}
       </div>
     </div>
+  )
+}
+
+/** One of the two buttons: a link to `target`, or a disabled button at an end of the list. */
+function step(target: number, label: string, disabled: boolean) {
+  if (disabled) {
+    return (
+      <Button variant="outline" size="sm" disabled>
+        {label}
+      </Button>
+    )
+  }
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      nativeButton={false}
+      render={
+        <Link
+          to="."
+          preload={false}
+          search={(previous: Record<string, unknown>) => ({ ...previous, page: target })}
+        />
+      }
+    >
+      {label}
+    </Button>
   )
 }
