@@ -1,8 +1,8 @@
 root = true
 
 [*]
+# No end_of_line: a file keeps the ending its checkout gave it (CODING_STANDARDS.md).
 charset = utf-8
-end_of_line = crlf
 insert_final_newline = true
 indent_style = space
 indent_size = 4

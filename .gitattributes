@@ -1,6 +1,6 @@
 # Text is stored LF in the repository and checked out in the platform's line ending: CRLF on
-# Windows, which is what .editorconfig asks the editors and oxfmt for, and LF elsewhere. No global
-# `eol`, so each checkout follows its own platform rather than this file.
+# Windows and LF elsewhere. No global `eol`, so each checkout follows its own platform rather than
+# this file, and .editorconfig and oxfmt follow the checkout (CODING_STANDARDS.md).
 * text=auto
 
 # cmd.exe misreads labels and `goto` in a batch file with bare LF line endings, so the evaluation
