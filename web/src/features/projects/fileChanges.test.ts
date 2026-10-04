@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test'
 import type { PeriodChanges } from '@/features/projects/api'
-import { barScale, fileChangeTotals } from '@/features/projects/fileChanges'
+import { barScale, countRoom, fileChangeTotals } from '@/features/projects/fileChanges'
 
 const month = (added: number, deleted: number, renamed = 0): PeriodChanges => ({
   start: '2026-01-01',
@@ -30,5 +30,22 @@ describe('fileChangeTotals', () => {
       deleted: 5,
       renamed: 6,
     })
+  })
+})
+
+describe('countRoom', () => {
+  it('grows with the longest count drawn, so a longer count never runs into the axis labels', () => {
+    expect(countRoom([999])).toBeLessThan(countRoom([12345]))
+    expect(countRoom([12345])).toBeLessThan(countRoom([1234567]))
+  })
+
+  it('is sized by the longest of several counts', () => {
+    expect(countRoom([5, 12345, 40])).toBe(countRoom([12345]))
+  })
+
+  // Measured in the browser: "2,723" upright is 28px tall and starts 4px past its bar, so the 36px
+  // reserved before cleared "Sep" by 2px. Eight is the clearance a reader sees as a gap.
+  it('leaves "2,723" at least 8px clear of the axis labels', () => {
+    expect(countRoom([2723])).toBeGreaterThanOrEqual(28 + 4 + 8)
   })
 })
