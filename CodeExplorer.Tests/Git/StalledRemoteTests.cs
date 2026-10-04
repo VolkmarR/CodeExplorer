@@ -3,9 +3,11 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Channels;
 using CodeExplorer.Control;
 using CodeExplorer.Git;
 using CodeExplorer.Index;
+using CodeExplorer.Infrastructure;
 using CodeExplorer.Refresh;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -144,6 +146,38 @@ public sealed class StalledRemoteTests : IDisposable
         // before the host's directories are deleted under it.
         foreach (var socket in _accepted) socket.Dispose();
         await TimedAsync(host.Services.GetRequiredService<GitClones>().Settled);
+    }
+
+    [Fact]
+    public async Task A_removal_hands_its_gate_to_a_queued_refresh_and_Settled_still_waits_for_it()
+    {
+        // A limit no test would wait out, so each transfer runs until the test hangs up on it.
+        using var host = new TestHost(SearchEngine.Substring, (TransferStallLimit.Setting, 120));
+        var connections = Channel.CreateUnbounded<Socket>();
+        Serve(socket => connections.Writer.TryWrite(socket));
+        var clones = host.Services.GetRequiredService<GitClones>();
+        var repository = new ProjectRepository("alpha", "stalled", RemoteUrl, null);
+        var token = TestContext.Current.CancellationToken;
+
+        // Each call takes or queues on the folder's gate before it returns, so the queue is, in order:
+        // the first refresh holding it, the removal, the second refresh (#350).
+        var first = clones.OpenRefreshedAsync(repository, token);
+        var removal = clones.RemoveAsync("alpha", "stalled", token);
+        var second = clones.OpenRefreshedAsync(repository, token);
+
+        // Hanging up ends the first clone, whose gate goes to the removal and from it to the second.
+        (await connections.Reader.ReadAsync(token)).Dispose();
+        await Assert.ThrowsAnyAsync<Exception>(() => first);
+        await TimedAsync(removal);
+        await connections.Reader.ReadAsync(token);
+
+        // The second clone is waiting on the silent remote and holds the folder's gate, which the
+        // removal must not have dropped: Settled has to wait for it.
+        Assert.False(clones.Settled.IsCompleted, "Settled lost the gate the queued refresh holds.");
+
+        foreach (var socket in _accepted) socket.Dispose();
+        await Assert.ThrowsAnyAsync<Exception>(() => second);
+        await TimedAsync(clones.Settled);
     }
 
     /// <summary>

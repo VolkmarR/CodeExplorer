@@ -38,9 +38,15 @@ public sealed class GitClones(
         + "content and would show pointer files as if they were source, so it refuses the repository rather "
         + "than answer wrongly. Ask the operator to point the project at a repository without LFS.";
 
-    // One gate per clone directory, so two first uses of the same repository clone it once and the
-    // second waits for the first instead of racing it on the same folder. The dictionary holds one
-    // entry per repository for the life of the process, which is bounded by the control database.
+    // One gate per clone directory, so a clone, a fetch and a removal of the same folder never overlap:
+    // two first uses of a repository clone it once, the second waiting for the first.
+    // A gate is never removed. Removing one safely would take a count of its holders and waiters kept
+    // in step with the dictionary, and a gate dropped while anyone holds or waits on it lets the next
+    // caller take a fresh one beside them, so two operations share a folder and Settled no longer sees
+    // the first (#350). The keys are folder paths of repositories and projects the control database has
+    // configured during this process's life, a bounded set, and each entry holds nothing but a count.
+    // A dictionary of its own and not a KeyedGate, though the reasoning is the same: Settled has to
+    // reach every gate, and a transfer's gate is released on another task (ReleaseAfterAsync).
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _cloneGates = new();
 
     /// <summary>
@@ -250,10 +256,8 @@ public sealed class GitClones(
             await Task.Run(() => LocalCopyFiles.DeleteDirectory(path), cancellationToken);
         }
 
-        // Dropped after the gate is released, so the dictionary does not grow by one entry for every
-        // repository ever removed. A clone starting now takes a fresh gate for a path that no longer
-        // exists in the control database, which is the same race the comment above describes.
-        _cloneGates.TryRemove(path, out _);
+        // The gate stays (see _cloneGates): releasing it may already have handed it to a refresh queued
+        // behind this removal.
     }
 
     /// <summary>
