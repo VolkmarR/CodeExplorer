@@ -47,7 +47,7 @@ internal static class OverviewReply
     public static string Headline(Project project, int repositories, string qualifier, long files, long lines) =>
         string.Create(CultureInfo.InvariantCulture,
             $"Project '{project.Slug}' ({project.Name}): {repositories} {ToolReply.Plural(repositories, "repository", "repositories")}{qualifier}, "
-            + $"{files:N0} files, {lines:N0} lines.\n");
+            + $"{files:N0} {ToolReply.Plural(files, "file")}, {lines:N0} {ToolReply.Plural(lines, "line")}.\n");
 
     /// <summary>The commit a repository was indexed at, as long as both replies print it.</summary>
     public static string Commit(IndexedRepository repository) =>
