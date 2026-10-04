@@ -3,8 +3,9 @@ import type { Declaration, FileDeclarations } from '@/features/files/api'
 /**
  * What the declarations panel has to say beside its list, or null when the list speaks for itself.
  * The four empty answers are four different facts — the file is not indexed, the extension was never
- * covered, the language has no declarations this can read, the file declares none — and a panel that drew them alike would
- * tell a reader a file declares nothing when what happened is that nothing looked.
+ * covered, the language has no declarations this can read, the file declares none — and a panel
+ * that drew them alike would tell a reader a file declares nothing when what happened is that
+ * nothing looked.
  */
 export function declarationsNote(file: FileDeclarations): string | null {
   // A switch on the one field the server sends rather than a cascade over two flags: the order of
