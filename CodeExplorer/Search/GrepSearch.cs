@@ -188,7 +188,7 @@ public sealed partial class GrepSearch(IndexReaders readers)
         if (!regex) return SearchLinesAsync(index, request, query, regex, bounds, cancellationToken);
         // Only a wrapped pattern needs compiling alone first: whole words and multiline wrap it.
         return PatternQuery.GuardedAsync(index.Connection, query, request.WholeWord || request.Multiline,
-            request.Multiline ? "" : PatternQuery.LineFlags(request.CaseSensitive),
+            request.Multiline ? MultilineFlags(request.CaseSensitive) : PatternQuery.LineFlags(request.CaseSensitive),
             () => request.Multiline
                 ? SearchMultilineAsync(index.Connection, request, query, bounds, cancellationToken)
                 : SearchLinesAsync(index, request, query, regex, bounds, cancellationToken),
@@ -387,11 +387,18 @@ public sealed partial class GrepSearch(IndexReaders readers)
     ///     candidate is <c>string_agg</c>-ed in line order and matched with the <c>s</c> flag so <c>.</c>
     ///     crosses newlines. Two passes: counts without content, then content only for the page shown.
     /// </summary>
+    /// <summary>
+    ///     The RE2 flags of a multiline search: <c>s</c> so <c>.</c> crosses newlines, and case-insensitive
+    ///     unless the caller asked otherwise. One spelling for the search and for the compile alone
+    ///     that guards it (<see cref="PatternQuery.GuardedAsync" />).
+    /// </summary>
+    private static string MultilineFlags(bool caseSensitive) => caseSensitive ? "s" : "si";
+
     private static async Task<Outcome> SearchMultilineAsync(
         DuckDBConnection connection, GrepRequest request, string query, Bounds bounds,
         CancellationToken cancellationToken)
     {
-        string flags = request.CaseSensitive ? "s" : "si";
+        string flags = MultilineFlags(request.CaseSensitive);
         // Whole words are counted and marked from the form whose group 2 is the match
         // (SymbolText.WholeWordMatches): the whole-word test alone loses a match one character from the
         // last. That form runs every match over the text skipped before it, so it is extracted only from
