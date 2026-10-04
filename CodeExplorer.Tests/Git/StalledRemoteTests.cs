@@ -10,6 +10,7 @@ using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
 using CodeExplorer.Refresh;
 using Microsoft.Extensions.DependencyInjection;
+using ModelContextProtocol;
 using Xunit;
 
 namespace CodeExplorer.Tests;
@@ -159,25 +160,42 @@ public sealed class StalledRemoteTests : IDisposable
         var repository = new ProjectRepository("alpha", "stalled", RemoteUrl, null);
         var token = TestContext.Current.CancellationToken;
 
-        // Each call takes or queues on the folder's gate before it returns, so the queue is, in order:
-        // the first refresh holding it, the removal, the second refresh (#350).
+        // Each call takes or queues on the folder's gate before it returns, because neither awaits
+        // anything before the gate, and a semaphore lets its waiters in in the order they came. So the
+        // queue is: the first refresh holding it, the removal, the second refresh (#350).
         var first = clones.OpenRefreshedAsync(repository, token);
         var removal = clones.RemoveAsync("alpha", "stalled", token);
         var second = clones.OpenRefreshedAsync(repository, token);
+        try
+        {
+            Assert.False(removal.IsCompleted, "The removal did not queue behind the first refresh.");
 
-        // Hanging up ends the first clone, whose gate goes to the removal and from it to the second.
-        (await connections.Reader.ReadAsync(token)).Dispose();
-        await Assert.ThrowsAnyAsync<Exception>(() => first);
-        await TimedAsync(removal);
-        await connections.Reader.ReadAsync(token);
+            // Hanging up ends the first clone, whose gate goes to the removal and from it to the second.
+            (await NextConnectionAsync(connections)).Dispose();
+            await TimedAsync(Assert.ThrowsAnyAsync<McpException>(() => first));
+            await TimedAsync(removal);
+            await NextConnectionAsync(connections);
 
-        // The second clone is waiting on the silent remote and holds the folder's gate, which the
-        // removal must not have dropped: Settled has to wait for it.
-        Assert.False(clones.Settled.IsCompleted, "Settled lost the gate the queued refresh holds.");
+            // The second clone is waiting on the silent remote and holds the folder's gate, which the
+            // removal must not have dropped: Settled has to wait for it.
+            Assert.False(clones.Settled.IsCompleted, "Settled lost the gate the queued refresh holds.");
+        }
+        finally
+        {
+            // Over before the host's directories are deleted under it, whether or not the test passed.
+            foreach (var socket in _accepted) socket.Dispose();
+            await TimedAsync(Task.WhenAny(second));
+        }
 
-        foreach (var socket in _accepted) socket.Dispose();
-        await Assert.ThrowsAnyAsync<Exception>(() => second);
+        await TimedAsync(Assert.ThrowsAnyAsync<McpException>(() => second));
         await TimedAsync(clones.Settled);
+    }
+
+    private static async Task<Socket> NextConnectionAsync(Channel<Socket> connections)
+    {
+        var next = connections.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask();
+        await TimedAsync(next);
+        return await next;
     }
 
     /// <summary>
