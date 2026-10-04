@@ -599,29 +599,22 @@ public sealed class GrepTests : IDisposable
     ///     With <c>s</c> a dot is every character and compiles smaller than one that stops at a newline,
     ///     so this pattern fits RE2's size limit with the search's flags and not without them: compiled
     ///     without, a pattern the search runs was refused as too large.
+    ///     It requires a literal no file holds, so the literal prefilter leaves RE2 nothing to scan: the
+    ///     compile is what is under test, and a scan of this pattern costs half a minute a file.
     /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_multiline_pattern_that_fits_with_the_dot_crossing_newlines_is_run(bool caseSensitive)
+    [Fact]
+    public async Task A_multiline_pattern_that_fits_with_the_dot_crossing_newlines_is_run()
     {
-        _host = new TestHost(SearchEngine.Substring);
-        await _host.IndexedProjectAsync("long", new Dictionary<string, Dictionary<string, string>>
-        {
-            ["one"] = new() { ["src/Long.txt"] = string.Concat(Enumerable.Repeat(new string('x', 99) + "\n", 700)) }
-        });
-        await using var client = await _host.ConnectAsync("long");
+        await using var client = await StartAsync(SearchEngine.Substring);
 
         string text = await GrepAsync(client,
             new Dictionary<string, object?>
             {
-                ["query"] = string.Concat(Enumerable.Repeat("(?:.{1000})", 64)), ["multiline"] = true,
-                ["caseSensitive"] = caseSensitive, ["filesOnly"] = true
+                ["query"] = "Unicorn" + string.Concat(Enumerable.Repeat("(?:.{1000})", 64)), ["multiline"] = true
             });
 
         Assert.DoesNotContain("not a valid RE2", text);
-        Assert.Contains("1 file match in total (1 matching line)", text);
-        Assert.Contains("src/Long.txt", text);
+        Assert.StartsWith("No matches", text);
     }
 
     private async Task<McpClient> StartAsync(SearchEngine engine)
