@@ -4,8 +4,9 @@ import { scaleBand } from '@tanstack/charts/scales/band'
 import { scaleLinear } from '@tanstack/charts/scales/linear'
 import { tooltip } from '@tanstack/charts/tooltip'
 import type { LanguageShare } from '@/features/projects/api'
+import { legendPercent } from '@/features/projects/languageLegend'
 import { OverviewCard } from '@/features/projects/OverviewCard'
-import { formatCountOf, formatPercent } from '@/lib/format'
+import { formatCountOf } from '@/lib/format'
 
 /** The languages drawn by name; every one after them is folded into "Other". */
 const NAMED = 5
@@ -103,7 +104,7 @@ export function LanguageShares({
                   className="size-2.5 rounded-xs bg-(--swatch)"
                   style={{ '--swatch': segment.colour } as React.CSSProperties}
                 />
-                {segment.name} {formatPercent(segment.lines / total)}
+                {segment.name} {legendPercent(segment.lines / total)}
               </li>
             ))}
           </ul>
