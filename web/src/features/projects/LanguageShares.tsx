@@ -102,7 +102,7 @@ export function LanguageShares({
                 <span
                   aria-hidden
                   className="size-2.5 rounded-xs bg-(--swatch)"
-                  style={{ '--swatch': segment.colour } as React.CSSProperties}
+                  style={{ '--swatch': segment.colour }}
                 />
                 {segment.name} {legendPercent(segment.lines / total)}
               </li>

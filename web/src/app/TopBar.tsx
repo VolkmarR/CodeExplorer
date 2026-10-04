@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router'
 import { Fragment } from 'react'
-import { PROJECT_VIEWS, VIEW_NAMES, type Step } from '@/app/navigation'
+import { PROJECT_VIEWS, type Step } from '@/app/navigation'
 import { commitSearch } from '@/lib/urls/commitParams'
 import { AccountBar } from '@/features/auth/AccountBar'
 import { McpEndpoint } from '@/features/projects/McpEndpoint'
@@ -59,10 +59,10 @@ function stepCrumb(project: string, step: Step): Crumb {
     // spelled — a miss here would mean the table and its own type had come apart.
     const item = PROJECT_VIEWS.find((view) => view.view === step.view)!
     return {
-      label: VIEW_NAMES[step.view],
+      label: item.label,
       link: (
         <Link {...item.link} params={{ project }}>
-          {VIEW_NAMES[step.view]}
+          {item.label}
         </Link>
       ),
     }

@@ -117,12 +117,12 @@ export default defineConfig({
       'react-doctor/react-in-jsx-scope': 'off',
       // The Tailwind entry is imported for its side effect; that is how a Vite CSS entry is written.
       'import/no-unassigned-import': 'off',
-      // `typeAware` (above, for the type check) also switches on the type-aware rules. These three
-      // fired on code that predates them — 20 sites, the vendored ui/ files among them — and are off
-      // until a change of their own decides each site, rather than riding in with the type check.
-      'typescript/no-unsafe-type-assertion': 'off',
-      'typescript/no-unnecessary-type-assertion': 'off',
-      'typescript/consistent-return': 'off',
+      // Three of the type-aware rules `typeAware` (above) switches on, named so that they stay errors.
+      // A CSS custom property in `style` needs no assertion, because src/cssProperties.d.ts declares
+      // them. Tests are the one exception to the first, below.
+      'typescript/no-unsafe-type-assertion': 'error',
+      'typescript/no-unnecessary-type-assertion': 'error',
+      'typescript/consistent-return': 'error',
     },
     // The one boundary the folder layout rests on, checked rather than remembered — the server has a
     // test for the same rule between its modules. `components/` is what every feature uses and
@@ -140,6 +140,14 @@ export default defineConfig({
           'shadcn/no-restyle': 'off',
           'shadcn/no-arbitrary-values': 'off',
         },
+      },
+      // A component test calls the component as a plain function and reads the element tree it
+      // returns, rather than rendering it into a DOM (see OverviewCard.test.tsx). React types an
+      // element's props as `unknown`, so reading that tree is asserting its shape, and the test's
+      // own expectations are what check the assertion: a wrong one fails the test, not a user.
+      {
+        files: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+        rules: { 'typescript/no-unsafe-type-assertion': 'off' },
       },
       {
         files: ['src/components/**', 'src/lib/**'],

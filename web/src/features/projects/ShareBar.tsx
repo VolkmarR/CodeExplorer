@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import { cn } from '@/lib/utils'
 
 /**
@@ -10,7 +9,7 @@ export function ShareBar({ share, className }: { share: number; className?: stri
     <div className={cn('h-1.5 overflow-hidden rounded-full bg-muted', className)}>
       <div
         className="h-full w-(--share) rounded-full bg-primary"
-        style={{ '--share': `${share}%` } as CSSProperties}
+        style={{ '--share': `${share}%` }}
       />
     </div>
   )

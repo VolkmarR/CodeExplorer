@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import { cn } from '@/lib/utils'
 
 /**
@@ -35,7 +34,7 @@ export function AuthorSplit({ shares }: { shares: [number, number, number] }) {
                 'h-full w-(--share) border-r border-background',
                 AUTHOR_SEGMENTS[i].className,
               )}
-              style={{ '--share': `${share * 100}%` } as CSSProperties}
+              style={{ '--share': `${share * 100}%` }}
             />
           ),
       )}

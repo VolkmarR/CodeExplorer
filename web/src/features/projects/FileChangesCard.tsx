@@ -187,6 +187,10 @@ function axisTicks(periods: PeriodChanges[], period: ChangePeriod) {
       return periods.length <= NAMED_MONTHS
         ? { values: periods.map((p) => p.start), format: formatUtcMonthName }
         : { values: at((d) => d.month === 0), format: (day: string) => day.slice(0, 4) }
+    default:
+      // A period added to `ChangePeriod` fails to compile here. One the server sends that the type
+      // does not know yet fails loudly at runtime, rather than drawing an axis with no labels.
+      throw new Error(`No axis for the period '${String(period satisfies never)}'`)
   }
 }
 
