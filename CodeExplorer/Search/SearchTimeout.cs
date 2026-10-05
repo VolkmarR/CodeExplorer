@@ -8,9 +8,12 @@ namespace CodeExplorer.Search;
 ///     so none of those can make RE2 scan for minutes.
 ///     The limit cancels a token, and DuckDB acts on it at its next check between chunks of work, so
 ///     it bounds how long a search goes on rather than ending it on the second. Two shapes overrun it
-///     by as much as one unit of work: a line scan whose pattern matches nothing reads on to the end of
-///     a row group before it checks (about 123,000 lines), and a multiline search cannot stop inside
-///     one file's match.
+///     by much more: a line scan whose pattern matches nothing reads on to the end of a row group
+///     before it checks (about 123,000 lines), and a multiline search matches a whole chunk of
+///     documents before it checks, so it runs on for about half of what finishing would have cost.
+///     Measured, over two thousand 5 KB files, 25 s past the limit for a search that took 50 s to
+///     finish, and over two hundred, 2.3 s past the limit for one that took 7 s. Nor can it stop inside
+///     one file's match, so a single very large file can hold it for longer still.
 /// </summary>
 public static class SearchTimeout
 {

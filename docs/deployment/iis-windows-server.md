@@ -223,9 +223,11 @@ lines, can hold a connection and a core for minutes; past the limit the search i
 caller is told to narrow it, with no partial results. A text grep is not limited. The stop lands at
 DuckDB's next check between chunks of work, which is usually within a second or two of the limit. Two
 cases run on longer: a line search whose pattern matches almost nothing checks only at the end of
-each block of about 123,000 lines, and a multiline search cannot stop inside the match over one
-file, so one very large file can hold it for minutes. It must be between 1 and 2147483, or the server
-refuses to start and names the setting.
+each block of about 123,000 lines, and a multiline search matches a whole chunk of files before it
+checks, so it can run on for about half of what it would have cost to finish. Measured, a multiline
+search that would have taken 50 s ran on for 25 s past the limit. Nor can it stop inside the match
+over one file, so one very large file can hold it for minutes. It must be between 1 and 2147483, or
+the server refuses to start and names the setting.
 
 `Git:RepackPackThreshold` — 50 by default — and `Git:RepackLooseObjectThreshold` — 5000 by default —
 decide when a refresh repacks a local copy. Every fetch adds a pack and nothing else ever folds them
