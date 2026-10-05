@@ -118,7 +118,7 @@ public sealed class MatchList(IndexReaders readers, IConfiguration configuration
         return await PatternQuery.TimedAsync(_timeoutSeconds,
             limited => request.Filter.OverIndexAsync(readers, slug, (index, filter, _) =>
             {
-                var token = limited();
+                var token = limited(index.Connection);
                 return PatternQuery.GuardedAsync(index.Connection, compileAlone,
                     PatternQuery.LineFlags(request.CaseSensitive),
                     () => missingGroup is not null
