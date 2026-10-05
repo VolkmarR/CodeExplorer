@@ -23,12 +23,12 @@ public sealed class SearchTimeoutTests(SearchTimeoutFixture fixture) : IClassFix
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>
-    ///     Measured on the fixture without a limit, on a 20-core laptop: about 39 s for the multiline grep,
-    ///     13 s for the listing and 10 s for the line grep, against a refusal in 1.1 to 2.8 s, the slower
-    ///     ones while another class ran beside it. Six seconds leaves a slower machine room for the
-    ///     statement to reach DuckDB's next interrupt check, and still fails a limit that was ignored.
+    ///     How much of the lines the reference scan of <see cref="WholeScanAsync" /> reads: a twentieth,
+    ///     6000 lines or nearly three vectors, about a second on a 20-core laptop with nothing else running. Enough vectors
+    ///     that one vector's noise does not decide the estimate, and few enough that the test still pays
+    ///     little for it under load.
     /// </summary>
-    private static readonly TimeSpan WellBefore = TimeSpan.FromSeconds(6);
+    private const int ReferenceShare = 20;
 
     [Theory]
     [InlineData(SearchEngine.Fts)]
@@ -38,21 +38,27 @@ public sealed class SearchTimeoutTests(SearchTimeoutFixture fixture) : IClassFix
         var host = await fixture.HostAsync(engine);
         await using var client = await host.ConnectAsync(SearchTimeoutFixture.Slug);
 
-        var watch = Stopwatch.StartNew();
+        // No time bound for the multiline grep: it stops after about half of what it would cost to finish,
+        // whatever the number of files, so no bound tells stopped from finished under every load. Refused
+        // over the 200 files it is scoped to, it took 3.0 to 3.5 s alone, against 6.7 to 7.1 s to finish.
         string grep = await TestHost.CallAsync(client, "grep", new Dictionary<string, object?>
         {
-            ["query"] = SearchTimeoutFixture.MultilinePattern, ["multiline"] = true
+            ["query"] = SearchTimeoutFixture.MultilinePattern, ["multiline"] = true,
+            ["ext"] = SearchTimeoutFixture.MultilineExtension
         });
         Assert.Equal(Refusal(1), grep);
-        Assert.True(watch.Elapsed < WellBefore, $"grep was refused after {watch.Elapsed}.");
 
-        watch.Restart();
+        // A line search is refused within one vector of the limit, and scans all of its nearly sixty only
+        // when the limit is ignored, so it is held to half the whole scan, measured under the same load.
+        var wholeScan = await WholeScanAsync(host);
+
+        var watch = Stopwatch.StartNew();
         string listed = await TestHost.CallAsync(client, "list_matches", new Dictionary<string, object?>
         {
             ["query"] = SearchTimeoutFixture.LinePattern
         });
         Assert.Equal(Refusal(1), listed);
-        Assert.True(watch.Elapsed < WellBefore, $"list_matches was refused after {watch.Elapsed}.");
+        AssertStopped("list_matches", watch.Elapsed, wholeScan);
 
         // The HTTP search runs the same grep and has no multiline mode, so it is refused for the line
         // pattern, with the status and the body of every other pattern it refuses.
@@ -61,15 +67,19 @@ public sealed class SearchTimeoutTests(SearchTimeoutFixture fixture) : IClassFix
         using var response = await http.GetAsync(
             $"/api/projects/{SearchTimeoutFixture.Slug}/search?regex=true&q="
             + Uri.EscapeDataString(SearchTimeoutFixture.LinePattern), Ct);
-        Assert.True(watch.Elapsed < WellBefore, $"/search was refused after {watch.Elapsed}.");
+        AssertStopped("/search", watch.Elapsed, wholeScan);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct));
         Assert.Equal(Refusal(1), body.RootElement.GetProperty("error").GetString());
 
-        // An interrupted connection is not handed to the next search broken: each shape runs again.
-        Assert.Contains("200 files match in total", await TestHost.CallAsync(client, "grep",
-            new Dictionary<string, object?> { ["query"] = "Needle", ["multiline"] = true }), StringComparison.Ordinal);
-        Assert.Contains("200 files match in total", await TestHost.CallAsync(client, "grep",
+        // An interrupted connection is not handed to the next search broken: each shape runs again. The
+        // multiline one keeps to its 200 files: over all of them, it passed the limit under load.
+        Assert.Contains($"{SearchTimeoutFixture.MultilineFiles} files match in total", await TestHost.CallAsync(client,
+            "grep", new Dictionary<string, object?>
+            {
+                ["query"] = "Needle", ["multiline"] = true, ["ext"] = SearchTimeoutFixture.MultilineExtension
+            }), StringComparison.Ordinal);
+        Assert.Contains($"{SearchTimeoutFixture.Files} files match in total", await TestHost.CallAsync(client, "grep",
             new Dictionary<string, object?> { ["query"] = "Needle" }), StringComparison.Ordinal);
         Assert.Contains("Needle", await TestHost.CallAsync(client, "list_matches",
             new Dictionary<string, object?> { ["query"] = "Need(le)" }), StringComparison.Ordinal);
@@ -90,7 +100,8 @@ public sealed class SearchTimeoutTests(SearchTimeoutFixture fixture) : IClassFix
         var matches = host.Services.GetRequiredService<MatchList>();
 
         await AssertCancelledAsync(token => grep.SearchAsync(SearchTimeoutFixture.Slug,
-            new GrepRequest(SearchTimeoutFixture.MultilinePattern, Multiline: true), token));
+            new GrepRequest(SearchTimeoutFixture.MultilinePattern, Extension: SearchTimeoutFixture.MultilineExtension,
+                Multiline: true), token));
         await AssertCancelledAsync(token => matches.ListAsync(SearchTimeoutFixture.Slug,
             new MatchListRequest(SearchTimeoutFixture.LinePattern, new FileFilter()), token));
     }
@@ -139,14 +150,49 @@ public sealed class SearchTimeoutTests(SearchTimeoutFixture fixture) : IClassFix
             $"Expected the cancellation, got {thrown?.GetType().Name ?? "an answer"}.");
     }
 
+    /// <summary>
+    ///     About how long the line pattern takes over every line with no limit, measured now, so it carries
+    ///     the load the searches beside it carry: the pattern over a <see cref="ReferenceShare" />th of the
+    ///     lines, run straight on the index where no limit applies, and scaled up. The scale holds because
+    ///     the lines fit one row group, which DuckDB scans on one thread, vector after vector; it is
+    ///     asserted, because lines spread over several row groups are scanned side by side, and the whole
+    ///     scan would then be faster than the estimate says, which would let a search that was not stopped
+    ///     pass. Only the statement is timed: opening the index is not the pattern's cost, and under load
+    ///     it would be scaled up with it.
+    /// </summary>
+    private static async Task<TimeSpan> WholeScanAsync(TestHost host)
+    {
+        using var lease = await host.OpenIndexAsync(SearchTimeoutFixture.Slug);
+        Assert.Equal(["1"], await TestHost.ScalarsAsync(lease,
+            "SELECT count(DISTINCT row_group_id)::VARCHAR FROM pragma_storage_info('lines')"));
+
+        var watch = Stopwatch.StartNew();
+        await TestHost.ScalarsAsync(lease, $"""
+                                            SELECT count(*)::VARCHAR
+                                            FROM (SELECT content FROM lines LIMIT {SearchTimeoutFixture.Lines / ReferenceShare})
+                                            WHERE regexp_matches(content, '{SearchTimeoutFixture.LinePattern}', 'i')
+                                            """);
+        var elapsed = watch.Elapsed;
+        lease.Completed();
+        return elapsed * ReferenceShare;
+    }
+
+    /// <summary>
+    ///     A search stopped by the limit ends within one vector of it; one the limit only refused once it
+    ///     finished took the whole scan. Half the whole scan is far from both, alone and under load.
+    /// </summary>
+    private static void AssertStopped(string search, TimeSpan refusedAfter, TimeSpan wholeScan) =>
+        Assert.True(refusedAfter < wholeScan / 2,
+            $"{search} was refused after {refusedAfter}, and the whole scan takes about {wholeScan}.");
+
     private static string Refusal(int seconds) =>
         $"The search was stopped after {seconds} s: this pattern is too expensive to run over the index. "
         + "Narrow it with `path` or `extension`, or use a simpler pattern, for example without `.*` spanning lines.";
 }
 
 /// <summary>
-///     One server per engine, each with a one-second limit and a project of two hundred small files,
-///     built once for the class: the build is most of what these tests cost.
+///     One server per engine, each with a one-second limit and a project of small files, built once for
+///     the class: the build is most of what these tests cost.
 ///     Each file starts with a line the patterns match cheaply. That keeps every 2048-line vector of a
 ///     scan non-empty: a scan whose filter rejects a whole vector reads on to the next one without
 ///     returning, so a pattern that matched nothing would only be interrupted between row groups.
@@ -154,6 +200,28 @@ public sealed class SearchTimeoutTests(SearchTimeoutFixture fixture) : IClassFix
 public sealed class SearchTimeoutFixture : IAsyncLifetime
 {
     public const string Slug = "slow";
+
+    /// <summary>
+    ///     As many lines as fit one row group of 122,880, so the whole scan of a line search is nearly sixty
+    ///     vectors on one thread. That keeps it far from a stop within one vector of the limit, about
+    ///     24 s against 1.4 s alone, and lets a share of it be scaled up. More lines would not make
+    ///     the scan slower: DuckDB scans the next row group on another thread beside the first.
+    /// </summary>
+    public const int Files = 1200;
+
+    public const int LinesPerFile = 100;
+
+    public const int Lines = Files * LinesPerFile;
+
+    /// <summary>
+    ///     The files the multiline grep is scoped to. Its stop grows with its files: it runs the pattern
+    ///     over a whole chunk of documents at a time, and refused over two thousand files it went on for
+    ///     25 s past the limit, against 2.3 s over two hundred.
+    /// </summary>
+    public const int MultilineFiles = 200;
+
+    /// <summary>The extension of the <see cref="MultilineFiles" />, and only of them.</summary>
+    public const string MultilineExtension = "txt";
 
     /// <summary>
     ///     A dot spanning a thousand characters, sixty-four times: it fits RE2's size limit only where the
@@ -183,10 +251,11 @@ public sealed class SearchTimeoutFixture : IAsyncLifetime
     private static async Task<TestHost> BuildAsync(SearchEngine engine)
     {
         var host = new TestHost(engine, (SearchTimeout.Setting, 1));
-        string filler = string.Concat(Enumerable.Repeat(new string('x', 49) + "\n", 99));
+        string content = "Needle\n" + string.Concat(Enumerable.Repeat(new string('x', 49) + "\n", LinesPerFile - 1));
         await host.IndexedProjectAsync(Slug, new Dictionary<string, Dictionary<string, string>>
         {
-            [Slug] = Enumerable.Range(0, 200).ToDictionary(i => $"src/File{i}.txt", _ => "Needle\n" + filler)
+            [Slug] = Enumerable.Range(0, Files).ToDictionary(
+                i => $"src/File{i}.{(i < MultilineFiles ? MultilineExtension : "log")}", _ => content)
         });
         return host;
     }
