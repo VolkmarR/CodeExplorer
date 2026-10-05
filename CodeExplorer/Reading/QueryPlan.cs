@@ -37,6 +37,25 @@ internal static class QueryPlan
     public static bool Enabled => _targets.Length > 0;
 
     /// <summary>
+    ///     Whether the reads of the index at <paramref name="dataSource" /> are recorded, which is
+    ///     <see cref="Enabled" /> narrowed to one server. A decision about what a search does, such as
+    ///     whether its time limit applies, asks this and not <see cref="Enabled" />: every test class runs
+    ///     a server in this one process, and a recording held by one of them must not change what another
+    ///     one's searches answer. <see cref="Enabled" /> only chooses the path a read takes to
+    ///     <see cref="DumpAsync(DuckDBCommand,string,string,CancellationToken)" />, which asks per read.
+    ///     A loop over one snapshot rather than LINQ, so that with nothing recorded it stays one read of
+    ///     an array's length.
+    /// </summary>
+    /// <param name="dataSource">The connection's data source, the index's instance file.</param>
+    public static bool Records(string dataSource)
+    {
+        foreach (var target in _targets)
+            if (target.Takes(dataSource))
+                return true;
+        return false;
+    }
+
+    /// <summary>
     ///     The same switch, held on for the length of one test and pointed at
     ///     <paramref name="directory" />. A test cannot use the environment variable itself: it is read
     ///     once, when this type is initialised, so setting it would only work for a test that happened

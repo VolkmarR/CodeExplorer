@@ -187,7 +187,7 @@ public sealed partial class GrepSearch(IndexReaders readers, IConfiguration conf
 
         return await PatternQuery.TimedAsync(_timeoutSeconds,
             limited => readers.OverIndexAsync(slug, null,
-                (index, _) => QueryAsync(index, request, query, regex, limited()), cancellationToken),
+                (index, _) => QueryAsync(index, request, query, regex, limited(index.Connection)), cancellationToken),
             cancellationToken);
     }
 

@@ -58,24 +58,29 @@ internal static class PatternQuery
     ///     pooled only once its reads returned (<see cref="IndexReaders" />).
     /// </summary>
     /// <param name="seconds">The limit, which is also what the refusal says.</param>
-    /// <param name="search">The search, handed a function that starts the clock and returns the token every statement runs with.</param>
+    /// <param name="search">
+    ///     The search, handed a function that starts the clock and returns the token every statement runs
+    ///     with. It passes the connection it reads, so the clock can ask whether that index's plans are
+    ///     being written.
+    /// </param>
     /// <param name="cancellationToken">
     ///     The caller's. When it is the one cancelled, the cancellation propagates as it always has: an
     ///     agent that gave up is not waiting for a sentence.
     /// </param>
     public static async Task<Outcome> TimedAsync(int seconds,
-        Func<Func<CancellationToken>, Task<Outcome>> search, CancellationToken cancellationToken)
+        Func<Func<DuckDBConnection, CancellationToken>, Task<Outcome>> search, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(search);
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {
-            return await search(() =>
+            return await search(connection =>
             {
-                // Not while plans are being written: each statement then runs twice, once profiled and
-                // once for real, and a search measured at half its cost would be refused instead of
-                // measured (CODING_STANDARDS, Performance).
-                if (!QueryPlan.Enabled) limit.CancelAfter(TimeSpan.FromSeconds(seconds));
+                // Not while this index's plans are being written: each statement then runs twice, once
+                // profiled and once for real, and a search measured at half its cost would be refused
+                // instead of measured (CODING_STANDARDS, Performance). Asked of this index alone, because
+                // a recording held for another server in the same process must not switch the limit off.
+                if (!QueryPlan.Records(connection.DataSource)) limit.CancelAfter(TimeSpan.FromSeconds(seconds));
                 return limit.Token;
             });
         }

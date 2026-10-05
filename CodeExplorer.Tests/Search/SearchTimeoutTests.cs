@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using CodeExplorer.Index;
 using CodeExplorer.Infrastructure;
+using CodeExplorer.Reading;
 using CodeExplorer.Search;
 using DuckDB.NET.Data;
 using Microsoft.Extensions.DependencyInjection;
@@ -92,6 +93,32 @@ public sealed class SearchTimeoutTests(SearchTimeoutFixture fixture) : IClassFix
             new GrepRequest(SearchTimeoutFixture.MultilinePattern, Multiline: true), token));
         await AssertCancelledAsync(token => matches.ListAsync(SearchTimeoutFixture.Slug,
             new MatchListRequest(SearchTimeoutFixture.LinePattern, new FileFilter()), token));
+    }
+
+    /// <summary>
+    ///     A search runs without the limit while its plans are recorded, because each statement then runs
+    ///     twice. Only its own server's recording counts: every test class runs a server in this process,
+    ///     and a recording held by another one switched the limit off here, so a pattern the limit should
+    ///     have stopped ran to the end and was answered.
+    /// </summary>
+    [Theory]
+    [InlineData(SearchEngine.Fts)]
+    [InlineData(SearchEngine.Substring)]
+    public async Task A_plan_recorded_for_another_server_leaves_the_limit_on(SearchEngine engine)
+    {
+        var host = await fixture.HostAsync(engine);
+        await using var client = await host.ConnectAsync(SearchTimeoutFixture.Slug);
+        // Neither directory is written to: no read of this server's index is recorded.
+        string elsewhere = Path.Combine(Path.GetTempPath(), "CodeExplorer.Tests", Guid.NewGuid().ToString("N"));
+
+        string listed;
+        using (QueryPlan.Recording(Path.Combine(elsewhere, "plans"), Path.Combine(elsewhere, "data")))
+            listed = await TestHost.CallAsync(client, "list_matches", new Dictionary<string, object?>
+            {
+                ["query"] = SearchTimeoutFixture.LinePattern
+            });
+
+        Assert.Equal(Refusal(1), listed);
     }
 
     [Fact]
