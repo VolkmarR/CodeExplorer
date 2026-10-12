@@ -29,8 +29,12 @@ import {
 import { toast } from '@/components/ui/toast'
 import { invalidateProject } from '@/features/projects/queries'
 
-/** What a row says in place of a value the last build has not produced yet. */
+/**
+ * What a row says in place of a value the last build has not produced yet. Said once, in the commit
+ * column; the columns after it show only a dash, as a row repeating it three times reads as noise.
+ */
 const NOT_INDEXED = 'not indexed yet'
+const NOT_BUILT = '—'
 
 /**
  * A project's repositories as configured, with where the last build found each. A repository added
@@ -158,11 +162,11 @@ export function RepositoryTable({
                     )}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {repository.headCommit ? formatTime(project.index.builtAt) : NOT_INDEXED}
+                    {repository.headCommit ? formatTime(project.index.builtAt) : NOT_BUILT}
                   </TableCell>
                   <TableCell className="text-right text-sm text-muted-foreground tabular-nums">
                     {repository.fileCount === null
-                      ? NOT_INDEXED
+                      ? NOT_BUILT
                       : `${formatCountOf(repository.fileCount, 'file')}, ${formatCountOf(repository.lineCount ?? 0, 'line')}`}
                   </TableCell>
                   <TableCell className="text-right">
