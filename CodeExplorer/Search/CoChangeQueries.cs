@@ -60,7 +60,7 @@ public sealed record CoChangeAnswer(
     PathLineage? Lineage = null) : Outcome;
 
 /// <summary>
-///     Co-Change (CONTEXT.md): which files keep moving with one file. Alone here because it is the
+///     Co-Change (GLOSSARY.md): which files keep moving with one file. Alone here because it is the
 ///     one read that pairs commits rather than listing them — the ceiling on how wide a commit may be
 ///     and the walk over an anchor's earlier paths are decisions no other answer takes.
 /// </summary>
@@ -158,7 +158,7 @@ public sealed partial class HistoryQueries
     ///     <paramref name="anchorPaths" /> is the anchor's own path and every earlier one a rename leads
     ///     back to, so coupling survives a move (#143). It is the one place in this system where a
     ///     rename is followed rather than signalled: every other path-scoped read counts what its own
-    ///     path recorded (CONTEXT.md, Previous Path), and the exception is here because <c>git_log</c>
+    ///     path recorded (GLOSSARY.md, Previous Path), and the exception is here because <c>git_log</c>
     ///     and <c>file_history</c> can answer for a previous path while nothing can answer its coupling.
     ///     In the commit that moved the anchor, a counterpart that <b>also moved</b> is dropped and one
     ///     that was edited is kept. Dropping the whole commit was the first shape and it was too blunt:

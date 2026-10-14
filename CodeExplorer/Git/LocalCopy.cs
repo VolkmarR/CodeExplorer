@@ -99,7 +99,7 @@ public sealed record ChangedPath(
     IReadOnlyList<LineEdit> Edits);
 
 /// <summary>
-///     One commit of a repository's history (CONTEXT.md), as plain records: the author, never the
+///     One commit of a repository's history (GLOSSARY.md), as plain records: the author, never the
 ///     committer (ADR-0007), and every path it touched. No LibGit2Sharp type is in it, so a build
 ///     reads history the same way it reads files.
 /// </summary>
@@ -122,7 +122,7 @@ public sealed record RecordedCommit(
     IReadOnlyList<ChangedPath> Files);
 
 /// <summary>
-///     A repository's local copy (CONTEXT.md) as the one reader it has, the refresh, sees it: the commit
+///     A repository's local copy (GLOSSARY.md) as the one reader it has, the refresh, sees it: the commit
 ///     HEAD is at and the files committed there. There is no working copy, so the files come from the
 ///     HEAD tree and their content from blobs (ADR-0003); a submodule is another repository and is not a
 ///     file of this one. Opened only through <see cref="GitClones.OpenRefreshedAsync" />, which has

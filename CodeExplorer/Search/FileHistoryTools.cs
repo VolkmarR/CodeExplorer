@@ -11,7 +11,7 @@ namespace CodeExplorer.Search;
 ///     The history tools that answer about one file or one commit — <c>file_history</c>,
 ///     <c>blame</c>, <c>commit</c> and <c>commit_files</c> — and <c>hot_files</c>, which ranks the
 ///     same changes rather than listing them. Each says in its own words that attribution is who
-///     touched a line last and not who wrote it (CONTEXT.md, Attribution).
+///     touched a line last and not who wrote it (GLOSSARY.md, Attribution).
 /// </summary>
 internal sealed partial class HistoryTools
 {

@@ -10,7 +10,7 @@ namespace CodeExplorer.Tests;
 
 /// <summary>
 ///     The local copy a refresh makes of a repository: a full bare clone that nothing but the refresh
-///     reads (CONTEXT.md, Local copy; ADR-0007). Adding the repository is <c>RepositoryEndpointTests</c>'
+///     reads (GLOSSARY.md, Local copy; ADR-0007). Adding the repository is <c>RepositoryEndpointTests</c>'
 ///     subject, in <c>Control/</c> beside the endpoints. Fixtures
 ///     are local repositories built with LibGit2Sharp, so the suite never touches the network; the
 ///     local transport cannot serve a shallow clone (ADR-0003), so the shallow copy an older server

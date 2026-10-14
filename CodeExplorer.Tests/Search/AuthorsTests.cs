@@ -60,7 +60,7 @@ public sealed class AuthorsTests(AuthorsFixture fixture) : IClassFixture<Authors
     /// <summary>
     ///     An index with no history has no authors, and says the one sentence every history tool says
     ///     about it: an empty list here would read as a project nobody has worked on, which is a fact,
-    ///     where this is the absence of one (CONTEXT.md, History).
+    ///     where this is the absence of one (GLOSSARY.md, History).
     /// </summary>
     [Fact]
     public async Task Authors_says_an_index_without_history_has_none_in_the_shared_words()

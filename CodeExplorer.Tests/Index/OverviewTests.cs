@@ -83,7 +83,7 @@ public sealed class OverviewTests : IDisposable
         // A real index with no commit tables to rank, built end to end rather than doctored: the build
         // fills the overview, completes and swaps exactly as a refresh does, and only the history is
         // missing. An empty answer here would read as "nothing changed", the one thing history must
-        // never say by accident (CONTEXT.md, History).
+        // never say by accident (GLOSSARY.md, History).
         await _host.CreateProjectAsync("beta");
         var builder = _host.Services.GetRequiredService<OverviewBuilder>();
         var shadow = await _host.Indexes.CreateShadowAsync("beta", Ct);

@@ -72,7 +72,7 @@ public sealed record AuthorsAnswer(
 ///     A page of commits, newest first. <see cref="HasHistory" /> is the project's and not the page's:
 ///     an empty page of a project that has history means the page is past the end, and an empty page of
 ///     one that has none means nothing was ever imported — opposite claims, and the reason the flag is
-///     carried rather than inferred from the count (CONTEXT.md, History). <see cref="Limit" /> and
+///     carried rather than inferred from the count (GLOSSARY.md, History). <see cref="Limit" /> and
 ///     <see cref="Page" /> are what the read actually used, after clamping, so a reply can say where it
 ///     stood without clamping a second time.
 ///     <see cref="Message" /> is the subject text the page was narrowed by, quoted back for the reason

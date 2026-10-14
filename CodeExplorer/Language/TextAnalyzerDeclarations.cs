@@ -151,7 +151,7 @@ public sealed partial class TextAnalyzer
         string flag = profile.CaseInsensitiveKeywords ? "(?i)" : "";
         string? modifiers = Alternation(profile.DeclarationModifiers);
         // The C-family shape: modifiers, a return type, the name, then what opens a body — or what
-        // ends the line, because a field is a member and a member is a declaration (CONTEXT.md,
+        // ends the line, because a field is a member and a member is a declaration (GLOSSARY.md,
         // Declaration). Without the `;` the class ended at `=`, so the same field appeared or
         // disappeared according to whether it had been given an initialiser: `private const string
         // Pattern = "…";` was a declaration and `public int Count;` was not. The keyword shape beside
@@ -184,7 +184,7 @@ public sealed partial class TextAnalyzer
         // Nested to a fixed depth because a regular expression cannot balance brackets and RE2 has
         // no recursion to fake it with. Three is `Dictionary<string, List<Foo<int>>>` — past what
         // these codebases write — and a type nested deeper is a miss rather than a wrong answer,
-        // which is the direction this module errs in everywhere (CONTEXT.md, Declaration).
+        // which is the direction this module errs in everywhere (GLOSSARY.md, Declaration).
         // A character of a name, as IsWordChar defines one. Not \w: these patterns also go to DuckDB as
         // the candidate predicate, where RE2's \w is ASCII-only, so `METHOD Größe()` was never a
         // candidate and the member was never declared (#235). .NET reads the class the same way.

@@ -34,7 +34,7 @@ export function RailPanel({
   note?: string | null
   /**
    * How the answer was reached — every one of these is read from line shape and is evidence rather
-   * than proof (CONTEXT.md). Undefined where nothing was read, so there is no claim to qualify.
+   * than proof (GLOSSARY.md). Undefined where nothing was read, so there is no claim to qualify.
    */
   evidence?: string
   children?: React.ReactNode

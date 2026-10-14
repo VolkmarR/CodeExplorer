@@ -359,7 +359,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
     ///     The churn page. It ranks over a window of days rather than a page of commits, and answers
     ///     with the dates that window resolved to — which end at the newest recorded commit and not at
     ///     today, so a caller can see that an index is stale rather than read an empty ranking as
-    ///     "nothing changed" (CONTEXT.md, Window).
+    ///     "nothing changed" (GLOSSARY.md, Window).
     ///     A server of its own, because the last step deletes a repository's commits.
     /// </summary>
     [Fact]
@@ -583,7 +583,7 @@ public sealed class SearchEndpointTests(SearchEndpointFixture fixture) : IClassF
         Assert.False(declared.Capped);
 
         // The type and its members, in the order the file writes them. The field on line 5 is among
-        // them: a field is a member and a member is a declaration (CONTEXT.md, Declaration), whether
+        // them: a field is a member and a member is a declaration (GLOSSARY.md, Declaration), whether
         // or not it was given an initialiser.
         // Line 6 is the one that matters most: `// public void Removed() { }` is shaped exactly like
         // the live declaration two lines below it, and only the walk of the lines above tells them

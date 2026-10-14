@@ -52,7 +52,7 @@ public sealed record ImportsResult(
 ///     alias resolved to nothing. It answered empty or ambiguous every time it was asked, and every
 ///     agent that asked fell back to <c>list_declarations</c> plus <c>find_references</c> — which is
 ///     the lookup that does not depend on a name resolving, and is now the only one offered.
-///     Every answer is evidence and not proof, in the sense CONTEXT.md gives the word: an import line
+///     Every answer is evidence and not proof, in the sense GLOSSARY.md gives the word: an import line
 ///     is text, a text profile is what read it, and a name that resolved did so against what another
 ///     file declared itself to be. It says so, and it says which edges it could not place rather than
 ///     leaving them out.

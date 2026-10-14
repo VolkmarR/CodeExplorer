@@ -16,7 +16,7 @@ import { formatCountOf, formatDate } from '@/lib/format'
  * pasted to a colleague and opens as the same page.
  *
  * What it is not is a complete history, and the empty state says so rather than "nothing changed":
- * history arrives with a refresh and may not reach the beginning of the repository (CONTEXT.md).
+ * history arrives with a refresh and may not reach the beginning of the repository (GLOSSARY.md).
  */
 export function HistoryPage() {
   const { project } = useParams({ from: '/projects/$project/history' })

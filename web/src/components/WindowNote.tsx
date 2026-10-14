@@ -4,7 +4,7 @@ import { Info } from 'lucide-react'
  * What a view counted over, above the view.
  *
  * Every window in this system ends at the newest commit the index holds and never at the clock
- * (CONTEXT.md, _Window_) — and that is exactly the thing a reader cannot see and will otherwise
+ * (GLOSSARY.md, _Window_) — and that is exactly the thing a reader cannot see and will otherwise
  * assume the other way round: a change log that stops two weeks ago looks like a quiet fortnight
  * rather than like an index nobody has refreshed. History and Churn both have to say it, so they
  * say it in the same words and the same place.

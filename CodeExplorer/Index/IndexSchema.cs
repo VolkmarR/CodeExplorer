@@ -106,7 +106,7 @@ public sealed partial class ProjectIndexes
                                       -- a repo_id is the position of the repository in the build's list
                                       -- and moves when one is added or removed, which would repoint
                                       -- every carried-over commit at a different repository. A slug is
-                                      -- stable by definition (CONTEXT.md, Repository Slug).
+                                      -- stable by definition (GLOSSARY.md, Repository Slug).
                                       repo_slug    VARCHAR NOT NULL,
                                       sha          VARCHAR NOT NULL,
                                       -- The author and never the committer: a rebase makes the two

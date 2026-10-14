@@ -78,7 +78,7 @@ understating what it knows, and one that did the reverse would be overstating it
 
 ## Where this leaves "no language analysis"
 
-`CONTEXT.md` says a reference is determined from the text alone, never from language analysis. That
+`GLOSSARY.md` says a reference is determined from the text alone, never from language analysis. That
 line stays where it was for the answers this build gives: a table of punctuation per extension is
 still text, and `TextAnalyzer` has no compiler, no symbol table and no parse tree. A reference it
 finds is still strong evidence and never proof, and every reply still says so.

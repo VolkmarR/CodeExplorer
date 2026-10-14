@@ -55,7 +55,7 @@ public sealed record AuthenticationSettings(string? ClientId, Uri? Authority, IR
 ///     own authentication scheme does both halves — see <see cref="Describe" /> for what it does and
 ///     what this code still has to supply.
 ///     At the root rather than in a module folder for the reason <see cref="KeyRing" /> is: ADR-0005's
-///     folders are the concepts in CONTEXT.md, and who is calling belongs to no one of them.
+///     folders are the concepts in GLOSSARY.md, and who is calling belongs to no one of them.
 /// </summary>
 public static class Authentication
 {

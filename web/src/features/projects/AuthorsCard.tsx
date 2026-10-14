@@ -24,7 +24,7 @@ export function AuthorsCard({
       title="Most commits"
       history={churn}
       // Said once, at the top, rather than per row: it is a caveat about the whole list, and
-      // attribution is who touched the code last and never who wrote it (CONTEXT.md).
+      // attribution is who touched the code last and never who wrote it (GLOSSARY.md).
       note={
         authors.length > 0 ? (
           <>

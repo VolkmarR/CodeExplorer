@@ -8,7 +8,7 @@ using ModelContextProtocol.Server;
 namespace CodeExplorer.Search;
 
 /// <summary>
-///     <c>find_definition</c>, which answers with declarations (CONTEXT.md, Declaration), and
+///     <c>find_definition</c>, which answers with declarations (GLOSSARY.md, Declaration), and
 ///     <c>list_matches</c>, which answers with what a pattern extracted. Both read a line's shape
 ///     rather than its text alone, and both say so in the same words.
 /// </summary>

@@ -9,7 +9,7 @@ import { formatCount } from '@/lib/format'
  * The ranking itself: most commits first, with the lines each row gained and lost.
  *
  * Ranked by number of commits rather than by lines, for the reason blame gives — a reformat is a
- * change, and this says where work happened, not where the logic did (CONTEXT.md, Churn).
+ * change, and this says where work happened, not where the logic did (GLOSSARY.md, Churn).
  *
  * It takes the files rather than the whole `Churn`, so the project page's overview — which carries
  * the same ranking, computed without the project's excluded paths — shows it in the same shape. One

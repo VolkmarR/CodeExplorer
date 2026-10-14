@@ -234,7 +234,7 @@ public sealed class ToolReplyTests : IDisposable
         // `committer` is a name no tool declares — asserted below, so that a tool growing one cannot
         // turn this into a sweep over a name that binds. It is what `author` was until git_log grew a
         // real one, and it is the spelling an agent reaches for next: git records both, this records
-        // the author (CONTEXT.md, History).
+        // the author (GLOSSARY.md, History).
         foreach ((string tool, var arguments) in Tools)
         {
             string reply = await TestHost.CallAsync(client, tool,
@@ -270,7 +270,7 @@ public sealed class ToolReplyTests : IDisposable
 
     /// <summary>
     ///     The near-miss names are named in the reply and nowhere else (#85): accepting one would put
-    ///     two spellings on a concept, which CONTEXT.md asks against. Read from the table above rather
+    ///     two spellings on a concept, which GLOSSARY.md asks against. Read from the table above rather
     ///     than listed again, so that a name added there cannot be answered nicely and quietly accepted
     ///     too. Per tool and not across the surface, because a near miss is only a near miss where it
     ///     is one: `path` is the real parameter of every tool that takes a single file, and a sweep

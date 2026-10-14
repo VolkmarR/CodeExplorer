@@ -4,7 +4,7 @@ import type { CommitRef } from '@/features/history/api'
  * When the history this project holds ends.
  *
  * Every window in this system is counted from the newest commit the index holds and never from the
- * clock (CONTEXT.md, _Window_), which is exactly the thing a reader cannot see and will otherwise
+ * clock (GLOSSARY.md, _Window_), which is exactly the thing a reader cannot see and will otherwise
  * assume the other way round: a change log that stops two weeks ago looks like a quiet fortnight
  * rather than like an index nobody has refreshed.
  *

@@ -27,7 +27,7 @@ tool surface an agent reads before calling:
 - `co_changed` — the history bullet
 
 Three more are reply prose: the shared `ByRecordedPath` note at the foot of every scoped answer,
-`WhyNoCommits`, and the "moves alone" branch of `co_changed`. `CONTEXT.md` states it twice — under
+`WhyNoCommits`, and the "moves alone" branch of `co_changed`. `GLOSSARY.md` states it twice — under
 **History** ("a file's history begins where it was last renamed") and under **Previous Path**
 ("Renames are **signalled, never followed**") — and two tests assert the wording directly.
 
@@ -58,7 +58,7 @@ answer for one — so the signal can name the gap and point at the fix. Nothing 
 was the single read that could name a gap and point nowhere, which is what made a redirect useless
 there and a merged ranking worth the exception.
 
-The carve-out is stated in `co_changed`'s tool description and in `CONTEXT.md` under **Co-Change**,
+The carve-out is stated in `co_changed`'s tool description and in `GLOSSARY.md` under **Co-Change**,
 so an agent meets it where it applies rather than inferring it. It does not widen: counts and scopes
 in every other tool stay literal, which is what the rest of this file is about.
 

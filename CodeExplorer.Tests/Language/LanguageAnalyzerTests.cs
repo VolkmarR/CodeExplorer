@@ -882,7 +882,7 @@ public sealed class LanguageAnalyzerTests
     }
 
     [Theory]
-    // A field is a member, and CONTEXT.md's _Declaration_ says a member is one. The C-family shape
+    // A field is a member, and GLOSSARY.md's _Declaration_ says a member is one. The C-family shape
     // used to require the name to be followed by `(`, `<`, `{` or `=`, so whether a field appeared
     // depended on whether it had been given an initialiser — the same member, read two ways, and the
     // opposite of what the xBase/Delphi/SQL shape beside it has always answered with its `;`.
@@ -952,7 +952,7 @@ public sealed class LanguageAnalyzerTests
         // The `export default function thing() {}` beside it is a miss and not the answer: no shape
         // reads it today, and it was a miss before the `;` too. Naming it here would be inventing a
         // behaviour, and a form no profile knows is one this does not find rather than one that is
-        // not there (CONTEXT.md, Declaration).
+        // not there (GLOSSARY.md, Declaration).
         Assert.Null(Declares("ts", "export default thing;").Value);
 
     [Fact]

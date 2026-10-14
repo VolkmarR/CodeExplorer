@@ -10,7 +10,7 @@ import { FilePathLink } from '@/components/FilePathLink'
  *
  * A name that resolved is a link to that file's page; one that did not is the name as written, with
  * the server's reason beside it, because an edge shown only when it resolves would tell the reader
- * this file depends on less than it does (CONTEXT.md, _Import_).
+ * this file depends on less than it does (GLOSSARY.md, _Import_).
  *
  * A Dependents panel drew the reverse direction beside this one and is gone (#160). It could only
  * answer where a name resolved to exactly one file, and on the codebases this server is pointed at

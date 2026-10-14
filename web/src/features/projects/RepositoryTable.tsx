@@ -39,7 +39,7 @@ const NOT_BUILT = '—'
 /**
  * A project's repositories as configured, with where the last build found each. A repository added
  * since that build has no commit, no counts and no time, which is how the page shows a rebuild is
- * owed. The build time is the project's: a refresh rebuilds every repository together (CONTEXT.md),
+ * owed. The build time is the project's: a refresh rebuilds every repository together (GLOSSARY.md),
  * so there is no per-repository time to report and the column repeats the one there is.
  *
  * Adding one is a form behind a button in the card's header rather than a second card below: it is

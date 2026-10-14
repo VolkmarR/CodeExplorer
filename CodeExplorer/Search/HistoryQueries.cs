@@ -28,7 +28,7 @@ public sealed record PathScope(string Spelled, string RepositorySlug, string Pat
     PathLineage? Lineage = null);
 
 /// <summary>
-///     The index-backed answers drawn from a project's history (CONTEXT.md): what changed, what changed
+///     The index-backed answers drawn from a project's history (GLOSSARY.md): what changed, what changed
 ///     one file, who last changed each line, what keeps changing, and what keeps changing with what.
 ///     One module behind the MCP tools and the operator's pages alike, so the decisions inside — when a
 ///     project counts as having no history, how far a window reaches, which commits are too wide to

@@ -111,7 +111,7 @@ export interface OverviewChurn {
   files: ChurnFile[]
 }
 
-/** Who has touched the project most. Who to ask, never who wrote it (CONTEXT.md, Attribution). */
+/** Who has touched the project most. Who to ask, never who wrote it (GLOSSARY.md, Attribution). */
 export interface OverviewAuthor {
   name: string
   email: string

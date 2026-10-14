@@ -456,7 +456,7 @@ public sealed partial class IndexReader : IDisposable
     /// <summary>
     ///     The repositories of this project that have no imported history, in build order — the one
     ///     place the rule lives, because an answer covering half a project reads as covering all of it
-    ///     and every surface that ranks over history has to say so in its own words (CONTEXT.md,
+    ///     and every surface that ranks over history has to say so in its own words (GLOSSARY.md,
     ///     History).
     ///     Empty where the question does not arise, which is the caller's answer and not its judgement:
     ///     a call already scoped to one repository is not speaking for the others, and a project of one

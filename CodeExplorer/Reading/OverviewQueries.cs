@@ -88,7 +88,7 @@ internal static partial class OverviewQueries
     ///     null where it excludes nothing, so a call that leaves nothing out pays for no count.
     ///     The churn section's window is anchored to the newest commit in the scope and not to the
     ///     clock, which for an overview matters twice over: the stored row outlives the build that wrote
-    ///     it, and either one is read from a replica that may be days behind (CONTEXT.md, Window).
+    ///     it, and either one is read from a replica that may be days behind (GLOSSARY.md, Window).
     /// </summary>
     /// <param name="connection">Bound to the index: a live project, or a shadow being built.</param>
     /// <param name="paths">How this project names its files (ADR-0006), for the paths in the answer.</param>

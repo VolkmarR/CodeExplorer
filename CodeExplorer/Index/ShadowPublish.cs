@@ -23,7 +23,7 @@ public sealed partial class ProjectIndexes
     /// <summary>
     ///     Creates the shadow index a refresh fills: a second file beside the live one, attached under
     ///     its own catalog and returned with the tables created. The live index is untouched and keeps
-    ///     answering every query until <see cref="PublishShadowAsync" /> (CONTEXT.md, ADR-0003).
+    ///     answering every query until <see cref="PublishShadowAsync" /> (GLOSSARY.md, ADR-0003).
     /// </summary>
     public async Task<ShadowIndex> CreateShadowAsync(string slug, CancellationToken cancellationToken)
     {

@@ -71,7 +71,7 @@ export function DeclarationPanel({
               <p className="truncate text-muted-foreground">
                 line {declaration.lineNumber}
                 {/* Only where the language draws the split. Where it does not, saying nothing is the
-                    answer rather than picking one of the two labels (CONTEXT.md, Declaration). */}
+                    answer rather than picking one of the two labels (GLOSSARY.md, Declaration). */}
                 {declaration.role === null ? null : ` · ${declaration.role.toLowerCase()}`}
               </p>
             </li>

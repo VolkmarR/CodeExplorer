@@ -3,7 +3,7 @@ using CodeExplorer.Infrastructure;
 namespace CodeExplorer.Reading;
 
 /// <summary>
-///     A qualified path (CONTEXT.md) taken apart: which repository, and where inside it. How it is
+///     A qualified path (GLOSSARY.md) taken apart: which repository, and where inside it. How it is
 ///     written back out depends on the project, so it is not written here — <see cref="ProjectPaths" />
 ///     both parses and formats, and is the only thing that constructs this.
 /// </summary>

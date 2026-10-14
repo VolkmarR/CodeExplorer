@@ -11,7 +11,7 @@ editor keeps a file's ending and gives a new file its own default. oxfmt writes 
 checkout gave `web/vite.config.ts`, so a new web file in the other ending fails `vp check` until
 `vp check --fix` converts it.
 
-Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules follow from.
+Read `GLOSSARY.md` for vocabulary and `docs/adr/` for the decisions these rules follow from.
 
 ## Dependencies
 
@@ -33,7 +33,7 @@ Read `CONTEXT.md` for vocabulary and `docs/adr/` for the decisions these rules f
   in `CodeExplorer.Tests/McpProxy/` because they drive it against the in-process server. The web app
   is `web/`, a Vite+ build into `CodeExplorer/wwwroot`, and stays out of the solution file.
 - **Modular monolith (ADR-0005).** Inside the host, one folder per module, named after the concept
-  in `CONTEXT.md` it owns: `Control/` (projects, repositories, credentials), `Git/` (local copies),
+  in `GLOSSARY.md` it owns: `Control/` (projects, repositories, credentials), `Git/` (local copies),
   `Index/`, `Reading/` (how an index is read: the reader, the shared statements and the row records
   every reading module is handed), `Search/`, `Refresh/`, `Operator/`, `Language/` (what a file is
   written in, and everything that follows from it — ADR-0008). Folders follow the module boundary, never the

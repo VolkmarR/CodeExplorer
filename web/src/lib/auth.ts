@@ -3,7 +3,7 @@ import { http } from '@/lib/http'
 /**
  * Who is signed in: the one read that stayed in `lib/` when every other response shape moved to the
  * feature that reads it. It is not a feature's answer — it is the session the whole frame is drawn
- * inside, asked once on every view and owned by no concept in CONTEXT.md — and it belongs beside the
+ * inside, asked once on every view and owned by no concept in GLOSSARY.md — and it belongs beside the
  * client for the same reason the 401 hook and the sign-in URL do: all three are this app's side of
  * one decision about who may call `/api` at all.
  */

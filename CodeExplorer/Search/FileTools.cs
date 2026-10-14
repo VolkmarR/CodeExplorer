@@ -425,7 +425,7 @@ internal sealed partial class FileTools(
     // CODING_STANDARDS asks that a tool name trade on a shell verb a model already knows, and
     // `outline` is not one — it is an IDE's noun, and a model that has not met it has nothing to
     // transfer. `list_declarations` reads beside `list_tree`, `list_extensions` and `list_matches`,
-    // and it spells the word CONTEXT.md defines, so the reply's vocabulary is the name's.
+    // and it spells the word GLOSSARY.md defines, so the reply's vocabulary is the name's.
     [McpServerTool(Name = "list_declarations", ReadOnly = true, Idempotent = true,
         Title = "List what one file declares")]
     [Description("""

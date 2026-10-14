@@ -103,7 +103,7 @@ public sealed record ChurnedExtension(string Extension, int Commits, int Files);
 ///     Which repositories of a project an answer drawn from history can speak for, and which it
 ///     cannot. Both sides, because "says which is which" is the point: naming only the repositories
 ///     that were not walked leaves a reader to infer the rest from a ranking, which is the inference
-///     the caveat exists to prevent (CONTEXT.md, History).
+///     the caveat exists to prevent (GLOSSARY.md, History).
 ///     <see cref="NothingToSay" /> where the question does not arise — a project of one repository, an
 ///     answer already scoped to one, or every repository walked — so a caller tests one thing.
 /// </summary>
@@ -112,7 +112,7 @@ public sealed record HistoryCoverage(IReadOnlyList<string> With, IReadOnlyList<s
     public static readonly HistoryCoverage NothingToSay = new([], []);
 }
 
-/// <summary>A run of consecutive lines sharing one attribution (CONTEXT.md, Attribution).</summary>
+/// <summary>A run of consecutive lines sharing one attribution (GLOSSARY.md, Attribution).</summary>
 public sealed record AttributedLines(int StartLine, int EndLine, AttributedBy? By);
 
 /// <summary>

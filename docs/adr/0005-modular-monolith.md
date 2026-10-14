@@ -1,7 +1,7 @@
 # Modular monolith: one host project, one folder per module
 
 The server stays one ASP.NET Core project, organised into folders that follow the modules named in
-`CONTEXT.md`: `Control/`, `Git/`, `Index/`, `Search/`, `Refresh/`, `Operator/`, plus a single
+`GLOSSARY.md`: `Control/`, `Git/`, `Index/`, `Search/`, `Refresh/`, `Operator/`, plus a single
 `Telemetry.cs`. Endpoints remain thin and are registered from `Program.cs`, moving into a `MapX`
 extension per module only when `Program.cs` outgrows inline lambdas. The alternatives weighed on
 2026-09-13 were a flat project root, feature folders (vertical slices), clean architecture and
@@ -85,7 +85,7 @@ review behind #35 added a tenth: the one module through which every reader opens
 "What every module is handed" was a rule with no folder, so it read as a bucket of leftovers to a
 coding agent grepping for a place to look, and the boundary test had nothing to name.
 
-- **They live in `Infrastructure/` now.** One folder for code that no `CONTEXT.md` concept owns and
+- **They live in `Infrastructure/` now.** One folder for code that no `GLOSSARY.md` concept owns and
   that more than one module is handed. `Program.cs` alone stays at the root, because it is the
   composition root and not a module. `ToolReply` moved there too: its callers are in `Control/` as
   well as `Search/`, so a `Search/` home had `Control/` crossing a seam for a pluraliser.
@@ -186,7 +186,7 @@ no folder, which is the same fault the #35 revisit fixed for the root.
 - **`Reading/` is a module.** It holds how an index is read: `IndexReader` with its row records and
   its tree listing, `IndexReaders` — the one way in — the shared statements, the query and plan
   helpers, the reader columns, the overview document, the history window, the path terms and the
-  qualified-path rule. It is named after the act and not after a noun in `CONTEXT.md`, because the
+  qualified-path rule. It is named after the act and not after a noun in `GLOSSARY.md`, because the
   noun it would be named after is Index, and that name is taken by the module that writes one.
 - **It is not `Index/`.** `Index/` builds: it clones, ingests, attaches, shadows and swaps, and it
   reaches `Git/` to do it. A reader that lived there would put every MCP tool one arrow away from

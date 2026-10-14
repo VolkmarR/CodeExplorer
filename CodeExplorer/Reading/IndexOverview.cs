@@ -53,7 +53,7 @@ public sealed record OverviewFile(string QualifiedPath, int LineCount, long Size
 ///     The churn section of an overview: the ranking and the window it was taken over.
 ///     <see cref="Since" /> and <see cref="Until" /> are null together when the project had no imported
 ///     history at build time, which is a different answer from a project nobody changed and is reported
-///     as one (CONTEXT.md, History).
+///     as one (GLOSSARY.md, History).
 /// </summary>
 public sealed record OverviewChurn(
     int Days,
@@ -78,7 +78,7 @@ public sealed record OverviewChurn(
 ///     One of the authors who has touched the project most, over the whole imported history rather than
 ///     the churn window: "who knows this code" is a longer question than "what is moving now".
 ///     It is who touched it, not who wrote it — a reformat counts, the same way it counts as
-///     attribution (CONTEXT.md, Attribution) — so an overview says so rather than letting a name read
+///     attribution (GLOSSARY.md, Attribution) — so an overview says so rather than letting a name read
 ///     as authorship.
 /// </summary>
 public sealed record OverviewAuthor(string Name, string Email, int Commits, DateTimeOffset LastCommit);

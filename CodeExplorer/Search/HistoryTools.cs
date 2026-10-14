@@ -7,7 +7,7 @@ using ModelContextProtocol.Server;
 namespace CodeExplorer.Search;
 
 /// <summary>
-///     The MCP tools that answer from a project's history (CONTEXT.md): what changed, who changed a
+///     The MCP tools that answer from a project's history (GLOSSARY.md): what changed, who changed a
 ///     file, which commit each line was last changed by, and what one commit did. They live beside the
 ///     other index-backed tools because that is what they are — history is tables in the project index like any other,
 ///     and none of these ever opens a local copy or talks to a remote.
@@ -16,7 +16,7 @@ namespace CodeExplorer.Search;
 ///     and a page of the same window cannot disagree about what a window is when only one place
 ///     decides, and the sentences below are the half a JSON response has no use for.
 ///     Every one of them is careful about the same thing: attribution says who touched a line last and
-///     not who wrote the logic (CONTEXT.md, Attribution). An agent that reads it as authorship will
+///     not who wrote the logic (GLOSSARY.md, Attribution). An agent that reads it as authorship will
 ///     confidently name the person who reformatted the file, so each tool says so in its own words
 ///     rather than relying on the agent having read another one's.
 /// </summary>
@@ -42,7 +42,7 @@ internal sealed partial class HistoryTools(IHttpContextAccessor httpContextAcces
     /// <summary>
     ///     What a scope with no commit at all is answered with, when the project around it has history.
     ///     That is a repository whose walk found nothing, and it reads as "nobody has changed it" unless
-    ///     it is said outright (CONTEXT.md, History) — so both rankings say it, and say it the same way,
+    ///     it is said outright (GLOSSARY.md, History) — so both rankings say it, and say it the same way,
     ///     because two spellings of one fact are two facts to keep in step.
     /// </summary>
     /// <param name="spelled">What the reply calls the scope, so the answer and the question match.</param>

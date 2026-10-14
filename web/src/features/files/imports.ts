@@ -3,7 +3,7 @@ import type { FileImports } from '@/features/files/api'
 /**
  * What the panel says about the strength of what it shows: an import line is text, a text profile is
  * what read it, and a name that resolved did so against what another file declared itself to be
- * (CONTEXT.md, _Import_).
+ * (GLOSSARY.md, _Import_).
  */
 export const IMPORT_EVIDENCE =
   'Read from import lines, not from a compiler, and a name resolves only where it names exactly one ' +
