@@ -10,7 +10,7 @@ const commit = (authoredAt: string) => ({
 
 /**
  * The end of every window in this app is the newest commit the index holds, never the clock
- * (CONTEXT.md, _Window_). Which commit that is comes from the repositories, and the cases worth
+ * (GLOSSARY.md, _Window_). Which commit that is comes from the repositories, and the cases worth
  * asserting are the ones where they disagree or where one of them has no history at all.
  */
 

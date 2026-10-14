@@ -52,7 +52,7 @@ export function ProjectCard({
         </div>
       }
       actions={
-        // "Refresh" as CONTEXT.md defines it, and for a project that has never been built too: the
+        // "Refresh" as GLOSSARY.md defines it, and for a project that has never been built too: the
         // first one clones rather than fetches, but it is the same action and a second name for it
         // would only suggest there are two. The label says what is happening rather than what was
         // asked for, because the work outlives the click and a page reopened mid-refresh must read

@@ -35,7 +35,7 @@ const NOTHING_READ = `${NOT_INDEXED}, so nothing was read from it.`
  * file, which cost a reader a heading and a box to learn nothing about this file; the second was
  * Dependents (#160), which asked a request per file opened and drew an empty list and a note saying
  * why almost every time. What refers to a file, and why the question is harder than it reads, is in
- * CONTEXT.md under _Reference_, where the vocabulary is.
+ * GLOSSARY.md under _Reference_, where the vocabulary is.
  */
 export function FileRail({
   project,
@@ -112,7 +112,7 @@ function RecentCommits({
     return (
       <RailPanel title="Recent commits">
         {/* Not "nobody changed it": history arrives with a refresh and may not reach the beginning
-            of the repository (CONTEXT.md), and the two mean opposite things. */}
+            of the repository (GLOSSARY.md), and the two mean opposite things. */}
         <p className="text-sm text-muted-foreground">
           No history is imported for this repository, so nothing can be said about what changed this
           file.
@@ -135,7 +135,7 @@ function RecentCommits({
       title="Recent commits"
       pending={!skipped && blame.isPending}
       // Said of the imported history and not of the file: history may not reach the beginning of
-      // the repository (CONTEXT.md), so the first commit it has is not known to be the one that
+      // the repository (GLOSSARY.md), so the first commit it has is not known to be the one that
       // added the file. One row where the two are the same commit, and "first and last" over a
       // single row would read as a row missing.
       note={

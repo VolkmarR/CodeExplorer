@@ -77,7 +77,7 @@ export function FilePage() {
           </span>
           {/* The last commit is the one a reader asks about — "who touched this?" — so it carries
               the subject. Nothing is shown for a file without history rather than "never changed",
-              which would be a claim the index cannot make (CONTEXT.md, History). */}
+              which would be a claim the index cannot make (GLOSSARY.md, History). */}
           {file.lastCommit ? (
             <span className="flex min-w-0 items-baseline gap-1 text-xs">
               <span className="text-muted-foreground">last changed</span>

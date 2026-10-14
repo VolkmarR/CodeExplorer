@@ -79,7 +79,7 @@ public sealed record ChurnRequest(string? Directory, int Days, int Limit, int? D
 /// <summary>
 ///     The most-changed files of a window, and everything needed to say what the ranking does not
 ///     cover. The four ways it can come back empty are kept apart rather than collapsed, because each
-///     is a different sentence and an agent shown the wrong one learns a wrong fact (CONTEXT.md,
+///     is a different sentence and an agent shown the wrong one learns a wrong fact (GLOSSARY.md,
 ///     History): <see cref="HasHistory" /> false is a project nothing was imported for,
 ///     <see cref="Window" /> null is a scope with no commit at all, an empty <see cref="Files" /> is a
 ///     window in which nothing changed, and <see cref="Coverage" /> names the repositories the ranking

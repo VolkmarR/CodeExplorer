@@ -36,7 +36,7 @@ export function declarationsNote(file: FileDeclarations): string | null {
 /**
  * What the panel says about the strength of what it shows. Said the same way the import panels say
  * theirs, because it is the same kind of claim: a declaration is read from the shape of a line in
- * the language the file is written in, and is strong evidence and never proof (CONTEXT.md,
+ * the language the file is written in, and is strong evidence and never proof (GLOSSARY.md,
  * _Declaration_).
  */
 export const DECLARATION_EVIDENCE =

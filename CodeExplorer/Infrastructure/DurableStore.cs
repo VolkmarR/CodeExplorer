@@ -7,7 +7,7 @@ using Azure.Storage.Blobs.Models;
 namespace CodeExplorer.Infrastructure;
 
 /// <summary>
-///     Where the durable copy lives (CONTEXT.md): the Parquet set of every project index and the
+///     Where the durable copy lives (GLOSSARY.md): the Parquet set of every project index and the
 ///     control database's backup, the only things that survive the container's disk being wiped on
 ///     every stop. Names are blob names — <c>indexes/&lt;slug&gt;/files.parquet</c> — and the local
 ///     path they resolve to lays them out as folders, so both halves hold the same tree.

@@ -9,7 +9,7 @@ import { formatCount, formatCountOf } from '@/lib/format'
 
 /**
  * The files at HEAD that are both large and busy (#211): commits in the filter bar's window times
- * lines at HEAD. Where large files keep changing, and not what is unstable (CONTEXT.md, Hotspot).
+ * lines at HEAD. Where large files keep changing, and not what is unstable (GLOSSARY.md, Hotspot).
  * The window is Most changed's, so whether there is history to rank is read off the same churn
  * section that card reads it from.
  */

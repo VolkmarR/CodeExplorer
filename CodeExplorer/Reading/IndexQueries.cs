@@ -139,7 +139,7 @@ internal static class IndexQueries
     ///     The same window's churn rolled up to the directories <paramref name="depth" /> segments
     ///     beneath the scope, most commits first. A rollup rather than a ranking the caller sums
     ///     itself, because a directory's churn is distinct commits and not the sum over its files
-    ///     (CONTEXT.md, Churn) — the two disagree by however many files one commit touched.
+    ///     (GLOSSARY.md, Churn) — the two disagree by however many files one commit touched.
     ///     A path with fewer segments than the depth is its own row, which keeps a file sitting
     ///     directly in the scope counted somewhere and named as what it is.
     /// </summary>

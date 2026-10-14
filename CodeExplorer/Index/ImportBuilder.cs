@@ -21,7 +21,7 @@ public sealed record ReadImports(IReadOnlyList<ImportEdge> Edges, string? Module
 public sealed record ImportEdge(int LineNumber, string Name, ImportShape Shape, Evidence Evidence);
 
 /// <summary>
-///     The import edges of a project index (CONTEXT.md, Import): read out of the line walk the build
+///     The import edges of a project index (GLOSSARY.md, Import): read out of the line walk the build
 ///     already performs, then resolved to the files they name.
 ///     The two halves are here together because they are one claim made twice. Extraction says what a
 ///     file asked for, in the words the file used; resolution says which file in this project that

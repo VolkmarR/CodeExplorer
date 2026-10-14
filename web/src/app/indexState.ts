@@ -3,7 +3,7 @@
  * refreshed on a schedule of hours, so anything that has gone a whole day without one has had a run
  * fail or a schedule stop — which is exactly what an operator opening the app wants told.
  *
- * Read against the clock, which every *window* in this app deliberately is not (CONTEXT.md,
+ * Read against the clock, which every *window* in this app deliberately is not (GLOSSARY.md,
  * _Window_) — and the difference is the point. A window over commits must not use the clock,
  * because the newest commit is the end of what the index knows and today is not. When the index
  * was *built* is the other kind of fact: a wall-clock event, and how long ago it happened is a

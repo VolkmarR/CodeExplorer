@@ -8,7 +8,7 @@ namespace CodeExplorer.Reading;
 ///     or one file is asked over one of these, so the way a window is expressed and applied is
 ///     decided once rather than per tool.
 ///     A window is anchored to the history that was imported and never to the clock. An index is
-///     built by a refresh and may be days behind its remotes (CONTEXT.md, History), so "the last 30
+///     built by a refresh and may be days behind its remotes (GLOSSARY.md, History), so "the last 30
 ///     days" measured from now would hand back an empty ranking for a project nobody refreshed this
 ///     month — an answer an agent reads as "nothing changed", which is the one thing history must
 ///     never say by accident. Measured back from the newest recorded commit instead, the same call

@@ -111,7 +111,7 @@ public sealed record FolderPair(string First, string Second, int Commits);
 
 /// <summary>
 ///     One repository's folder coupling. Pairs never cross a repository, because a commit never does
-///     (CONTEXT.md, Co-Change).
+///     (GLOSSARY.md, Co-Change).
 /// </summary>
 /// <param name="RepositorySlug">The repository.</param>
 /// <param name="Commits">Distinct commits under the ceiling that touched one of its folders.</param>

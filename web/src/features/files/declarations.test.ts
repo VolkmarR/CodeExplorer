@@ -23,7 +23,7 @@ const declared = (fields: Partial<FileDeclarations>): FileDeclarations => ({
 
 /**
  * The three ways an empty list means something other than "this file declares nothing", which is
- * the sentence the panel must never say by accident (CONTEXT.md, _Declaration_). They send a reader
+ * the sentence the panel must never say by accident (GLOSSARY.md, _Declaration_). They send a reader
  * to three different places: widen the profile, accept that the language has no answer here, or
  * believe the file.
  */

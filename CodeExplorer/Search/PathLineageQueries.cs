@@ -37,7 +37,7 @@ public sealed record PathLineage(IReadOnlyList<PreviousPath> Previous, int Omitt
     IReadOnlyList<string> Chain);
 
 /// <summary>
-///     The Previous Path of a scope (CONTEXT.md): the chain the build wrote down, read back as the
+///     The Previous Path of a scope (GLOSSARY.md): the chain the build wrote down, read back as the
 ///     note every path-scoped answer carries. It is its own file because it is the one part of this
 ///     module that answers about a path's earlier names rather than about its commits, and because
 ///     every other read here only signals it (#131, #143).

@@ -64,7 +64,7 @@ internal static class ToolReply
     /// <summary>
     ///     What every reply drawn from history says when there is none. Distinguishing this from
     ///     "nothing matched" is the whole point: an empty answer to "who changed this" reads as
-    ///     "nobody", which is a fact, and this is the absence of one (CONTEXT.md, History). One
+    ///     "nobody", which is a fact, and this is the absence of one (GLOSSARY.md, History). One
     ///     sentence and not one per surface, because two spellings of an absence are two facts to keep
     ///     in step and the overview and the history tools are read in the same session.
     /// </summary>

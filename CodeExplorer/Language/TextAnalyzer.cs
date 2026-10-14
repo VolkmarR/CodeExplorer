@@ -6,7 +6,7 @@ namespace CodeExplorer.Language;
 /// <summary>
 ///     The <see cref="ILanguageAnalyzer" /> that answers from a <see cref="LanguageProfile" /> and the
 ///     line in front of it. There is no compiler and no symbol table here, which is why every answer
-///     it gives is <see cref="Evidence.Text" /> and why CONTEXT.md calls a reference strong evidence
+///     it gives is <see cref="Evidence.Text" /> and why GLOSSARY.md calls a reference strong evidence
 ///     and never proof.
 ///     It stays a first-class implementation rather than a stopgap: a Roslyn analyser will one day
 ///     answer C# better and tree-sitter the C family, but X# has no grammar to be had, and a text

@@ -3,7 +3,7 @@ import { ProjectCard } from '@/features/projects/ProjectCard'
 import { ProjectOverview } from '@/features/projects/ProjectOverview'
 
 /**
- * What a project's index holds (CONTEXT.md, _Overview_), split over three pages because one held
+ * What a project's index holds (GLOSSARY.md, _Overview_), split over three pages because one held
  * eight cards and scrolled past most of them: what the code is, what is changing in it, and where it
  * is expensive to change. This is the first, the page an operator lands on and the project's own
  * path, so it is also the one that carries the project's card and its refresh.

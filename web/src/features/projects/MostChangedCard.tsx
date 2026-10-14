@@ -8,7 +8,7 @@ import { CHURN_DEFAULTS, churnSearch } from '@/lib/urls/churnParams'
 /**
  * The same ranking the churn page shows, over the filter bar's window and without the project's
  * excluded paths. The window ends at the newest commit in the index and not at today, so a stale
- * index shows as one (CONTEXT.md, Window).
+ * index shows as one (GLOSSARY.md, Window).
  */
 export function MostChangedCard({
   project,

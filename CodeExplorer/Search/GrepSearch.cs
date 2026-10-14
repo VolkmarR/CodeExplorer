@@ -35,7 +35,7 @@ public sealed record GrepRequest(
 /// <summary>
 ///     One line of an answer. <see cref="IsMatch" /> is false for a line returned only as context around
 ///     a match. <see cref="By" /> is filled only when the caller asked for history and the
-///     build attributed the line; it says who last changed it, never who wrote it (CONTEXT.md,
+///     build attributed the line; it says who last changed it, never who wrote it (GLOSSARY.md,
 ///     Attribution).
 /// </summary>
 public sealed record GrepLine(int LineNumber, string Text, bool IsMatch, AttributedBy? By = null);

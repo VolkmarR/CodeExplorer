@@ -9,7 +9,7 @@ namespace CodeExplorer.Index;
 public sealed record HistorySummary(int Commits, long AttributedFiles);
 
 /// <summary>
-///     Fills a shadow index's history (CONTEXT.md): the commits of every repository, the paths each one
+///     Fills a shadow index's history (GLOSSARY.md): the commits of every repository, the paths each one
 ///     touched, and the attribution of every line at HEAD. It runs inside the ordinary build, before the
 ///     swap, so a project is never live with code at one commit and history at another — and so nothing
 ///     here ever writes to an index that is answering queries.

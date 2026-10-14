@@ -25,7 +25,7 @@ namespace CodeExplorer.Infrastructure;
 ///     want `glob` and `query`, `path` or `file` where `read_file` wants `paths`, `max_results`
 ///     where `grep` wants `pageSize`. Each is what an agent's own built-in file tools call the
 ///     thing, so they keep arriving. Naming them is the whole fix; accepting one would put two
-///     spellings on a concept, which CONTEXT.md asks against. (`path` is the real parameter of
+///     spellings on a concept, which GLOSSARY.md asks against. (`path` is the real parameter of
 ///     every tool that takes one file; it is a near miss only at `read_file`, which takes several.)
 /// </summary>
 internal static class ToolArguments
@@ -118,7 +118,7 @@ internal static class ToolArguments
     ///     result, which is the failure this whole filter exists to stop (CODING_STANDARDS, Errors).
     ///     It names what the tool does take from the schema, so a caller learns the right spelling in
     ///     the same breath. None of the near misses is accepted anywhere: one spelling per concept
-    ///     (CONTEXT.md).
+    ///     (GLOSSARY.md).
     /// </summary>
     private static string? Ignored(RequestContext<CallToolRequestParams> request)
     {

@@ -1,7 +1,7 @@
 namespace CodeExplorer.Infrastructure;
 
 /// <summary>
-///     A project (CONTEXT.md): the stable slug agents address it by, and its display name. Nothing
+///     A project (GLOSSARY.md): the stable slug agents address it by, and its display name. Nothing
 ///     about it changes after creation, the name included, which is what lets the control database
 ///     cache a found project for as long as it exists (<c>ControlDatabase.FindAsync</c>).
 ///     It sits in <c>Infrastructure/</c> rather than in <c>Control/</c> even though the control

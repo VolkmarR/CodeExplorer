@@ -12,7 +12,7 @@ namespace CodeExplorer.Control;
 ///     serves, what repositories it has and how they were indexed. They are the only tools allowed to
 ///     read both the control database and the index, because "configured but not indexed yet" is a
 ///     question neither side can answer alone. Nothing here opens a local copy: a tool answers from
-///     the index (CONTEXT.md), and <c>list_tree</c> lives with the other index readers in
+///     the index (GLOSSARY.md), and <c>list_tree</c> lives with the other index readers in
 ///     <c>Search/</c>.
 /// </summary>
 [McpServerToolType]
@@ -58,7 +58,7 @@ internal sealed class ProjectTools(
 
         var text = new StringBuilder();
         text.Append(OverviewReply.Headline(project, indexed.Count, " indexed", status.Files, status.Lines));
-        // One time for the project: a refresh rebuilds every repository together (CONTEXT.md), so there
+        // One time for the project: a refresh rebuilds every repository together (GLOSSARY.md), so there
         // is no per-repository index time to report.
         text.Append(CultureInfo.InvariantCulture,
             $"Indexed at: {status.BuiltAt:yyyy-MM-dd HH:mm:ss} UTC (all repositories are indexed together)\n");
@@ -89,7 +89,7 @@ internal sealed class ProjectTools(
     ///     oldest commit turned up, which cost one measured evaluation fifteen of its twenty-eight
     ///     calls to establish two dates (#108).
     ///     A repository with none says so in those words. An empty span and a repository nobody has
-    ///     changed read alike and mean opposite things (CONTEXT.md, History) — and here the first is
+    ///     changed read alike and mean opposite things (GLOSSARY.md, History) — and here the first is
     ///     always what it means, because a walk that ran records the root commit at least.
     /// </summary>
     private static string History(IndexedRepository repository)

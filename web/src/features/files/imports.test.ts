@@ -23,7 +23,7 @@ const imports = (fields: Partial<FileImports>): FileImports => ({
 
 /**
  * The three ways an empty list means something other than "this file imports nothing", which is the
- * sentence the panel must never say by accident (CONTEXT.md, _Import_).
+ * sentence the panel must never say by accident (GLOSSARY.md, _Import_).
  */
 test('an empty imports panel says which kind of empty it is', () => {
   expect(

@@ -27,7 +27,7 @@ public sealed class DurableCopy(string directory, Telemetry.DurableCopyRecording
 }
 
 /// <summary>
-///     The durable copy of a project index (CONTEXT.md): <c>COPY TO</c> writes the tables to local
+///     The durable copy of a project index (GLOSSARY.md): <c>COPY TO</c> writes the tables to local
 ///     Parquet, the store moves them out, and a restore reads them back into a fresh database file.
 ///     This is what makes scale to zero survivable — the container's disk is wiped on every stop, and
 ///     the Parquet set is the only copy of an index that outlives a replica.

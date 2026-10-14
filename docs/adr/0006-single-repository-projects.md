@@ -17,7 +17,7 @@ files that are both `src/index.ts`, and it survives a remote moving. In a projec
 repository it separates nothing. It is a segment every path carries, every agent quotes, and every
 operator reads, to disambiguate a set of one.
 
-`CONTEXT.md` previously said a project of one repository is "the common case, not a special case".
+`GLOSSARY.md` previously said a project of one repository is "the common case, not a special case".
 That was a statement about the data model, and it stays true of the model — one repository is still
 a repository, indexed the same way. What changes is the naming, which was the part that made the
 common case pay for the rare one.

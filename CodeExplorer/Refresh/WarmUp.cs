@@ -11,7 +11,7 @@ namespace CodeExplorer.Refresh;
 public sealed record WarmedProject(string Project, bool Ready, string? Error = null);
 
 /// <summary>
-///     The warm-up (CONTEXT.md): attaching every project ahead of the working day so that the first
+///     The warm-up (GLOSSARY.md): attaching every project ahead of the working day so that the first
 ///     agent of the morning does not wait for a restore. It is an operator action an external cron
 ///     calls, and deliberately not an in-process timer — a replica that has scaled to zero has nothing
 ///     running to fire one (ADR-0004).

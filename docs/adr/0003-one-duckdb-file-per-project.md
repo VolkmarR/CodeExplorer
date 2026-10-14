@@ -80,7 +80,7 @@ workaround for `match_bm25` failing to resolve its internal tables in an attache
 ## Revisited for #37, on 2026-09-15
 
 The bare shallow clone is the refresh's and nobody else's. It was also what `list_tree` answered
-from, which made it a second source of truth beside the index and contradicted CONTEXT.md; that tool
+from, which made it a second source of truth beside the index and contradicted GLOSSARY.md; that tool
 now reads the index like every other. The clone is opened in one place, `GitClones.OpenRefreshedAsync`,
 which decides empty and LFS once and hands the refresh a `LocalCopy` of plain records, so no
 LibGit2Sharp type leaves `Git/` and `ModuleBoundaryTests` keeps it that way. Nothing may depend on the

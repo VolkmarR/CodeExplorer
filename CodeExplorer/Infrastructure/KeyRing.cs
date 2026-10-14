@@ -23,7 +23,7 @@ public sealed record KeyRingSettings(Uri? Container, Uri? KeyVaultKey);
 ///     managed identity grant, one token cache, one account to watch, and the key ring sits under its
 ///     own prefix beside the Parquet sets and the control database backup rather than among them.
 ///     At the root rather than in a module folder, for the reason <c>DurableStore</c> is: ADR-0005's
-///     folders are the concepts in CONTEXT.md, and a key ring belongs to no one of them — Control
+///     folders are the concepts in GLOSSARY.md, and a key ring belongs to no one of them — Control
 ///     protects credentials with it and Git unprotects them, so it sits where both can see it.
 /// </summary>
 public static class KeyRing

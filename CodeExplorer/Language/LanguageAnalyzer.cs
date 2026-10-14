@@ -3,7 +3,7 @@ namespace CodeExplorer.Language;
 /// <summary>
 ///     How an answer about a file's language was reached. Every answer carries one, because a
 ///     heuristic answer and a parsed one are claims of different strength and an agent weighing them
-///     has to be able to tell them apart — the same distinction CONTEXT.md draws between a reference
+///     has to be able to tell them apart — the same distinction GLOSSARY.md draws between a reference
 ///     and proof.
 /// </summary>
 public enum Evidence
@@ -106,7 +106,7 @@ public abstract record CandidateLines
 }
 
 /// <summary>
-///     What one appearance of an identifier looks like. The names are the ones CONTEXT.md uses for a
+///     What one appearance of an identifier looks like. The names are the ones GLOSSARY.md uses for a
 ///     reference: a place where an identifier appears in code in a way that looks like real use, as
 ///     against a mention in a comment, a string or an import. <see cref="Other" /> is deliberate —
 ///     one this cannot place is kept and labelled unplaced rather than dropped, because a dropped
@@ -257,7 +257,7 @@ public sealed record Declared(string? Type, string? Member, DeclarationRole? Rol
 public interface ILanguageAnalyzer
 {
     /// <summary>
-    ///     What this analyses, as <c>CONTEXT.md</c>'s Language, or null for the fallback that covers
+    ///     What this analyses, as <c>GLOSSARY.md</c>'s Language, or null for the fallback that covers
     ///     every extension no profile claims. Null is the honest answer there: an extension nobody
     ///     declared stands for itself rather than being guessed at.
     /// </summary>

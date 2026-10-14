@@ -275,7 +275,7 @@ public sealed class HotFilesTests(HotFilesFixture fixture) : IClassFixture<HotFi
     /// <summary>
     ///     Two repositories, one of which was never walked. The ranking cannot show what it has not got,
     ///     so it has to say which repositories it is speaking for — otherwise it reads as the project's
-    ///     whole story (CONTEXT.md, History).
+    ///     whole story (GLOSSARY.md, History).
     /// </summary>
     [Fact]
     public async Task Hot_files_says_which_repositories_have_history_and_which_have_none()

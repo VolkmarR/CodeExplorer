@@ -12,7 +12,7 @@ namespace CodeExplorer.Search;
 ///     The two commits are <see cref="AttributedBy" />, the read's own record, rather than a copy of
 ///     it: both are null where no history was imported, which the view says rather than drawing an
 ///     empty field, and that is the read's distinction and not this layer's to restate
-///     (CONTEXT.md, History).
+///     (GLOSSARY.md, History).
 /// </remarks>
 internal sealed record FileContentResponse(
     string QualifiedPath,
@@ -41,11 +41,11 @@ internal sealed record CommitFilesResponse(string Sha, IReadOnlyList<CommitFileR
 ///     A churn ranking and the window it covers. <see cref="Since" /> and <see cref="Until" /> are
 ///     null together when the scope holds no commit at all, which is a project or a repository without
 ///     imported history rather than an error.
-///     The window ends at the newest recorded commit rather than today (CONTEXT.md, Window), so the
+///     The window ends at the newest recorded commit rather than today (GLOSSARY.md, Window), so the
 ///     dates are part of the answer and not an echo of the request: a reader who asked for ninety days
 ///     and is shown a window ending two months ago has learned that the index is stale.
 ///     <see cref="WithoutHistory" /> names the repositories the ranking cannot speak for, so that a
-///     ranking covering half a project is not read as covering all of it (CONTEXT.md, History). Empty
+///     ranking covering half a project is not read as covering all of it (GLOSSARY.md, History). Empty
 ///     where the question does not arise: a project of one repository, or a scoped request.
 /// </summary>
 internal sealed record ChurnResponse(
@@ -185,7 +185,7 @@ internal static class SearchEndpoints
                     await history.ChangeLogAsync(project.Slug, new ChangeLogRequest(repository, page, pageSize), ct),
                     Commits));
 
-        // The churn ranking (CONTEXT.md, Churn), over a window of days rather than a page of commits:
+        // The churn ranking (GLOSSARY.md, Churn), over a window of days rather than a page of commits:
         // it is a view of its own now, with nothing beside it to agree with. `days` and not a pair of
         // dates, because the window is anchored to the newest recorded commit and only the index knows
         // where that is — a client sending dates would be guessing at it.

@@ -223,4 +223,4 @@ scripts and settings from `deploy/evaluation/` added at the top.
 | `build.cs`               | Cake.Sdk: packages the image, the Windows zip and the evaluation zip. |
 | `build.ps1`              | A wrapper around it. Passes its arguments through, nothing else.   |
 
-`CONTEXT.md` holds the vocabulary; `CODING_STANDARDS.md` holds the rules tooling cannot check.
+`GLOSSARY.md` holds the vocabulary; `CODING_STANDARDS.md` holds the rules tooling cannot check.

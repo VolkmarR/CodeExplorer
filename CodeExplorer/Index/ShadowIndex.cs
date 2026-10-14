@@ -4,7 +4,7 @@ using DuckDB.NET.Data;
 namespace CodeExplorer.Index;
 
 /// <summary>
-///     The shadow index a refresh fills (CONTEXT.md): a connection already <c>USE</c>ing the shadow
+///     The shadow index a refresh fills (GLOSSARY.md): a connection already <c>USE</c>ing the shadow
 ///     file, and the catalog name an appender targets. It is a second file next to the live one, so
 ///     the live index keeps answering queries until <see cref="ProjectIndexes.PublishShadowAsync" />.
 /// </summary>

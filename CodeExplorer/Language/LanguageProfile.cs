@@ -151,7 +151,7 @@ public sealed record ImportForm(string Opener, ImportShape Shape)
 ///     form a profile does not know costs an unplaced reference, a form it invents costs a wrong
 ///     answer reported as a right one. Leave a doubtful form out.
 /// </summary>
-/// <param name="Name">The language as <c>CONTEXT.md</c> means it, or null for the fallback profile.</param>
+/// <param name="Name">The language as <c>GLOSSARY.md</c> means it, or null for the fallback profile.</param>
 /// <param name="Extensions">Lowercase, without the dot, as <c>files.extension</c> stores them.</param>
 public sealed record LanguageProfile(string? Name, IReadOnlyList<string> Extensions)
 {

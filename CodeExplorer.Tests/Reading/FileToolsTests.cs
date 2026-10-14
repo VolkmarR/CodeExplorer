@@ -648,7 +648,7 @@ public sealed class FileToolsTests(FileToolsFixture fixture) : IClassFixture<Fil
 
     /// <summary>
     ///     A repository whose history was never walked. "No commits" and "nobody changed it" read alike
-    ///     and mean opposite things (CONTEXT.md, History), and this is the reply an agent reads before
+    ///     and mean opposite things (GLOSSARY.md, History), and this is the reply an agent reads before
     ///     it asks any history tool about the repository at all.
     /// </summary>
     [Fact]

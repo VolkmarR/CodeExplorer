@@ -8,7 +8,7 @@ using ModelContextProtocol.Server;
 namespace CodeExplorer.Search;
 
 /// <summary>
-///     <c>find_references</c>: where an identifier is used (CONTEXT.md, Reference), and what the
+///     <c>find_references</c>: where an identifier is used (GLOSSARY.md, Reference), and what the
 ///     answer leaves uncovered. The coverage note is the larger half of it, which is why it is written
 ///     apart from the grep it is built on.
 /// </summary>

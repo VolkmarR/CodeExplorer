@@ -41,7 +41,7 @@ public enum DeclarationCoverage
 }
 
 /// <summary>
-///     One name a file introduces, as CONTEXT.md's <em>Declaration</em> defines the word: the line
+///     One name a file introduces, as GLOSSARY.md's <em>Declaration</em> defines the word: the line
 ///     that introduces it, the line's own text, and what it turned out to declare. Either name may be
 ///     null — a member declaration names no type and a type declaration no member — and a line that
 ///     reads as both fills both.

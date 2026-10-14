@@ -12,7 +12,7 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 namespace CodeExplorer.Git;
 
 /// <summary>
-///     Keeps the local copy of every repository (CONTEXT.md): a full bare clone under
+///     Keeps the local copy of every repository (GLOSSARY.md): a full bare clone under
 ///     <c>{DataDirectory}/clones/{project}/{repository}.git</c>, made on the first refresh and
 ///     brought up to date on every later one. The refresh is its only reader, and reads it through
 ///     the <see cref="LocalCopy" /> this hands out; the copy is temporary and nothing may depend on
@@ -79,7 +79,7 @@ public sealed class GitClones(
     /// <summary>
     ///     Opens the repository with its local copy brought up to date: a fetch when it is already
     ///     cloned, and the clone itself when it is not, which is already current. This is the
-    ///     first half of a refresh (CONTEXT.md), and the only way a local copy is ever read; a tool
+    ///     first half of a refresh (GLOSSARY.md), and the only way a local copy is ever read; a tool
     ///     call answers from the index, because an agent must not make the server talk to a remote.
     ///     Throws <see cref="McpException" /> when the transfer fails; the message names the repository
     ///     and what to check and never carries the credential, which only ever reaches libgit2 through

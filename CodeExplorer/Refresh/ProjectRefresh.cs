@@ -8,7 +8,7 @@ using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 namespace CodeExplorer.Refresh;
 
 /// <summary>
-///     One refresh of one project (CONTEXT.md): bring every local copy up to date, read them into a
+///     One refresh of one project (GLOSSARY.md): bring every local copy up to date, read them into a
 ///     shadow index beside the live one, and swap it in. The live index answers every query
 ///     throughout, so a project is never searchable in a half-built state. What it may not do —
 ///     one at a time, and not without the disk for it — is <see cref="RefreshService" />'s to decide.
